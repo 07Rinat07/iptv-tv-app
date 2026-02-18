@@ -17,30 +17,34 @@ import androidx.compose.ui.unit.sp
 
 private val DarkColors: ColorScheme = darkColorScheme(
     primary = Color(0xFF19C37D),
-    onPrimary = Color(0xFF03140B),
-    secondary = Color(0xFF4AB3FF),
-    onSecondary = Color(0xFF041421),
+    onPrimary = Color(0xFF021108),
+    secondary = Color(0xFF6EC7FF),
+    onSecondary = Color(0xFF03131F),
     tertiary = Color(0xFFFFB547),
-    background = Color(0xFF071018),
-    surface = Color(0xFF101D2A),
-    surfaceVariant = Color(0xFF17293A),
-    onSurface = Color(0xFFEAF4FF),
-    outline = Color(0xFF40617A),
-    outlineVariant = Color(0xFF253C4E)
+    background = Color(0xFF102234),
+    onBackground = Color(0xFFF0F7FF),
+    surface = Color(0xFF1A2F43),
+    onSurface = Color(0xFFF3F8FF),
+    surfaceVariant = Color(0xFF254056),
+    onSurfaceVariant = Color(0xFFDDEAF7),
+    outline = Color(0xFF7391AA),
+    outlineVariant = Color(0xFF4C667C)
 )
 
 private val LightColors: ColorScheme = lightColorScheme(
-    primary = Color(0xFF0F8A53),
+    primary = Color(0xFF0D7A4B),
     onPrimary = Color.White,
-    secondary = Color(0xFF1E75A8),
+    secondary = Color(0xFF1B6A97),
     onSecondary = Color.White,
     tertiary = Color(0xFFC2780A),
-    background = Color(0xFFF1F6FB),
+    background = Color(0xFFF7FAFE),
+    onBackground = Color(0xFF0F1A23),
     surface = Color(0xFFFFFFFF),
-    surfaceVariant = Color(0xFFE9F1F8),
     onSurface = Color(0xFF111A22),
-    outline = Color(0xFF567286),
-    outlineVariant = Color(0xFFC9D7E2)
+    surfaceVariant = Color(0xFFF0F5FB),
+    onSurfaceVariant = Color(0xFF334555),
+    outline = Color(0xFF647F92),
+    outlineVariant = Color(0xFFD5E0EA)
 )
 
 private val IptvTypography: Typography = Typography(

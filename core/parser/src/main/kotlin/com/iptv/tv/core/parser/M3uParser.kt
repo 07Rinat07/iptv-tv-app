@@ -5,13 +5,26 @@ import com.iptv.tv.core.model.ChannelHealth
 
 class M3uParser {
     fun parse(playlistId: Long, raw: String): ParseResult {
-        if (!raw.trimStart().startsWith("#EXTM3U", ignoreCase = true)) {
+        val sanitizedRaw = raw.removePrefix(UTF8_BOM)
+        val normalizedStart = sanitizedRaw.trimStart()
+        val headerMissing = !normalizedStart.startsWith("#EXTM3U", ignoreCase = true)
+        val canRecoverMissingHeader = headerMissing && looksLikeHeaderlessPlaylist(sanitizedRaw)
+        if (headerMissing && !canRecoverMissingHeader) {
             return ParseResult.Invalid("Missing #EXTM3U header")
         }
 
-        val lines = raw.lineSequence().map { it.trim() }.toList()
+        val rawToParse = if (canRecoverMissingHeader) {
+            "#EXTM3U\n$sanitizedRaw"
+        } else {
+            sanitizedRaw
+        }
+
+        val lines = rawToParse.lineSequence().map { it.trim() }.toList()
         val channels = mutableListOf<Channel>()
         val warnings = mutableListOf<String>()
+        if (canRecoverMissingHeader) {
+            warnings += "Missing #EXTM3U header; auto-added"
+        }
         var currentMeta: ExtInfMeta? = null
         var index = 0
 
@@ -93,6 +106,21 @@ class M3uParser {
             "acestream",
             "sop"
         )
+    }
+
+    private fun looksLikeHeaderlessPlaylist(raw: String): Boolean {
+        val lines = raw.lineSequence().map { it.trim() }
+        val hasExtInf = lines.any { line -> line.startsWith("#EXTINF", ignoreCase = true) }
+        val hasStreamUrl = lines.any { line ->
+            line.isNotBlank() &&
+                !line.startsWith("#") &&
+                isLikelyStreamUrl(line)
+        }
+        return hasExtInf && hasStreamUrl
+    }
+
+    private companion object {
+        const val UTF8_BOM = "\uFEFF"
     }
 }
 

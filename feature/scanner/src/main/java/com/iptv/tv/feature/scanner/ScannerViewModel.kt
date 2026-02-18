@@ -174,7 +174,7 @@ class ScannerViewModel @Inject constructor(
             setStatus(
                 type = ScannerStatusType.LOADING,
                 title = "Выполняется $actionLabel",
-                details = "Источник: ${providerDisplayName(state.selectedProvider)} | лимит: $SEARCH_LIMIT",
+                details = "Источник: ${providerDisplayName(state.selectedProvider)} | цель: $SEARCH_SAVE_TARGET",
                 isLoading = true,
                 hasSearched = state.hasSearched
             )
@@ -223,28 +223,38 @@ class ScannerViewModel @Inject constructor(
                     return@launch
                 }
 
-                val found = outcome.candidates.take(SEARCH_LIMIT)
+                val foundAll = outcome.candidates
+                val foundForDisplay = foundAll.take(SEARCH_DISPLAY_LIMIT)
                 val importSummary = if (saveFoundResults) {
-                    importFoundPlaylists(found)
+                    importFoundPlaylists(
+                        candidates = foundAll,
+                        targetSaveCount = SEARCH_SAVE_TARGET
+                    )
                 } else {
                     null
                 }
                 val hasErrors = outcome.errors.isNotEmpty()
                 val firstError = outcome.errors.firstOrNull().orEmpty()
+                val importFailedCompletely = saveFoundResults &&
+                    importSummary != null &&
+                    importSummary.imported == 0 &&
+                    importSummary.failed > 0
 
                 val statusType = when {
-                    found.isNotEmpty() -> ScannerStatusType.SUCCESS
+                    importFailedCompletely -> ScannerStatusType.ERROR
+                    foundAll.isNotEmpty() -> ScannerStatusType.SUCCESS
                     hasErrors -> ScannerStatusType.ERROR
                     else -> ScannerStatusType.INFO
                 }
                 val statusTitle = when {
-                    found.isNotEmpty() -> "Поиск завершен"
+                    importFailedCompletely -> "Поиск завершен, но сохранить не удалось"
+                    foundAll.isNotEmpty() -> "Поиск завершен"
                     hasErrors -> "Ошибка поиска"
                     else -> "Ничего не найдено"
                 }
                 val statusDetails = when {
-                    found.isNotEmpty() -> {
-                        val summary = buildResultSummary(found, importSummary)
+                    foundAll.isNotEmpty() -> {
+                        val summary = buildResultSummary(foundAll, importSummary)
                         if (hasErrors) "$summary | предупреждений=${outcome.errors.size}" else summary
                     }
                     hasErrors -> "${mapScannerError(firstError)}. Проверьте интернет и повторите."
@@ -255,8 +265,8 @@ class ScannerViewModel @Inject constructor(
                     it.copy(
                         isLoading = false,
                         hasSearched = true,
-                        results = found,
-                        selectedPreview = found.firstOrNull(),
+                        results = foundForDisplay,
+                        selectedPreview = foundForDisplay.firstOrNull(),
                         statusType = statusType,
                         statusTitle = statusTitle,
                         statusDetails = statusDetails
@@ -265,8 +275,8 @@ class ScannerViewModel @Inject constructor(
 
                 safeLog(
                     status = when {
-                        found.isNotEmpty() && hasErrors -> "scanner_ok_partial"
-                        found.isNotEmpty() -> "scanner_ok"
+                        foundAll.isNotEmpty() && hasErrors -> "scanner_ok_partial"
+                        foundAll.isNotEmpty() -> "scanner_ok"
                         hasErrors -> "scanner_error"
                         else -> "scanner_empty"
                     },
@@ -402,7 +412,7 @@ class ScannerViewModel @Inject constructor(
         val errors = mutableListOf<String>()
 
         plan.forEachIndexed { index, step ->
-            if (merged.size >= SEARCH_LIMIT) return@forEachIndexed
+            if (merged.size >= SEARCH_FETCH_LIMIT) return@forEachIndexed
 
             setStatus(
                 type = ScannerStatusType.LOADING,
@@ -418,7 +428,7 @@ class ScannerViewModel @Inject constructor(
             )
 
             val stepResult = withTimeoutOrNull(SEARCH_STEP_TIMEOUT_MS) {
-                scannerRepository.search(step.request.copy(limit = SEARCH_LIMIT))
+                scannerRepository.search(step.request.copy(limit = SEARCH_FETCH_LIMIT))
             }
 
             when (stepResult) {
@@ -461,12 +471,15 @@ class ScannerViewModel @Inject constructor(
         }
 
         return SearchPlanOutcome(
-            candidates = merged.values.take(SEARCH_LIMIT),
+            candidates = merged.values.take(SEARCH_FETCH_LIMIT),
             errors = errors
         )
     }
 
-    private suspend fun importFoundPlaylists(candidates: List<PlaylistCandidate>): ImportSummary {
+    private suspend fun importFoundPlaylists(
+        candidates: List<PlaylistCandidate>,
+        targetSaveCount: Int
+    ): ImportSummary {
         if (candidates.isEmpty()) return ImportSummary()
 
         val existingSources = playlistRepository.observePlaylists()
@@ -477,11 +490,15 @@ class ScannerViewModel @Inject constructor(
         var imported = 0
         var skipped = 0
         var failed = 0
+        val failureReasons = mutableListOf<String>()
 
+        val maxToSave = targetSaveCount.coerceAtLeast(1)
         candidates.forEach { candidate ->
+            if (imported >= maxToSave) return@forEach
             val sourceUrl = candidate.downloadUrl.trim()
             if (sourceUrl.isBlank()) {
                 failed += 1
+                failureReasons += "${candidate.provider}/${candidate.repository}/${candidate.path}: empty download url"
                 return@forEach
             }
 
@@ -491,17 +508,32 @@ class ScannerViewModel @Inject constructor(
                 return@forEach
             }
 
-            when (playlistRepository.importFromUrl(sourceUrl, candidate.name.ifBlank { "Imported Playlist" })) {
+            val importResult = playlistRepository.importFromUrl(
+                sourceUrl,
+                candidate.name.ifBlank { "Imported Playlist" }
+            )
+            when (importResult) {
                 is AppResult.Success -> {
                     imported += 1
                     existingSources += normalizedSource
                 }
-                is AppResult.Error -> failed += 1
+                is AppResult.Error -> {
+                    failed += 1
+                    failureReasons += buildFailureReason(
+                        candidate = candidate,
+                        reason = importResult.message
+                    )
+                }
                 AppResult.Loading -> Unit
             }
         }
 
-        return ImportSummary(imported = imported, skipped = skipped, failed = failed)
+        return ImportSummary(
+            imported = imported,
+            skipped = skipped,
+            failed = failed,
+            failureReasons = failureReasons.take(MAX_IMPORT_FAILURE_DETAILS)
+        )
     }
 
     private fun setStatus(
@@ -579,7 +611,9 @@ class ScannerViewModel @Inject constructor(
         val bitbucket = byProvider["bitbucket"] ?: 0
         val foundMessage = "Найдено ${results.size} (GitHub=$github, GitLab=$gitlab, Bitbucket=$bitbucket)"
         val importMessage = importSummary?.let {
-            " | сохранено=${it.imported}, пропущено=${it.skipped}, ошибок=${it.failed}"
+            val base = " | сохранено=${it.imported}, пропущено=${it.skipped}, ошибок=${it.failed}"
+            val reason = it.failureReasons.firstOrNull()?.let { first -> " | причина: $first" }.orEmpty()
+            base + reason
         }.orEmpty()
         return foundMessage + importMessage
     }
@@ -635,7 +669,7 @@ class ScannerViewModel @Inject constructor(
             updatedAfterEpochMs = updatedAfter,
             minSizeBytes = minSizeBytes.toLongOrNull(),
             maxSizeBytes = maxSizeBytes.toLongOrNull(),
-            limit = SEARCH_LIMIT
+            limit = SEARCH_FETCH_LIMIT
         )
     }
 
@@ -768,18 +802,39 @@ class ScannerViewModel @Inject constructor(
     private data class ImportSummary(
         val imported: Int = 0,
         val skipped: Int = 0,
-        val failed: Int = 0
+        val failed: Int = 0,
+        val failureReasons: List<String> = emptyList()
     )
 
     private companion object {
-        const val SEARCH_LIMIT = 10
+        const val SEARCH_SAVE_TARGET = 10
+        const val SEARCH_DISPLAY_LIMIT = 10
+        const val SEARCH_FETCH_LIMIT = 40
         const val SEARCH_TIMEOUT_MS = 35_000L
         const val SEARCH_WATCHDOG_MS = 8_000L
         const val SEARCH_STEP_TIMEOUT_MS = 12_000L
         const val MAX_PLAN_STEPS = 6
         const val MAX_KEYWORDS = 10
         const val MAX_LOG_MESSAGE = 700
+        const val MAX_IMPORT_FAILURE_DETAILS = 5
     }
+}
+
+private fun buildFailureReason(
+    candidate: PlaylistCandidate,
+    reason: String
+): String {
+    val rawReason = reason.trim()
+    val mappedReason = when {
+        rawReason.contains("Missing #EXTM3U header", ignoreCase = true) ->
+            "файл не похож на M3U (#EXTM3U отсутствует)"
+        rawReason.contains("No valid channels found", ignoreCase = true) ->
+            "файл не содержит валидных каналов"
+        rawReason.contains("HTTP ", ignoreCase = true) ->
+            rawReason
+        else -> rawReason
+    }
+    return "${candidate.provider}/${candidate.repository}/${candidate.path}: $mappedReason"
 }
 
 private fun scannerPresets(): List<ScannerPreset> {
@@ -796,7 +851,7 @@ private fun scannerPresets(): List<ScannerPreset> {
             id = "ru",
             title = "Русские каналы",
             query = "russian iptv",
-            keywords = "russia, russian, ru, россия, русский",
+            keywords = "",
             provider = ScannerProviderScope.ALL,
             description = "Поиск списков с русскими каналами и русскоязычными метками."
         ),
@@ -804,7 +859,7 @@ private fun scannerPresets(): List<ScannerPreset> {
             id = "world",
             title = "Каналы мира",
             query = "world iptv",
-            keywords = "world, global, international, countries",
+            keywords = "",
             provider = ScannerProviderScope.ALL,
             description = "Поиск международных и мульти-страночных IPTV списков."
         ),
@@ -812,7 +867,7 @@ private fun scannerPresets(): List<ScannerPreset> {
             id = "sport",
             title = "Спорт",
             query = "sport iptv",
-            keywords = "sport, football, soccer, hockey",
+            keywords = "",
             provider = ScannerProviderScope.ALL,
             description = "Поиск спортивных плейлистов (футбол, хоккей и др.)."
         ),
@@ -820,7 +875,7 @@ private fun scannerPresets(): List<ScannerPreset> {
             id = "movies",
             title = "Фильмы/Сериалы",
             query = "movie iptv",
-            keywords = "movie, cinema, film, vod",
+            keywords = "",
             provider = ScannerProviderScope.ALL,
             description = "Поиск плейлистов с фильмами и VOD-каталогами."
         )

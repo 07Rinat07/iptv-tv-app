@@ -491,16 +491,12 @@ class PublicRepositoryScannerDataSource @Inject constructor(
     }
 
     private fun matchesFilters(candidate: PlaylistCandidate, request: ScannerSearchRequest): Boolean {
-        val haystack = "${candidate.name} ${candidate.path} ${candidate.repository}".lowercase()
         val repoFilter = request.repoFilter
         val pathFilter = request.pathFilter
         val minSizeBytes = request.minSizeBytes
         val maxSizeBytes = request.maxSizeBytes
         val updatedAfter = request.updatedAfterEpochMs
 
-        val matchesKeywords = request.keywords.isEmpty() || request.keywords.any { keyword ->
-            haystack.contains(keyword.trim().lowercase())
-        }
         val matchesRepo = repoFilter.isNullOrBlank() || candidate.repository.contains(repoFilter, ignoreCase = true)
         val matchesPath = pathFilter.isNullOrBlank() || candidate.path.contains(pathFilter, ignoreCase = true)
         val size = candidate.sizeBytes
@@ -508,7 +504,11 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         val matchesMaxSize = maxSizeBytes == null || (size != null && size <= maxSizeBytes)
         val updated = parseEpochOrNull(candidate.updatedAt)
         val matchesUpdated = updatedAfter == null || (updated != null && updated >= updatedAfter)
-        return matchesKeywords && matchesRepo && matchesPath && matchesMinSize && matchesMaxSize && matchesUpdated
+
+        // Keywords are used as relevance boost instead of hard filter:
+        // provider APIs already search in file/repository content, while local metadata
+        // (name/path/repo) can miss these words and over-filter valid playlists.
+        return matchesRepo && matchesPath && matchesMinSize && matchesMaxSize && matchesUpdated
     }
 
     private fun relevanceScore(candidate: PlaylistCandidate, request: ScannerSearchRequest): Int {

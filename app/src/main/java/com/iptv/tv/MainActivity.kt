@@ -87,6 +87,7 @@ private fun AppRoot() {
     val navController = rememberNavController()
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route ?: Routes.HOME
     val activity = LocalContext.current as? ComponentActivity
+    val colorScheme = MaterialTheme.colorScheme
     var showExitConfirm by remember { mutableStateOf(false) }
     var showSectionsMenu by remember { mutableStateOf(false) }
 
@@ -102,9 +103,9 @@ private fun AppRoot() {
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF06121D),
-                        Color(0xFF0A1D2D),
-                        Color(0xFF071017)
+                        colorScheme.background,
+                        colorScheme.surface,
+                        colorScheme.surfaceVariant
                     )
                 )
             )
@@ -113,7 +114,7 @@ private fun AppRoot() {
             containerColor = Color.Transparent,
             topBar = {
                 Surface(
-                    color = Color(0x44111A22),
+                    color = colorScheme.surface.copy(alpha = 0.92f),
                     tonalElevation = 8.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -136,7 +137,7 @@ private fun AppRoot() {
                                 text = "Раздел: ${routeTitle(currentRoute)}",
                                 modifier = Modifier.testTag(TAG_ROUTE_LABEL),
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.secondary
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         NavControlButtons(
@@ -163,7 +164,7 @@ private fun AppRoot() {
                     modifier = Modifier
                         .fillMaxSize()
                         .widthIn(max = 1360.dp),
-                    color = Color(0x262D3E4D),
+                    color = colorScheme.surfaceVariant.copy(alpha = 0.58f),
                     tonalElevation = 4.dp
                 ) {
                     NavHost(

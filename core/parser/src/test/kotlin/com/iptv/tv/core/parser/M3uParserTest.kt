@@ -23,7 +23,7 @@ class M3uParserTest {
     }
 
     @Test
-    fun failsWhenHeaderMissing() {
+    fun parsesWhenHeaderMissingButEntriesLookValid() {
         val parser = M3uParser()
         val raw = """
             #EXTINF:-1,No Header
@@ -31,6 +31,19 @@ class M3uParserTest {
         """.trimIndent()
 
         val result = parser.parse(playlistId = 1, raw = raw)
+        assertTrue(result is ParseResult.Valid)
+        val valid = result as ParseResult.Valid
+        assertEquals(1, valid.channels.size)
+        assertTrue(valid.warnings.any { it.contains("auto-added", ignoreCase = true) })
+    }
+
+    @Test
+    fun failsWhenHeaderMissingAndNoPlaylistStructure() {
+        val parser = M3uParser()
+        val raw = "plain text without extinf and stream url"
+
+        val result = parser.parse(playlistId = 1, raw = raw)
+
         assertTrue(result is ParseResult.Invalid)
     }
 
