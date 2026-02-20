@@ -55,10 +55,12 @@ import com.iptv.tv.feature.home.HomeScreen
 import com.iptv.tv.feature.importer.ImportPrefill
 import com.iptv.tv.feature.importer.ImportPrefillBus
 import com.iptv.tv.feature.importer.ImporterScreen
+import com.iptv.tv.feature.player.PLAYER_CHANNEL_ID_ARG
 import com.iptv.tv.feature.player.PLAYER_PLAYLIST_ID_ARG
 import com.iptv.tv.feature.player.PlayerScreen
 import com.iptv.tv.feature.playlists.PlaylistsScreen
 import com.iptv.tv.feature.scanner.ScannerScreen
+import com.iptv.tv.feature.settings.NetworkTestScreen
 import com.iptv.tv.feature.settings.SettingsScreen
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -222,8 +224,8 @@ private fun AppRoot() {
                         }
                         composable(Routes.FAVORITES) {
                             FavoritesScreen(
-                                onOpenPlayer = { playlistId ->
-                                    navController.navigate(Routes.playerRoute(playlistId))
+                                onOpenPlayer = { playlistId, channelId ->
+                                    navController.navigate(Routes.playerRoute(playlistId, channelId))
                                 }
                             )
                         }
@@ -245,11 +247,31 @@ private fun AppRoot() {
                         ) {
                             PlayerScreen(onPrimaryAction = { navController.navigate(Routes.SETTINGS) }, primaryLabel = "Сменить плеер")
                         }
+                        composable(
+                            route = Routes.PLAYER_WITH_CHANNEL_ARG,
+                            arguments = listOf(
+                                navArgument(PLAYER_PLAYLIST_ID_ARG) { type = NavType.LongType },
+                                navArgument(PLAYER_CHANNEL_ID_ARG) { type = NavType.LongType }
+                            )
+                        ) {
+                            PlayerScreen(onPrimaryAction = { navController.navigate(Routes.SETTINGS) }, primaryLabel = "Сменить плеер")
+                        }
                         composable(Routes.DOWNLOADS) {
                             DownloadsScreen()
                         }
                         composable(Routes.SETTINGS) {
-                            SettingsScreen(onPrimaryAction = { navController.navigate(Routes.DIAGNOSTICS) }, primaryLabel = "Диагностика")
+                            SettingsScreen(
+                                onOpenNetworkTest = { navController.navigate(Routes.NETWORK_TEST) },
+                                onPrimaryAction = { navController.navigate(Routes.DIAGNOSTICS) },
+                                primaryLabel = "Диагностика"
+                            )
+                        }
+                        composable(Routes.NETWORK_TEST) {
+                            NetworkTestScreen(
+                                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                                onPrimaryAction = { navController.navigate(Routes.SCANNER) },
+                                primaryLabel = "Открыть сканер"
+                            )
                         }
                         composable(Routes.DIAGNOSTICS) {
                             DiagnosticsScreen(onPrimaryAction = { navController.navigate(Routes.HOME) }, primaryLabel = "На главную")
@@ -326,6 +348,7 @@ private fun SectionsMenuDialog(
         Routes.PLAYER to "Плеер",
         Routes.DOWNLOADS to "Загрузки",
         Routes.SETTINGS to "Настройки",
+        Routes.NETWORK_TEST to "Сетевой тест",
         Routes.DIAGNOSTICS to "Логи"
     )
 
@@ -375,6 +398,7 @@ private fun routeTitle(route: String): String = when {
         Routes.HISTORY -> "История"
         Routes.DOWNLOADS -> "Загрузки"
         Routes.SETTINGS -> "Настройки"
+        Routes.NETWORK_TEST -> "Сетевой тест"
         Routes.DIAGNOSTICS -> "Диагностика"
         else -> route
     }
@@ -391,10 +415,13 @@ object Routes {
     const val HISTORY = "history"
     const val PLAYER = "player"
     const val PLAYER_WITH_ARG = "player/{playlistId}"
+    const val PLAYER_WITH_CHANNEL_ARG = "player/{playlistId}/{channelId}"
     const val DOWNLOADS = "downloads"
     const val SETTINGS = "settings"
+    const val NETWORK_TEST = "network_test"
     const val DIAGNOSTICS = "diagnostics"
 
     fun editorRoute(playlistId: Long): String = "editor/$playlistId"
     fun playerRoute(playlistId: Long): String = "player/$playlistId"
+    fun playerRoute(playlistId: Long, channelId: Long): String = "player/$playlistId/$channelId"
 }

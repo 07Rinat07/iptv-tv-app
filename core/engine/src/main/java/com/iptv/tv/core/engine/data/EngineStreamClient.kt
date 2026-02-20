@@ -1,6 +1,7 @@
 package com.iptv.tv.core.engine.data
 
 import com.iptv.tv.core.common.AppResult
+import com.iptv.tv.core.common.toLogSummary
 import com.iptv.tv.core.engine.api.EngineStreamApi
 import com.iptv.tv.core.model.EngineStatus
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -104,7 +105,7 @@ class EngineStreamClient @Inject constructor(
                 connected = false,
                 message = "Torrent resolve failed: ${throwable.message}"
             )
-            AppResult.Error("Engine resolve failed", throwable)
+            AppResult.Error("Engine resolve failed: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
         }
     }
 
@@ -134,7 +135,7 @@ class EngineStreamClient @Inject constructor(
                 )
             )
         }.getOrElse { throwable ->
-            AppResult.Error("Engine status request failed", throwable)
+            AppResult.Error("Engine status request failed: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
         }
     }
 

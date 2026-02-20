@@ -3,6 +3,8 @@ package com.iptv.tv.core.domain.repository
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.ManualBufferSettings
 import com.iptv.tv.core.model.PlayerType
+import com.iptv.tv.core.model.ScannerLearnedQuery
+import com.iptv.tv.core.model.ScannerProxySettings
 import kotlinx.coroutines.flow.Flow
 
 interface SettingsRepository {
@@ -16,6 +18,9 @@ interface SettingsRepository {
     fun observeAllowInsecureUrls(): Flow<Boolean>
     fun observeDownloadsWifiOnly(): Flow<Boolean>
     fun observeMaxParallelDownloads(): Flow<Int>
+    fun observeScannerAiEnabled(): Flow<Boolean>
+    fun observeScannerProxySettings(): Flow<ScannerProxySettings>
+    fun observeScannerLearnedQueries(): Flow<List<ScannerLearnedQuery>>
     suspend fun setDefaultPlayer(playerType: PlayerType)
     suspend fun setBufferProfile(profile: BufferProfile)
     suspend fun setManualBuffer(startMs: Int, rebufferMs: Int, maxMs: Int)
@@ -26,4 +31,8 @@ interface SettingsRepository {
     suspend fun setAllowInsecureUrls(allowed: Boolean)
     suspend fun setDownloadsWifiOnly(enabled: Boolean)
     suspend fun setMaxParallelDownloads(value: Int)
+    suspend fun setScannerAiEnabled(enabled: Boolean)
+    suspend fun setScannerProxySettings(settings: ScannerProxySettings)
+    suspend fun recordScannerLearning(query: String, relatedQueries: List<String>, presetId: String?)
+    suspend fun clearScannerLearning()
 }

@@ -33,6 +33,7 @@ dependencies {
     implementation(libs.moshi.kotlin)
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
+    implementation(libs.okhttp.dnsoverhttps)
 
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)

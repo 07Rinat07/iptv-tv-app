@@ -27,6 +27,10 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.exoplayer.hls)
+    implementation(libs.androidx.media3.exoplayer.dash)
+    implementation(libs.androidx.media3.exoplayer.rtsp)
+    implementation(libs.androidx.media3.exoplayer.smoothstreaming)
     implementation(libs.androidx.media3.ui)
 
     testImplementation(libs.junit4)

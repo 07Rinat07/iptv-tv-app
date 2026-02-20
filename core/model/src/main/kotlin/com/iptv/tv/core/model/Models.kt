@@ -35,11 +35,27 @@ data class ManualBufferSettings(
     val maxMs: Int
 )
 
+data class ScannerProxySettings(
+    val enabled: Boolean = false,
+    val host: String = "",
+    val port: Int? = null,
+    val username: String = "",
+    val password: String = ""
+)
+
+data class ScannerLearnedQuery(
+    val query: String,
+    val hits: Int,
+    val lastSuccessAt: Long,
+    val presetId: String? = null
+)
+
 data class Playlist(
     val id: Long,
     val name: String,
     val sourceType: PlaylistSourceType,
     val source: String,
+    val epgSourceUrl: String? = null,
     val scheduleHours: Int,
     val lastSyncedAt: Long?,
     val channelCount: Int,
@@ -57,6 +73,25 @@ data class Channel(
     val health: ChannelHealth,
     val orderIndex: Int,
     val isHidden: Boolean
+)
+
+data class EpgProgram(
+    val title: String,
+    val description: String?,
+    val category: String?,
+    val startEpochMs: Long,
+    val endEpochMs: Long
+)
+
+data class ChannelEpgInfo(
+    val channelId: Long,
+    val channelName: String,
+    val tvgId: String?,
+    val epgSourceUrl: String?,
+    val matchedBy: String,
+    val now: EpgProgram?,
+    val next: EpgProgram?,
+    val upcoming: List<EpgProgram>
 )
 
 data class PlaylistCandidate(
@@ -77,10 +112,17 @@ enum class ScannerProviderScope {
     BITBUCKET
 }
 
+enum class ScannerSearchMode {
+    AUTO,
+    DIRECT_API,
+    SEARCH_ENGINE
+}
+
 data class ScannerSearchRequest(
     val query: String,
     val keywords: List<String> = emptyList(),
     val providerScope: ScannerProviderScope = ScannerProviderScope.ALL,
+    val searchMode: ScannerSearchMode = ScannerSearchMode.AUTO,
     val repoFilter: String? = null,
     val pathFilter: String? = null,
     val updatedAfterEpochMs: Long? = null,

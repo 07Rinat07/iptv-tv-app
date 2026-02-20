@@ -28,6 +28,7 @@ import com.iptv.tv.core.model.PlayerType as CorePlayerType
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
+    onOpenNetworkTest: (() -> Unit)? = null,
     onPrimaryAction: (() -> Unit)? = null,
     primaryLabel: String = "Открыть",
     viewModel: SettingsViewModel = hiltViewModel()
@@ -56,6 +57,106 @@ fun SettingsScreen(
             ) {
                 Button(onClick = viewModel::applyRecommendedSettings) {
                     Text("Рекомендуемые настройки")
+                }
+            }
+        }
+
+        item {
+            SettingsSectionCard(
+                title = "AI-сканер",
+                subtitle = "Локальный AI (offline): умный подбор запросов и fallback-стратегий"
+            ) {
+                Text("Статус: ${if (state.scannerAiEnabled) "Включен" else "Выключен"}")
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SelectionButton(
+                        selected = state.scannerAiEnabled,
+                        label = "AI Вкл",
+                        onClick = { viewModel.setScannerAiEnabled(true) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = !state.scannerAiEnabled,
+                        label = "AI Выкл",
+                        onClick = { viewModel.setScannerAiEnabled(false) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                }
+                Text(
+                    text = "Рекомендуется держать включенным: поиск строится по тематике запроса и по нескольким провайдерам.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+
+        item {
+            SettingsSectionCard(
+                title = "Прокси для сканера",
+                subtitle = "Ручной proxy для GitHub/GitLab/Bitbucket поиска"
+            ) {
+                Text("Статус: ${if (state.scannerProxyEnabled) "Включен" else "Выключен"}")
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SelectionButton(
+                        selected = state.scannerProxyEnabled,
+                        label = "Proxy Вкл",
+                        onClick = { viewModel.setScannerProxyEnabled(true) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = !state.scannerProxyEnabled,
+                        label = "Proxy Выкл",
+                        onClick = { viewModel.setScannerProxyEnabled(false) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                }
+                OutlinedTextField(
+                    value = state.scannerProxyHost,
+                    onValueChange = viewModel::updateScannerProxyHost,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Proxy host") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = state.scannerProxyPort,
+                    onValueChange = viewModel::updateScannerProxyPort,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Proxy port") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = state.scannerProxyUsername,
+                    onValueChange = viewModel::updateScannerProxyUsername,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Proxy user (опционально)") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = state.scannerProxyPassword,
+                    onValueChange = viewModel::updateScannerProxyPassword,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Proxy pass (опционально)") },
+                    singleLine = true
+                )
+                Button(onClick = viewModel::saveScannerProxySettings) {
+                    Text("Сохранить прокси")
+                }
+            }
+        }
+
+        onOpenNetworkTest?.let { openNetworkTest ->
+            item {
+                SettingsSectionCard(
+                    title = "Сетевой тест сканера",
+                    subtitle = "One-click проверка DNS/API/Web и текущего прокси"
+                ) {
+                    Button(onClick = openNetworkTest) {
+                        Text("Открыть сетевой тест")
+                    }
                 }
             }
         }

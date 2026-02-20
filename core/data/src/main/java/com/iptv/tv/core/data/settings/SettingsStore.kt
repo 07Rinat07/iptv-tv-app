@@ -22,4 +22,11 @@ object SettingsKeys {
     val allowInsecureUrls: Preferences.Key<Boolean> = booleanPreferencesKey("allow_insecure_urls")
     val downloadsWifiOnly: Preferences.Key<Boolean> = booleanPreferencesKey("downloads_wifi_only")
     val maxParallelDownloads: Preferences.Key<Int> = intPreferencesKey("downloads_max_parallel")
+    val scannerAiEnabled: Preferences.Key<Boolean> = booleanPreferencesKey("scanner_ai_enabled")
+    val scannerProxyEnabled: Preferences.Key<Boolean> = booleanPreferencesKey("scanner_proxy_enabled")
+    val scannerProxyHost: Preferences.Key<String> = stringPreferencesKey("scanner_proxy_host")
+    val scannerProxyPort: Preferences.Key<Int> = intPreferencesKey("scanner_proxy_port")
+    val scannerProxyUsername: Preferences.Key<String> = stringPreferencesKey("scanner_proxy_username")
+    val scannerProxyPassword: Preferences.Key<String> = stringPreferencesKey("scanner_proxy_password")
+    val scannerLearnedQueries: Preferences.Key<String> = stringPreferencesKey("scanner_learned_queries")
 }

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.PlayerType
+import com.iptv.tv.core.model.ScannerProxySettings
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,6 +28,12 @@ data class SettingsUiState(
     val allowInsecureUrls: Boolean = false,
     val downloadsWifiOnly: Boolean = true,
     val maxParallelDownloads: String = "1",
+    val scannerAiEnabled: Boolean = true,
+    val scannerProxyEnabled: Boolean = false,
+    val scannerProxyHost: String = "",
+    val scannerProxyPort: String = "",
+    val scannerProxyUsername: String = "",
+    val scannerProxyPassword: String = "",
     val isSaving: Boolean = false,
     val lastError: String? = null,
     val lastInfo: String? = null
@@ -150,6 +157,75 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setScannerAiEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setScannerAiEnabled(enabled)
+            _uiState.update {
+                it.copy(
+                    scannerAiEnabled = enabled,
+                    lastInfo = if (enabled) "AI-помощник сканера включен" else "AI-помощник сканера выключен",
+                    lastError = null
+                )
+            }
+        }
+    }
+
+    fun setScannerProxyEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(scannerProxyEnabled = enabled, lastError = null) }
+    }
+
+    fun updateScannerProxyHost(value: String) {
+        _uiState.update { it.copy(scannerProxyHost = value, lastError = null) }
+    }
+
+    fun updateScannerProxyPort(value: String) {
+        _uiState.update { it.copy(scannerProxyPort = value.filter { ch -> ch.isDigit() }, lastError = null) }
+    }
+
+    fun updateScannerProxyUsername(value: String) {
+        _uiState.update { it.copy(scannerProxyUsername = value, lastError = null) }
+    }
+
+    fun updateScannerProxyPassword(value: String) {
+        _uiState.update { it.copy(scannerProxyPassword = value, lastError = null) }
+    }
+
+    fun saveScannerProxySettings() {
+        val state = _uiState.value
+        val enabled = state.scannerProxyEnabled
+        val host = state.scannerProxyHost.trim()
+        val port = state.scannerProxyPort.toIntOrNull()
+
+        if (enabled) {
+            if (host.isBlank()) {
+                _uiState.update { it.copy(lastError = "Укажите Proxy host") }
+                return
+            }
+            if (port == null || port !in 1..65535) {
+                _uiState.update { it.copy(lastError = "Proxy port должен быть от 1 до 65535") }
+                return
+            }
+        }
+
+        viewModelScope.launch {
+            settingsRepository.setScannerProxySettings(
+                ScannerProxySettings(
+                    enabled = enabled,
+                    host = host,
+                    port = if (enabled) port else null,
+                    username = state.scannerProxyUsername.trim(),
+                    password = state.scannerProxyPassword
+                )
+            )
+            _uiState.update {
+                it.copy(
+                    lastInfo = if (enabled) "Прокси сканера сохранен и включен" else "Прокси сканера выключен",
+                    lastError = null
+                )
+            }
+        }
+    }
+
     fun acceptLegal() {
         viewModelScope.launch {
             settingsRepository.setLegalAccepted(true)
@@ -171,6 +247,16 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.setAllowInsecureUrls(false)
             settingsRepository.setDownloadsWifiOnly(true)
             settingsRepository.setMaxParallelDownloads(1)
+            settingsRepository.setScannerAiEnabled(true)
+            settingsRepository.setScannerProxySettings(
+                ScannerProxySettings(
+                    enabled = false,
+                    host = "",
+                    port = null,
+                    username = "",
+                    password = ""
+                )
+            )
 
             _uiState.update {
                 it.copy(
@@ -249,6 +335,24 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.observeMaxParallelDownloads().collect { value ->
                 _uiState.update { it.copy(maxParallelDownloads = value.toString()) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.observeScannerAiEnabled().collect { enabled ->
+                _uiState.update { it.copy(scannerAiEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.observeScannerProxySettings().collect { proxy ->
+                _uiState.update {
+                    it.copy(
+                        scannerProxyEnabled = proxy.enabled,
+                        scannerProxyHost = proxy.host,
+                        scannerProxyPort = proxy.port?.toString().orEmpty(),
+                        scannerProxyUsername = proxy.username,
+                        scannerProxyPassword = proxy.password
+                    )
+                }
             }
         }
     }

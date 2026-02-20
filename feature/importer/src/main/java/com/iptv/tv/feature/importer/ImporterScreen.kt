@@ -1,5 +1,11 @@
 package com.iptv.tv.feature.importer
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,8 +24,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 
 const val TAG_IMPORTER_PLAYLIST_NAME = "importer_playlist_name"
@@ -41,6 +49,29 @@ fun ImporterScreen(
     viewModel: ImporterViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    val openDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            viewModel.updateFilePath(it.toString())
+        }
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.importFromFile()
+        } else {
+            viewModel.onStoragePermissionDenied()
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -81,7 +112,8 @@ fun ImporterScreen(
             Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = viewModel::importFromUrl,
-                    modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_URL)
+                    modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_URL),
+                    enabled = !state.isLoading
                 ) {
                     Text(if (state.isLoading) "Импорт..." else "Импорт URL")
                 }
@@ -101,8 +133,41 @@ fun ImporterScreen(
             )
             Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    onClick = viewModel::importFromFile,
-                    modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_FILE)
+                    onClick = {
+                        openDocumentLauncher.launch(
+                            arrayOf(
+                                "application/vnd.apple.mpegurl",
+                                "application/x-mpegURL",
+                                "audio/x-mpegurl",
+                                "audio/mpegurl",
+                                "text/plain",
+                                "*/*"
+                            )
+                        )
+                    },
+                    enabled = !state.isLoading
+                ) {
+                    Text("Выбрать файл")
+                }
+                Button(
+                    onClick = {
+                        val needLegacyPermission = state.filePathOrUri.requiresLegacyReadPermission()
+                        if (needLegacyPermission) {
+                            val granted = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.READ_EXTERNAL_STORAGE
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (granted) {
+                                viewModel.importFromFile()
+                            } else {
+                                permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+                            }
+                        } else {
+                            viewModel.importFromFile()
+                        }
+                    },
+                    modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_FILE),
+                    enabled = !state.isLoading
                 ) {
                     Text(if (state.isLoading) "Импорт..." else "Импорт файла")
                 }
@@ -123,13 +188,15 @@ fun ImporterScreen(
             Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = viewModel::importFromText,
-                    modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_TEXT)
+                    modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_TEXT),
+                    enabled = !state.isLoading
                 ) {
                     Text(if (state.isLoading) "Импорт..." else "Импорт текста")
                 }
                 Button(
                     onClick = viewModel::validateLastImportedPlaylist,
-                    modifier = Modifier.testTag(TAG_IMPORTER_VALIDATE)
+                    modifier = Modifier.testTag(TAG_IMPORTER_VALIDATE),
+                    enabled = !state.isLoading
                 ) {
                     Text("Проверить")
                 }
@@ -193,4 +260,12 @@ fun ImporterScreen(
             }
         }
     }
+}
+
+private fun String.requiresLegacyReadPermission(): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return false
+    val value = trim().lowercase()
+    if (value.isBlank()) return false
+    if (value.startsWith("content://")) return false
+    return value.startsWith("/") || value.startsWith("file://")
 }

@@ -1,6 +1,7 @@
 package com.iptv.tv.core.domain.repository
 
 import com.iptv.tv.core.common.AppResult
+import com.iptv.tv.core.model.ChannelEpgInfo
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistValidationReport
@@ -18,4 +19,5 @@ interface PlaylistRepository {
     suspend fun refreshAllPlaylists(): AppResult<Int>
     suspend fun deletePlaylist(playlistId: Long): AppResult<Int>
     suspend fun getChannelById(channelId: Long): AppResult<Channel>
+    suspend fun getChannelEpgNowNext(channelId: Long): AppResult<ChannelEpgInfo>
 }

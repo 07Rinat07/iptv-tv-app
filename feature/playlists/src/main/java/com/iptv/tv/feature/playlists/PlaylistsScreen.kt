@@ -53,6 +53,7 @@ fun PlaylistsScreen(
         }
 
         item {
+            val current = state.playlists.firstOrNull { it.id == state.selectedPlaylistId }
             Card(
                 modifier = Modifier.fillMaxWidth().tvFocusOutline(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -64,8 +65,13 @@ fun PlaylistsScreen(
                     Text("Управление списками", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Всего плейлистов: ${state.playlists.size} | " +
-                            "выбран: ${state.selectedPlaylistId ?: "-"}"
+                            "текущий: ${current?.name ?: "не выбран"}"
                     )
+                    current?.let {
+                        Text("Источник: ${sourceTypeLabel(it.sourceType.name)}")
+                        Text("Ссылка/путь: ${it.source}")
+                        Text("Каналов: ${it.channelCount} | Последняя синхронизация: ${formatSyncTime(it.lastSyncedAt)}")
+                    }
                 }
             }
         }
@@ -87,6 +93,19 @@ fun PlaylistsScreen(
                     enabled = !state.isRefreshing && !state.isDeleting
                 ) {
                     Text(if (state.isDeleting) "Удаление..." else "Удалить выбранный плейлист")
+                }
+                val selectedPlaylistId = state.selectedPlaylistId
+                if (selectedPlaylistId != null) {
+                    onOpenEditor?.let { openEditor ->
+                        OutlinedButton(onClick = { openEditor(selectedPlaylistId) }) {
+                            Text("Открыть редактор")
+                        }
+                    }
+                    onOpenPlayer?.let { openPlayer ->
+                        OutlinedButton(onClick = { openPlayer(selectedPlaylistId) }) {
+                            Text("Открыть плеер")
+                        }
+                    }
                 }
             }
         }
@@ -132,14 +151,15 @@ fun PlaylistsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = playlist.name,
+                            text = if (selected) "${playlist.name} (текущий)" else playlist.name,
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            "ID: ${playlist.id} | source=${playlist.sourceType} | " +
-                                "custom=${playlist.isCustom} | channels=${playlist.channelCount}"
+                            "ID: ${playlist.id} | тип: ${sourceTypeLabel(playlist.sourceType.name)} | " +
+                                "кастомный=${if (playlist.isCustom) "да" else "нет"} | каналов=${playlist.channelCount}"
                         )
-                        Text("Source: ${playlist.source}")
+                        Text("Источник: ${playlist.source}")
+                        Text("Последняя синхронизация: ${formatSyncTime(playlist.lastSyncedAt)}")
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -163,5 +183,24 @@ fun PlaylistsScreen(
             }
         }
     }
+}
+
+private fun sourceTypeLabel(raw: String): String {
+    return when (raw.uppercase()) {
+        "URL" -> "URL"
+        "TEXT" -> "Текст"
+        "FILE" -> "Локальный файл"
+        "GITHUB" -> "GitHub"
+        "GITLAB" -> "GitLab"
+        "BITBUCKET" -> "Bitbucket"
+        "CUSTOM" -> "Пользовательский"
+        else -> raw
+    }
+}
+
+private fun formatSyncTime(value: Long?): String {
+    if (value == null || value <= 0L) return "нет данных"
+    val formatter = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
+    return formatter.format(java.util.Date(value))
 }
 

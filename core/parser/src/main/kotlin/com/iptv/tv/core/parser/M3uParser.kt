@@ -20,6 +20,7 @@ class M3uParser {
         }
 
         val lines = rawToParse.lineSequence().map { it.trim() }.toList()
+        val epgUrls = parseHeaderEpgUrls(lines)
         val channels = mutableListOf<Channel>()
         val warnings = mutableListOf<String>()
         if (canRecoverMissingHeader) {
@@ -70,7 +71,11 @@ class M3uParser {
             return ParseResult.Invalid("No valid channels found")
         }
 
-        return ParseResult.Valid(channels = channels, warnings = warnings)
+        return ParseResult.Valid(
+            channels = channels,
+            warnings = warnings,
+            epgUrls = epgUrls
+        )
     }
 
     private fun parseMeta(extInf: String): ExtInfMeta {
@@ -85,6 +90,25 @@ class M3uParser {
             logo = attr("tvg-logo"),
             name = title
         )
+    }
+
+    private fun parseHeaderEpgUrls(lines: List<String>): List<String> {
+        val attrNames = listOf("url-tvg", "x-tvg-url", "tvg-url")
+        return lines
+            .asSequence()
+            .filter { it.startsWith("#EXTM3U", ignoreCase = true) }
+            .flatMap { line ->
+                attrNames.asSequence().mapNotNull { attr ->
+                    Regex("$attr=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+                        .find(line)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                }
+            }
+            .distinct()
+            .toList()
     }
 
     private fun isLikelyStreamUrl(raw: String): Boolean {
@@ -134,7 +158,8 @@ data class ExtInfMeta(
 sealed interface ParseResult {
     data class Valid(
         val channels: List<Channel>,
-        val warnings: List<String>
+        val warnings: List<String>,
+        val epgUrls: List<String> = emptyList()
     ) : ParseResult
 
     data class Invalid(val reason: String) : ParseResult

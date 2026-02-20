@@ -3,16 +3,19 @@ package com.iptv.tv.core.network.di
 import com.iptv.tv.core.network.api.BitbucketApi
 import com.iptv.tv.core.network.api.GitHubApi
 import com.iptv.tv.core.network.api.GitLabApi
+import com.iptv.tv.core.network.dns.ResilientDns
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.net.ProxySelector
 import java.util.concurrent.TimeUnit
 import javax.inject.Named
 import javax.inject.Singleton
@@ -34,7 +37,26 @@ object NetworkModule {
         val logger = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BASIC
         }
+        val resilientDns = ResilientDns.create()
         return OkHttpClient.Builder()
+            .dns(resilientDns)
+            .proxySelector(ProxySelector.getDefault())
+            .proxyAuthenticator { _, response ->
+                val user = System.getProperty(PROXY_SCANNER_USER).orEmpty().trim()
+                if (user.isBlank()) {
+                    null
+                } else {
+                    val pass = System.getProperty(PROXY_SCANNER_PASS).orEmpty()
+                    val credential = Credentials.basic(user, pass)
+                    if (response.request.header("Proxy-Authorization") == credential) {
+                        null
+                    } else {
+                        response.request.newBuilder()
+                            .header("Proxy-Authorization", credential)
+                            .build()
+                    }
+                }
+            }
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
                     .header("User-Agent", "IptvTv/0.1")
@@ -42,11 +64,15 @@ object NetworkModule {
                 chain.proceed(request)
             }
             .addInterceptor(logger)
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(40, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
     }
+
+    private const val PROXY_SCANNER_USER = "myscaner.proxy.user"
+    private const val PROXY_SCANNER_PASS = "myscaner.proxy.pass"
 
     @Provides
     @Singleton

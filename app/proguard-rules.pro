@@ -13,6 +13,11 @@
 
 # Media3 PlayerView used via AndroidView interop.
 -keep class androidx.media3.ui.PlayerView { <init>(...); }
+-keep class androidx.media3.exoplayer.hls.** { *; }
+-keep class androidx.media3.exoplayer.dash.** { *; }
+-keep class androidx.media3.exoplayer.rtsp.** { *; }
+-keep class androidx.media3.exoplayer.smoothstreaming.** { *; }
+-keep class androidx.media3.exoplayer.source.DefaultMediaSourceFactory { *; }
 
 # Keep model members used by serialization/mapping.
 -keepclassmembers class com.iptv.tv.core.model.** { *; }

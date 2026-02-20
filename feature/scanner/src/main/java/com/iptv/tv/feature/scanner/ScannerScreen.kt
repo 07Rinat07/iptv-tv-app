@@ -2,9 +2,11 @@ package com.iptv.tv.feature.scanner
 
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -21,11 +23,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.ScannerProviderScope
+import com.iptv.tv.core.model.ScannerSearchMode
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -43,13 +48,14 @@ fun ScannerScreen(
         ScannerProviderScope.ALL -> "Опционально: owner/repo или group/project"
     }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp)
-            .focusable(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp)
+                .focusable(),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
         item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
             Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
@@ -64,8 +70,9 @@ fun ScannerScreen(
                     Text("Быстрый старт", style = MaterialTheme.typography.titleMedium)
                     Text("1) Выберите пресет (например: Русские каналы)")
                     Text("2) Проверьте запрос и источник поиска")
-                    Text("3) Нажмите \"Найти и сохранить 10\"")
-                    Text("4) Откройте \"Мои плейлисты\"")
+                    Text("3) Нажмите \"Найти и сохранить найденное\"")
+                    Text("4) Поиск идет до 5 минут, затем найденное сохранится автоматически")
+                    Text("5) Откройте \"Мои плейлисты\"")
                 }
             }
         }
@@ -97,7 +104,7 @@ fun ScannerScreen(
                 onValueChange = viewModel::updateQuery,
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Поисковый запрос") },
-                placeholder = { Text("iptv, sport, news") },
+                placeholder = { Text("iptv, world iptv, russian iptv, movie iptv") },
                 supportingText = { Text("Обязательное поле.") },
                 singleLine = true
             )
@@ -109,8 +116,8 @@ fun ScannerScreen(
                 onValueChange = viewModel::updateKeywords,
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Ключевые слова") },
-                placeholder = { Text("usa, movie, premium") },
-                supportingText = { Text("Опционально, через пробел или запятую.") },
+                placeholder = { Text("movie, series, music, news, sport, мультфильмы, экшен, триллер, ужасы") },
+                supportingText = { Text("Опционально. RU/EN, через пробел или запятую.") },
                 singleLine = true
             )
         }
@@ -125,15 +132,29 @@ fun ScannerScreen(
         }
 
         item {
+            Text("Режим поиска", style = MaterialTheme.typography.titleSmall)
+            SearchModeSelector(
+                selected = state.selectedSearchMode,
+                enabled = !state.isLoading,
+                onSelected = viewModel::updateSearchMode
+            )
+        }
+
+        item {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Button(onClick = viewModel::scanAndSaveTop10, enabled = !state.isLoading) {
-                    Text(if (state.isLoading) "Сканирование..." else "Найти и сохранить 10")
+                Button(onClick = viewModel::scanAndSaveFound, enabled = !state.isLoading) {
+                    Text(if (state.isLoading) "Сканирование..." else "Найти и сохранить найденное (до 5 мин)")
                 }
                 OutlinedButton(onClick = viewModel::scanOnlyTop10, enabled = !state.isLoading) {
                     Text("Только найти")
+                }
+                if (state.isLoading) {
+                    OutlinedButton(onClick = viewModel::stopSearch) {
+                        Text("Остановить и сохранить найденное")
+                    }
                 }
             }
         }
@@ -257,29 +278,41 @@ fun ScannerScreen(
             Text(text = "Найдено: ${state.results.size}", style = MaterialTheme.typography.titleMedium)
         }
 
-        items(state.results, key = { it.id }) { item ->
-            Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(text = item.name, style = MaterialTheme.typography.titleMedium)
-                    Text(text = "${item.provider} | ${item.repository}", style = MaterialTheme.typography.bodySmall)
-                    Text(text = item.path, style = MaterialTheme.typography.bodySmall)
-                    Text(text = "Updated: ${item.updatedAt.ifBlank { "-" }} | size=${item.sizeBytes ?: "-"}")
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(onClick = { viewModel.selectPreview(item) }) {
-                            Text("Предпросмотр")
-                        }
-                        OutlinedButton(
-                            onClick = { onImportCandidate?.invoke(item.downloadUrl, item.name) },
-                            enabled = item.downloadUrl.isNotBlank()
+            items(state.results, key = { it.id }) { item ->
+                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(text = item.name, style = MaterialTheme.typography.titleMedium)
+                        Text(text = "${item.provider} | ${item.repository}", style = MaterialTheme.typography.bodySmall)
+                        Text(text = item.path, style = MaterialTheme.typography.bodySmall)
+                        Text(text = "Updated: ${item.updatedAt.ifBlank { "-" }} | size=${item.sizeBytes ?: "-"}")
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("Импорт вручную")
+                            OutlinedButton(onClick = { viewModel.selectPreview(item) }) {
+                                Text("Предпросмотр")
+                            }
+                            OutlinedButton(
+                                onClick = { onImportCandidate?.invoke(item.downloadUrl, item.name) },
+                                enabled = item.downloadUrl.isNotBlank()
+                            ) {
+                                Text("Импорт вручную")
+                            }
                         }
                     }
                 }
             }
+        }
+
+        if (state.isLoading) {
+            ScannerLiveOverlay(
+                state = state,
+                onStop = viewModel::stopSearch,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .zIndex(2f)
+            )
         }
     }
 }
@@ -303,9 +336,169 @@ private fun StatusCard(state: ScannerUiState) {
         ) {
             Text(state.statusTitle, style = MaterialTheme.typography.titleMedium)
             Text(state.statusDetails, style = MaterialTheme.typography.bodyMedium)
+            val totalSteps = state.progressTotalSteps.coerceAtLeast(0)
+            val currentStep = state.progressCurrentStep.coerceAtLeast(0)
+            val hasStepProgress = totalSteps > 0
+            val progress = if (hasStepProgress) {
+                (currentStep.coerceAtMost(totalSteps).toFloat() / totalSteps.toFloat()).coerceIn(0f, 1f)
+            } else {
+                0f
+            }
             if (state.isLoading) {
+                if (hasStepProgress) {
+                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+            if (hasStepProgress || state.isLoading) {
+                Text(
+                    text = "Шаг: ${if (hasStepProgress) currentStep.coerceAtMost(totalSteps) else 0}/${if (hasStepProgress) totalSteps else "-"} | найдено: ${state.progressFoundItems}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (state.progressStageLabel.isNotBlank()) {
+                Text(
+                    text = "Сейчас: ${state.progressStageLabel}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (state.progressStageLocation.isNotBlank()) {
+                Text(
+                    text = "Где: ${state.progressStageLocation}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (state.isLoading || state.progressElapsedSeconds > 0) {
+                Text(
+                    text = "Время: ${formatElapsed(state.progressElapsedSeconds)} / лимит ${formatElapsed(state.progressTimeLimitSeconds)}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (state.isLoading) {
+                val remaining = (state.progressTimeLimitSeconds - state.progressElapsedSeconds).coerceAtLeast(0L)
+                Text(
+                    text = "Осталось примерно: ${formatElapsed(remaining)}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScannerLiveOverlay(
+    state: ScannerUiState,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val totalSteps = state.progressTotalSteps.coerceAtLeast(0)
+    val currentStep = state.progressCurrentStep.coerceAtLeast(0)
+    val hasStepProgress = totalSteps > 0
+    val progress = if (hasStepProgress) {
+        (currentStep.coerceAtMost(totalSteps).toFloat() / totalSteps.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+    Card(
+        modifier = modifier.fillMaxWidth(0.52f).tvFocusOutline(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("Сканирование...", style = MaterialTheme.typography.titleMedium)
+            if (hasStepProgress) {
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+            } else {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
+            Text(
+                text = "Шаг ${if (hasStepProgress) currentStep.coerceAtMost(totalSteps) else 0}/${if (hasStepProgress) totalSteps else "-"} | найдено ${state.progressFoundItems}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (state.progressStageLabel.isNotBlank()) {
+                Text("Сейчас: ${state.progressStageLabel}", style = MaterialTheme.typography.bodySmall)
+            }
+            if (state.progressStageLocation.isNotBlank()) {
+                Text("Где: ${state.progressStageLocation}", style = MaterialTheme.typography.bodySmall)
+            }
+            Text("Время: ${formatElapsed(state.progressElapsedSeconds)} / ${formatElapsed(state.progressTimeLimitSeconds)}", style = MaterialTheme.typography.bodySmall)
+            val remaining = (state.progressTimeLimitSeconds - state.progressElapsedSeconds).coerceAtLeast(0L)
+            Text("Осталось: ${formatElapsed(remaining)}", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onStop) {
+                    Text("Остановить")
+                }
+            }
+        }
+    }
+}
+
+private fun formatElapsed(totalSeconds: Long): String {
+    val safe = totalSeconds.coerceAtLeast(0L)
+    val hours = safe / 3600
+    val minutes = (safe % 3600) / 60
+    val seconds = safe % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%02d:%02d".format(minutes, seconds)
+    }
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun SearchModeSelector(
+    selected: ScannerSearchMode,
+    enabled: Boolean,
+    onSelected: (ScannerSearchMode) -> Unit
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        SearchModeButton(
+            label = "Auto",
+            mode = ScannerSearchMode.AUTO,
+            selected = selected,
+            enabled = enabled,
+            onSelected = onSelected
+        )
+        SearchModeButton(
+            label = "Direct API",
+            mode = ScannerSearchMode.DIRECT_API,
+            selected = selected,
+            enabled = enabled,
+            onSelected = onSelected
+        )
+        SearchModeButton(
+            label = "Search Engine",
+            mode = ScannerSearchMode.SEARCH_ENGINE,
+            selected = selected,
+            enabled = enabled,
+            onSelected = onSelected
+        )
+    }
+}
+
+@Composable
+private fun SearchModeButton(
+    label: String,
+    mode: ScannerSearchMode,
+    selected: ScannerSearchMode,
+    enabled: Boolean,
+    onSelected: (ScannerSearchMode) -> Unit
+) {
+    if (mode == selected) {
+        Button(onClick = { onSelected(mode) }, enabled = enabled) {
+            Text(label)
+        }
+    } else {
+        OutlinedButton(onClick = { onSelected(mode) }, enabled = enabled) {
+            Text(label)
         }
     }
 }

@@ -22,7 +22,7 @@ import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 
 @Composable
 fun FavoritesScreen(
-    onOpenPlayer: ((Long) -> Unit)? = null,
+    onOpenPlayer: ((Long, Long) -> Unit)? = null,
     viewModel: FavoritesViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -43,8 +43,9 @@ fun FavoritesScreen(
                 onClick = {
                     val channel = state.channels.firstOrNull { it.id == state.selectedChannelId }
                     val playlistId = channel?.playlistId
-                    if (playlistId != null) {
-                        onOpenPlayer?.invoke(playlistId)
+                    val channelId = channel?.id
+                    if (playlistId != null && channelId != null) {
+                        onOpenPlayer?.invoke(playlistId, channelId)
                     }
                 },
                 enabled = state.selectedChannelId != null

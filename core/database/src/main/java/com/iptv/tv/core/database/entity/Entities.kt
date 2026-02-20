@@ -17,6 +17,7 @@ data class PlaylistEntity(
     val name: String,
     val sourceType: String,
     val source: String,
+    val epgSourceUrl: String?,
     val scheduleHours: Int,
     val lastSyncedAt: Long?,
     val isCustom: Boolean,

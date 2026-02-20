@@ -18,6 +18,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
@@ -45,6 +46,7 @@ data class EditorUiState(
     val customPlaylistName: String = "Мой плейлист",
     val editDraft: ChannelEditDraft = ChannelEditDraft(),
     val exportPreview: String? = null,
+    val exportFileExtension: String = "m3u",
     val exportedFilePath: String? = null,
     val isLoading: Boolean = false,
     val lastError: String? = null,
@@ -69,6 +71,7 @@ class EditorViewModel @Inject constructor(
     private var channelsJob: Job? = null
     private var lastExportContent: String? = null
     private var lastExportPlaylistId: Long? = null
+    private var lastExportExtension: String = "m3u"
 
     init {
         observePlaylists()
@@ -187,9 +190,85 @@ class EditorViewModel @Inject constructor(
         executeEditorAction { editorRepository.createCustomPlaylistFromChannels(name, selected) }
     }
 
-    fun exportSelectedOrVisible() {
+    fun exportSelectedOrVisibleM3u() {
+        exportSelectedOrVisible(extension = "m3u")
+    }
+
+    fun exportSelectedOrVisibleM3u8() {
+        exportSelectedOrVisible(extension = "m3u8")
+    }
+
+    fun exportAllPlaylistsToTxt() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, lastError = null, lastInfo = null) }
+            runCatching {
+                val playlists = playlistRepository.observePlaylists().first()
+                if (playlists.isEmpty()) {
+                    error("Плейлистов пока нет")
+                }
+
+                val contentBuilder = StringBuilder()
+                var totalChannels = 0
+
+                contentBuilder.appendLine("myscanerIPTV | Экспорт плейлистов")
+                contentBuilder.appendLine("Плейлистов: ${playlists.size}")
+                contentBuilder.appendLine("Сформировано: ${System.currentTimeMillis()}")
+                contentBuilder.appendLine()
+
+                playlists.forEachIndexed { playlistIndex, playlist ->
+                    val channels = playlistRepository.observeChannels(playlist.id).first()
+                    totalChannels += channels.size
+
+                    contentBuilder.appendLine("${playlistIndex + 1}. ${playlist.name}")
+                    contentBuilder.appendLine("ID=${playlist.id} | type=${playlist.sourceType} | channels=${channels.size}")
+                    contentBuilder.appendLine("Source: ${playlist.source}")
+
+                    if (channels.isEmpty()) {
+                        contentBuilder.appendLine("  (каналов нет)")
+                    } else {
+                        channels.forEachIndexed { channelIndex, channel ->
+                            val groupSuffix = channel.group?.takeIf { it.isNotBlank() }?.let { " | group=$it" }.orEmpty()
+                            contentBuilder.appendLine("  ${channelIndex + 1}) ${channel.name}$groupSuffix")
+                            contentBuilder.appendLine("     URL: ${channel.streamUrl}")
+                        }
+                    }
+                    contentBuilder.appendLine()
+                }
+
+                TextExportResult(
+                    content = contentBuilder.toString(),
+                    playlistsCount = playlists.size,
+                    channelsCount = totalChannels
+                )
+            }.onSuccess { export ->
+                lastExportContent = export.content
+                lastExportPlaylistId = null
+                lastExportExtension = "txt"
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        exportPreview = export.content.take(EXPORT_PREVIEW_MAX_LEN),
+                        exportFileExtension = "txt",
+                        exportedFilePath = null,
+                        lastInfo = "TXT подготовлен: плейлистов=${export.playlistsCount}, каналов=${export.channelsCount}",
+                        lastError = null
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        lastError = "Не удалось подготовить TXT: ${throwable.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    private fun exportSelectedOrVisible(extension: String) {
         val playlistId = currentPlaylistIdOrError() ?: return
         val selected = _uiState.value.selectedChannelIds.toList()
+        val normalizedExtension = if (extension.equals("m3u8", ignoreCase = true)) "m3u8" else "m3u"
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, lastError = null, lastInfo = null) }
             when (val result = editorRepository.exportToM3u(playlistId, selected)) {
@@ -197,12 +276,14 @@ class EditorViewModel @Inject constructor(
                     val preview = result.data.m3uContent.take(EXPORT_PREVIEW_MAX_LEN)
                     lastExportContent = result.data.m3uContent
                     lastExportPlaylistId = result.data.playlistId
+                    lastExportExtension = normalizedExtension
                     _uiState.update {
                         it.copy(
                             isLoading = false,
                             exportPreview = preview,
+                            exportFileExtension = normalizedExtension,
                             exportedFilePath = null,
-                            lastInfo = "Экспортировано каналов: ${result.data.channelCount}. Нажмите \"Сохранить .m3u в память ТВ\"."
+                            lastInfo = "Экспортировано каналов: ${result.data.channelCount}. Формат: .$normalizedExtension."
                         )
                     }
                 }
@@ -217,7 +298,7 @@ class EditorViewModel @Inject constructor(
     fun saveExportToStorage() {
         val content = lastExportContent
         if (content.isNullOrBlank()) {
-            _uiState.update { it.copy(lastError = "Сначала выполните \"Экспорт M3U\"") }
+            _uiState.update { it.copy(lastError = "Сначала выполните экспорт (M3U/M3U8/TXT)") }
             return
         }
 
@@ -230,14 +311,19 @@ class EditorViewModel @Inject constructor(
                     targetDir.mkdirs()
                 }
 
-                val playlistId = lastExportPlaylistId ?: _uiState.value.effectivePlaylistId ?: 0L
-                val playlistName = _uiState.value.playlists
-                    .firstOrNull { it.id == playlistId }
-                    ?.name
-                    ?.sanitizeFileName()
-                    .orEmpty()
-                    .ifBlank { "playlist-$playlistId" }
-                val fileName = "$playlistName-${System.currentTimeMillis()}.m3u"
+                val playlistId = lastExportPlaylistId ?: _uiState.value.effectivePlaylistId
+                val playlistName = if (playlistId == null) {
+                    "playlists-export"
+                } else {
+                    _uiState.value.playlists
+                        .firstOrNull { it.id == playlistId }
+                        ?.name
+                        ?.sanitizeFileName()
+                        .orEmpty()
+                        .ifBlank { "playlist-$playlistId" }
+                }
+                val ext = _uiState.value.exportFileExtension.ifBlank { lastExportExtension }
+                val fileName = "$playlistName-${System.currentTimeMillis()}.$ext"
                 val file = File(targetDir, fileName)
                 file.writeText(content)
                 file.absolutePath
@@ -264,7 +350,7 @@ class EditorViewModel @Inject constructor(
     fun saveExportToUri(uriString: String) {
         val content = lastExportContent
         if (content.isNullOrBlank()) {
-            _uiState.update { it.copy(lastError = "Сначала выполните \"Экспорт M3U\"") }
+            _uiState.update { it.copy(lastError = "Сначала выполните экспорт (M3U/M3U8/TXT)") }
             return
         }
 
@@ -493,6 +579,12 @@ class EditorViewModel @Inject constructor(
         const val EXPORT_PREVIEW_MAX_LEN = 4000
     }
 }
+
+private data class TextExportResult(
+    val content: String,
+    val playlistsCount: Int,
+    val channelsCount: Int
+)
 
 private fun String.sanitizeFileName(): String {
     return trim()

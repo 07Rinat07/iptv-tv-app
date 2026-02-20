@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.datastore.preferences.core.edit
 import com.iptv.tv.core.common.AppResult
+import com.iptv.tv.core.common.toLogSummary
 import com.iptv.tv.core.data.mapper.toEntity
 import com.iptv.tv.core.data.mapper.toModel
 import com.iptv.tv.core.data.settings.SettingsKeys
@@ -27,8 +28,10 @@ import com.iptv.tv.core.domain.repository.ScannerRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.engine.data.EngineStreamClient
 import com.iptv.tv.core.model.BufferProfile
+import com.iptv.tv.core.model.ChannelEpgInfo
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
+import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.EngineStatus
 import com.iptv.tv.core.model.ManualBufferSettings
 import com.iptv.tv.core.model.PlayerType
@@ -36,6 +39,8 @@ import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.model.PlaylistValidationReport
+import com.iptv.tv.core.model.ScannerLearnedQuery
+import com.iptv.tv.core.model.ScannerProxySettings
 import com.iptv.tv.core.model.ScannerSearchRequest
 import com.iptv.tv.core.network.datasource.PublicRepositoryScannerDataSource
 import com.iptv.tv.core.parser.M3uParser
@@ -43,6 +48,7 @@ import com.iptv.tv.core.parser.ParseResult
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -52,9 +58,17 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserException
+import org.xmlpull.v1.XmlPullParserFactory
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -69,8 +83,13 @@ class ScannerRepositoryImpl @Inject constructor(
             .fold(
                 onSuccess = { AppResult.Success(it) },
                 onFailure = { throwable ->
+                    if (throwable is CancellationException) throw throwable
                     AppResult.Error(
-                        message = throwable.message ?: "Scanner failed",
+                        message = buildString {
+                            append(throwable.message ?: "Scanner failed")
+                            append(" | cause=")
+                            append(throwable.toLogSummary(maxDepth = 5))
+                        },
                         cause = throwable
                     )
                 }
@@ -94,6 +113,7 @@ class PlaylistRepositoryImpl @Inject constructor(
         .readTimeout(5, TimeUnit.SECONDS)
         .callTimeout(7, TimeUnit.SECONDS)
         .build()
+    private val epgCache = ConcurrentHashMap<String, EpgCacheEntry>()
 
     override fun observePlaylists(): Flow<List<Playlist>> {
         return playlistDao.observePlaylistsWithCount().map { rows ->
@@ -119,7 +139,9 @@ class PlaylistRepositoryImpl @Inject constructor(
                 sourceType = PlaylistSourceType.URL,
                 source = url
             )
-        }.getOrElse { AppResult.Error("Unable to import by URL", it) }
+        }.getOrElse { throwable ->
+            AppResult.Error("Unable to import by URL: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
+        }
     }
 
     override suspend fun importFromText(text: String, name: String): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
@@ -134,7 +156,7 @@ class PlaylistRepositoryImpl @Inject constructor(
     override suspend fun importFromFile(pathOrUri: String, name: String): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
         if (pathOrUri.isBlank()) return@withContext AppResult.Error("File path/uri is empty")
         val raw = runCatching { readPlaylistContent(pathOrUri) }.getOrElse {
-            return@withContext AppResult.Error("Unable to read file", it)
+            return@withContext AppResult.Error("Unable to read file: ${it.toLogSummary(maxDepth = 3)}", it)
         }
         importParsedPlaylist(
             playlistName = name,
@@ -260,6 +282,51 @@ class PlaylistRepositoryImpl @Inject constructor(
         AppResult.Success(channel.toModel())
     }
 
+    override suspend fun getChannelEpgNowNext(channelId: Long): AppResult<ChannelEpgInfo> = withContext(Dispatchers.IO) {
+        if (channelId <= 0) return@withContext AppResult.Error("Invalid channel id")
+        val channelEntity = channelDao.findById(channelId)
+            ?: return@withContext AppResult.Error("Channel not found: id=$channelId")
+        val playlist = playlistDao.findById(channelEntity.playlistId)
+            ?: return@withContext AppResult.Error("Playlist not found: id=${channelEntity.playlistId}")
+
+        val epgUrl = playlist.epgSourceUrl?.trim().orEmpty()
+        if (epgUrl.isBlank()) {
+            return@withContext AppResult.Error("EPG source URL is not configured for playlist ${playlist.id}")
+        }
+
+        val epgData = runCatching { getOrLoadXmlTv(epgUrl) }.getOrElse { throwable ->
+            return@withContext AppResult.Error(
+                "Unable to load EPG: ${throwable.toLogSummary(maxDepth = 4)}",
+                throwable
+            )
+        }
+
+        val match = matchChannelToEpg(
+            channelName = channelEntity.name,
+            tvgId = channelEntity.tvgId,
+            data = epgData
+        )
+        val now = System.currentTimeMillis()
+        val nowProgram = match.programs.firstOrNull { it.startEpochMs <= now && now < it.endEpochMs }
+        val nextProgram = match.programs.firstOrNull { it.startEpochMs > now }
+        val upcoming = match.programs
+            .filter { it.endEpochMs > now }
+            .take(12)
+
+        AppResult.Success(
+            ChannelEpgInfo(
+                channelId = channelEntity.id,
+                channelName = channelEntity.name,
+                tvgId = channelEntity.tvgId,
+                epgSourceUrl = epgUrl,
+                matchedBy = match.matchedBy,
+                now = nowProgram,
+                next = nextProgram,
+                upcoming = upcoming
+            )
+        )
+    }
+
     private suspend fun importParsedPlaylist(
         playlistName: String,
         rawPlaylist: String,
@@ -283,11 +350,19 @@ class PlaylistRepositoryImpl @Inject constructor(
             }
             is ParseResult.Valid -> {
                 val deduplicated = deduplicate(parsed.channels)
+                val enrichedLogos = deduplicated.map { channel ->
+                    if (!channel.logo.isNullOrBlank()) {
+                        channel
+                    } else {
+                        channel.copy(logo = resolveLogoFromCatalog(channel))
+                    }
+                }
                 val playlistId = playlistDao.insertPlaylist(
                     PlaylistEntity(
                         name = playlistName,
                         sourceType = sourceType.name,
                         source = source,
+                        epgSourceUrl = parsed.epgUrls.firstOrNull(),
                         scheduleHours = 12,
                         lastSyncedAt = null,
                         isCustom = false,
@@ -295,7 +370,7 @@ class PlaylistRepositoryImpl @Inject constructor(
                     )
                 )
 
-                val prepared = deduplicated.mapIndexed { index, channel ->
+                val prepared = enrichedLogos.mapIndexed { index, channel ->
                     channel.copy(playlistId = playlistId, orderIndex = index)
                 }
                 prepared
@@ -367,6 +442,229 @@ class PlaylistRepositoryImpl @Inject constructor(
 
     private fun normalizeStreamKey(url: String): String {
         return url.trim().lowercase(Locale.ROOT)
+    }
+
+    private fun resolveLogoFromCatalog(channel: Channel): String? {
+        val tvgIdKey = channel.tvgId
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?.replace(Regex("[^a-z0-9._-]"), "")
+            .orEmpty()
+        if (tvgIdKey.isNotBlank()) {
+            LOGO_BY_TVG_ID[tvgIdKey]?.let { return it }
+        }
+
+        val nameKey = channel.name.trim().lowercase(Locale.ROOT)
+        LOGO_BY_NAME_KEYWORD.firstOrNull { (keyword, _) ->
+            nameKey.contains(keyword)
+        }?.let { return it.second }
+
+        return null
+    }
+
+    private fun getOrLoadXmlTv(url: String): XmlTvData {
+        val now = System.currentTimeMillis()
+        epgCache[url]?.takeIf { now - it.loadedAtMs <= EPG_CACHE_TTL_MS }?.let { cached ->
+            return cached.data
+        }
+
+        val xmlPayload = okHttpClient.newCall(
+            Request.Builder()
+                .url(url)
+                .get()
+                .build()
+        ).execute().use { response ->
+            if (!response.isSuccessful) error("HTTP ${response.code}")
+            response.body?.bytes() ?: error("Empty EPG body")
+        }
+
+        val parsed = parseXmlTv(xmlPayload)
+        epgCache[url] = EpgCacheEntry(loadedAtMs = now, data = parsed)
+        return parsed
+    }
+
+    private fun parseXmlTv(payload: ByteArray): XmlTvData {
+        val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
+            setInput(ByteArrayInputStream(payload), Charsets.UTF_8.name())
+        }
+
+        val channelDisplayNames = mutableMapOf<String, MutableSet<String>>()
+        val programsByChannel = mutableMapOf<String, MutableList<EpgProgram>>()
+
+        try {
+            var event = parser.eventType
+            var currentChannelId: String? = null
+            var currentProgrammeChannel: String? = null
+            var currentProgrammeTitle: String? = null
+            var currentProgrammeDesc: String? = null
+            var currentProgrammeCategory: String? = null
+            var currentProgrammeStart: Long? = null
+            var currentProgrammeStop: Long? = null
+
+            while (event != XmlPullParser.END_DOCUMENT) {
+                when (event) {
+                    XmlPullParser.START_TAG -> {
+                        when (parser.name) {
+                            "channel" -> {
+                                currentChannelId = parser.getAttributeValue(null, "id")
+                                    ?.trim()
+                                    ?.takeIf { it.isNotEmpty() }
+                            }
+                            "programme" -> {
+                                currentProgrammeChannel = parser.getAttributeValue(null, "channel")
+                                    ?.trim()
+                                    ?.takeIf { it.isNotEmpty() }
+                                currentProgrammeStart = parseXmlTvTime(parser.getAttributeValue(null, "start"))
+                                currentProgrammeStop = parseXmlTvTime(parser.getAttributeValue(null, "stop"))
+                                currentProgrammeTitle = null
+                                currentProgrammeDesc = null
+                                currentProgrammeCategory = null
+                            }
+                            "display-name" -> {
+                                if (!currentChannelId.isNullOrBlank()) {
+                                    val value = parser.nextText().trim()
+                                    if (value.isNotBlank()) {
+                                        channelDisplayNames.getOrPut(currentChannelId!!) { linkedSetOf() } += value
+                                    }
+                                }
+                            }
+                            "title" -> {
+                                if (!currentProgrammeChannel.isNullOrBlank()) {
+                                    currentProgrammeTitle = parser.nextText().trim().takeIf { it.isNotBlank() }
+                                }
+                            }
+                            "desc" -> {
+                                if (!currentProgrammeChannel.isNullOrBlank()) {
+                                    currentProgrammeDesc = parser.nextText().trim().takeIf { it.isNotBlank() }
+                                }
+                            }
+                            "category" -> {
+                                if (!currentProgrammeChannel.isNullOrBlank()) {
+                                    currentProgrammeCategory = parser.nextText().trim().takeIf { it.isNotBlank() }
+                                }
+                            }
+                        }
+                    }
+                    XmlPullParser.END_TAG -> {
+                        when (parser.name) {
+                            "channel" -> currentChannelId = null
+                            "programme" -> {
+                                val channel = currentProgrammeChannel
+                                val start = currentProgrammeStart
+                                val stop = currentProgrammeStop
+                                val title = currentProgrammeTitle
+                                if (!channel.isNullOrBlank() && start != null && stop != null && !title.isNullOrBlank()) {
+                                    programsByChannel.getOrPut(channel) { mutableListOf() } += EpgProgram(
+                                        title = title,
+                                        description = currentProgrammeDesc,
+                                        category = currentProgrammeCategory,
+                                        startEpochMs = start,
+                                        endEpochMs = stop
+                                    )
+                                }
+                                currentProgrammeChannel = null
+                                currentProgrammeStart = null
+                                currentProgrammeStop = null
+                                currentProgrammeTitle = null
+                                currentProgrammeDesc = null
+                                currentProgrammeCategory = null
+                            }
+                        }
+                    }
+                }
+                event = parser.next()
+            }
+        } catch (throwable: XmlPullParserException) {
+            throw IOException("Invalid XMLTV format: ${throwable.message}", throwable)
+        }
+
+        val normalizedPrograms = programsByChannel
+            .mapValues { (_, items) ->
+                items
+                    .distinctBy { "${it.startEpochMs}:${it.endEpochMs}:${it.title}" }
+                    .sortedBy { it.startEpochMs }
+            }
+
+        val normalizedDisplayNames = channelDisplayNames
+            .mapValues { (_, names) -> names.toSet() }
+
+        return XmlTvData(
+            channelDisplayNames = normalizedDisplayNames,
+            programsByChannel = normalizedPrograms
+        )
+    }
+
+    private fun parseXmlTvTime(raw: String?): Long? {
+        if (raw.isNullOrBlank()) return null
+        val text = raw.trim()
+        val matcher = XMLTV_TIME_REGEX.find(text) ?: return null
+        val year = matcher.groupValues[1].toIntOrNull() ?: return null
+        val month = matcher.groupValues[2].toIntOrNull() ?: return null
+        val day = matcher.groupValues[3].toIntOrNull() ?: return null
+        val hour = matcher.groupValues[4].toIntOrNull() ?: return null
+        val minute = matcher.groupValues[5].toIntOrNull() ?: return null
+        val second = matcher.groupValues[6].toIntOrNull() ?: 0
+        val zoneRaw = matcher.groupValues.getOrNull(7).orEmpty().trim()
+
+        val utcMs = java.time.LocalDateTime.of(year, month, day, hour, minute, second)
+            .toInstant(java.time.ZoneOffset.UTC)
+            .toEpochMilli()
+
+        if (zoneRaw.isBlank()) return utcMs
+
+        val zoneSign = if (zoneRaw.startsWith("-")) -1 else 1
+        val zoneDigits = zoneRaw.removePrefix("+").removePrefix("-").replace(":", "")
+        val hh = zoneDigits.take(2).toIntOrNull() ?: 0
+        val mm = zoneDigits.drop(2).take(2).toIntOrNull() ?: 0
+        val offsetMs = ((hh * 60L) + mm) * 60_000L * zoneSign
+        return utcMs - offsetMs
+    }
+
+    private fun matchChannelToEpg(
+        channelName: String,
+        tvgId: String?,
+        data: XmlTvData
+    ): EpgMatch {
+        val normalizedTvgId = tvgId
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?.takeIf { it.isNotEmpty() }
+        if (normalizedTvgId != null) {
+            val exact = data.programsByChannel.entries.firstOrNull { entry ->
+                entry.key.trim().lowercase(Locale.ROOT) == normalizedTvgId
+            }
+            if (exact != null) {
+                return EpgMatch(programs = exact.value, matchedBy = "tvg-id")
+            }
+        }
+
+        val normalizedName = normalizeTextKey(channelName)
+        if (normalizedName.isNotBlank()) {
+            val byDisplayName = data.channelDisplayNames.entries.firstOrNull { (_, names) ->
+                names.any { normalizeTextKey(it) == normalizedName }
+            }
+            if (byDisplayName != null) {
+                val programs = data.programsByChannel[byDisplayName.key].orEmpty()
+                return EpgMatch(programs = programs, matchedBy = "display-name")
+            }
+
+            val byContains = data.programsByChannel.entries.firstOrNull { (channelId, _) ->
+                normalizeTextKey(channelId).contains(normalizedName) ||
+                    normalizedName.contains(normalizeTextKey(channelId))
+            }
+            if (byContains != null) {
+                return EpgMatch(programs = byContains.value, matchedBy = "channel-id")
+            }
+        }
+
+        return EpgMatch(programs = emptyList(), matchedBy = "not-matched")
+    }
+
+    private fun normalizeTextKey(raw: String): String {
+        return raw
+            .trim()
+            .lowercase(Locale.ROOT)
+            .replace(Regex("[^\\p{L}\\p{N}]"), "")
     }
 
     private suspend fun probeAndPersistHealth(channels: List<ChannelEntity>): HealthStats {
@@ -486,13 +784,58 @@ class PlaylistRepositoryImpl @Inject constructor(
         data object NonRetryableFailure : ProbeOutcome
     }
 
+    private data class EpgCacheEntry(
+        val loadedAtMs: Long,
+        val data: XmlTvData
+    )
+
+    private data class XmlTvData(
+        val channelDisplayNames: Map<String, Set<String>>,
+        val programsByChannel: Map<String, List<EpgProgram>>
+    )
+
+    private data class EpgMatch(
+        val programs: List<EpgProgram>,
+        val matchedBy: String
+    )
+
     private companion object {
         const val DB_INSERT_CHUNK = 500
         const val AUTO_HEALTH_CHECK_LIMIT = 200
         const val HEALTH_CHECK_CONCURRENCY = 20
         const val HEALTH_CHECK_RETRIES = 2
         const val HEALTH_RETRY_DELAY_MS = 450L
+        const val EPG_CACHE_TTL_MS = 15 * 60 * 1000L
+        val XMLTV_TIME_REGEX =
+            Regex("^(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})?\\s*([+\\-]\\d{4})?.*$")
         val RETRIABLE_HTTP_CODES = setOf(408, 429, 500, 502, 503, 504)
+        val LOGO_BY_TVG_ID = mapOf(
+            "bbcone.uk" to "https://upload.wikimedia.org/wikipedia/commons/4/47/BBC_One_logo.svg",
+            "bbctwo.uk" to "https://upload.wikimedia.org/wikipedia/commons/6/62/BBC_Two_logo_2021.svg",
+            "cnn.us" to "https://upload.wikimedia.org/wikipedia/commons/b/b1/CNN.svg",
+            "euronews.fr" to "https://upload.wikimedia.org/wikipedia/commons/5/58/Euronews_2016_logo.svg",
+            "discoverychannel.us" to "https://upload.wikimedia.org/wikipedia/commons/4/43/Discovery_Channel_Logo.svg",
+            "cartoonnetwork.us" to "https://upload.wikimedia.org/wikipedia/commons/0/04/Cartoon_Network_2010_logo.svg",
+            "mtv.us" to "https://upload.wikimedia.org/wikipedia/commons/e/ea/MTV_Logo_2010.svg",
+            "nickelodeon.us" to "https://upload.wikimedia.org/wikipedia/commons/6/6e/Nickelodeon_2023_logo_%28outline%29.svg",
+            "animalplanet.us" to "https://upload.wikimedia.org/wikipedia/commons/2/2b/Animal_Planet_logo_2018.svg",
+            "natgeo.us" to "https://upload.wikimedia.org/wikipedia/commons/f/fc/Natgeologo.svg",
+            "tnt.us" to "https://upload.wikimedia.org/wikipedia/commons/c/c2/TNT_Logo_2016.svg"
+        )
+        val LOGO_BY_NAME_KEYWORD = listOf(
+            "bbc one" to "https://upload.wikimedia.org/wikipedia/commons/4/47/BBC_One_logo.svg",
+            "bbc two" to "https://upload.wikimedia.org/wikipedia/commons/6/62/BBC_Two_logo_2021.svg",
+            "cnn" to "https://upload.wikimedia.org/wikipedia/commons/b/b1/CNN.svg",
+            "euronews" to "https://upload.wikimedia.org/wikipedia/commons/5/58/Euronews_2016_logo.svg",
+            "discovery" to "https://upload.wikimedia.org/wikipedia/commons/4/43/Discovery_Channel_Logo.svg",
+            "national geographic" to "https://upload.wikimedia.org/wikipedia/commons/f/fc/Natgeologo.svg",
+            "nickelodeon" to "https://upload.wikimedia.org/wikipedia/commons/6/6e/Nickelodeon_2023_logo_%28outline%29.svg",
+            "cartoon network" to "https://upload.wikimedia.org/wikipedia/commons/0/04/Cartoon_Network_2010_logo.svg",
+            "animal planet" to "https://upload.wikimedia.org/wikipedia/commons/2/2b/Animal_Planet_logo_2018.svg",
+            "mtv" to "https://upload.wikimedia.org/wikipedia/commons/e/ea/MTV_Logo_2010.svg",
+            "eurosport" to "https://upload.wikimedia.org/wikipedia/commons/e/e7/Eurosport_2023.svg",
+            "espn" to "https://upload.wikimedia.org/wikipedia/commons/2/2f/ESPN_wordmark.svg"
+        )
     }
 }
 
@@ -625,6 +968,30 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
+    override fun observeScannerAiEnabled(): Flow<Boolean> {
+        return context.settingsDataStore.data.map { prefs ->
+            prefs[SettingsKeys.scannerAiEnabled] ?: true
+        }
+    }
+
+    override fun observeScannerProxySettings(): Flow<ScannerProxySettings> {
+        return context.settingsDataStore.data.map { prefs ->
+            ScannerProxySettings(
+                enabled = prefs[SettingsKeys.scannerProxyEnabled] ?: false,
+                host = prefs[SettingsKeys.scannerProxyHost].orEmpty(),
+                port = prefs[SettingsKeys.scannerProxyPort]?.takeIf { it in 1..65535 },
+                username = prefs[SettingsKeys.scannerProxyUsername].orEmpty(),
+                password = prefs[SettingsKeys.scannerProxyPassword].orEmpty()
+            )
+        }
+    }
+
+    override fun observeScannerLearnedQueries(): Flow<List<ScannerLearnedQuery>> {
+        return context.settingsDataStore.data.map { prefs ->
+            decodeScannerLearnedQueries(prefs[SettingsKeys.scannerLearnedQueries])
+        }
+    }
+
     override suspend fun setDefaultPlayer(playerType: PlayerType) {
         context.settingsDataStore.edit { prefs ->
             prefs[SettingsKeys.defaultPlayer] = playerType.name
@@ -697,6 +1064,94 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun setScannerAiEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[SettingsKeys.scannerAiEnabled] = enabled
+        }
+    }
+
+    override suspend fun setScannerProxySettings(settings: ScannerProxySettings) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[SettingsKeys.scannerProxyEnabled] = settings.enabled
+            prefs[SettingsKeys.scannerProxyHost] = settings.host.trim()
+            val port = settings.port?.coerceIn(1, 65535)
+            if (port == null) {
+                prefs.remove(SettingsKeys.scannerProxyPort)
+            } else {
+                prefs[SettingsKeys.scannerProxyPort] = port
+            }
+            prefs[SettingsKeys.scannerProxyUsername] = settings.username.trim()
+            prefs[SettingsKeys.scannerProxyPassword] = settings.password
+        }
+    }
+
+    override suspend fun recordScannerLearning(
+        query: String,
+        relatedQueries: List<String>,
+        presetId: String?
+    ) {
+        val primary = normalizeLearningQuery(query)
+        if (primary.isBlank()) return
+
+        val related = relatedQueries
+            .asSequence()
+            .map(::normalizeLearningQuery)
+            .filter { it.isNotBlank() }
+            .filterNot { it.equals(primary, ignoreCase = true) }
+            .distinct()
+            .take(MAX_SCANNER_LEARN_RELATED)
+            .toList()
+
+        val now = System.currentTimeMillis()
+        val normalizedPreset = presetId?.trim()?.ifBlank { null }
+
+        context.settingsDataStore.edit { prefs ->
+            val current = decodeScannerLearnedQueries(prefs[SettingsKeys.scannerLearnedQueries])
+                .associateBy { it.query.lowercase(Locale.ROOT) }
+                .toMutableMap()
+
+            fun upsert(value: String, increment: Int) {
+                val key = value.lowercase(Locale.ROOT)
+                val existing = current[key]
+                val updated = if (existing == null) {
+                    ScannerLearnedQuery(
+                        query = value,
+                        hits = increment,
+                        lastSuccessAt = now,
+                        presetId = normalizedPreset
+                    )
+                } else {
+                    existing.copy(
+                        hits = (existing.hits + increment).coerceAtMost(MAX_SCANNER_LEARN_HITS),
+                        lastSuccessAt = now,
+                        presetId = normalizedPreset ?: existing.presetId
+                    )
+                }
+                current[key] = updated
+            }
+
+            upsert(primary, increment = 2)
+            related.forEach { value ->
+                upsert(value, increment = 1)
+            }
+
+            val merged = current.values
+                .sortedWith(
+                    compareByDescending<ScannerLearnedQuery> { it.hits }
+                        .thenByDescending { it.lastSuccessAt }
+                )
+                .take(MAX_SCANNER_LEARN_ITEMS)
+
+            prefs[SettingsKeys.scannerLearnedQueries] = encodeScannerLearnedQueries(merged)
+        }
+    }
+
+    override suspend fun clearScannerLearning() {
+        context.settingsDataStore.edit { prefs ->
+            prefs.remove(SettingsKeys.scannerLearnedQueries)
+        }
+    }
+
     private fun parseChannelOverrides(raw: String?): Map<Long, PlayerType> {
         if (raw.isNullOrBlank()) return emptyMap()
         return raw.split(';')
@@ -717,11 +1172,79 @@ class SettingsRepositoryImpl @Inject constructor(
             .joinToString(";") { "${it.key}=${it.value.name}" }
     }
 
+    private fun normalizeLearningQuery(raw: String): String {
+        return raw
+            .trim()
+            .replace(Regex("\\s+"), " ")
+            .trim(',', '.', ';')
+            .take(MAX_SCANNER_LEARN_QUERY_LENGTH)
+    }
+
+    private fun encodeScannerLearnedQueries(items: List<ScannerLearnedQuery>): String {
+        if (items.isEmpty()) return ""
+        return items.joinToString(separator = SCANNER_LEARN_ENTRY_SEPARATOR) { item ->
+            listOf(
+                safeUrlEncode(item.query),
+                item.hits.coerceAtLeast(1).toString(),
+                item.lastSuccessAt.coerceAtLeast(0L).toString(),
+                safeUrlEncode(item.presetId.orEmpty())
+            ).joinToString(SCANNER_LEARN_FIELD_SEPARATOR)
+        }
+    }
+
+    private fun decodeScannerLearnedQueries(raw: String?): List<ScannerLearnedQuery> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return raw.split(SCANNER_LEARN_ENTRY_SEPARATOR)
+            .asSequence()
+            .mapNotNull { entry ->
+                val fields = entry.split(SCANNER_LEARN_FIELD_SEPARATOR)
+                if (fields.size < 3) return@mapNotNull null
+                val query = safeUrlDecode(fields[0]).trim()
+                if (query.isBlank()) return@mapNotNull null
+
+                val hits = fields.getOrNull(1)?.toIntOrNull()?.coerceIn(1, MAX_SCANNER_LEARN_HITS) ?: 1
+                val lastSuccessAt = fields.getOrNull(2)?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+                val preset = fields.getOrNull(3)?.let(::safeUrlDecode)?.trim().orEmpty().ifBlank { null }
+
+                ScannerLearnedQuery(
+                    query = query,
+                    hits = hits,
+                    lastSuccessAt = lastSuccessAt,
+                    presetId = preset
+                )
+            }
+            .distinctBy { it.query.lowercase(Locale.ROOT) }
+            .sortedWith(
+                compareByDescending<ScannerLearnedQuery> { it.hits }
+                    .thenByDescending { it.lastSuccessAt }
+            )
+            .take(MAX_SCANNER_LEARN_ITEMS)
+            .toList()
+    }
+
+    private fun safeUrlEncode(raw: String): String {
+        return runCatching {
+            URLEncoder.encode(raw, StandardCharsets.UTF_8.toString())
+        }.getOrDefault("")
+    }
+
+    private fun safeUrlDecode(raw: String): String {
+        return runCatching {
+            URLDecoder.decode(raw, StandardCharsets.UTF_8.toString())
+        }.getOrDefault(raw)
+    }
+
     private companion object {
         const val DEFAULT_MANUAL_START_MS = 12_000
         const val DEFAULT_MANUAL_REBUFFER_MS = 2_000
         const val DEFAULT_MANUAL_MAX_MS = 50_000
         const val DEFAULT_ENGINE_ENDPOINT = "http://127.0.0.1:6878"
+        const val SCANNER_LEARN_ENTRY_SEPARATOR = "||"
+        const val SCANNER_LEARN_FIELD_SEPARATOR = "\t"
+        const val MAX_SCANNER_LEARN_ITEMS = 80
+        const val MAX_SCANNER_LEARN_RELATED = 8
+        const val MAX_SCANNER_LEARN_HITS = 9_999
+        const val MAX_SCANNER_LEARN_QUERY_LENGTH = 120
     }
 }
 

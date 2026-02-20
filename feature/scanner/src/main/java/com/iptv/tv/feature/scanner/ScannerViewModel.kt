@@ -3,13 +3,26 @@ package com.iptv.tv.feature.scanner
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
+import com.iptv.tv.core.common.toLogSummary
 import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.domain.repository.ScannerRepository
+import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.PlaylistCandidate
+import com.iptv.tv.core.model.ScannerLearnedQuery
 import com.iptv.tv.core.model.ScannerProviderScope
+import com.iptv.tv.core.model.ScannerProxySettings
+import com.iptv.tv.core.model.ScannerSearchMode
 import com.iptv.tv.core.model.ScannerSearchRequest
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,8 +30,13 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 
 enum class ScannerStatusType {
@@ -39,12 +57,13 @@ data class ScannerPreset(
 
 data class ScannerUiState(
     val title: String = "Сканер репозиториев",
-    val description: String = "Поиск публичных M3U/M3U8 с сохранением топ-10 в Мои плейлисты",
+    val description: String = "Поиск публичных M3U/M3U8 с сохранением найденного в Мои плейлисты",
     val query: String = "iptv",
     val keywords: String = "",
     val presets: List<ScannerPreset> = scannerPresets(),
     val selectedPresetId: String? = null,
     val selectedProvider: ScannerProviderScope = ScannerProviderScope.ALL,
+    val selectedSearchMode: ScannerSearchMode = ScannerSearchMode.AUTO,
     val showAdvancedFilters: Boolean = false,
     val repoFilter: String = "",
     val pathFilter: String = "",
@@ -52,23 +71,43 @@ data class ScannerUiState(
     val maxSizeBytes: String = "",
     val updatedDaysBack: String = "",
     val selectedPreview: PlaylistCandidate? = null,
+    val aiEnabled: Boolean = true,
     val isLoading: Boolean = false,
     val hasSearched: Boolean = false,
     val statusType: ScannerStatusType = ScannerStatusType.INFO,
     val statusTitle: String = "Готово к поиску",
-    val statusDetails: String = "Введите запрос и нажмите \"Найти и сохранить 10\".",
-    val results: List<PlaylistCandidate> = emptyList()
+    val statusDetails: String = "Введите запрос и нажмите \"Найти и сохранить найденное\".",
+    val results: List<PlaylistCandidate> = emptyList(),
+    val progressCurrentStep: Int = 0,
+    val progressTotalSteps: Int = 0,
+    val progressFoundItems: Int = 0,
+    val progressStageLabel: String = "",
+    val progressStageLocation: String = "",
+    val progressElapsedSeconds: Long = 0,
+    val progressTimeLimitSeconds: Long = 300
 )
 
 @HiltViewModel
 class ScannerViewModel @Inject constructor(
     private val scannerRepository: ScannerRepository,
     private val playlistRepository: PlaylistRepository,
-    private val diagnosticsRepository: DiagnosticsRepository
+    private val diagnosticsRepository: DiagnosticsRepository,
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(ScannerUiState())
     val uiState: StateFlow<ScannerUiState> = _uiState.asStateFlow()
     private var searchAttemptId: Long = 0L
+    private var stopRequestedByUser: Boolean = false
+    private var searchJob: Job? = null
+    private var currentMergedCandidates: LinkedHashMap<String, PlaylistCandidate> = linkedMapOf()
+    private val localAiAssistant = LocalAiQueryAssistant()
+    private val probeCache = ConcurrentHashMap<String, ProbeCacheEntry>()
+    private var learnedQueryTemplates: List<ScannerLearnedQuery> = emptyList()
+
+    init {
+        observeAiSetting()
+        observeLearnedQueryTemplates()
+    }
 
     fun updateQuery(value: String) = _uiState.update { it.copy(query = value) }
     fun updateKeywords(value: String) = _uiState.update { it.copy(keywords = value) }
@@ -103,7 +142,22 @@ class ScannerViewModel @Inject constructor(
             selectedProvider = value,
             statusType = ScannerStatusType.INFO,
             statusTitle = "Источник: ${providerDisplayName(value)}",
-            statusDetails = providerInputHint(value)
+            statusDetails = buildSearchHint(
+                provider = value,
+                mode = it.selectedSearchMode
+            )
+        )
+    }
+
+    fun updateSearchMode(value: ScannerSearchMode) = _uiState.update {
+        it.copy(
+            selectedSearchMode = value,
+            statusType = ScannerStatusType.INFO,
+            statusTitle = "Режим: ${searchModeDisplayName(value)}",
+            statusDetails = buildSearchHint(
+                provider = it.selectedProvider,
+                mode = value
+            )
         )
     }
 
@@ -120,13 +174,14 @@ class ScannerViewModel @Inject constructor(
             maxSizeBytes = "",
             updatedDaysBack = "",
             selectedProvider = ScannerProviderScope.ALL,
+            selectedSearchMode = ScannerSearchMode.AUTO,
             statusType = ScannerStatusType.INFO,
             statusTitle = "Фильтры очищены",
             statusDetails = "Оставьте только запрос и запустите поиск."
         )
     }
 
-    fun search() = scanAndSaveTop10()
+    fun search() = scanAndSaveFound()
 
     fun scanOnlyTop10() {
         logClick(saveFoundResults = false)
@@ -134,8 +189,43 @@ class ScannerViewModel @Inject constructor(
     }
 
     fun scanAndSaveTop10() {
+        scanAndSaveFound()
+    }
+
+    fun scanAndSaveFound() {
         logClick(saveFoundResults = true)
         runSearch(saveFoundResults = true)
+    }
+
+    fun stopSearch() {
+        if (!_uiState.value.isLoading) return
+        if (stopRequestedByUser) {
+            viewModelScope.launch {
+                safeLog(
+                    status = "scanner_stop_ignored",
+                    message = "attempt=$searchAttemptId, stop already requested"
+                )
+            }
+            return
+        }
+        val wasActive = searchJob?.isActive == true
+        stopRequestedByUser = true
+        _uiState.update {
+            it.copy(
+                statusType = ScannerStatusType.INFO,
+                statusTitle = "Остановка поиска",
+                statusDetails = "Прерываем сетевые запросы, сохраняем уже найденное.",
+                progressStageLabel = "Остановка по запросу пользователя",
+                progressStageLocation = "Отмена активного запроса..."
+            )
+        }
+        viewModelScope.launch {
+            safeLog(
+                status = "scanner_stop_requested",
+                message = "attempt=$searchAttemptId, step=${_uiState.value.progressCurrentStep}/${_uiState.value.progressTotalSteps}, activeBeforeCancel=$wasActive"
+            )
+        }
+        searchJob?.cancel(CancellationException("Scanner stop requested by user"))
     }
 
     private fun runSearch(saveFoundResults: Boolean) {
@@ -167,20 +257,86 @@ class ScannerViewModel @Inject constructor(
             return
         }
 
-        viewModelScope.launch {
+        searchJob = viewModelScope.launch {
             val attemptId = ++searchAttemptId
             val startedAt = System.currentTimeMillis()
+            val searchRuntimeLimitMs = SEARCH_MAX_RUNTIME_MS
             val actionLabel = if (saveFoundResults) "поиск и сохранение" else "поиск"
+            val targetResultCount = if (saveFoundResults) SEARCH_SAVE_FETCH_TARGET else SEARCH_DISPLAY_LIMIT
+            var runState = state
+            val preflight = runNetworkPreflight(runState.selectedSearchMode)
+            safeLog(
+                status = "scanner_preflight",
+                message = "attempt=$attemptId, mode=${runState.selectedSearchMode}, apiReachable=${preflight.apiReachable}, webReachable=${preflight.webReachable}, details=${preflight.details}"
+            )
+            var preflightWarning: String? = null
+            var preflightDegraded = shouldAbortByPreflight(runState.selectedSearchMode, preflight)
+            if (preflightDegraded) {
+                preflightWarning = preflightAbortMessage(runState.selectedSearchMode, preflight)
+                safeLog(
+                    status = "scanner_preflight_warn",
+                    message = "attempt=$attemptId, reason=$preflightWarning"
+                )
+            }
+            if (runState.selectedSearchMode == ScannerSearchMode.AUTO &&
+                !preflight.apiReachable &&
+                preflight.webReachable
+            ) {
+                runState = runState.copy(selectedSearchMode = ScannerSearchMode.SEARCH_ENGINE)
+                safeLog(
+                    status = "scanner_mode_auto_fallback",
+                    message = "attempt=$attemptId, switch=AUTO->SEARCH_ENGINE, reason=api_dns_unreachable"
+                )
+                preflightDegraded = false
+                preflightWarning = null
+            } else if (runState.selectedSearchMode == ScannerSearchMode.AUTO &&
+                preflight.apiReachable &&
+                !preflight.webReachable
+            ) {
+                runState = runState.copy(selectedSearchMode = ScannerSearchMode.DIRECT_API)
+                safeLog(
+                    status = "scanner_mode_auto_fallback",
+                    message = "attempt=$attemptId, switch=AUTO->DIRECT_API, reason=web_dns_unreachable"
+                )
+                preflightDegraded = false
+                preflightWarning = null
+            }
+            val proxySettings = settingsRepository.observeScannerProxySettings().first()
+            val proxySummary = applyScannerProxySettings(proxySettings)
+            stopRequestedByUser = false
+            currentMergedCandidates = linkedMapOf()
+            val timeoutMs = if (preflightDegraded) NETWORK_STEP_TIMEOUT_DEGRADED_MS else NETWORK_STEP_TIMEOUT_MS
+            val hardTimeoutMs = if (preflightDegraded) STEP_HARD_TIMEOUT_DEGRADED_MS else STEP_HARD_TIMEOUT_MS
             setStatus(
                 type = ScannerStatusType.LOADING,
                 title = "Выполняется $actionLabel",
-                details = "Источник: ${providerDisplayName(state.selectedProvider)} | цель: $SEARCH_SAVE_TARGET",
+                details = buildString {
+                    append("Источник: ${providerDisplayName(runState.selectedProvider)}")
+                    append(" | режим: ${searchModeDisplayName(runState.selectedSearchMode)}")
+                    append(" | цель: ${if (saveFoundResults) "сохранить найденное" else "найти совпадения"}")
+                    append(" | лимит: ${searchRuntimeLimitMs / 60_000} мин")
+                    append(" | proxy: $proxySummary")
+                    if (preflightWarning != null) {
+                        append(" | preflight: сеть ограничена, запуск в деградированном режиме")
+                    }
+                },
                 isLoading = true,
-                hasSearched = state.hasSearched
+                hasSearched = runState.hasSearched
             )
+            _uiState.update {
+                it.copy(
+                    progressCurrentStep = 0,
+                    progressTotalSteps = 0,
+                    progressFoundItems = 0,
+                    progressStageLabel = "Подготовка поиска",
+                    progressStageLocation = providerDisplayName(state.selectedProvider),
+                    progressElapsedSeconds = 0,
+                    progressTimeLimitSeconds = searchRuntimeLimitMs / 1_000L
+                )
+            }
             safeLog(
                 status = "scanner_start",
-                message = "attempt=$attemptId, query=${state.query}, provider=${state.selectedProvider}, save=$saveFoundResults, preset=${state.selectedPresetId ?: "-"}"
+                message = "attempt=$attemptId, query=${runState.query}, provider=${runState.selectedProvider}, save=$saveFoundResults, preset=${runState.selectedPresetId ?: "-"}, ai=${runState.aiEnabled}, proxy=$proxySummary, ${buildRequestSnapshot(runState)}"
             )
 
             val watchdogJob = launch {
@@ -192,73 +348,166 @@ class ScannerViewModel @Inject constructor(
                     )
                 }
             }
+            val elapsedTickerJob = launch {
+                while (_uiState.value.isLoading && searchAttemptId == attemptId) {
+                    val elapsedSec = ((System.currentTimeMillis() - startedAt) / 1000L)
+                        .coerceAtLeast(0L)
+                        .coerceAtMost(searchRuntimeLimitMs / 1000L)
+                    _uiState.update { current ->
+                        if (!current.isLoading) {
+                            current
+                        } else {
+                            current.copy(progressElapsedSeconds = elapsedSec)
+                        }
+                    }
+                    delay(1_000L)
+                }
+            }
 
             try {
-                val searchPlan = buildSearchPlan(state)
+                val searchPlan = buildSearchPlan(runState)
+                val effectivePlan = if (preflightDegraded) {
+                    val trimmed = searchPlan.take(PREFLIGHT_DEGRADED_PLAN_STEPS)
+                    safeLog(
+                        status = "scanner_plan_degraded",
+                        message = "attempt=$attemptId, reason=preflight_unreachable, originalSteps=${searchPlan.size}, effectiveSteps=${trimmed.size}, timeoutMs=$timeoutMs"
+                    )
+                    trimmed
+                } else {
+                    searchPlan
+                }
+                _uiState.update {
+                    it.copy(
+                        progressCurrentStep = 0,
+                        progressTotalSteps = effectivePlan.size,
+                        progressStageLabel = "План построен",
+                        progressStageLocation = "Шагов: ${effectivePlan.size}",
+                        progressFoundItems = 0
+                    )
+                }
                 safeLog(
                     status = "scanner_plan",
-                    message = "attempt=$attemptId, steps=${searchPlan.size}"
+                    message = "attempt=$attemptId, steps=${effectivePlan.size}"
                 )
-
-                val outcome = withTimeoutOrNull(SEARCH_TIMEOUT_MS) {
-                    executeSearchPlan(
-                        attemptId = attemptId,
-                        state = state,
-                        plan = searchPlan
+                if (state.aiEnabled) {
+                    val learnedTop = learnedQueryTemplates
+                        .take(3)
+                        .joinToString(" | ") { it.query }
+                        .ifBlank { "-" }
+                    safeLog(
+                        status = "scanner_ai_memory",
+                        message = "attempt=$attemptId, templates=${learnedQueryTemplates.size}, top=$learnedTop"
+                    )
+                    safeLog(
+                        status = "scanner_ai_plan",
+                        message = "attempt=$attemptId, ai=enabled(local), steps=${effectivePlan.size}, preset=${state.selectedPresetId ?: "-"}"
+                    )
+                }
+                effectivePlan.forEachIndexed { index, step ->
+                    safeLog(
+                        status = "scanner_plan_step",
+                        message = "attempt=$attemptId, step=${index + 1}/${effectivePlan.size}, label=${step.label}, ${buildRequestSnapshot(step.request)}"
                     )
                 }
 
-                if (outcome == null) {
-                    setStatus(
-                        type = ScannerStatusType.ERROR,
-                        title = "Таймаут поиска",
-                        details = "Поиск занял слишком много времени (${SEARCH_TIMEOUT_MS / 1000}с). Повторите попытку.",
-                        isLoading = false,
-                        hasSearched = true
+                val outcome = withTimeoutOrNull(searchRuntimeLimitMs) {
+                    executeSearchPlan(
+                        attemptId = attemptId,
+                        state = runState,
+                        plan = effectivePlan,
+                        targetResultCount = targetResultCount,
+                        networkStepTimeoutMs = timeoutMs,
+                        stepHardTimeoutMs = hardTimeoutMs
                     )
+                } ?: run {
+                    val partial = currentMergedCandidates.values.take(targetResultCount)
                     safeLog(
-                        status = "scanner_timeout",
-                        message = "attempt=$attemptId, query=${state.query}, provider=${state.selectedProvider}"
+                        status = "scanner_time_limit_reached",
+                        message = "attempt=$attemptId, limitMs=$searchRuntimeLimitMs, partial=${partial.size}"
                     )
-                    return@launch
+                    SearchPlanOutcome(
+                        candidates = partial,
+                        errors = listOf("Ограничение времени поиска достигнуто (${searchRuntimeLimitMs / 60_000} мин)"),
+                        successfulStepQueries = emptyList(),
+                        timedOut = true
+                    )
                 }
 
                 val foundAll = outcome.candidates
                 val foundForDisplay = foundAll.take(SEARCH_DISPLAY_LIMIT)
+                val stoppedManually = stopRequestedByUser
+                val timedOut = outcome.timedOut
                 val importSummary = if (saveFoundResults) {
                     importFoundPlaylists(
-                        candidates = foundAll,
-                        targetSaveCount = SEARCH_SAVE_TARGET
+                        candidates = foundAll
                     )
                 } else {
                     null
                 }
+                if (foundAll.isNotEmpty()) {
+                    val relatedQueries = outcome.successfulStepQueries
+                        .filterNot { it.equals(runState.query, ignoreCase = true) }
+                        .distinct()
+                    runCatching {
+                        settingsRepository.recordScannerLearning(
+                            query = runState.query,
+                            relatedQueries = relatedQueries,
+                            presetId = runState.selectedPresetId
+                        )
+                    }.onSuccess {
+                        safeLog(
+                            status = "scanner_ai_learn_saved",
+                            message = "attempt=$attemptId, primary=${runState.query}, related=${relatedQueries.size}, templatesCached=${learnedQueryTemplates.size}"
+                        )
+                    }.onFailure { throwable ->
+                        safeLog(
+                            status = "scanner_ai_learn_error",
+                            message = "attempt=$attemptId, ${throwable.toLogSummary(maxDepth = 3)}"
+                        )
+                    }
+                }
                 val hasErrors = outcome.errors.isNotEmpty()
-                val firstError = outcome.errors.firstOrNull().orEmpty()
+                val primaryError = selectPrimaryError(outcome.errors)
                 val importFailedCompletely = saveFoundResults &&
                     importSummary != null &&
                     importSummary.imported == 0 &&
                     importSummary.failed > 0
 
                 val statusType = when {
+                    timedOut && foundAll.isNotEmpty() -> ScannerStatusType.SUCCESS
+                    timedOut -> ScannerStatusType.INFO
+                    stoppedManually && foundAll.isNotEmpty() -> ScannerStatusType.SUCCESS
+                    stoppedManually -> ScannerStatusType.INFO
                     importFailedCompletely -> ScannerStatusType.ERROR
                     foundAll.isNotEmpty() -> ScannerStatusType.SUCCESS
                     hasErrors -> ScannerStatusType.ERROR
                     else -> ScannerStatusType.INFO
                 }
                 val statusTitle = when {
+                    timedOut -> "Достигнут лимит времени поиска (5 минут)"
+                    stoppedManually -> "Поиск остановлен пользователем"
                     importFailedCompletely -> "Поиск завершен, но сохранить не удалось"
                     foundAll.isNotEmpty() -> "Поиск завершен"
                     hasErrors -> "Ошибка поиска"
                     else -> "Ничего не найдено"
                 }
                 val statusDetails = when {
+                    timedOut && foundAll.isNotEmpty() -> {
+                        val summary = buildResultSummary(foundAll, importSummary)
+                        "$summary | поиск остановлен по лимиту 5 минут"
+                    }
+                    timedOut -> "За 5 минут совпадения не найдены. Уточните запрос или смените источник."
+                    stoppedManually && foundAll.isNotEmpty() -> {
+                        val summary = buildResultSummary(foundAll, importSummary)
+                        "$summary | остановлено вручную"
+                    }
+                    stoppedManually -> "Поиск остановлен вручную. Совпадения не найдены."
                     foundAll.isNotEmpty() -> {
                         val summary = buildResultSummary(foundAll, importSummary)
                         if (hasErrors) "$summary | предупреждений=${outcome.errors.size}" else summary
                     }
-                    hasErrors -> "${mapScannerError(firstError)}. Проверьте интернет и повторите."
-                    else -> emptyResultsHint(state)
+                    hasErrors -> "Найдено 0. ${mapScannerError(primaryError)}. Проверьте интернет и повторите."
+                    else -> emptyResultsHint(runState)
                 }
 
                 _uiState.update {
@@ -269,18 +518,80 @@ class ScannerViewModel @Inject constructor(
                         selectedPreview = foundForDisplay.firstOrNull(),
                         statusType = statusType,
                         statusTitle = statusTitle,
-                        statusDetails = statusDetails
+                        statusDetails = statusDetails,
+                        progressCurrentStep = searchPlan.size,
+                        progressTotalSteps = searchPlan.size,
+                        progressFoundItems = foundAll.size,
+                        progressStageLabel = "Поиск завершен",
+                        progressStageLocation = if (foundAll.isNotEmpty()) {
+                            "Подготовка результатов"
+                        } else {
+                            "Совпадения не найдены"
+                        }
                     )
                 }
 
                 safeLog(
                     status = when {
+                        timedOut && foundAll.isNotEmpty() -> "scanner_timeout_partial"
+                        timedOut -> "scanner_timeout_empty"
+                        stoppedManually && foundAll.isNotEmpty() -> "scanner_stopped_partial"
+                        stoppedManually -> "scanner_stopped_empty"
                         foundAll.isNotEmpty() && hasErrors -> "scanner_ok_partial"
                         foundAll.isNotEmpty() -> "scanner_ok"
                         hasErrors -> "scanner_error"
                         else -> "scanner_empty"
                     },
                     message = "attempt=$attemptId, $statusDetails"
+                )
+
+                if (foundAll.isEmpty()) {
+                    val noResultReason = detectNoResultsReason(outcome.errors)
+                    val noResultProbe = providerNetworkProbe(
+                        provider = ScannerProviderScope.ALL,
+                        mode = runState.selectedSearchMode
+                    )
+                    val topErrors = outcome.errors.take(3).joinToString(" || ").take(600)
+                    safeLog(
+                        status = "scanner_no_results_diagnostic",
+                        message = "attempt=$attemptId, reason=$noResultReason, mode=${runState.selectedSearchMode}, provider=${runState.selectedProvider}, query=${runState.query}, errors=$topErrors, network=$noResultProbe"
+                    )
+                }
+            } catch (cancellation: CancellationException) {
+                val partial = currentMergedCandidates.values.take(targetResultCount)
+                val partialForDisplay = partial.take(SEARCH_DISPLAY_LIMIT)
+                val importSummary = if (saveFoundResults && partial.isNotEmpty()) {
+                    withContext(NonCancellable) { importFoundPlaylists(candidates = partial) }
+                } else {
+                    null
+                }
+                val partialDetails = if (partial.isEmpty()) {
+                    "Поиск остановлен вручную. Совпадений пока нет."
+                } else {
+                    val importText = if (importSummary != null) {
+                        " | сохранено=${importSummary.imported}, дубликаты=${importSummary.skipped}, ошибок=${importSummary.failed}"
+                    } else {
+                        ""
+                    }
+                    "Поиск остановлен вручную. Найдено ${partial.size}$importText."
+                }
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        hasSearched = true,
+                        results = partialForDisplay,
+                        selectedPreview = partialForDisplay.firstOrNull(),
+                        statusType = if (partial.isEmpty()) ScannerStatusType.INFO else ScannerStatusType.SUCCESS,
+                        statusTitle = "Поиск остановлен пользователем",
+                        statusDetails = partialDetails,
+                        progressFoundItems = partial.size,
+                        progressStageLabel = "Остановлено",
+                        progressStageLocation = "Поиск отменен пользователем"
+                    )
+                }
+                safeLogNonCancellable(
+                    status = "scanner_cancelled",
+                    message = "attempt=$attemptId, reason=${cancellation.message ?: "cancelled"}, partial=${partial.size}"
                 )
             } catch (throwable: Throwable) {
                 val raw = throwable.message ?: throwable.javaClass.simpleName
@@ -292,16 +603,26 @@ class ScannerViewModel @Inject constructor(
                     isLoading = false,
                     hasSearched = true
                 )
-                safeLog(
+                _uiState.update {
+                    it.copy(
+                        progressStageLabel = "Ошибка выполнения",
+                        progressStageLocation = throwable.javaClass.simpleName
+                    )
+                }
+                safeLogNonCancellable(
                     status = "scanner_fatal",
-                    message = "attempt=$attemptId, throwable=${throwable.javaClass.simpleName}, msg=$raw"
+                    message = "attempt=$attemptId, throwable=${throwable.toLogSummary(maxDepth = 5)}, msg=$raw"
                 )
             } finally {
                 watchdogJob.cancel()
+                elapsedTickerJob.cancel()
                 val duration = System.currentTimeMillis() - startedAt
-                safeLog(
+                _uiState.update { it.copy(progressElapsedSeconds = (duration / 1000L).coerceAtLeast(0L)) }
+                stopRequestedByUser = false
+                searchJob = null
+                safeLogNonCancellable(
                     status = "scanner_finish",
-                    message = "attempt=$attemptId, durationMs=$duration, status=${_uiState.value.statusType}, results=${_uiState.value.results.size}"
+                    message = "attempt=$attemptId, durationMs=$duration, status=${_uiState.value.statusType}, results=${_uiState.value.results.size}, storedPartial=${currentMergedCandidates.size}"
                 )
             }
         }
@@ -312,7 +633,7 @@ class ScannerViewModel @Inject constructor(
         viewModelScope.launch {
             safeLog(
                 status = "scanner_click",
-                message = "save=$saveFoundResults, query=${state.query}, provider=${state.selectedProvider}, loading=${state.isLoading}"
+                message = "save=$saveFoundResults, loading=${state.isLoading}, ${buildRequestSnapshot(state)}"
             )
         }
     }
@@ -324,6 +645,88 @@ class ScannerViewModel @Inject constructor(
                 message = message.take(MAX_LOG_MESSAGE),
                 playlistId = playlistId
             )
+        }
+    }
+
+    private suspend fun safeLogNonCancellable(status: String, message: String, playlistId: Long? = null) {
+        withContext(NonCancellable) {
+            safeLog(status = status, message = message, playlistId = playlistId)
+        }
+    }
+
+    private fun observeAiSetting() {
+        viewModelScope.launch {
+            settingsRepository.observeScannerAiEnabled().collect { enabled ->
+                _uiState.update { state ->
+                    state.copy(aiEnabled = enabled)
+                }
+            }
+        }
+    }
+
+    private fun observeLearnedQueryTemplates() {
+        viewModelScope.launch {
+            settingsRepository.observeScannerLearnedQueries().collect { learned ->
+                learnedQueryTemplates = learned
+            }
+        }
+    }
+
+    private fun buildAppErrorDetails(error: AppResult.Error): String {
+        val message = error.message.trim()
+        val cause = error.cause?.toLogSummary(maxDepth = 4).orEmpty()
+        return when {
+            cause.isBlank() -> message
+            message.isBlank() -> cause
+            else -> "$message | cause=$cause"
+        }
+    }
+
+    private fun buildRequestSnapshot(state: ScannerUiState): String {
+        return buildString {
+            append("query=")
+            append(state.query)
+            append(", provider=")
+            append(state.selectedProvider)
+            append(", mode=")
+            append(state.selectedSearchMode)
+            append(", keywords=")
+            append(state.keywords.ifBlank { "-" })
+            append(", repoFilter=")
+            append(state.repoFilter.ifBlank { "-" })
+            append(", pathFilter=")
+            append(state.pathFilter.ifBlank { "-" })
+            append(", minSize=")
+            append(state.minSizeBytes.ifBlank { "-" })
+            append(", maxSize=")
+            append(state.maxSizeBytes.ifBlank { "-" })
+            append(", daysBack=")
+            append(state.updatedDaysBack.ifBlank { "-" })
+        }
+    }
+
+    private fun buildRequestSnapshot(request: ScannerSearchRequest): String {
+        return buildString {
+            append("query=")
+            append(request.query)
+            append(", provider=")
+            append(request.providerScope)
+            append(", mode=")
+            append(request.searchMode)
+            append(", keywords=")
+            append(request.keywords.joinToString(",").ifBlank { "-" })
+            append(", repoFilter=")
+            append(request.repoFilter ?: "-")
+            append(", pathFilter=")
+            append(request.pathFilter ?: "-")
+            append(", minSize=")
+            append(request.minSizeBytes?.toString() ?: "-")
+            append(", maxSize=")
+            append(request.maxSizeBytes?.toString() ?: "-")
+            append(", updatedAfter=")
+            append(request.updatedAfterEpochMs?.toString() ?: "-")
+            append(", limit=")
+            append(request.limit)
         }
     }
 
@@ -398,89 +801,430 @@ class ScannerViewModel @Inject constructor(
             )
         }
 
+        if (state.aiEnabled) {
+            val learnedVariants = buildLearnedQueryVariants(
+                baseQuery = base.query,
+                presetId = state.selectedPresetId,
+                intentKeywords = intentKeywords
+            )
+            learnedVariants.forEachIndexed { idx, variant ->
+                plan += SearchPlanStep(
+                    label = "AI-обученный ${idx + 1}",
+                    request = relaxed.copy(
+                        query = variant,
+                        keywords = mergeKeywords(relaxed.keywords, inferIntentKeywords(variant, relaxed.keywords))
+                    )
+                )
+            }
+
+            val aiVariants = buildAiQueryVariants(
+                query = base.query,
+                keywords = base.keywords,
+                intentKeywords = intentKeywords
+            )
+
+            aiVariants.take(AI_MAX_QUERY_VARIANTS).forEachIndexed { idx, variant ->
+                plan += SearchPlanStep(
+                    label = "AI-вариант ${idx + 1}",
+                    request = relaxed.copy(
+                        query = variant,
+                        keywords = mergeKeywords(relaxed.keywords, inferIntentKeywords(variant, relaxed.keywords))
+                    )
+                )
+            }
+
+            if (base.providerScope == ScannerProviderScope.ALL && aiVariants.isNotEmpty()) {
+                val focusVariant = aiVariants.first()
+                plan += SearchPlanStep(
+                    label = "AI-fallback GitHub",
+                    request = relaxed.copy(
+                        providerScope = ScannerProviderScope.GITHUB,
+                        query = focusVariant
+                    )
+                )
+                plan += SearchPlanStep(
+                    label = "AI-fallback GitLab",
+                    request = relaxed.copy(
+                        providerScope = ScannerProviderScope.GITLAB,
+                        query = focusVariant
+                    )
+                )
+            }
+        }
+
         return plan
             .distinctBy { it.request.key() }
-            .take(MAX_PLAN_STEPS)
+            .take(if (state.aiEnabled) MAX_PLAN_STEPS_AI else MAX_PLAN_STEPS)
     }
 
     private suspend fun executeSearchPlan(
         attemptId: Long,
         state: ScannerUiState,
-        plan: List<SearchPlanStep>
+        plan: List<SearchPlanStep>,
+        targetResultCount: Int,
+        networkStepTimeoutMs: Long,
+        stepHardTimeoutMs: Long
     ): SearchPlanOutcome {
         val merged = linkedMapOf<String, PlaylistCandidate>()
         val errors = mutableListOf<String>()
+        val successfulStepQueries = linkedSetOf<String>()
+        currentMergedCandidates = linkedMapOf()
 
         plan.forEachIndexed { index, step ->
-            if (merged.size >= SEARCH_FETCH_LIMIT) return@forEachIndexed
+            if (merged.size >= targetResultCount) return@forEachIndexed
+            if (stopRequestedByUser) {
+                errors += "Остановлено пользователем"
+                safeLog(
+                    status = "scanner_stopped",
+                    message = "attempt=$attemptId, beforeStep=${index + 1}, totalFound=${merged.size}"
+                )
+                currentMergedCandidates = LinkedHashMap(merged)
+                return SearchPlanOutcome(
+                    candidates = merged.values.take(targetResultCount),
+                    errors = errors,
+                    successfulStepQueries = successfulStepQueries.toList()
+                )
+            }
 
+            val stepNumber = index + 1
+            val providerName = providerDisplayName(step.request.providerScope)
             setStatus(
                 type = ScannerStatusType.LOADING,
-                title = "Поиск: шаг ${index + 1}/${plan.size}",
+                title = "Поиск: шаг $stepNumber/${plan.size}",
                 details = "${step.label} | найдено=${merged.size}",
                 isLoading = true,
                 hasSearched = state.hasSearched
             )
+            _uiState.update {
+                it.copy(
+                    progressCurrentStep = stepNumber,
+                    progressTotalSteps = plan.size,
+                    progressFoundItems = merged.size,
+                    progressStageLabel = step.label,
+                    progressStageLocation = "$providerName | ${step.request.query}"
+                )
+            }
 
             safeLog(
                 status = "scanner_step_start",
-                message = "attempt=$attemptId, step=${index + 1}, label=${step.label}, query=${step.request.query}, provider=${step.request.providerScope}"
+                message = "attempt=$attemptId, step=$stepNumber, label=${step.label}, ${buildRequestSnapshot(step.request)}"
             )
 
-            val stepResult = withTimeoutOrNull(SEARCH_STEP_TIMEOUT_MS) {
-                scannerRepository.search(step.request.copy(limit = SEARCH_FETCH_LIMIT))
+            val stepStartedAt = System.currentTimeMillis()
+            val stepResult = coroutineScope {
+                val stepPulseJob = launch {
+                    while (true) {
+                        delay(STEP_PULSE_MS)
+                        if (!_uiState.value.isLoading) break
+                        val elapsed = (System.currentTimeMillis() - stepStartedAt).coerceAtLeast(0L)
+                        val elapsedSec = elapsed / 1000L
+                        _uiState.update {
+                            it.copy(
+                                progressStageLocation = "$providerName | идет запрос ${elapsedSec}с | найдено=${merged.size}",
+                                statusDetails = "${step.label} | найдено=${merged.size} | в работе ${elapsedSec}с"
+                            )
+                        }
+                        safeLog(
+                            status = "scanner_step_pulse",
+                            message = "attempt=$attemptId, step=$stepNumber, runningMs=$elapsed, found=${merged.size}, label=${step.label}"
+                        )
+                    }
+                }
+                try {
+                    val timed = withTimeoutOrNull(stepHardTimeoutMs) {
+                        executeStepSearch(
+                            attemptId = attemptId,
+                            stepNumber = stepNumber,
+                            stepLabel = step.label,
+                            request = step.request.copy(limit = targetResultCount.coerceAtLeast(SEARCH_DISPLAY_LIMIT)),
+                            targetResultCount = targetResultCount,
+                            networkStepTimeoutMs = networkStepTimeoutMs
+                        )
+                    }
+                    timed ?: AppResult.Error(
+                        message = "Step timeout ${stepHardTimeoutMs / 1000}s (${step.label})"
+                    )
+                } finally {
+                    stepPulseJob.cancel()
+                }
             }
+            val stepDurationMs = System.currentTimeMillis() - stepStartedAt
 
             when (stepResult) {
-                null -> {
-                    val msg = "${step.label}: timeout"
-                    errors += msg
-                    safeLog(
-                        status = "scanner_step_timeout",
-                        message = "attempt=$attemptId, step=${index + 1}, label=${step.label}"
-                    )
-                }
                 is AppResult.Success -> {
                     val before = merged.size
                     stepResult.data.forEach { candidate ->
                         merged.putIfAbsent(candidate.id, candidate)
                     }
                     val added = merged.size - before
+                    currentMergedCandidates = LinkedHashMap(merged)
+                    _uiState.update {
+                        it.copy(
+                            progressFoundItems = merged.size,
+                            progressStageLocation = "$providerName | +$added | всего=${merged.size}"
+                        )
+                    }
                     safeLog(
                         status = "scanner_step_ok",
-                        message = "attempt=$attemptId, step=${index + 1}, added=$added, total=${merged.size}"
+                        message = "attempt=$attemptId, step=$stepNumber, added=$added, total=${merged.size}, durationMs=$stepDurationMs"
                     )
+                    if (added > 0) {
+                        successfulStepQueries += step.request.query
+                    }
                 }
                 is AppResult.Error -> {
-                    val msg = "${step.label}: ${stepResult.message}"
+                    val details = buildAppErrorDetails(stepResult)
+                    val msg = "${step.label}: $details"
                     errors += msg
+                    _uiState.update {
+                        it.copy(progressStageLocation = "$providerName | ошибка: ${details.take(120)}")
+                    }
                     safeLog(
                         status = "scanner_step_error",
-                        message = "attempt=$attemptId, step=${index + 1}, message=${stepResult.message}"
+                        message = "attempt=$attemptId, step=$stepNumber, durationMs=$stepDurationMs, reason=$details"
                     )
+                    if (isFatalNetworkError(details) && merged.isEmpty() && stepNumber <= FAIL_FAST_MAX_STEP) {
+                        safeLog(
+                            status = "scanner_fail_fast",
+                            message = "attempt=$attemptId, step=$stepNumber, reason=network dead-end, details=${details.take(500)}"
+                        )
+                        currentMergedCandidates = LinkedHashMap(merged)
+                        return SearchPlanOutcome(
+                            candidates = merged.values.take(targetResultCount),
+                            errors = errors,
+                            successfulStepQueries = successfulStepQueries.toList()
+                        )
+                    }
                 }
                 AppResult.Loading -> {
                     val msg = "${step.label}: repository returned Loading"
                     errors += msg
+                    _uiState.update {
+                        it.copy(progressStageLocation = "$providerName | статус Loading")
+                    }
                     safeLog(
                         status = "scanner_step_loading_state",
-                        message = "attempt=$attemptId, step=${index + 1}"
+                        message = "attempt=$attemptId, step=$stepNumber, durationMs=$stepDurationMs"
+                    )
+                }
+            }
+
+            if (stopRequestedByUser) {
+                errors += "Остановлено пользователем"
+                safeLog(
+                    status = "scanner_stopped",
+                    message = "attempt=$attemptId, afterStep=$stepNumber, totalFound=${merged.size}"
+                )
+                currentMergedCandidates = LinkedHashMap(merged)
+                return SearchPlanOutcome(
+                    candidates = merged.values.take(targetResultCount),
+                    errors = errors,
+                    successfulStepQueries = successfulStepQueries.toList()
+                )
+            }
+        }
+
+        currentMergedCandidates = LinkedHashMap(merged)
+        return SearchPlanOutcome(
+            candidates = merged.values.take(targetResultCount),
+            errors = errors,
+            successfulStepQueries = successfulStepQueries.toList()
+        )
+    }
+
+    private suspend fun executeStepSearch(
+        attemptId: Long,
+        stepNumber: Int,
+        stepLabel: String,
+        request: ScannerSearchRequest,
+        targetResultCount: Int,
+        networkStepTimeoutMs: Long
+    ): AppResult<List<PlaylistCandidate>> {
+        return if (request.providerScope == ScannerProviderScope.ALL) {
+            executeAllProvidersStep(
+                attemptId = attemptId,
+                stepNumber = stepNumber,
+                stepLabel = stepLabel,
+                request = request,
+                targetResultCount = targetResultCount,
+                networkStepTimeoutMs = networkStepTimeoutMs
+            )
+        } else {
+            executeSingleProviderStep(
+                attemptId = attemptId,
+                stepNumber = stepNumber,
+                stepLabel = stepLabel,
+                request = request,
+                networkStepTimeoutMs = networkStepTimeoutMs
+            )
+        }
+    }
+
+    private suspend fun executeAllProvidersStep(
+        attemptId: Long,
+        stepNumber: Int,
+        stepLabel: String,
+        request: ScannerSearchRequest,
+        targetResultCount: Int,
+        networkStepTimeoutMs: Long
+    ): AppResult<List<PlaylistCandidate>> {
+        if (request.searchMode == ScannerSearchMode.SEARCH_ENGINE) {
+            safeLog(
+                status = "scanner_search_engine_single",
+                message = "attempt=$attemptId, step=$stepNumber, label=$stepLabel, provider=ALL"
+            )
+            return executeSingleProviderStep(
+                attemptId = attemptId,
+                stepNumber = stepNumber,
+                stepLabel = "$stepLabel/SEARCH_ENGINE",
+                request = request.copy(providerScope = ScannerProviderScope.ALL),
+                networkStepTimeoutMs = networkStepTimeoutMs
+            )
+        }
+
+        val providers = buildList {
+            add(ScannerProviderScope.GITHUB)
+            add(ScannerProviderScope.GITLAB)
+            if (!request.repoFilter.isNullOrBlank()) {
+                add(ScannerProviderScope.BITBUCKET)
+            }
+        }
+
+        val merged = linkedMapOf<String, PlaylistCandidate>()
+        val providerErrors = mutableListOf<String>()
+        var hasSuccessfulProviderCall = false
+        _uiState.update {
+            it.copy(
+                progressStageLocation = "Параллельно: ${providers.joinToString(", ") { providerDisplayName(it) }}",
+                statusDetails = "$stepLabel | параллельный запрос провайдеров"
+            )
+        }
+
+        val providerResults = coroutineScope {
+            providers.map { provider ->
+                async {
+                    val providerName = providerDisplayName(provider)
+                    if (stopRequestedByUser) {
+                        return@async ProviderExecutionResult(
+                            provider = provider,
+                            result = AppResult.Error("Stopped by user"),
+                            providerName = providerName
+                        )
+                    }
+                    val networkProbe = providerNetworkProbe(provider, request.searchMode)
+                    safeLog(
+                        status = "scanner_provider_start",
+                        message = "attempt=$attemptId, step=$stepNumber, provider=$provider, query=${request.query}, network=$networkProbe"
+                    )
+                    val result = executeSingleProviderStep(
+                        attemptId = attemptId,
+                        stepNumber = stepNumber,
+                        stepLabel = "$stepLabel/$providerName",
+                        request = request.copy(providerScope = provider),
+                        networkStepTimeoutMs = networkStepTimeoutMs
+                    )
+                    ProviderExecutionResult(
+                        provider = provider,
+                        result = result,
+                        providerName = providerName
+                    )
+                }
+            }.awaitAll()
+        }
+
+        providerResults.forEach { providerResult ->
+            when (val result = providerResult.result) {
+                is AppResult.Success -> {
+                    hasSuccessfulProviderCall = true
+                    val before = merged.size
+                    result.data.forEach { merged.putIfAbsent(it.id, it) }
+                    val added = merged.size - before
+                    safeLog(
+                        status = "scanner_provider_ok",
+                        message = "attempt=$attemptId, step=$stepNumber, provider=${providerResult.provider}, added=$added, total=${merged.size}"
+                    )
+                }
+                is AppResult.Error -> {
+                    providerErrors += "${providerResult.provider.name}: ${result.message}"
+                    safeLog(
+                        status = "scanner_provider_error",
+                        message = "attempt=$attemptId, step=$stepNumber, provider=${providerResult.provider}, reason=${result.message.take(900)}"
+                    )
+                }
+                AppResult.Loading -> {
+                    providerErrors += "${providerResult.provider.name}: Loading state"
+                    safeLog(
+                        status = "scanner_provider_loading_state",
+                        message = "attempt=$attemptId, step=$stepNumber, provider=${providerResult.provider}"
                     )
                 }
             }
         }
 
-        return SearchPlanOutcome(
-            candidates = merged.values.take(SEARCH_FETCH_LIMIT),
-            errors = errors
-        )
+        return if (merged.isNotEmpty()) {
+            AppResult.Success(merged.values.take(targetResultCount))
+        } else if (hasSuccessfulProviderCall) {
+            AppResult.Success(emptyList())
+        } else {
+            AppResult.Error(
+                message = providerErrors.joinToString("; ").ifBlank { "Providers returned no results" }
+            )
+        }
+    }
+
+    private suspend fun executeSingleProviderStep(
+        attemptId: Long,
+        stepNumber: Int,
+        stepLabel: String,
+        request: ScannerSearchRequest,
+        networkStepTimeoutMs: Long
+    ): AppResult<List<PlaylistCandidate>> {
+        val startedAtMs = System.currentTimeMillis()
+        return try {
+            val result = withTimeout(networkStepTimeoutMs) {
+                scannerRepository.search(request)
+            }
+            val elapsedMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L)
+            safeLog(
+                status = "scanner_provider_complete",
+                message = "attempt=$attemptId, step=$stepNumber, provider=${request.providerScope}, durationMs=$elapsedMs, label=$stepLabel"
+            )
+            result
+        } catch (timeout: TimeoutCancellationException) {
+            val elapsedMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L)
+            val networkProbe = providerNetworkProbe(request.providerScope, request.searchMode)
+            safeLog(
+                status = "scanner_provider_timeout",
+                message = "attempt=$attemptId, step=$stepNumber, provider=${request.providerScope}, timeoutMs=$networkStepTimeoutMs, elapsedMs=$elapsedMs, label=$stepLabel, network=$networkProbe"
+            )
+            AppResult.Error(
+                message = "Timeout ${networkStepTimeoutMs / 1000}s for ${request.providerScope}",
+                cause = timeout
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (throwable: Throwable) {
+            val elapsedMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L)
+            safeLog(
+                status = "scanner_provider_exception",
+                message = "attempt=$attemptId, step=$stepNumber, provider=${request.providerScope}, elapsedMs=$elapsedMs, label=$stepLabel, cause=${throwable.toLogSummary(maxDepth = 5)}"
+            )
+            AppResult.Error(
+                message = throwable.message ?: throwable.javaClass.simpleName,
+                cause = throwable
+            )
+        }
     }
 
     private suspend fun importFoundPlaylists(
-        candidates: List<PlaylistCandidate>,
-        targetSaveCount: Int
+        candidates: List<PlaylistCandidate>
     ): ImportSummary {
         if (candidates.isEmpty()) return ImportSummary()
+
+        safeLog(
+            status = "scanner_import_start",
+            message = "candidates=${candidates.size}, targetSave=all"
+        )
 
         val existingSources = playlistRepository.observePlaylists()
             .first()
@@ -492,19 +1236,25 @@ class ScannerViewModel @Inject constructor(
         var failed = 0
         val failureReasons = mutableListOf<String>()
 
-        val maxToSave = targetSaveCount.coerceAtLeast(1)
         candidates.forEach { candidate ->
-            if (imported >= maxToSave) return@forEach
             val sourceUrl = candidate.downloadUrl.trim()
             if (sourceUrl.isBlank()) {
                 failed += 1
                 failureReasons += "${candidate.provider}/${candidate.repository}/${candidate.path}: empty download url"
+                safeLog(
+                    status = "scanner_import_error",
+                    message = "provider=${candidate.provider}, repo=${candidate.repository}, path=${candidate.path}, reason=empty download url"
+                )
                 return@forEach
             }
 
             val normalizedSource = normalizeSource(sourceUrl)
             if (existingSources.contains(normalizedSource)) {
                 skipped += 1
+                safeLog(
+                    status = "scanner_import_skip_duplicate",
+                    message = "provider=${candidate.provider}, repo=${candidate.repository}, path=${candidate.path}"
+                )
                 return@forEach
             }
 
@@ -516,17 +1266,31 @@ class ScannerViewModel @Inject constructor(
                 is AppResult.Success -> {
                     imported += 1
                     existingSources += normalizedSource
+                    safeLog(
+                        status = "scanner_import_ok",
+                        message = "provider=${candidate.provider}, repo=${candidate.repository}, path=${candidate.path}, playlistId=${importResult.data.playlistId}, imported=$imported"
+                    )
                 }
                 is AppResult.Error -> {
                     failed += 1
-                    failureReasons += buildFailureReason(
+                    val reason = buildFailureReason(
                         candidate = candidate,
                         reason = importResult.message
+                    )
+                    failureReasons += reason
+                    safeLog(
+                        status = "scanner_import_error",
+                        message = "provider=${candidate.provider}, repo=${candidate.repository}, path=${candidate.path}, reason=$reason"
                     )
                 }
                 AppResult.Loading -> Unit
             }
         }
+
+        safeLog(
+            status = "scanner_import_finish",
+            message = "imported=$imported, skipped=$skipped, failed=$failed"
+        )
 
         return ImportSummary(
             imported = imported,
@@ -584,7 +1348,94 @@ class ScannerViewModel @Inject constructor(
         return null
     }
 
+    private suspend fun runNetworkPreflight(mode: ScannerSearchMode): NetworkPreflight {
+        val apiTargets = listOf("api.github.com", "gitlab.com")
+        val webTargets = listOf("duckduckgo.com", "www.bing.com")
+
+        val apiDetails = if (mode == ScannerSearchMode.SEARCH_ENGINE) {
+            emptyList()
+        } else {
+            probeHosts(apiTargets)
+        }
+        val webDetails = if (mode == ScannerSearchMode.DIRECT_API) {
+            emptyList()
+        } else {
+            probeHosts(webTargets)
+        }
+
+        val apiReachable = if (apiDetails.isEmpty()) {
+            false
+        } else {
+            apiDetails.any { it.contains("=ok(", ignoreCase = true) }
+        }
+        val webReachable = if (webDetails.isEmpty()) {
+            false
+        } else {
+            webDetails.any { it.contains("=ok(", ignoreCase = true) }
+        }
+
+        val details = buildString {
+            if (apiDetails.isNotEmpty()) {
+                append("api=[")
+                append(apiDetails.joinToString(" ; "))
+                append("]")
+            } else {
+                append("api=[skipped]")
+            }
+            append(" | ")
+            if (webDetails.isNotEmpty()) {
+                append("web=[")
+                append(webDetails.joinToString(" ; "))
+                append("]")
+            } else {
+                append("web=[skipped]")
+            }
+        }.take(1500)
+
+        return NetworkPreflight(
+            apiReachable = apiReachable,
+            webReachable = webReachable,
+            details = details
+        )
+    }
+
+    private fun shouldAbortByPreflight(
+        mode: ScannerSearchMode,
+        preflight: NetworkPreflight
+    ): Boolean {
+        return when (mode) {
+            ScannerSearchMode.DIRECT_API -> !preflight.apiReachable
+            ScannerSearchMode.SEARCH_ENGINE -> !preflight.webReachable
+            ScannerSearchMode.AUTO -> !preflight.apiReachable && !preflight.webReachable
+        }
+    }
+
+    private fun preflightAbortMessage(
+        mode: ScannerSearchMode,
+        preflight: NetworkPreflight
+    ): String {
+        val modeText = when (mode) {
+            ScannerSearchMode.DIRECT_API -> "Direct API"
+            ScannerSearchMode.SEARCH_ENGINE -> "Search Engine"
+            ScannerSearchMode.AUTO -> "Auto"
+        }
+        return buildString {
+            append("Режим: ")
+            append(modeText)
+            append(". DNS/API недоступны. ")
+            append("Проверьте интернет/DNS/прокси и повторите. ")
+            append("Детали: ")
+            append(preflight.details)
+        }.take(1800)
+    }
+
     private fun emptyResultsHint(state: ScannerUiState): String {
+        if (state.selectedSearchMode == ScannerSearchMode.DIRECT_API) {
+            return "Прямой API-режим не дал результатов. Попробуйте режим Search Engine или Auto."
+        }
+        if (state.selectedSearchMode == ScannerSearchMode.SEARCH_ENGINE) {
+            return "Поисковики не нашли валидные M3U. Попробуйте упростить запрос или переключиться на Auto."
+        }
         val queryLower = state.query.lowercase()
         if (isRussianIntent(queryLower)) {
             return "Для русских каналов: используйте пресет \"Русские каналы\" и оставьте только источник GitHub или ALL."
@@ -636,21 +1487,213 @@ class ScannerViewModel @Inject constructor(
         }
     }
 
+    private fun searchModeDisplayName(mode: ScannerSearchMode): String {
+        return when (mode) {
+            ScannerSearchMode.AUTO -> "Auto"
+            ScannerSearchMode.DIRECT_API -> "Direct API"
+            ScannerSearchMode.SEARCH_ENGINE -> "Search Engine"
+        }
+    }
+
+    private fun searchModeInputHint(mode: ScannerSearchMode): String {
+        return when (mode) {
+            ScannerSearchMode.AUTO -> "Auto: сначала API, при пустом результате fallback через поисковики."
+            ScannerSearchMode.DIRECT_API -> "Direct API: только прямой доступ к GitHub/GitLab/Bitbucket API."
+            ScannerSearchMode.SEARCH_ENGINE -> "Search Engine: поиск через DuckDuckGo/Bing с извлечением ссылок."
+        }
+    }
+
+    private fun buildSearchHint(provider: ScannerProviderScope, mode: ScannerSearchMode): String {
+        return "${providerInputHint(provider)} | ${searchModeInputHint(mode)}"
+    }
+
     private fun mapScannerError(raw: String): String {
         val message = raw.trim()
         return when {
             message.contains("Unable to create converter", ignoreCase = true) ->
                 "Внутренняя ошибка сетевого слоя (Retrofit/Moshi). Обновите APK до последней сборки"
+            message.contains("UnknownHostException", ignoreCase = true) ||
+                message.contains("Unable to resolve host", ignoreCase = true) ->
+                "Не удалось определить DNS-адрес сервера (проверьте интернет/DNS)"
+            message.contains("SSLHandshakeException", ignoreCase = true) ||
+                message.contains("SSLPeerUnverifiedException", ignoreCase = true) ->
+                "Ошибка TLS/SSL при подключении к API"
             message.contains("Network IO", ignoreCase = true) ->
                 "Приложение не может получить доступ к сети"
+            message.contains("SocketTimeoutException", ignoreCase = true) ->
+                "Сетевой таймаут (сервер не ответил вовремя)"
             message.contains("HTTP 401", ignoreCase = true) ->
                 "Источник ограничил доступ к API (HTTP 401)"
             message.contains("HTTP 403", ignoreCase = true) ->
                 "Достигнут лимит API или доступ запрещен (HTTP 403)"
+            message.contains("HTTP 429", ignoreCase = true) ->
+                "Превышен лимит запросов API (HTTP 429)"
             message.contains("timeout", ignoreCase = true) ->
                 "Таймаут сетевого запроса"
             else -> message
         }
+    }
+
+    private fun selectPrimaryError(errors: List<String>): String {
+        if (errors.isEmpty()) return ""
+        val priority = listOf(
+            "UnknownHostException",
+            "Unable to resolve host",
+            "Network IO",
+            "timeout",
+            "SocketTimeoutException",
+            "HTTP 429",
+            "HTTP 403",
+            "HTTP 401"
+        )
+        priority.forEach { marker ->
+            errors.firstOrNull { it.contains(marker, ignoreCase = true) }?.let { return it }
+        }
+        return errors.first()
+    }
+
+    private fun isFatalNetworkError(message: String): Boolean {
+        val lowered = message.lowercase()
+        return lowered.contains("unknownhostexception") ||
+            lowered.contains("unable to resolve host") ||
+            lowered.contains("network io") ||
+            lowered.contains("timeout")
+    }
+
+    private fun isDnsError(message: String): Boolean {
+        val lowered = message.lowercase()
+        return lowered.contains("unknownhostexception") ||
+            lowered.contains("unable to resolve host")
+    }
+
+    private fun detectNoResultsReason(errors: List<String>): String {
+        if (errors.isEmpty()) return "empty_response_without_errors"
+        val joined = errors.joinToString(" | ").lowercase()
+        return when {
+            joined.contains("unknownhostexception") || joined.contains("unable to resolve host") ->
+                "dns_unavailable"
+            joined.contains("timeout") || joined.contains("timed out") ->
+                "network_timeout"
+            joined.contains("http 403") || joined.contains("forbidden") ->
+                "http_forbidden"
+            joined.contains("http 429") || joined.contains("rate") ->
+                "rate_limit"
+            joined.contains("stopped") ->
+                "stopped_by_user"
+            else -> "provider_error_or_no_matches"
+        }
+    }
+
+    private suspend fun providerNetworkProbe(
+        provider: ScannerProviderScope,
+        mode: ScannerSearchMode
+    ): String {
+        val hosts = when (provider) {
+            ScannerProviderScope.GITHUB -> {
+                if (mode == ScannerSearchMode.SEARCH_ENGINE) listOf("duckduckgo.com", "www.bing.com")
+                else listOf("api.github.com")
+            }
+            ScannerProviderScope.GITLAB -> {
+                if (mode == ScannerSearchMode.SEARCH_ENGINE) listOf("duckduckgo.com", "www.bing.com")
+                else listOf("gitlab.com")
+            }
+            ScannerProviderScope.BITBUCKET -> {
+                if (mode == ScannerSearchMode.SEARCH_ENGINE) listOf("duckduckgo.com", "www.bing.com")
+                else listOf("api.bitbucket.org")
+            }
+            ScannerProviderScope.ALL -> {
+                if (mode == ScannerSearchMode.SEARCH_ENGINE) {
+                    listOf("duckduckgo.com", "www.bing.com")
+                } else {
+                    listOf("api.github.com", "gitlab.com", "api.bitbucket.org")
+                }
+            }
+        }
+        return probeHosts(hosts).joinToString(" ; ")
+    }
+
+    private suspend fun probeHosts(hosts: List<String>): List<String> {
+        val results = mutableListOf<String>()
+        hosts.forEach { host ->
+            results += probeHost(host)
+        }
+        return results
+    }
+
+    private suspend fun probeHost(host: String): String {
+        val now = System.currentTimeMillis()
+        probeCache[host]?.let { cached ->
+            if (now - cached.ts <= NETWORK_PROBE_CACHE_MS) {
+                return cached.value
+            }
+        }
+
+        val value = withContext(Dispatchers.IO) {
+            runCatching {
+                val resolved = withTimeoutOrNull(NETWORK_PROBE_TIMEOUT_MS) {
+                    runInterruptible {
+                        InetAddress.getAllByName(host)
+                            .mapNotNull { it.hostAddress }
+                            .distinct()
+                            .take(2)
+                    }
+                }
+
+                when {
+                    resolved == null -> "$host=probe_timeout(${NETWORK_PROBE_TIMEOUT_MS}ms)"
+                    resolved.isEmpty() -> "$host=resolved(empty)"
+                    else -> "$host=ok(${resolved.joinToString(",")})"
+                }
+            }.getOrElse { throwable ->
+                val reason = "${throwable.javaClass.simpleName}:${throwable.message.orEmpty()}"
+                    .replace('\n', ' ')
+                    .take(180)
+                "$host=err($reason)"
+            }
+        }
+
+        probeCache[host] = ProbeCacheEntry(ts = now, value = value)
+        return value
+    }
+
+    private fun applyScannerProxySettings(settings: ScannerProxySettings): String {
+        if (!settings.enabled) {
+            clearProxyProperties()
+            return "off"
+        }
+
+        val host = settings.host.trim()
+        val port = settings.port ?: 0
+        if (host.isBlank() || port !in 1..65535) {
+            clearProxyProperties()
+            return "invalid(off)"
+        }
+
+        System.setProperty(PROXY_HTTP_HOST, host)
+        System.setProperty(PROXY_HTTPS_HOST, host)
+        System.setProperty(PROXY_HTTP_PORT, port.toString())
+        System.setProperty(PROXY_HTTPS_PORT, port.toString())
+
+        val user = settings.username.trim()
+        if (user.isNotBlank()) {
+            System.setProperty(PROXY_SCANNER_USER, user)
+            System.setProperty(PROXY_SCANNER_PASS, settings.password)
+        } else {
+            System.clearProperty(PROXY_SCANNER_USER)
+            System.clearProperty(PROXY_SCANNER_PASS)
+        }
+
+        val auth = if (user.isBlank()) "no-auth" else "auth:${user.take(1)}***"
+        return "$host:$port,$auth"
+    }
+
+    private fun clearProxyProperties() {
+        System.clearProperty(PROXY_HTTP_HOST)
+        System.clearProperty(PROXY_HTTPS_HOST)
+        System.clearProperty(PROXY_HTTP_PORT)
+        System.clearProperty(PROXY_HTTPS_PORT)
+        System.clearProperty(PROXY_SCANNER_USER)
+        System.clearProperty(PROXY_SCANNER_PASS)
     }
 
     private fun ScannerUiState.toRequest(): ScannerSearchRequest {
@@ -664,12 +1707,13 @@ class ScannerViewModel @Inject constructor(
             query = boostedQuery,
             keywords = manualKeywords,
             providerScope = selectedProvider,
+            searchMode = selectedSearchMode,
             repoFilter = repoFilter.ifBlank { null },
             pathFilter = pathFilter.ifBlank { null },
             updatedAfterEpochMs = updatedAfter,
             minSizeBytes = minSizeBytes.toLongOrNull(),
             maxSizeBytes = maxSizeBytes.toLongOrNull(),
-            limit = SEARCH_FETCH_LIMIT
+            limit = SEARCH_SAVE_FETCH_TARGET
         )
     }
 
@@ -693,22 +1737,10 @@ class ScannerViewModel @Inject constructor(
     }
 
     private fun inferIntentKeywords(query: String, manualKeywords: List<String>): List<String> {
-        val lowered = "$query ${manualKeywords.joinToString(" ")}".lowercase()
-        val tags = mutableListOf<String>()
-
-        if (isRussianIntent(lowered)) {
-            tags += listOf("russian", "russia", "ru", "рус", "россия")
-        }
-        if (isWorldIntent(lowered)) {
-            tags += listOf("world", "global", "international", "countries")
-        }
-        if (lowered.contains("sport") || lowered.contains("спорт")) {
-            tags += listOf("sport", "football", "soccer", "hockey")
-        }
-        if (lowered.contains("movie") || lowered.contains("film") || lowered.contains("кино") || lowered.contains("фильм")) {
-            tags += listOf("movie", "film", "cinema", "vod")
-        }
-        return tags.distinct()
+        return localAiAssistant.inferIntentKeywords(
+            query = query,
+            manualKeywords = manualKeywords
+        )
     }
 
     private fun boostQueryWithKeywords(query: String, keywords: List<String>): String {
@@ -729,6 +1761,65 @@ class ScannerViewModel @Inject constructor(
             .filter { it.isNotEmpty() }
             .distinct()
             .take(MAX_KEYWORDS)
+    }
+
+    private fun buildAiQueryVariants(
+        query: String,
+        keywords: List<String>,
+        intentKeywords: List<String>
+    ): List<String> {
+        val expandedKeywords = mergeKeywords(keywords, intentKeywords)
+        return localAiAssistant.buildAiVariants(
+            query = query,
+            manualKeywords = expandedKeywords,
+            inferredKeywords = intentKeywords
+        ).take(AI_MAX_QUERY_VARIANTS)
+    }
+
+    private fun buildLearnedQueryVariants(
+        baseQuery: String,
+        presetId: String?,
+        intentKeywords: List<String>
+    ): List<String> {
+        val normalizedBase = buildNormalizedQuery(baseQuery).lowercase()
+        val baseTokens = normalizedBase
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .map { it.trim() }
+            .filter { it.length >= 2 }
+            .toSet()
+        val intentSet = intentKeywords.map { it.lowercase() }.toSet()
+        val normalizedPreset = presetId?.trim()?.ifBlank { null }
+
+        return learnedQueryTemplates
+            .asSequence()
+            .mapNotNull { entry ->
+                val normalizedCandidate = buildNormalizedQuery(entry.query)
+                if (normalizedCandidate.isBlank()) return@mapNotNull null
+                if (normalizedCandidate.lowercase() == normalizedBase) return@mapNotNull null
+
+                val candidateTokens = normalizedCandidate.lowercase()
+                    .split(Regex("[^\\p{L}\\p{N}]+"))
+                    .map { it.trim() }
+                    .filter { it.length >= 2 }
+                    .toSet()
+
+                val overlap = candidateTokens.intersect(baseTokens).size
+                val intentOverlap = candidateTokens.intersect(intentSet).size
+                val presetBoost = if (normalizedPreset != null && entry.presetId == normalizedPreset) 4 else 0
+                val recencyBoost = (entry.lastSuccessAt / 86_400_000L).coerceAtLeast(0L).toInt() % 3
+                val score = (entry.hits * 3) + (overlap * 4) + (intentOverlap * 3) + presetBoost + recencyBoost
+                if (score <= 0) return@mapNotNull null
+                LearnedQueryCandidate(query = normalizedCandidate, score = score, hits = entry.hits, lastSuccessAt = entry.lastSuccessAt)
+            }
+            .sortedWith(
+                compareByDescending<LearnedQueryCandidate> { it.score }
+                    .thenByDescending { it.hits }
+                    .thenByDescending { it.lastSuccessAt }
+            )
+            .map { it.query }
+            .distinctBy { it.lowercase() }
+            .take(MAX_LEARNED_QUERY_VARIANTS)
+            .toList()
     }
 
     private fun broadFallbackQuery(query: String): String {
@@ -780,6 +1871,7 @@ class ScannerViewModel @Inject constructor(
         return listOf(
             query.lowercase(),
             providerScope.name,
+            searchMode.name,
             repoFilter.orEmpty().lowercase(),
             pathFilter.orEmpty().lowercase(),
             updatedAfterEpochMs?.toString().orEmpty(),
@@ -794,9 +1886,24 @@ class ScannerViewModel @Inject constructor(
         val request: ScannerSearchRequest
     )
 
+    private data class ProviderExecutionResult(
+        val provider: ScannerProviderScope,
+        val result: AppResult<List<PlaylistCandidate>>,
+        val providerName: String
+    )
+
+    private data class LearnedQueryCandidate(
+        val query: String,
+        val score: Int,
+        val hits: Int,
+        val lastSuccessAt: Long
+    )
+
     private data class SearchPlanOutcome(
         val candidates: List<PlaylistCandidate>,
-        val errors: List<String>
+        val errors: List<String>,
+        val successfulStepQueries: List<String>,
+        val timedOut: Boolean = false
     )
 
     private data class ImportSummary(
@@ -806,19 +1913,46 @@ class ScannerViewModel @Inject constructor(
         val failureReasons: List<String> = emptyList()
     )
 
+    private data class NetworkPreflight(
+        val apiReachable: Boolean,
+        val webReachable: Boolean,
+        val details: String
+    )
+
     private companion object {
-        const val SEARCH_SAVE_TARGET = 10
-        const val SEARCH_DISPLAY_LIMIT = 10
-        const val SEARCH_FETCH_LIMIT = 40
-        const val SEARCH_TIMEOUT_MS = 35_000L
+        const val SEARCH_DISPLAY_LIMIT = 120
+        const val SEARCH_SAVE_FETCH_TARGET = Int.MAX_VALUE
+        const val SEARCH_MAX_RUNTIME_MS = 5 * 60 * 1000L
         const val SEARCH_WATCHDOG_MS = 8_000L
-        const val SEARCH_STEP_TIMEOUT_MS = 12_000L
+        const val STEP_PULSE_MS = 3_000L
+        const val NETWORK_STEP_TIMEOUT_MS = 25_000L
+        const val NETWORK_STEP_TIMEOUT_DEGRADED_MS = 12_000L
+        const val STEP_HARD_TIMEOUT_MS = 30_000L
+        const val STEP_HARD_TIMEOUT_DEGRADED_MS = 16_000L
+        const val FAIL_FAST_MAX_STEP = 2
         const val MAX_PLAN_STEPS = 6
+        const val MAX_PLAN_STEPS_AI = 14
+        const val PREFLIGHT_DEGRADED_PLAN_STEPS = 2
+        const val AI_MAX_QUERY_VARIANTS = 8
+        const val MAX_LEARNED_QUERY_VARIANTS = 4
         const val MAX_KEYWORDS = 10
-        const val MAX_LOG_MESSAGE = 700
+        const val MAX_LOG_MESSAGE = 1200
+        const val NETWORK_PROBE_TIMEOUT_MS = 1_500L
+        const val NETWORK_PROBE_CACHE_MS = 30_000L
         const val MAX_IMPORT_FAILURE_DETAILS = 5
+        const val PROXY_HTTP_HOST = "http.proxyHost"
+        const val PROXY_HTTP_PORT = "http.proxyPort"
+        const val PROXY_HTTPS_HOST = "https.proxyHost"
+        const val PROXY_HTTPS_PORT = "https.proxyPort"
+        const val PROXY_SCANNER_USER = "myscaner.proxy.user"
+        const val PROXY_SCANNER_PASS = "myscaner.proxy.pass"
     }
 }
+
+private data class ProbeCacheEntry(
+    val ts: Long,
+    val value: String
+)
 
 private fun buildFailureReason(
     candidate: PlaylistCandidate,
@@ -875,9 +2009,81 @@ private fun scannerPresets(): List<ScannerPreset> {
             id = "movies",
             title = "Фильмы/Сериалы",
             query = "movie iptv",
-            keywords = "",
+            keywords = "movie, series, serial, cinema, vod, action, thriller, horror, кино, сериалы, боевик, триллер, ужасы",
             provider = ScannerProviderScope.ALL,
-            description = "Поиск плейлистов с фильмами и VOD-каталогами."
+            description = "Поиск плейлистов с фильмами, сериалами и VOD-каталогами."
+        ),
+        ScannerPreset(
+            id = "news",
+            title = "Новости",
+            query = "news iptv",
+            keywords = "news, live, breaking, headlines, новости, новостные",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск новостных каналов и live-news плейлистов."
+        ),
+        ScannerPreset(
+            id = "music",
+            title = "Музыка/Радио",
+            query = "music iptv",
+            keywords = "music, radio, audio, hits, музыка, радио",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск музыкальных и радио IPTV списков."
+        ),
+        ScannerPreset(
+            id = "kids",
+            title = "Мультфильмы/Детские",
+            query = "kids iptv",
+            keywords = "kids, cartoon, animation, family, мультфильмы, детские, kids channels",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск детских и анимационных каналов."
+        ),
+        ScannerPreset(
+            id = "tvlists",
+            title = "Списки ТВ каналов",
+            query = "tv channels iptv list",
+            keywords = "tv channels, iptv channel list, списки тв, каналы iptv, списки каналов iptv, m3u, m3u8",
+            provider = ScannerProviderScope.ALL,
+            description = "Широкий поиск списков каналов в форматах M3U/M3U8."
+        ),
+        ScannerPreset(
+            id = "documentary",
+            title = "Документальные",
+            query = "documentary iptv",
+            keywords = "documentary, history, discovery, nature, science, документальные, познавательные, наука, история, природа",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск познавательных и документальных каналов."
+        ),
+        ScannerPreset(
+            id = "regional",
+            title = "Региональные",
+            query = "regional local iptv",
+            keywords = "regional, local tv, city channels, country channels, региональные, местные каналы, city tv, local channels",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск региональных и локальных плейлистов."
+        ),
+        ScannerPreset(
+            id = "religion",
+            title = "Религия/Духовные",
+            query = "religious iptv",
+            keywords = "religion, islamic channels, christian channels, religious, религиозные, исламские каналы, духовные",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск религиозных и духовных каналов."
+        ),
+        ScannerPreset(
+            id = "uhd",
+            title = "HD/4K",
+            query = "iptv hd 4k",
+            keywords = "hd, full hd, 4k, uhd, fhd, high quality, высокое качество, 4k каналы",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск HD/FHD/UHD каналов и качественных потоков."
+        ),
+        ScannerPreset(
+            id = "ace",
+            title = "Ace/Torrent каналы",
+            query = "acestream iptv",
+            keywords = "acestream, ace stream, torrent tv, magnet, infohash, ace, acestream channels, torrent channels",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск каналов со ссылками Ace Stream / torrent descriptor."
         )
     )
 }

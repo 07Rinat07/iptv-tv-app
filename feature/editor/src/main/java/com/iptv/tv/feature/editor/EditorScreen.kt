@@ -33,8 +33,11 @@ fun EditorScreen(
     viewModel: EditorViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    val currentPlaylist = remember(state.playlists, state.effectivePlaylistId) {
+        state.playlists.firstOrNull { it.id == state.effectivePlaylistId }
+    }
     val saveDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("audio/x-mpegurl")
+        contract = ActivityResultContracts.CreateDocument("*/*")
     ) { uri ->
         uri?.let { viewModel.saveExportToUri(it.toString()) }
     }
@@ -61,8 +64,17 @@ fun EditorScreen(
         item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
             Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
-            Text("Playlist ID: ${state.effectivePlaylistId ?: "-"} | selected=${state.selectedChannelIds.size}")
-            Text("Шаги: открыть список -> выбрать каналы -> действие -> экспорт")
+            Text(
+                text = "Сейчас редактируется: ${currentPlaylist?.name ?: "не выбран"} " +
+                    "(ID: ${state.effectivePlaylistId ?: "-"})"
+            )
+            Text("Отмечено каналов: ${state.selectedChannelIds.size}")
+            currentPlaylist?.let { playlist ->
+                Text("Источник: ${editorSourceTypeLabel(playlist.sourceType.name)}")
+                Text("Ссылка/путь: ${playlist.source}")
+                Text("Всего каналов в списке: ${playlist.channelCount}")
+            }
+            Text("Шаги: выбрать список -> выбрать каналы -> действие -> экспорт/сохранение")
         }
 
         if (state.playlists.isNotEmpty()) {
@@ -73,8 +85,11 @@ fun EditorScreen(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text("${playlist.name} (id=${playlist.id}, custom=${playlist.isCustom})")
+                        Text("Источник: ${editorSourceTypeLabel(playlist.sourceType.name)}")
+                        Text("Ссылка/путь: ${playlist.source}")
+                        Text("Каналов: ${playlist.channelCount}")
                         Button(onClick = { viewModel.selectPlaylist(playlist.id) }) {
-                            Text(if (playlist.id == state.effectivePlaylistId) "Текущий плейлист" else "Открыть плейлист")
+                            Text(if (playlist.id == state.effectivePlaylistId) "Редактируется сейчас" else "Редактировать этот плейлист")
                         }
                     }
                 }
@@ -135,8 +150,14 @@ fun EditorScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(onClick = viewModel::exportSelectedOrVisible, enabled = !state.isLoading) {
+                        Button(onClick = viewModel::exportSelectedOrVisibleM3u, enabled = !state.isLoading) {
                             Text("Экспорт M3U")
+                        }
+                        Button(onClick = viewModel::exportSelectedOrVisibleM3u8, enabled = !state.isLoading) {
+                            Text("Экспорт M3U8")
+                        }
+                        Button(onClick = viewModel::exportAllPlaylistsToTxt, enabled = !state.isLoading) {
+                            Text("Экспорт TXT (все списки)")
                         }
                         Button(onClick = viewModel::saveExportToStorage, enabled = !state.isLoading) {
                             Text("Сохранить в память ТВ")
@@ -149,9 +170,20 @@ fun EditorScreen(
                                     ?.replace(Regex("[\\\\/:*?\"<>|]"), "_")
                                     ?.replace(Regex("\\s+"), "_")
                                     ?.take(40)
-                                    ?.ifBlank { "playlist" }
-                                    ?: "playlist"
-                                saveDocumentLauncher.launch("$playlistName.m3u")
+                                    ?.ifBlank {
+                                        if (state.exportFileExtension.equals("txt", ignoreCase = true)) {
+                                            "playlists_export"
+                                        } else {
+                                            "playlist"
+                                        }
+                                    }
+                                    ?: if (state.exportFileExtension.equals("txt", ignoreCase = true)) {
+                                        "playlists_export"
+                                    } else {
+                                        "playlist"
+                                    }
+                                val ext = state.exportFileExtension.ifBlank { "m3u" }
+                                saveDocumentLauncher.launch("$playlistName.$ext")
                             },
                             enabled = !state.isLoading
                         ) {
@@ -320,6 +352,19 @@ fun EditorScreen(
                 }
             }
         }
+    }
+}
+
+private fun editorSourceTypeLabel(raw: String): String {
+    return when (raw.uppercase()) {
+        "URL" -> "URL"
+        "TEXT" -> "Текст"
+        "FILE" -> "Локальный файл"
+        "GITHUB" -> "GitHub"
+        "GITLAB" -> "GitLab"
+        "BITBUCKET" -> "Bitbucket"
+        "CUSTOM" -> "Пользовательский"
+        else -> raw
     }
 }
 

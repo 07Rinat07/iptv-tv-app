@@ -20,6 +20,7 @@ fun PlaylistEntity.toModel(channelCount: Int = 0): Playlist {
         name = name,
         sourceType = PlaylistSourceType.valueOf(sourceType),
         source = source,
+        epgSourceUrl = epgSourceUrl,
         scheduleHours = scheduleHours,
         lastSyncedAt = lastSyncedAt,
         channelCount = channelCount,

@@ -1,5 +1,6 @@
 package com.iptv.tv.core.player
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -46,6 +47,18 @@ class ExternalVlcLauncher {
         return context.packageManager.getLaunchIntentForPackage(VLC_PACKAGE_NAME) != null
     }
 
+    fun createDirectPlayerIntent(streamUrl: String, title: String? = null): Intent {
+        return Intent(Intent.ACTION_VIEW).apply {
+            component = ComponentName(VLC_PACKAGE_NAME, VLC_PLAYER_ACTIVITY_NAME)
+            setDataAndType(Uri.parse(streamUrl), "video/*")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(VLC_EXTRA_FROM_START, true)
+            if (!title.isNullOrBlank()) {
+                putExtra(VLC_EXTRA_TITLE, title)
+            }
+        }
+    }
+
     fun createIntent(streamUrl: String): Intent {
         return Intent(Intent.ACTION_VIEW).apply {
             setPackage(VLC_PACKAGE_NAME)
@@ -66,6 +79,9 @@ class ExternalVlcLauncher {
 
     companion object {
         const val VLC_PACKAGE_NAME = "org.videolan.vlc"
+        const val VLC_PLAYER_ACTIVITY_NAME = "org.videolan.vlc.gui.video.VideoPlayerActivity"
+        const val VLC_EXTRA_FROM_START = "from_start"
+        const val VLC_EXTRA_TITLE = "title"
     }
 }
 
