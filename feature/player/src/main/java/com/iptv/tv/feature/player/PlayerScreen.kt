@@ -23,7 +23,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -75,6 +78,9 @@ fun PlayerScreen(
             }
         }
     }
+    var showTechnicalInfo by rememberSaveable { mutableStateOf(false) }
+    var showPlaylists by rememberSaveable { mutableStateOf(true) }
+    var showChannels by rememberSaveable { mutableStateOf(true) }
 
     LazyColumn(
         modifier = Modifier
@@ -86,36 +92,69 @@ fun PlayerScreen(
         item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
             Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
-            Text("Effective player: ${state.effectivePlayer} | default: ${state.defaultPlayer} | override: ${state.channelPlayerOverride ?: "default"}")
-            Text("Buffer: ${state.bufferProfile} | manual=${state.manualBuffer}")
-            Text("Engine: connected=${state.engineConnected}, peers=${state.enginePeers}, speed=${state.engineSpeedKbps} kbps")
-            Text("Engine endpoint: ${state.engineEndpoint} | Tor=${state.torEnabled}")
-            Text("Engine message: ${state.engineMessage}")
-            Text("Размер плеера: ${if (state.internalPlayerExpanded) "увеличенный" else "стандарт"} | Масштаб: ${state.playerVideoScale}")
-            Text("Встроенный плеер: двойной клик по видео = полноэкранный/обычный режим.")
-            Text("VLC: сначала запускается прямой fullscreen-режим (если поддерживается), иначе режим совместимости.")
-            Text("Возврат из VLC обратно в приложение: кнопка Back/Назад.")
-            if (state.torEnabled) {
-                Text("Tor режим активен: для работы нужен локально запущенный Tor/Orbot.")
-            }
+            Text(
+                "Управление: пульт (стрелки + OK + BACK), мышь (двойной клик по видео = развернуть/свернуть).",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "Режимы экрана: встроенный плеер — малый/большой; внешний VLC — полноэкранный режим VLC.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "Счетчики: плейлистов=${state.playlists.size} | " +
+                    "каналов в текущем=${state.channels.size} | " +
+                    "по фильтру=${filteredChannels.size} | избранных=${state.favoriteChannelIds.size}"
+            )
             Text("Тип выбранного потока: ${state.selectedStreamKind}")
-            val aceDescriptorLabel = state.selectedAceDescriptor?.let { descriptor ->
-                if (descriptor.length > 110) "${descriptor.take(110)}..." else descriptor
-            } ?: "не обнаружен"
-            Text("Ace-дескриптор: $aceDescriptorLabel")
-            Text(state.epgStatus)
-            state.channelEpgInfo?.let { epg ->
-                val nowText = epg.now?.let { "Сейчас: ${it.title}" } ?: "Сейчас: нет данных"
-                val nextText = epg.next?.let { "Далее: ${it.title}" } ?: "Далее: нет данных"
-                Text(nowText)
-                Text(nextText)
-                Text("EPG source: ${epg.epgSourceUrl ?: "-"}")
-                epg.upcoming.take(4).forEach { item ->
-                    Text("• ${formatEpgTime(item.startEpochMs)} - ${formatEpgTime(item.endEpochMs)} | ${item.title}")
+            Text("EPG: ${state.epgStatus}")
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = { showTechnicalInfo = !showTechnicalInfo }) {
+                    Text(if (showTechnicalInfo) "Скрыть тех.инфо" else "Показать тех.инфо")
+                }
+                OutlinedButton(onClick = { showPlaylists = !showPlaylists }) {
+                    Text(if (showPlaylists) "Свернуть плейлисты" else "Развернуть плейлисты")
+                }
+                OutlinedButton(onClick = { showChannels = !showChannels }) {
+                    Text(if (showChannels) "Свернуть каналы" else "Развернуть каналы")
                 }
             }
-            state.resolvedStreamUrl?.let { resolved ->
-                Text("Подготовленный URL: $resolved")
+            if (showTechnicalInfo) {
+                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("Тех.информация", style = MaterialTheme.typography.titleSmall)
+                        Text("Effective player: ${state.effectivePlayer} | default: ${state.defaultPlayer} | override: ${state.channelPlayerOverride ?: "default"}")
+                        Text("Buffer: ${state.bufferProfile} | manual=${state.manualBuffer}")
+                        Text("Engine: connected=${state.engineConnected}, peers=${state.enginePeers}, speed=${state.engineSpeedKbps} kbps")
+                        Text("Engine endpoint: ${state.engineEndpoint} | Tor=${state.torEnabled}")
+                        Text("Engine message: ${state.engineMessage}")
+                        Text("Размер плеера: ${if (state.internalPlayerExpanded) "увеличенный" else "стандарт"} | Масштаб: ${state.playerVideoScale}")
+                        Text("Встроенный плеер: двойной клик по видео = полноэкранный/обычный режим.")
+                        Text("VLC: сначала запускается прямой fullscreen, затем fallback совместимости.")
+                        val aceDescriptorLabel = state.selectedAceDescriptor?.let { descriptor ->
+                            if (descriptor.length > 110) "${descriptor.take(110)}..." else descriptor
+                        } ?: "не обнаружен"
+                        Text("Ace-дескриптор: $aceDescriptorLabel")
+                        state.channelEpgInfo?.let { epg ->
+                            val nowText = epg.now?.let { "Сейчас: ${it.title}" } ?: "Сейчас: нет данных"
+                            val nextText = epg.next?.let { "Далее: ${it.title}" } ?: "Далее: нет данных"
+                            Text(nowText)
+                            Text(nextText)
+                            Text("EPG source: ${epg.epgSourceUrl ?: "-"}")
+                            epg.upcoming.take(4).forEach { item ->
+                                Text("• ${formatEpgTime(item.startEpochMs)} - ${formatEpgTime(item.endEpochMs)} | ${item.title}")
+                            }
+                        }
+                        state.resolvedStreamUrl?.let { resolved ->
+                            Text("Подготовленный URL: $resolved")
+                        }
+                    }
+                }
             }
         }
 
@@ -236,95 +275,99 @@ fun PlayerScreen(
             }
         }
 
-        item {
-            Text("Плейлисты", style = MaterialTheme.typography.titleMedium)
-        }
-        items(state.playlists, key = { it.id }) { playlist ->
-            Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                Column(
-                    modifier = Modifier.padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text("${playlist.name} (id=${playlist.id})")
-                    Button(onClick = { viewModel.selectPlaylist(playlist.id) }) {
-                        Text(
-                            if (playlist.id == state.selectedPlaylistId) {
-                                "Текущий плейлист"
-                            } else {
-                                "Открыть плейлист"
-                            }
-                        )
-                    }
-                }
-            }
-        }
-
-        item {
-            Text("Каналы", style = MaterialTheme.typography.titleMedium)
-        }
-        item {
-            OutlinedTextField(
-                value = state.channelQuery,
-                onValueChange = viewModel::updateChannelQuery,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Поиск каналов") },
-                singleLine = true
-            )
-        }
-        if (state.availableGroups.isNotEmpty()) {
+        if (showPlaylists) {
             item {
-                Text("Группы каналов", style = MaterialTheme.typography.titleSmall)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (state.selectedGroup == null) {
-                        Button(onClick = { viewModel.selectGroup(null) }) {
-                            Text("Все группы")
-                        }
-                    } else {
-                        OutlinedButton(onClick = { viewModel.selectGroup(null) }) {
-                            Text("Все группы")
-                        }
-                    }
-                    state.availableGroups.forEach { group ->
-                        if (state.selectedGroup == group) {
-                            Button(onClick = { viewModel.selectGroup(group) }) {
-                                Text(group)
-                            }
-                        } else {
-                            OutlinedButton(onClick = { viewModel.selectGroup(group) }) {
-                                Text(group)
-                            }
-                        }
-                    }
-                }
+                Text("Плейлисты (${state.playlists.size})", style = MaterialTheme.typography.titleMedium)
             }
-        }
-        if (filteredChannels.isEmpty()) {
-            item {
-                Text("Нет каналов по текущему фильтру")
-            }
-        } else {
-            items(filteredChannels, key = { it.id }) { channel ->
+            items(state.playlists, key = { it.id }) { playlist ->
                 Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                     Column(
                         modifier = Modifier.padding(10.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(channel.name, style = MaterialTheme.typography.titleSmall)
-                        Text("Group: ${channel.group ?: "-"} | health=${channel.health}")
-                        Text("EPG id: ${channel.tvgId ?: "-"}")
-                        Text("Logo: ${channel.logo ?: "-"}")
-                        Text("URL: ${channel.streamUrl}")
-                        Button(onClick = { viewModel.selectChannel(channel.id) }) {
+                        Text("${playlist.name} (id=${playlist.id}, каналов=${playlist.channelCount})")
+                        Button(onClick = { viewModel.selectPlaylist(playlist.id) }) {
                             Text(
-                                if (channel.id == state.selectedChannelId) {
-                                    "Канал выбран"
+                                if (playlist.id == state.selectedPlaylistId) {
+                                    "Текущий плейлист"
                                 } else {
-                                    "Выбрать канал"
+                                    "Открыть плейлист"
                                 }
                             )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showChannels) {
+            item {
+                Text("Каналы (${filteredChannels.size}/${state.channels.size})", style = MaterialTheme.typography.titleMedium)
+            }
+            item {
+                OutlinedTextField(
+                    value = state.channelQuery,
+                    onValueChange = viewModel::updateChannelQuery,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Поиск каналов") },
+                    singleLine = true
+                )
+            }
+            if (state.availableGroups.isNotEmpty()) {
+                item {
+                    Text("Группы каналов (${state.availableGroups.size})", style = MaterialTheme.typography.titleSmall)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (state.selectedGroup == null) {
+                            Button(onClick = { viewModel.selectGroup(null) }) {
+                                Text("Все группы")
+                            }
+                        } else {
+                            OutlinedButton(onClick = { viewModel.selectGroup(null) }) {
+                                Text("Все группы")
+                            }
+                        }
+                        state.availableGroups.forEach { group ->
+                            if (state.selectedGroup == group) {
+                                Button(onClick = { viewModel.selectGroup(group) }) {
+                                    Text(group)
+                                }
+                            } else {
+                                OutlinedButton(onClick = { viewModel.selectGroup(group) }) {
+                                    Text(group)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (filteredChannels.isEmpty()) {
+                item {
+                    Text("Нет каналов по текущему фильтру")
+                }
+            } else {
+                items(filteredChannels, key = { it.id }) { channel ->
+                    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(channel.name, style = MaterialTheme.typography.titleSmall)
+                            Text("Group: ${channel.group ?: "-"} | health=${channel.health}")
+                            Text("EPG id: ${channel.tvgId ?: "-"}")
+                            Text("Logo: ${channel.logo ?: "-"}")
+                            Text("URL: ${channel.streamUrl}")
+                            Button(onClick = { viewModel.selectChannel(channel.id) }) {
+                                Text(
+                                    if (channel.id == state.selectedChannelId) {
+                                        "Канал выбран"
+                                    } else {
+                                        "Выбрать канал"
+                                    }
+                                )
+                            }
                         }
                     }
                 }

@@ -36,6 +36,7 @@ fun FavoritesScreen(
         item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
             Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
+            Text("Счетчик: избранных каналов ${state.channels.size}")
         }
 
         item {

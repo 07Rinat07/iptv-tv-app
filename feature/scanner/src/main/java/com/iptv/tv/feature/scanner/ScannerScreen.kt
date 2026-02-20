@@ -156,7 +156,21 @@ fun ScannerScreen(
                         Text("Остановить и сохранить найденное")
                     }
                 }
+                OutlinedButton(
+                    onClick = viewModel::exportFoundLinksToTxt,
+                    enabled = !state.isLoading && (state.progressFoundItems > 0 || state.results.isNotEmpty())
+                ) {
+                    Text("Экспорт найденных ссылок (.txt)")
+                }
             }
+            Text(
+                "Подсказка: при остановке сканера найденное сохраняется. Во время сохранения будет показан прогресс и текущий источник.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "Управление: пульт (стрелки + OK) и мышь поддерживаются на всех кнопках.",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
 
         item {
@@ -276,6 +290,18 @@ fun ScannerScreen(
 
         item {
             Text(text = "Найдено: ${state.results.size}", style = MaterialTheme.typography.titleMedium)
+            if (state.progressFoundItems > state.results.size) {
+                Text(
+                    text = "Всего найдено в этой сессии: ${state.progressFoundItems} (на экране показаны первые ${state.results.size})",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            state.exportedLinksPath?.let { path ->
+                Text(
+                    text = "TXT сохранен: $path",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
 
             items(state.results, key = { it.id }) { item ->

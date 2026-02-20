@@ -141,6 +141,11 @@ private fun AppRoot() {
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Text(
+                                text = routeControlHint(currentRoute),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         NavControlButtons(
                             onBack = {
@@ -402,6 +407,15 @@ private fun routeTitle(route: String): String = when {
         Routes.DIAGNOSTICS -> "Диагностика"
         else -> route
     }
+}
+
+private fun routeControlHint(route: String): String = when {
+    route.startsWith("player") ->
+        "Пульт: стрелки + OK, BACK. Мышь: двойной клик по видео = развернуть/свернуть."
+    route.startsWith("scanner") ->
+        "Пульт: стрелки + OK для кнопок. Мышь: клик по карточкам и кнопкам."
+    else ->
+        "Управление: пульт (D-pad + OK + BACK) и мышь."
 }
 
 object Routes {

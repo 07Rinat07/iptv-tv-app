@@ -38,6 +38,7 @@ fun PlaylistsScreen(
     viewModel: PlaylistsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    val totalChannels = state.playlists.sumOf { it.channelCount }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -49,7 +50,9 @@ fun PlaylistsScreen(
         item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
             Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
+            Text("Счетчики: списков=${state.playlists.size} | каналов во всех списках=$totalChannels")
             Text("Совет: выберите плейлист и используйте быстрые кнопки ниже.")
+            Text("Управление: пульт (стрелки + OK) и мышь.")
         }
 
         item {

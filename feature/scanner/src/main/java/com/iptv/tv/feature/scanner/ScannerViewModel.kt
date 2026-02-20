@@ -1,5 +1,7 @@
 package com.iptv.tv.feature.scanner
 
+import android.content.Context
+import android.os.Environment
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
@@ -15,6 +17,7 @@ import com.iptv.tv.core.model.ScannerProxySettings
 import com.iptv.tv.core.model.ScannerSearchMode
 import com.iptv.tv.core.model.ScannerSearchRequest
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,6 +37,7 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
@@ -84,11 +88,19 @@ data class ScannerUiState(
     val progressStageLabel: String = "",
     val progressStageLocation: String = "",
     val progressElapsedSeconds: Long = 0,
-    val progressTimeLimitSeconds: Long = 300
+    val progressTimeLimitSeconds: Long = 300,
+    val exportedLinksPath: String? = null
 )
+
+private enum class SearchPhase {
+    IDLE,
+    SCANNING,
+    IMPORTING
+}
 
 @HiltViewModel
 class ScannerViewModel @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     private val scannerRepository: ScannerRepository,
     private val playlistRepository: PlaylistRepository,
     private val diagnosticsRepository: DiagnosticsRepository,
@@ -99,6 +111,7 @@ class ScannerViewModel @Inject constructor(
     private var searchAttemptId: Long = 0L
     private var stopRequestedByUser: Boolean = false
     private var searchJob: Job? = null
+    private var searchPhase: SearchPhase = SearchPhase.IDLE
     private var currentMergedCandidates: LinkedHashMap<String, PlaylistCandidate> = linkedMapOf()
     private val localAiAssistant = LocalAiQueryAssistant()
     private val probeCache = ConcurrentHashMap<String, ProbeCacheEntry>()
@@ -199,6 +212,24 @@ class ScannerViewModel @Inject constructor(
 
     fun stopSearch() {
         if (!_uiState.value.isLoading) return
+        if (searchPhase == SearchPhase.IMPORTING) {
+            _uiState.update {
+                it.copy(
+                    statusType = ScannerStatusType.INFO,
+                    statusTitle = "Сохраняем найденное",
+                    statusDetails = "Сейчас идет запись найденных плейлистов. Этот этап завершается автоматически.",
+                    progressStageLabel = "Сохранение найденного",
+                    progressStageLocation = "Пожалуйста, дождитесь завершения..."
+                )
+            }
+            viewModelScope.launch {
+                safeLog(
+                    status = "scanner_stop_deferred",
+                    message = "attempt=$searchAttemptId, phase=IMPORTING, found=${currentMergedCandidates.size}"
+                )
+            }
+            return
+        }
         if (stopRequestedByUser) {
             viewModelScope.launch {
                 safeLog(
@@ -226,6 +257,85 @@ class ScannerViewModel @Inject constructor(
             )
         }
         searchJob?.cancel(CancellationException("Scanner stop requested by user"))
+    }
+
+    fun exportFoundLinksToTxt() {
+        if (_uiState.value.isLoading) {
+            _uiState.update {
+                it.copy(
+                    statusType = ScannerStatusType.INFO,
+                    statusTitle = "Экспорт недоступен",
+                    statusDetails = "Дождитесь завершения текущего сканирования/сохранения."
+                )
+            }
+            return
+        }
+
+        val candidates = currentMergedCandidates.values.toList().ifEmpty { _uiState.value.results }
+        if (candidates.isEmpty()) {
+            _uiState.update {
+                it.copy(
+                    statusType = ScannerStatusType.INFO,
+                    statusTitle = "Нечего экспортировать",
+                    statusDetails = "Сначала выполните поиск: найденные ссылки появятся здесь."
+                )
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val now = System.currentTimeMillis()
+                    val content = buildString {
+                        appendLine("myscanerIPTV | Экспорт найденных плейлистов")
+                        appendLine("Найдено: ${candidates.size}")
+                        appendLine("Сформировано: $now")
+                        appendLine()
+                        candidates.forEachIndexed { index, candidate ->
+                            appendLine("${index + 1}. ${candidate.name.ifBlank { "Без названия" }}")
+                            appendLine("URL: ${candidate.downloadUrl.ifBlank { "-" }}")
+                            appendLine("Provider: ${candidate.provider} | Repo: ${candidate.repository} | Path: ${candidate.path}")
+                            appendLine()
+                        }
+                    }
+                    val targetDir = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                        ?: appContext.filesDir
+                    if (!targetDir.exists()) {
+                        targetDir.mkdirs()
+                    }
+                    val file = File(targetDir, "scanner-found-links-$now.txt")
+                    file.writeText(content)
+                    file.absolutePath
+                }
+            }.onSuccess { path ->
+                _uiState.update {
+                    it.copy(
+                        exportedLinksPath = path,
+                        statusType = ScannerStatusType.SUCCESS,
+                        statusTitle = "Ссылки сохранены",
+                        statusDetails = "Экспортировано ${candidates.size} ссылок в TXT: $path"
+                    )
+                }
+                safeLog(
+                    status = "scanner_export_links_ok",
+                    message = "count=${candidates.size}, path=$path"
+                )
+            }.onFailure { throwable ->
+                val reason = throwable.message ?: throwable.javaClass.simpleName
+                _uiState.update {
+                    it.copy(
+                        statusType = ScannerStatusType.ERROR,
+                        statusTitle = "Ошибка экспорта",
+                        statusDetails = "Не удалось сохранить TXT: $reason"
+                    )
+                }
+                safeLog(
+                    status = "scanner_export_links_error",
+                    message = reason
+                )
+            }
+        }
     }
 
     private fun runSearch(saveFoundResults: Boolean) {
@@ -304,6 +414,7 @@ class ScannerViewModel @Inject constructor(
             val proxySettings = settingsRepository.observeScannerProxySettings().first()
             val proxySummary = applyScannerProxySettings(proxySettings)
             stopRequestedByUser = false
+            searchPhase = SearchPhase.SCANNING
             currentMergedCandidates = linkedMapOf()
             val timeoutMs = if (preflightDegraded) NETWORK_STEP_TIMEOUT_DEGRADED_MS else NETWORK_STEP_TIMEOUT_MS
             val hardTimeoutMs = if (preflightDegraded) STEP_HARD_TIMEOUT_DEGRADED_MS else STEP_HARD_TIMEOUT_MS
@@ -331,7 +442,8 @@ class ScannerViewModel @Inject constructor(
                     progressStageLabel = "Подготовка поиска",
                     progressStageLocation = providerDisplayName(state.selectedProvider),
                     progressElapsedSeconds = 0,
-                    progressTimeLimitSeconds = searchRuntimeLimitMs / 1_000L
+                    progressTimeLimitSeconds = searchRuntimeLimitMs / 1_000L,
+                    exportedLinksPath = null
                 )
             }
             safeLog(
@@ -352,7 +464,6 @@ class ScannerViewModel @Inject constructor(
                 while (_uiState.value.isLoading && searchAttemptId == attemptId) {
                     val elapsedSec = ((System.currentTimeMillis() - startedAt) / 1000L)
                         .coerceAtLeast(0L)
-                        .coerceAtMost(searchRuntimeLimitMs / 1000L)
                     _uiState.update { current ->
                         if (!current.isLoading) {
                             current
@@ -438,9 +549,40 @@ class ScannerViewModel @Inject constructor(
                 val stoppedManually = stopRequestedByUser
                 val timedOut = outcome.timedOut
                 val importSummary = if (saveFoundResults) {
-                    importFoundPlaylists(
-                        candidates = foundAll
-                    )
+                    searchPhase = SearchPhase.IMPORTING
+                    _uiState.update {
+                        it.copy(
+                            progressCurrentStep = searchPlan.size.coerceAtLeast(1),
+                            progressTotalSteps = searchPlan.size.coerceAtLeast(1),
+                            progressFoundItems = foundAll.size,
+                            progressStageLabel = "Сохранение найденного",
+                            progressStageLocation = "Подготовка сохранения 0/${foundAll.size}",
+                            statusType = ScannerStatusType.LOADING,
+                            statusTitle = if (timedOut) {
+                                "Лимит 5 минут достигнут, сохраняем найденное"
+                            } else if (stoppedManually) {
+                                "Остановка принята, сохраняем найденное"
+                            } else {
+                                "Сохраняем найденные плейлисты"
+                            },
+                            statusDetails = "Сохранение: 0/${foundAll.size}"
+                        )
+                    }
+                    withContext(NonCancellable) {
+                        importFoundPlaylists(candidates = foundAll) { progress ->
+                            val baseText =
+                                "Сохранение: ${progress.processed}/${progress.total} | " +
+                                    "сохранено=${progress.imported}, дубликаты=${progress.skipped}, ошибок=${progress.failed}"
+                            val progressText = progress.current?.let { "$baseText | $it" } ?: baseText
+                            _uiState.update {
+                                it.copy(
+                                    progressStageLabel = "Сохранение найденного",
+                                    progressStageLocation = progressText,
+                                    statusDetails = progressText
+                                )
+                            }
+                        }
+                    }
                 } else {
                     null
                 }
@@ -561,7 +703,31 @@ class ScannerViewModel @Inject constructor(
                 val partial = currentMergedCandidates.values.take(targetResultCount)
                 val partialForDisplay = partial.take(SEARCH_DISPLAY_LIMIT)
                 val importSummary = if (saveFoundResults && partial.isNotEmpty()) {
-                    withContext(NonCancellable) { importFoundPlaylists(candidates = partial) }
+                    searchPhase = SearchPhase.IMPORTING
+                    _uiState.update {
+                        it.copy(
+                            statusType = ScannerStatusType.LOADING,
+                            statusTitle = "Остановка принята, сохраняем найденное",
+                            statusDetails = "Сохранение: 0/${partial.size}",
+                            progressStageLabel = "Сохранение найденного",
+                            progressStageLocation = "Подготовка сохранения 0/${partial.size}"
+                        )
+                    }
+                    withContext(NonCancellable) {
+                        importFoundPlaylists(candidates = partial) { progress ->
+                            val baseText =
+                                "Сохранение: ${progress.processed}/${progress.total} | " +
+                                    "сохранено=${progress.imported}, дубликаты=${progress.skipped}, ошибок=${progress.failed}"
+                            val progressText = progress.current?.let { "$baseText | $it" } ?: baseText
+                            _uiState.update {
+                                it.copy(
+                                    progressStageLabel = "Сохранение найденного",
+                                    progressStageLocation = progressText,
+                                    statusDetails = progressText
+                                )
+                            }
+                        }
+                    }
                 } else {
                     null
                 }
@@ -618,6 +784,7 @@ class ScannerViewModel @Inject constructor(
                 elapsedTickerJob.cancel()
                 val duration = System.currentTimeMillis() - startedAt
                 _uiState.update { it.copy(progressElapsedSeconds = (duration / 1000L).coerceAtLeast(0L)) }
+                searchPhase = SearchPhase.IDLE
                 stopRequestedByUser = false
                 searchJob = null
                 safeLogNonCancellable(
@@ -1217,13 +1384,23 @@ class ScannerViewModel @Inject constructor(
     }
 
     private suspend fun importFoundPlaylists(
-        candidates: List<PlaylistCandidate>
+        candidates: List<PlaylistCandidate>,
+        onProgress: ((ImportProgress) -> Unit)? = null
     ): ImportSummary {
         if (candidates.isEmpty()) return ImportSummary()
 
         safeLog(
             status = "scanner_import_start",
             message = "candidates=${candidates.size}, targetSave=all"
+        )
+        onProgress?.invoke(
+            ImportProgress(
+                processed = 0,
+                total = candidates.size,
+                imported = 0,
+                skipped = 0,
+                failed = 0
+            )
         )
 
         val existingSources = playlistRepository.observePlaylists()
@@ -1236,7 +1413,7 @@ class ScannerViewModel @Inject constructor(
         var failed = 0
         val failureReasons = mutableListOf<String>()
 
-        candidates.forEach { candidate ->
+        candidates.forEachIndexed { index, candidate ->
             val sourceUrl = candidate.downloadUrl.trim()
             if (sourceUrl.isBlank()) {
                 failed += 1
@@ -1245,7 +1422,17 @@ class ScannerViewModel @Inject constructor(
                     status = "scanner_import_error",
                     message = "provider=${candidate.provider}, repo=${candidate.repository}, path=${candidate.path}, reason=empty download url"
                 )
-                return@forEach
+                onProgress?.invoke(
+                    ImportProgress(
+                        processed = index + 1,
+                        total = candidates.size,
+                        imported = imported,
+                        skipped = skipped,
+                        failed = failed,
+                        current = "${candidate.name.ifBlank { candidate.path }} | ${candidate.downloadUrl.take(140)}"
+                    )
+                )
+                return@forEachIndexed
             }
 
             val normalizedSource = normalizeSource(sourceUrl)
@@ -1255,7 +1442,17 @@ class ScannerViewModel @Inject constructor(
                     status = "scanner_import_skip_duplicate",
                     message = "provider=${candidate.provider}, repo=${candidate.repository}, path=${candidate.path}"
                 )
-                return@forEach
+                onProgress?.invoke(
+                    ImportProgress(
+                        processed = index + 1,
+                        total = candidates.size,
+                        imported = imported,
+                        skipped = skipped,
+                        failed = failed,
+                        current = "${candidate.name.ifBlank { candidate.path }} | duplicate"
+                    )
+                )
+                return@forEachIndexed
             }
 
             val importResult = playlistRepository.importFromUrl(
@@ -1284,6 +1481,24 @@ class ScannerViewModel @Inject constructor(
                     )
                 }
                 AppResult.Loading -> Unit
+            }
+
+            onProgress?.invoke(
+                ImportProgress(
+                    processed = index + 1,
+                    total = candidates.size,
+                    imported = imported,
+                    skipped = skipped,
+                    failed = failed,
+                    current = "${candidate.name.ifBlank { candidate.path }} | ${sourceUrl.take(140)}"
+                )
+            )
+
+            if ((index + 1) % IMPORT_PROGRESS_LOG_EVERY == 0 || index + 1 == candidates.size) {
+                safeLog(
+                    status = "scanner_import_progress",
+                    message = "processed=${index + 1}/${candidates.size}, imported=$imported, skipped=$skipped, failed=$failed"
+                )
             }
         }
 
@@ -1913,6 +2128,15 @@ class ScannerViewModel @Inject constructor(
         val failureReasons: List<String> = emptyList()
     )
 
+    private data class ImportProgress(
+        val processed: Int,
+        val total: Int,
+        val imported: Int,
+        val skipped: Int,
+        val failed: Int,
+        val current: String? = null
+    )
+
     private data class NetworkPreflight(
         val apiReachable: Boolean,
         val webReachable: Boolean,
@@ -1940,6 +2164,7 @@ class ScannerViewModel @Inject constructor(
         const val NETWORK_PROBE_TIMEOUT_MS = 1_500L
         const val NETWORK_PROBE_CACHE_MS = 30_000L
         const val MAX_IMPORT_FAILURE_DETAILS = 5
+        const val IMPORT_PROGRESS_LOG_EVERY = 5
         const val PROXY_HTTP_HOST = "http.proxyHost"
         const val PROXY_HTTP_PORT = "http.proxyPort"
         const val PROXY_HTTPS_HOST = "https.proxyHost"

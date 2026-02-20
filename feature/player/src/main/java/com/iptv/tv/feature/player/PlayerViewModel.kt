@@ -292,11 +292,32 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun toggleInternalPlayerSize() {
-        _uiState.update { it.copy(internalPlayerExpanded = !it.internalPlayerExpanded) }
+        _uiState.update { current ->
+            val expanded = !current.internalPlayerExpanded
+            current.copy(
+                internalPlayerExpanded = expanded,
+                lastInfo = if (expanded) {
+                    "Режим плеера: большой экран"
+                } else {
+                    "Режим плеера: малый экран"
+                },
+                lastError = null
+            )
+        }
     }
 
     fun setInternalPlayerExpanded(expanded: Boolean) {
-        _uiState.update { it.copy(internalPlayerExpanded = expanded) }
+        _uiState.update {
+            it.copy(
+                internalPlayerExpanded = expanded,
+                lastInfo = if (expanded) {
+                    "Режим плеера: большой экран"
+                } else {
+                    "Режим плеера: малый экран"
+                },
+                lastError = null
+            )
+        }
     }
 
     fun cycleVideoScale() {
@@ -306,7 +327,11 @@ class PlayerViewModel @Inject constructor(
                 PlayerVideoScale.FILL -> PlayerVideoScale.ZOOM
                 PlayerVideoScale.ZOOM -> PlayerVideoScale.FIT
             }
-            state.copy(playerVideoScale = next)
+            state.copy(
+                playerVideoScale = next,
+                lastInfo = "Режим кадра переключен: $next",
+                lastError = null
+            )
         }
     }
 
