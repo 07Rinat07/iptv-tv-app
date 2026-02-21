@@ -549,7 +549,9 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             ScannerProviderScope.ALL -> listOf(
                 "site:github.com",
                 "site:gitlab.com",
-                "site:bitbucket.org"
+                "site:bitbucket.org",
+                "site:raw.githubusercontent.com",
+                "site:gist.githubusercontent.com"
             )
         }
 
@@ -563,6 +565,13 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         if (request.providerScope == ScannerProviderScope.ALL) {
             variations += "$searchBase iptv m3u github"
             variations += "$searchBase iptv m3u gitlab"
+            variations += "$searchBase iptv m3u bitbucket"
+            variations += "$searchBase m3u8 url"
+            variations += "$searchBase filetype:m3u"
+            variations += "$searchBase filetype:m3u8"
+            variations += "$searchBase forum m3u"
+            variations += "$searchBase reddit m3u"
+            variations += "$searchBase 4pda m3u"
         }
 
         return variations
@@ -736,7 +745,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                 buildGitLabCandidate(link, scope)
             host == "bitbucket.org" ->
                 buildBitbucketCandidate(link, scope)
-            else -> null
+            else -> buildDirectWebCandidate(link, scope)
         }
     }
 
@@ -840,6 +849,29 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             path = path,
             name = path.substringAfterLast('/'),
             downloadUrl = rawUrl,
+            updatedAt = "",
+            sizeBytes = null
+        )
+    }
+
+    private fun buildDirectWebCandidate(link: String, scope: ScannerProviderScope): PlaylistCandidate? {
+        if (scope != ScannerProviderScope.ALL) return null
+        val parsed = link.toHttpUrlOrNull() ?: return null
+        val path = parsed.pathSegments
+            .filter { it.isNotBlank() }
+            .joinToString("/")
+        if (!isPlaylistPath(path)) return null
+
+        val host = parsed.host.lowercase()
+        val name = path.substringAfterLast('/').ifBlank { host }
+        val normalizedLink = parsed.newBuilder().query(parsed.query).build().toString()
+        return PlaylistCandidate(
+            id = "web:direct:${normalizeSourceKey(normalizedLink)}",
+            provider = PROVIDER_WEB,
+            repository = host,
+            path = path,
+            name = name,
+            downloadUrl = normalizedLink,
             updatedAt = "",
             sizeBytes = null
         )
@@ -1114,6 +1146,14 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         return URLEncoder.encode(value, StandardCharsets.UTF_8.toString()).replace("+", "%20")
     }
 
+    private fun normalizeSourceKey(value: String): String {
+        val compact = value
+            .lowercase()
+            .replace(Regex("[^a-z0-9]+"), "_")
+            .trim('_')
+        return compact.take(120).ifBlank { value.hashCode().toString() }
+    }
+
     private fun parseEpochOrNull(raw: String): Long? {
         if (raw.isBlank()) return null
         parseIsoEpoch(raw)?.let { return it }
@@ -1269,10 +1309,10 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         const val BITBUCKET_SOURCE_PAGE_SIZE = 100
         const val MAX_BITBUCKET_PAGES = 3
 
-        const val MAX_WEB_SEARCH_QUERIES = 8
-        const val MAX_WEB_LINKS_PER_QUERY = 24
-        const val MAX_WEB_PROBES = 20
-        const val WEB_PROBE_TIMEOUT_MS = 6_000L
+        const val MAX_WEB_SEARCH_QUERIES = 14
+        const val MAX_WEB_LINKS_PER_QUERY = 36
+        const val MAX_WEB_PROBES = 48
+        const val WEB_PROBE_TIMEOUT_MS = 4_000L
 
         val HTML_LINK_REGEX = Regex("href=[\"']([^\"'#<>]+)[\"']", RegexOption.IGNORE_CASE)
     }

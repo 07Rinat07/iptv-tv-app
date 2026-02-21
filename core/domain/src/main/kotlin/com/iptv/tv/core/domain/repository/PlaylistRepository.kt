@@ -18,6 +18,7 @@ interface PlaylistRepository {
     suspend fun refreshPlaylist(playlistId: Long): AppResult<Unit>
     suspend fun refreshAllPlaylists(): AppResult<Int>
     suspend fun deletePlaylist(playlistId: Long): AppResult<Int>
+    suspend fun setPlaylistEpgSource(playlistId: Long, epgSourceUrl: String?): AppResult<Unit>
     suspend fun getChannelById(channelId: Long): AppResult<Channel>
     suspend fun getChannelEpgNowNext(channelId: Long): AppResult<ChannelEpgInfo>
 }

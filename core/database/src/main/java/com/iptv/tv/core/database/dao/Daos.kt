@@ -48,6 +48,9 @@ interface PlaylistDao {
     @Query("UPDATE playlists SET lastSyncedAt = :syncedAt WHERE id = :playlistId")
     suspend fun updateLastSynced(playlistId: Long, syncedAt: Long)
 
+    @Query("UPDATE playlists SET epgSourceUrl = :epgSourceUrl WHERE id = :playlistId")
+    suspend fun updateEpgSourceUrl(playlistId: Long, epgSourceUrl: String?): Int
+
     @Query("DELETE FROM playlists WHERE id = :playlistId")
     suspend fun deleteById(playlistId: Long): Int
 }

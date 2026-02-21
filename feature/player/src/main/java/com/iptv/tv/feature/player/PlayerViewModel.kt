@@ -39,6 +39,7 @@ import java.net.URL
 import java.net.URLDecoder
 import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 
 const val PLAYER_PLAYLIST_ID_ARG = "playlistId"
@@ -87,6 +88,9 @@ data class PlayerUiState(
     val resolvedStreamUrl: String? = null,
     val channelEpgInfo: ChannelEpgInfo? = null,
     val epgStatus: String = "EPG: нет данных",
+    val epgWizardUrl: String = "",
+    val epgWizardStatus: String = "EPG мастер: выберите плейлист",
+    val isSavingEpgWizard: Boolean = false,
     val internalSession: InternalPlaybackSession? = null,
     val playerVideoScale: PlayerVideoScale = PlayerVideoScale.FIT,
     val internalPlayerExpanded: Boolean = false,
@@ -122,8 +126,8 @@ class PlayerViewModel @Inject constructor(
     private var overrideJob: Job? = null
     private var epgJob: Job? = null
     private var lastEpgRequestedChannelId: Long? = null
-    private var lastEpgErrorSignature: String? = null
-    private var lastEpgErrorAtMs: Long = 0L
+    private val epgErrorLoggedAtMs = mutableMapOf<String, Long>()
+    private val epgUiErrorShownAtMs = mutableMapOf<String, Long>()
     private val missingEpgByPlaylistLoggedAtMs = mutableMapOf<Long, Long>()
     private var internalStartElapsedMs: Long = 0L
     private val vlcLauncher = ExternalVlcLauncher()
@@ -137,6 +141,7 @@ class PlayerViewModel @Inject constructor(
 
     fun selectPlaylist(playlistId: Long) {
         lastEpgRequestedChannelId = null
+        val selectedPlaylist = _uiState.value.playlists.firstOrNull { it.id == playlistId }
         _uiState.update {
             it.copy(
                 selectedPlaylistId = playlistId,
@@ -149,6 +154,12 @@ class PlayerViewModel @Inject constructor(
                 resolvedStreamUrl = null,
                 channelEpgInfo = null,
                 epgStatus = "EPG: загрузка...",
+                epgWizardUrl = selectedPlaylist?.epgSourceUrl.orEmpty(),
+                epgWizardStatus = if (selectedPlaylist != null) {
+                    "EPG мастер: плейлист ${selectedPlaylist.name}"
+                } else {
+                    "EPG мастер: выберите плейлист"
+                },
                 internalSession = null,
                 lastError = null,
                 lastInfo = null
@@ -231,6 +242,175 @@ class PlayerViewModel @Inject constructor(
 
     fun updateTestStreamUrl(value: String) {
         _uiState.update { it.copy(testStreamUrl = value, testStreamResult = null) }
+    }
+
+    fun updateEpgWizardUrl(value: String) {
+        _uiState.update {
+            it.copy(
+                epgWizardUrl = value,
+                epgWizardStatus = "EPG мастер: URL изменен (нажмите \"Проверить и сохранить\")"
+            )
+        }
+    }
+
+    fun fillEpgWizardFromSelectedPlaylist() {
+        val state = _uiState.value
+        val playlist = state.selectedPlaylistId?.let { selectedId ->
+            state.playlists.firstOrNull { it.id == selectedId }
+        }
+        if (playlist == null) {
+            _uiState.update {
+                it.copy(
+                    epgWizardStatus = "EPG мастер: сначала выберите плейлист",
+                    lastError = "Плейлист не выбран",
+                    lastInfo = null
+                )
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(
+                epgWizardUrl = playlist.epgSourceUrl.orEmpty(),
+                epgWizardStatus = "EPG мастер: URL подставлен из плейлиста ${playlist.name}"
+            )
+        }
+    }
+
+    fun saveEpgWizardAndTest() {
+        val state = _uiState.value
+        val playlistId = state.selectedPlaylistId
+        if (playlistId == null) {
+            _uiState.update {
+                it.copy(
+                    epgWizardStatus = "EPG мастер: выберите плейлист",
+                    lastError = "Сначала выберите плейлист",
+                    lastInfo = null
+                )
+            }
+            return
+        }
+        val playlist = state.playlists.firstOrNull { it.id == playlistId }
+        if (playlist == null) {
+            _uiState.update {
+                it.copy(
+                    epgWizardStatus = "EPG мастер: плейлист не найден",
+                    lastError = "Плейлист не найден",
+                    lastInfo = null
+                )
+            }
+            return
+        }
+
+        val newUrl = state.epgWizardUrl.trim()
+        if (newUrl.isNotBlank()) {
+            val lowered = newUrl.lowercase()
+            if (!lowered.startsWith("http://") && !lowered.startsWith("https://")) {
+                _uiState.update {
+                    it.copy(
+                        epgWizardStatus = "EPG мастер: URL должен начинаться с http:// или https://",
+                        lastError = "EPG URL должен начинаться с http:// или https://",
+                        lastInfo = null
+                    )
+                }
+                return
+            }
+        }
+
+        viewModelScope.launch {
+            val previousUrl = playlist.epgSourceUrl?.trim()?.ifBlank { null }
+            val normalized = newUrl.ifBlank { null }
+            _uiState.update {
+                it.copy(
+                    isSavingEpgWizard = true,
+                    epgWizardStatus = "EPG мастер: сохраняем настройки..."
+                )
+            }
+
+            when (val saveResult = playlistRepository.setPlaylistEpgSource(playlistId, normalized)) {
+                is AppResult.Success -> {
+                    val selectedChannelId = _uiState.value.selectedChannelId
+                    if (selectedChannelId != null && normalized != null) {
+                        _uiState.update {
+                            it.copy(epgWizardStatus = "EPG мастер: тестируем EPG на выбранном канале...")
+                        }
+                        when (val epgResult = playlistRepository.getChannelEpgNowNext(selectedChannelId)) {
+                            is AppResult.Success -> {
+                                val nowTitle = epgResult.data.now?.title ?: "-"
+                                val nextTitle = epgResult.data.next?.title ?: "-"
+                                _uiState.update {
+                                    it.copy(
+                                        isSavingEpgWizard = false,
+                                        channelEpgInfo = epgResult.data,
+                                        epgStatus = "EPG: ${epgResult.data.matchedBy} | сейчас: $nowTitle | далее: $nextTitle",
+                                        epgWizardStatus = "EPG мастер: OK, источник сохранен и проверен",
+                                        lastInfo = "EPG источник сохранен для плейлиста ${playlist.name}",
+                                        lastError = null
+                                    )
+                                }
+                                safeLog(
+                                    status = "player_epg_wizard_ok",
+                                    message = "playlistId=$playlistId, channelId=$selectedChannelId, source=${normalized.take(180)}",
+                                    playlistId = playlistId
+                                )
+                            }
+                            is AppResult.Error -> {
+                                // Revert on failed test to keep stable behavior.
+                                playlistRepository.setPlaylistEpgSource(playlistId, previousUrl)
+                                _uiState.update {
+                                    it.copy(
+                                        isSavingEpgWizard = false,
+                                        epgWizardStatus = "EPG мастер: тест не пройден, сохранение отменено",
+                                        lastError = "EPG тест не пройден: ${epgResult.message}. Предыдущий источник восстановлен.",
+                                        lastInfo = null
+                                    )
+                                }
+                                safeLog(
+                                    status = "player_epg_wizard_error",
+                                    message = "playlistId=$playlistId, channelId=$selectedChannelId, reason=${epgResult.message.take(300)}"
+                                )
+                            }
+                            AppResult.Loading -> Unit
+                        }
+                    } else {
+                        _uiState.update {
+                            it.copy(
+                                isSavingEpgWizard = false,
+                                epgWizardStatus = if (normalized == null) {
+                                    "EPG мастер: источник очищен"
+                                } else {
+                                    "EPG мастер: источник сохранен (для автотеста выберите канал)"
+                                },
+                                lastInfo = if (normalized == null) {
+                                    "EPG источник очищен для плейлиста ${playlist.name}"
+                                } else {
+                                    "EPG источник сохранен для плейлиста ${playlist.name}"
+                                },
+                                lastError = null
+                            )
+                        }
+                        safeLog(
+                            status = "player_epg_wizard_saved",
+                            message = "playlistId=$playlistId, source=${normalized?.take(180) ?: "-"}, selectedChannel=${selectedChannelId ?: "-"}"
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update {
+                        it.copy(
+                            isSavingEpgWizard = false,
+                            epgWizardStatus = "EPG мастер: ошибка сохранения",
+                            lastError = "Не удалось сохранить EPG URL: ${saveResult.message}",
+                            lastInfo = null
+                        )
+                    }
+                    safeLog(
+                        status = "player_epg_wizard_error",
+                        message = "playlistId=$playlistId, reason=${saveResult.message.take(300)}"
+                    )
+                }
+                AppResult.Loading -> Unit
+            }
+        }
     }
 
     fun fillTestStreamFromSelected() {
@@ -674,9 +854,18 @@ class PlayerViewModel @Inject constructor(
                     val preferred = state.selectedPlaylistId ?: requestedPlaylistId ?: playlists.firstOrNull()?.id
                     val selected = preferred?.takeIf { id -> playlists.any { it.id == id } }
                         ?: playlists.firstOrNull()?.id
+                    val selectedPlaylist = selected?.let { selectedId ->
+                        playlists.firstOrNull { it.id == selectedId }
+                    }
                     state.copy(
                         playlists = playlists,
-                        selectedPlaylistId = selected
+                        selectedPlaylistId = selected,
+                        epgWizardUrl = selectedPlaylist?.epgSourceUrl.orEmpty(),
+                        epgWizardStatus = if (selectedPlaylist != null) {
+                            "EPG мастер: плейлист ${selectedPlaylist.name}"
+                        } else {
+                            "EPG мастер: выберите плейлист"
+                        }
                     )
                 }
 
@@ -850,12 +1039,11 @@ class PlayerViewModel @Inject constructor(
         val playlist = playlistId?.let { id -> stateSnapshot.playlists.firstOrNull { it.id == id } }
         val epgUrl = playlist?.epgSourceUrl?.trim().orEmpty()
         if (playlist != null && epgUrl.isBlank()) {
-            _uiState.update {
-                it.copy(
-                    channelEpgInfo = null,
-                    epgStatus = "EPG: источник не настроен для плейлиста ${playlist.name} (id=${playlist.id})"
-                )
-            }
+            pushEpgUiErrorWithCooldown(
+                signature = "missing_epg_source|${playlist.id}",
+                message = "EPG: источник не настроен для плейлиста ${playlist.name} (id=${playlist.id})",
+                cooldownMs = MISSING_EPG_SOURCE_LOG_COOLDOWN_MS
+            )
             logMissingEpgSourceOncePerCooldown(playlistId = playlist.id, channelId = channelId)
             return
         }
@@ -879,25 +1067,33 @@ class PlayerViewModel @Inject constructor(
                     )
                 }
                 is AppResult.Error -> {
-                    _uiState.update { it.copy(channelEpgInfo = null, epgStatus = "EPG: ${result.message}") }
                     val message = result.message
-                    val signature = when {
-                        message.startsWith("EPG source URL is not configured", ignoreCase = true) ->
-                            "missing_epg_source|${playlistId ?: -1L}"
-                        else ->
-                            "$channelId|$message"
+                    val signature = buildEpgErrorSignature(
+                        playlistId = playlistId,
+                        channelId = channelId,
+                        message = message
+                    )
+                    val cooldownMs = when {
+                        signature.startsWith("missing_epg_source|") -> MISSING_EPG_SOURCE_LOG_COOLDOWN_MS
+                        signature.startsWith("epg_net|") -> EPG_CONNECTIVITY_ERROR_LOG_COOLDOWN_MS
+                        else -> EPG_ERROR_LOG_COOLDOWN_MS
                     }
+                    pushEpgUiErrorWithCooldown(
+                        signature = signature,
+                        message = "EPG: $message",
+                        cooldownMs = cooldownMs
+                    )
                     val now = System.currentTimeMillis()
-                    val suppressRepeat =
-                        signature == lastEpgErrorSignature &&
-                            now - lastEpgErrorAtMs < EPG_ERROR_LOG_COOLDOWN_MS
-                    if (!suppressRepeat) {
+                    val lastLocal = epgErrorLoggedAtMs[signature] ?: 0L
+                    val lastGlobal = globalEpgErrorLoggedAtMs[signature] ?: 0L
+                    val lastLoggedAt = maxOf(lastLocal, lastGlobal)
+                    if (now - lastLoggedAt >= cooldownMs) {
                         safeLog(
                             status = "player_epg_error",
                             message = "channelId=$channelId, reason=$message"
                         )
-                        lastEpgErrorSignature = signature
-                        lastEpgErrorAtMs = now
+                        epgErrorLoggedAtMs[signature] = now
+                        globalEpgErrorLoggedAtMs[signature] = now
                     }
                 }
                 AppResult.Loading -> Unit
@@ -909,12 +1105,91 @@ class PlayerViewModel @Inject constructor(
         val now = System.currentTimeMillis()
         val lastLoggedAt = missingEpgByPlaylistLoggedAtMs[playlistId] ?: 0L
         if (now - lastLoggedAt < MISSING_EPG_SOURCE_LOG_COOLDOWN_MS) return
+        val globalSignature = "missing_epg_source|$playlistId"
+        val globalLast = globalEpgErrorLoggedAtMs[globalSignature] ?: 0L
+        if (now - globalLast < MISSING_EPG_SOURCE_LOG_COOLDOWN_MS) return
         logAsync(
             status = "player_epg_error",
             message = "channelId=$channelId, reason=EPG source URL is not configured for playlist $playlistId",
             playlistId = playlistId
         )
         missingEpgByPlaylistLoggedAtMs[playlistId] = now
+        globalEpgErrorLoggedAtMs[globalSignature] = now
+    }
+
+    private fun pushEpgUiErrorWithCooldown(
+        signature: String,
+        message: String,
+        cooldownMs: Long
+    ) {
+        val now = System.currentTimeMillis()
+        val lastLocal = epgUiErrorShownAtMs[signature] ?: 0L
+        val lastGlobal = globalEpgUiErrorShownAtMs[signature] ?: 0L
+        val shouldShow = now - maxOf(lastLocal, lastGlobal) >= cooldownMs
+        if (shouldShow) {
+            _uiState.update {
+                it.copy(
+                    channelEpgInfo = null,
+                    epgStatus = message
+                )
+            }
+            epgUiErrorShownAtMs[signature] = now
+            globalEpgUiErrorShownAtMs[signature] = now
+            return
+        }
+
+        _uiState.update { current ->
+            val fallback = if (current.epgStatus.startsWith("EPG: загрузка")) {
+                "EPG: повтор ошибки подавлен (см. диагностику)"
+            } else {
+                current.epgStatus
+            }
+            current.copy(
+                channelEpgInfo = null,
+                epgStatus = fallback
+            )
+        }
+    }
+
+    private fun buildEpgErrorSignature(
+        playlistId: Long?,
+        channelId: Long,
+        message: String
+    ): String {
+        val normalizedPlaylistId = playlistId ?: -1L
+        val lowered = message.lowercase()
+        if (message.startsWith("EPG source URL is not configured", ignoreCase = true)) {
+            return "missing_epg_source|$normalizedPlaylistId"
+        }
+        val networkKind = when {
+            lowered.contains("sockettimeoutexception") || lowered.contains("timed out") ->
+                "timeout"
+            lowered.contains("unknownhostexception") || lowered.contains("unable to resolve host") ->
+                "dns"
+            lowered.contains("connectexception") || lowered.contains("connection refused") ->
+                "connect"
+            else -> null
+        }
+        if (networkKind != null) {
+            val hostOrIp = extractHostOrIp(message)
+            return "epg_net|$networkKind|$normalizedPlaylistId|${hostOrIp ?: "-"}"
+        }
+        val httpCode = Regex("""\bHTTP\s+(\d{3})\b""").find(message)?.groupValues?.getOrNull(1)
+        if (!httpCode.isNullOrBlank()) {
+            return "epg_http|$httpCode|$normalizedPlaylistId"
+        }
+        val compact = message
+            .replace(Regex("""\bport\s+\d+\b""", RegexOption.IGNORE_CASE), "port")
+            .replace(Regex("""\d{1,5}"""), "#")
+            .trim()
+            .take(160)
+        return "epg_other|$normalizedPlaylistId|$channelId|$compact"
+    }
+
+    private fun extractHostOrIp(message: String): String? {
+        val ip = Regex("""\b\d{1,3}(?:\.\d{1,3}){3}\b""").find(message)?.value
+        if (!ip.isNullOrBlank()) return ip
+        return Regex("""\b[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b""").find(message)?.value
     }
 
     private fun observeFavorites() {
@@ -1372,9 +1647,12 @@ class PlayerViewModel @Inject constructor(
         const val PROBE_CONNECT_TIMEOUT_MS = 8_000
         const val PROBE_READ_TIMEOUT_MS = 12_000
         const val EPG_ERROR_LOG_COOLDOWN_MS = 20_000L
-        const val MISSING_EPG_SOURCE_LOG_COOLDOWN_MS = 60_000L
+        const val EPG_CONNECTIVITY_ERROR_LOG_COOLDOWN_MS = 120_000L
+        const val MISSING_EPG_SOURCE_LOG_COOLDOWN_MS = 300_000L
         val HASH40_REGEX = Regex("^[a-fA-F0-9]{40}$")
         val ACE_QUERY_KEYS = setOf("id", "content_id", "infohash", "hash", "url")
+        val globalEpgErrorLoggedAtMs = ConcurrentHashMap<String, Long>()
+        val globalEpgUiErrorShownAtMs = ConcurrentHashMap<String, Long>()
     }
 
     private fun logAsync(status: String, message: String, playlistId: Long? = _uiState.value.selectedPlaylistId) {

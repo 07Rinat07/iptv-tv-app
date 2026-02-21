@@ -47,6 +47,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
+import java.util.TimeZone
 import javax.inject.Inject
 
 enum class ScannerStatusType {
@@ -63,6 +64,18 @@ data class ScannerPreset(
     val keywords: String,
     val provider: ScannerProviderScope = ScannerProviderScope.ALL,
     val description: String
+)
+
+data class ScannerProviderHealthUi(
+    val provider: ScannerProviderScope,
+    val providerName: String,
+    val score: Int,
+    val successCount: Int,
+    val timeoutCount: Int,
+    val errorCount: Int,
+    val timeoutStreak: Int,
+    val cooldownRemainingSec: Long,
+    val lastIssue: String? = null
 )
 
 data class ScannerUiState(
@@ -95,13 +108,15 @@ data class ScannerUiState(
     val progressStageLocation: String = "",
     val progressElapsedSeconds: Long = 0,
     val progressTimeLimitSeconds: Long = 300,
-    val exportedLinksPath: String? = null
+    val exportedLinksPath: String? = null,
+    val providerHealth: List<ScannerProviderHealthUi> = defaultProviderHealthUi()
 )
 
 private enum class SearchPhase {
     IDLE,
     SCANNING,
-    IMPORTING
+    IMPORTING,
+    EXPORTING
 }
 
 @HiltViewModel
@@ -116,11 +131,15 @@ class ScannerViewModel @Inject constructor(
     val uiState: StateFlow<ScannerUiState> = _uiState.asStateFlow()
     private var searchAttemptId: Long = 0L
     private var stopRequestedByUser: Boolean = false
+    private var stopImportRequested: Boolean = false
     private var searchJob: Job? = null
     private var searchPhase: SearchPhase = SearchPhase.IDLE
     private var currentMergedCandidates: LinkedHashMap<String, PlaylistCandidate> = linkedMapOf()
     private val localAiAssistant = LocalAiQueryAssistant()
     private val probeCache = ConcurrentHashMap<String, ProbeCacheEntry>()
+    private val providerTimeoutStreak = mutableMapOf<ScannerProviderScope, Int>()
+    private val providerCooldownUntilMs = mutableMapOf<ScannerProviderScope, Long>()
+    private val providerHealthStats = mutableMapOf<ScannerProviderScope, ProviderHealthRuntime>()
     private var learnedQueryTemplates: List<ScannerLearnedQuery> = emptyList()
 
     init {
@@ -219,19 +238,38 @@ class ScannerViewModel @Inject constructor(
     fun stopSearch() {
         if (!_uiState.value.isLoading) return
         if (searchPhase == SearchPhase.IMPORTING) {
+            stopImportRequested = true
             _uiState.update {
                 it.copy(
                     statusType = ScannerStatusType.INFO,
-                    statusTitle = "Сохраняем найденное",
-                    statusDetails = "Сейчас идет запись найденных плейлистов. Этот этап завершается автоматически.",
+                    statusTitle = "Остановка сохранения принята",
+                    statusDetails = "Завершаем текущий импорт и останавливаем сохранение остальных списков.",
                     progressStageLabel = "Сохранение найденного",
-                    progressStageLocation = "Пожалуйста, дождитесь завершения..."
+                    progressStageLocation = "Остановка после текущего файла..."
                 )
             }
             viewModelScope.launch {
                 safeLog(
-                    status = "scanner_stop_deferred",
+                    status = "scanner_stop_import_requested",
                     message = "attempt=$searchAttemptId, phase=IMPORTING, found=${currentMergedCandidates.size}"
+                )
+            }
+            return
+        }
+        if (searchPhase == SearchPhase.EXPORTING) {
+            _uiState.update {
+                it.copy(
+                    statusType = ScannerStatusType.INFO,
+                    statusTitle = "Экспорт завершается",
+                    statusDetails = "Остановка принята. Дождитесь завершения записи TXT.",
+                    progressStageLabel = "Экспорт ссылок",
+                    progressStageLocation = "Завершение записи файла..."
+                )
+            }
+            viewModelScope.launch {
+                safeLog(
+                    status = "scanner_stop_export_deferred",
+                    message = "attempt=$searchAttemptId, phase=EXPORTING, found=${currentMergedCandidates.size}"
                 )
             }
             return
@@ -291,19 +329,39 @@ class ScannerViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            exportCandidatesToTxt(candidates = candidates, sourceQuery = sourceQuery)
+            val refined = applyResultPostFilter(
+                attemptId = searchAttemptId,
+                state = _uiState.value,
+                candidates = candidates,
+                stage = "manual_export"
+            ).candidates
+            if (refined.isEmpty()) {
+                _uiState.update {
+                    it.copy(
+                        statusType = ScannerStatusType.INFO,
+                        statusTitle = "Нечего экспортировать",
+                        statusDetails = "После фильтра по свежести список пуст. Ослабьте фильтр \"Дней назад\"."
+                    )
+                }
+                safeLog(
+                    status = "scanner_export_links_skip",
+                    message = "mode=manual, query=${sourceQuery.take(80)}, reason=empty_after_refine"
+                )
+                return@launch
+            }
+            exportCandidatesToTxt(candidates = refined, sourceQuery = sourceQuery)
                 .onSuccess { path ->
                 _uiState.update {
                     it.copy(
                         exportedLinksPath = path,
                         statusType = ScannerStatusType.SUCCESS,
                         statusTitle = "Ссылки сохранены",
-                        statusDetails = "Экспортировано ${candidates.size} ссылок в TXT: $path"
+                        statusDetails = "Экспортировано ${refined.size} ссылок в TXT: $path"
                     )
                 }
                 safeLog(
                     status = "scanner_export_links_ok",
-                    message = "mode=manual, query=${sourceQuery.take(80)}, count=${candidates.size}, path=$path"
+                    message = "mode=manual, query=${sourceQuery.take(80)}, count=${refined.size}, path=$path"
                 )
             }.onFailure { throwable ->
                 val reason = throwable.message ?: throwable.javaClass.simpleName
@@ -465,8 +523,10 @@ class ScannerViewModel @Inject constructor(
             val proxySettings = settingsRepository.observeScannerProxySettings().first()
             val proxySummary = applyScannerProxySettings(proxySettings)
             stopRequestedByUser = false
+            stopImportRequested = false
             searchPhase = SearchPhase.SCANNING
             currentMergedCandidates = linkedMapOf()
+            resetProviderHealthTracking()
             val timeoutMs = if (preflightDegraded) NETWORK_STEP_TIMEOUT_DEGRADED_MS else NETWORK_STEP_TIMEOUT_MS
             val hardTimeoutMs = if (preflightDegraded) STEP_HARD_TIMEOUT_DEGRADED_MS else STEP_HARD_TIMEOUT_MS
             setStatus(
@@ -595,7 +655,13 @@ class ScannerViewModel @Inject constructor(
                     )
                 }
 
-                val foundAll = outcome.candidates
+                val foundAll = applyResultPostFilter(
+                    attemptId = attemptId,
+                    state = runState,
+                    candidates = outcome.candidates,
+                    stage = "search_complete"
+                ).candidates
+                currentMergedCandidates = LinkedHashMap(foundAll.associateBy { it.id })
                 val foundForDisplay = foundAll.take(SEARCH_DISPLAY_LIMIT)
                 val stoppedManually = stopRequestedByUser
                 val timedOut = outcome.timedOut
@@ -638,6 +704,7 @@ class ScannerViewModel @Inject constructor(
                     null
                 }
                 val autoExportPath = if (saveFoundResults && foundAll.isNotEmpty()) {
+                    searchPhase = SearchPhase.EXPORTING
                     withContext(NonCancellable) {
                         val exportResult = exportCandidatesToTxt(
                             candidates = foundAll,
@@ -687,6 +754,7 @@ class ScannerViewModel @Inject constructor(
                 val primaryError = selectPrimaryError(outcome.errors)
                 val importFailedCompletely = saveFoundResults &&
                     importSummary != null &&
+                    !importSummary.stoppedByUser &&
                     importSummary.imported == 0 &&
                     importSummary.failed > 0
 
@@ -776,7 +844,13 @@ class ScannerViewModel @Inject constructor(
                     )
                 }
             } catch (cancellation: CancellationException) {
-                val partial = currentMergedCandidates.values.take(targetResultCount)
+                val partial = applyResultPostFilter(
+                    attemptId = attemptId,
+                    state = runState,
+                    candidates = currentMergedCandidates.values.take(targetResultCount),
+                    stage = "cancelled"
+                ).candidates
+                currentMergedCandidates = LinkedHashMap(partial.associateBy { it.id })
                 val partialForDisplay = partial.take(SEARCH_DISPLAY_LIMIT)
                 val importSummary = if (saveFoundResults && partial.isNotEmpty()) {
                     searchPhase = SearchPhase.IMPORTING
@@ -808,6 +882,7 @@ class ScannerViewModel @Inject constructor(
                     null
                 }
                 val autoExportPath = if (saveFoundResults && partial.isNotEmpty()) {
+                    searchPhase = SearchPhase.EXPORTING
                     withContext(NonCancellable) {
                         val exportResult = exportCandidatesToTxt(
                             candidates = partial,
@@ -835,7 +910,8 @@ class ScannerViewModel @Inject constructor(
                     "Поиск остановлен вручную. Совпадений пока нет."
                 } else {
                     val importText = if (importSummary != null) {
-                        " | сохранено=${importSummary.imported}, дубликаты=${importSummary.skipped}, ошибок=${importSummary.failed}"
+                        val stopTail = if (importSummary.stoppedByUser) ", остановлено пользователем" else ""
+                        " | сохранено=${importSummary.imported}, дубликаты=${importSummary.skipped}, ошибок=${importSummary.failed}$stopTail"
                     } else {
                         ""
                     }
@@ -887,7 +963,9 @@ class ScannerViewModel @Inject constructor(
                 _uiState.update { it.copy(progressElapsedSeconds = (duration / 1000L).coerceAtLeast(0L)) }
                 searchPhase = SearchPhase.IDLE
                 stopRequestedByUser = false
+                stopImportRequested = false
                 searchJob = null
+                refreshProviderHealthSnapshot()
                 safeLogNonCancellable(
                     status = "scanner_finish",
                     message = "attempt=$attemptId, durationMs=$duration, status=${_uiState.value.statusType}, results=${_uiState.value.results.size}, storedPartial=${currentMergedCandidates.size}"
@@ -1323,7 +1401,8 @@ class ScannerViewModel @Inject constructor(
                 stepNumber = stepNumber,
                 stepLabel = stepLabel,
                 request = request,
-                networkStepTimeoutMs = networkStepTimeoutMs
+                networkStepTimeoutMs = networkStepTimeoutMs,
+                respectCooldown = false
             )
         }
     }
@@ -1346,7 +1425,8 @@ class ScannerViewModel @Inject constructor(
                 stepNumber = stepNumber,
                 stepLabel = "$stepLabel/SEARCH_ENGINE",
                 request = request.copy(providerScope = ScannerProviderScope.ALL),
-                networkStepTimeoutMs = networkStepTimeoutMs
+                networkStepTimeoutMs = networkStepTimeoutMs,
+                respectCooldown = false
             )
         }
 
@@ -1357,19 +1437,60 @@ class ScannerViewModel @Inject constructor(
                 add(ScannerProviderScope.BITBUCKET)
             }
         }
+        val now = System.currentTimeMillis()
+        val activeProviders = providers.filterNot { provider ->
+            val blockedUntil = providerCooldownUntilMs[provider] ?: 0L
+            blockedUntil > now
+        }
+        var sortedActiveProviders = activeProviders.sortedByDescending { provider ->
+            providerHealthScore(provider = provider, nowMs = now)
+        }
+        val skippedProviders = providers - activeProviders.toSet()
+
+        skippedProviders.forEach { skipped ->
+            val remainMs = (providerCooldownUntilMs[skipped] ?: now) - now
+            safeLog(
+                status = "scanner_provider_skipped",
+                message = "attempt=$attemptId, step=$stepNumber, provider=$skipped, reason=temporary_backoff, remainingMs=${remainMs.coerceAtLeast(0L)}"
+            )
+        }
+
+        refreshProviderHealthSnapshot(nowMs = now)
+
+        if (sortedActiveProviders.isEmpty()) {
+            val forcedProvider = providers
+                .sortedByDescending { provider -> providerHealthScore(provider = provider, nowMs = now) }
+                .firstOrNull()
+            if (forcedProvider != null) {
+                sortedActiveProviders = listOf(forcedProvider)
+                safeLog(
+                    status = "scanner_provider_forced_probe",
+                    message = "attempt=$attemptId, step=$stepNumber, provider=$forcedProvider, reason=all_in_backoff"
+                )
+            } else {
+                val fallbackInSec = ((providerCooldownUntilMs.values.minOrNull() ?: now) - now).coerceAtLeast(0L) / 1000L
+                return AppResult.Error(
+                    message = "All providers temporarily paused due repeated timeouts (retry in ~${fallbackInSec}s)"
+                )
+            }
+        }
 
         val merged = linkedMapOf<String, PlaylistCandidate>()
         val providerErrors = mutableListOf<String>()
         var hasSuccessfulProviderCall = false
         _uiState.update {
             it.copy(
-                progressStageLocation = "Параллельно: ${providers.joinToString(", ") { providerDisplayName(it) }}",
+                progressStageLocation = "Параллельно: ${sortedActiveProviders.joinToString(", ") { providerDisplayName(it) }}",
                 statusDetails = "$stepLabel | параллельный запрос провайдеров"
             )
         }
+        safeLog(
+            status = "scanner_provider_order",
+            message = "attempt=$attemptId, step=$stepNumber, order=${sortedActiveProviders.joinToString(">") { it.name }}"
+        )
 
         val providerResults = coroutineScope {
-            providers.map { provider ->
+            sortedActiveProviders.map { provider ->
                 async {
                     val providerName = providerDisplayName(provider)
                     if (stopRequestedByUser) {
@@ -1389,7 +1510,8 @@ class ScannerViewModel @Inject constructor(
                         stepNumber = stepNumber,
                         stepLabel = "$stepLabel/$providerName",
                         request = request.copy(providerScope = provider),
-                        networkStepTimeoutMs = networkStepTimeoutMs
+                        networkStepTimeoutMs = networkStepTimeoutMs,
+                        respectCooldown = true
                     )
                     ProviderExecutionResult(
                         provider = provider,
@@ -1445,12 +1567,40 @@ class ScannerViewModel @Inject constructor(
         stepNumber: Int,
         stepLabel: String,
         request: ScannerSearchRequest,
-        networkStepTimeoutMs: Long
+        networkStepTimeoutMs: Long,
+        respectCooldown: Boolean
     ): AppResult<List<PlaylistCandidate>> {
+        val provider = request.providerScope
+        if (respectCooldown && provider != ScannerProviderScope.ALL && request.searchMode != ScannerSearchMode.SEARCH_ENGINE) {
+            val now = System.currentTimeMillis()
+            val blockedUntil = providerCooldownUntilMs[provider] ?: 0L
+            if (blockedUntil > now) {
+                val remainMs = blockedUntil - now
+                safeLog(
+                    status = "scanner_provider_skipped",
+                    message = "attempt=$attemptId, step=$stepNumber, provider=$provider, reason=temporary_backoff, remainingMs=${remainMs.coerceAtLeast(0L)}, label=$stepLabel"
+                )
+                return AppResult.Error(
+                    message = "Provider $provider temporarily skipped due repeated timeouts (${(remainMs / 1000L).coerceAtLeast(1L)}s)"
+                )
+            }
+        }
         val startedAtMs = System.currentTimeMillis()
         return try {
             val result = withTimeout(networkStepTimeoutMs) {
                 scannerRepository.search(request)
+            }
+            when (result) {
+                is AppResult.Success -> markProviderSuccess(provider = request.providerScope)
+                is AppResult.Error -> {
+                    val isTimeoutError = result.message.contains("timeout", ignoreCase = true)
+                    if (isTimeoutError) {
+                        markProviderTimeout(provider = request.providerScope)
+                    } else {
+                        markProviderError(provider = request.providerScope, reason = result.message)
+                    }
+                }
+                AppResult.Loading -> markProviderError(provider = request.providerScope, reason = "Loading state")
             }
             val elapsedMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L)
             safeLog(
@@ -1465,6 +1615,13 @@ class ScannerViewModel @Inject constructor(
                 status = "scanner_provider_timeout",
                 message = "attempt=$attemptId, step=$stepNumber, provider=${request.providerScope}, timeoutMs=$networkStepTimeoutMs, elapsedMs=$elapsedMs, label=$stepLabel, network=$networkProbe"
             )
+            val backoffMs = markProviderTimeout(provider = request.providerScope)
+            if (backoffMs != null) {
+                safeLog(
+                    status = "scanner_provider_backoff",
+                    message = "attempt=$attemptId, step=$stepNumber, provider=${request.providerScope}, backoffMs=$backoffMs, streak=${providerTimeoutStreak[request.providerScope] ?: 0}"
+                )
+            }
             AppResult.Error(
                 message = "Timeout ${networkStepTimeoutMs / 1000}s for ${request.providerScope}",
                 cause = timeout
@@ -1482,6 +1639,112 @@ class ScannerViewModel @Inject constructor(
                 cause = throwable
             )
         }
+    }
+
+    private fun markProviderSuccess(provider: ScannerProviderScope) {
+        if (provider == ScannerProviderScope.ALL) return
+        val now = System.currentTimeMillis()
+        providerTimeoutStreak.remove(provider)
+        providerCooldownUntilMs.remove(provider)
+        val prev = providerHealthStats[provider] ?: ProviderHealthRuntime()
+        providerHealthStats[provider] = prev.copy(
+            successCount = prev.successCount + 1,
+            timeoutStreak = 0,
+            lastIssue = null,
+            lastUpdatedAt = now
+        )
+        refreshProviderHealthSnapshot(nowMs = now)
+    }
+
+    private fun markProviderTimeout(provider: ScannerProviderScope): Long? {
+        if (provider == ScannerProviderScope.ALL) return null
+        val now = System.currentTimeMillis()
+        val streak = (providerTimeoutStreak[provider] ?: 0) + 1
+        providerTimeoutStreak[provider] = streak
+        val prev = providerHealthStats[provider] ?: ProviderHealthRuntime()
+        providerHealthStats[provider] = prev.copy(
+            timeoutCount = prev.timeoutCount + 1,
+            timeoutStreak = streak,
+            lastIssue = "timeout",
+            lastUpdatedAt = now
+        )
+        if (streak < PROVIDER_TIMEOUT_STREAK_TO_BACKOFF) return null
+
+        val multiplier = (streak - PROVIDER_TIMEOUT_STREAK_TO_BACKOFF + 1).coerceAtLeast(1)
+        val cooldownMs = (PROVIDER_TIMEOUT_BACKOFF_MS * multiplier)
+            .coerceAtMost(PROVIDER_TIMEOUT_BACKOFF_MAX_MS)
+        providerCooldownUntilMs[provider] = now + cooldownMs
+        refreshProviderHealthSnapshot(nowMs = now)
+        return cooldownMs
+    }
+
+    private fun markProviderError(
+        provider: ScannerProviderScope,
+        reason: String
+    ) {
+        if (provider == ScannerProviderScope.ALL) return
+        val now = System.currentTimeMillis()
+        val streak = providerTimeoutStreak[provider] ?: 0
+        val prev = providerHealthStats[provider] ?: ProviderHealthRuntime()
+        providerHealthStats[provider] = prev.copy(
+            errorCount = prev.errorCount + 1,
+            timeoutStreak = streak,
+            lastIssue = reason.take(180),
+            lastUpdatedAt = now
+        )
+        refreshProviderHealthSnapshot(nowMs = now)
+    }
+
+    private fun resetProviderHealthTracking() {
+        providerTimeoutStreak.clear()
+        providerCooldownUntilMs.clear()
+        providerHealthStats.clear()
+        refreshProviderHealthSnapshot()
+    }
+
+    private fun refreshProviderHealthSnapshot(nowMs: Long = System.currentTimeMillis()) {
+        val items = listOf(
+            ScannerProviderScope.GITHUB,
+            ScannerProviderScope.GITLAB,
+            ScannerProviderScope.BITBUCKET
+        ).map { provider ->
+            val runtime = providerHealthStats[provider] ?: ProviderHealthRuntime()
+            ScannerProviderHealthUi(
+                provider = provider,
+                providerName = providerDisplayName(provider),
+                score = providerHealthScore(provider = provider, nowMs = nowMs),
+                successCount = runtime.successCount,
+                timeoutCount = runtime.timeoutCount,
+                errorCount = runtime.errorCount,
+                timeoutStreak = runtime.timeoutStreak,
+                cooldownRemainingSec = providerCooldownRemainingSec(provider = provider, nowMs = nowMs),
+                lastIssue = runtime.lastIssue
+            )
+        }
+        _uiState.update { it.copy(providerHealth = items) }
+    }
+
+    private fun providerHealthScore(
+        provider: ScannerProviderScope,
+        nowMs: Long
+    ): Int {
+        val runtime = providerHealthStats[provider] ?: ProviderHealthRuntime()
+        val cooldownPenalty = if ((providerCooldownUntilMs[provider] ?: 0L) > nowMs) 25 else 0
+        val raw = 70 +
+            (runtime.successCount * 6) -
+            (runtime.timeoutCount * 18) -
+            (runtime.errorCount * 8) -
+            (runtime.timeoutStreak * 10) -
+            cooldownPenalty
+        return raw.coerceIn(0, 100)
+    }
+
+    private fun providerCooldownRemainingSec(
+        provider: ScannerProviderScope,
+        nowMs: Long
+    ): Long {
+        val until = providerCooldownUntilMs[provider] ?: 0L
+        return ((until - nowMs).coerceAtLeast(0L) / 1000L)
     }
 
     private suspend fun importFoundPlaylists(
@@ -1512,107 +1775,186 @@ class ScannerViewModel @Inject constructor(
         var imported = 0
         var skipped = 0
         var failed = 0
+        var processed = 0
+        var stoppedByUser = false
         val failureReasons = mutableListOf<String>()
-
-        candidates.forEachIndexed { index, candidate ->
-            val sourceUrl = candidate.downloadUrl.trim()
-            if (sourceUrl.isBlank()) {
-                failed += 1
-                failureReasons += "${candidate.provider}/${candidate.repository}/${candidate.path}: empty download url"
+        var cursor = 0
+        while (cursor < candidates.size) {
+            if (stopImportRequested) {
+                stoppedByUser = true
                 safeLog(
-                    status = "scanner_import_error",
-                    message = "provider=${candidate.provider}, repo=${candidate.repository}, path=${candidate.path}, reason=empty download url"
+                    status = "scanner_import_stopped",
+                    message = "processed=$processed/${candidates.size}, imported=$imported, skipped=$skipped, failed=$failed"
                 )
-                onProgress?.invoke(
-                    ImportProgress(
-                        processed = index + 1,
-                        total = candidates.size,
-                        imported = imported,
-                        skipped = skipped,
-                        failed = failed,
-                        current = "${candidate.name.ifBlank { candidate.path }} | ${candidate.downloadUrl.take(140)}"
-                    )
-                )
-                return@forEachIndexed
+                break
             }
 
-            val normalizedSource = normalizeSource(sourceUrl)
-            if (existingSources.contains(normalizedSource)) {
-                skipped += 1
-                safeLog(
-                    status = "scanner_import_skip_duplicate",
-                    message = "provider=${candidate.provider}, repo=${candidate.repository}, path=${candidate.path}"
-                )
-                onProgress?.invoke(
-                    ImportProgress(
-                        processed = index + 1,
-                        total = candidates.size,
-                        imported = imported,
-                        skipped = skipped,
-                        failed = failed,
-                        current = "${candidate.name.ifBlank { candidate.path }} | duplicate"
-                    )
-                )
-                return@forEachIndexed
-            }
+            val batch = candidates.subList(cursor, minOf(cursor + IMPORT_BATCH_SIZE, candidates.size))
+            cursor += batch.size
 
-            val importResult = playlistRepository.importFromUrl(
-                sourceUrl,
-                candidate.name.ifBlank { "Imported Playlist" }
-            )
-            when (importResult) {
-                is AppResult.Success -> {
-                    imported += 1
-                    existingSources += normalizedSource
+            var batchOffset = 0
+            while (batchOffset < batch.size) {
+                if (stopImportRequested) {
+                    stoppedByUser = true
                     safeLog(
-                        status = "scanner_import_ok",
-                        message = "provider=${candidate.provider}, repo=${candidate.repository}, path=${candidate.path}, playlistId=${importResult.data.playlistId}, imported=$imported"
+                        status = "scanner_import_stopped",
+                        message = "processed=$processed/${candidates.size}, imported=$imported, skipped=$skipped, failed=$failed"
                     )
+                    break
                 }
-                is AppResult.Error -> {
-                    failed += 1
-                    val reason = buildFailureReason(
-                        candidate = candidate,
-                        reason = importResult.message
-                    )
-                    failureReasons += reason
-                    safeLog(
-                        status = "scanner_import_error",
-                        message = "provider=${candidate.provider}, repo=${candidate.repository}, path=${candidate.path}, reason=$reason"
-                    )
+
+                val group = batch.subList(batchOffset, minOf(batchOffset + IMPORT_PARALLELISM, batch.size))
+                batchOffset += group.size
+
+                val groupResults = MutableList<ImportItemResult?>(group.size) { null }
+                coroutineScope {
+                    val pending = mutableListOf<Pair<Int, kotlinx.coroutines.Deferred<ImportItemResult>>>()
+                    group.forEachIndexed { idx, candidate ->
+                        val sourceUrl = candidate.downloadUrl.trim()
+                        if (sourceUrl.isBlank()) {
+                            groupResults[idx] = ImportItemResult(
+                                candidate = candidate,
+                                sourceUrl = sourceUrl,
+                                status = ImportItemStatus.FAILED,
+                                reason = "${candidate.provider}/${candidate.repository}/${candidate.path}: empty download url"
+                            )
+                            return@forEachIndexed
+                        }
+
+                        val normalizedSource = normalizeSource(sourceUrl)
+                        if (existingSources.contains(normalizedSource)) {
+                            groupResults[idx] = ImportItemResult(
+                                candidate = candidate,
+                                sourceUrl = sourceUrl,
+                                status = ImportItemStatus.SKIPPED,
+                                reason = "duplicate"
+                            )
+                            return@forEachIndexed
+                        }
+
+                        existingSources += normalizedSource
+                        val deferred = async {
+                            val importResult = withTimeoutOrNull(IMPORT_ITEM_TIMEOUT_MS) {
+                                playlistRepository.importFromUrl(
+                                    sourceUrl,
+                                    candidate.name.ifBlank { "Imported Playlist" }
+                                )
+                            }
+
+                            when (importResult) {
+                                null -> ImportItemResult(
+                                    candidate = candidate,
+                                    sourceUrl = sourceUrl,
+                                    status = ImportItemStatus.FAILED,
+                                    reason = buildFailureReason(
+                                        candidate = candidate,
+                                        reason = "Import timeout ${IMPORT_ITEM_TIMEOUT_MS / 1000}s"
+                                    )
+                                )
+                                is AppResult.Success -> ImportItemResult(
+                                    candidate = candidate,
+                                    sourceUrl = sourceUrl,
+                                    status = ImportItemStatus.IMPORTED,
+                                    playlistId = importResult.data.playlistId
+                                )
+                                is AppResult.Error -> ImportItemResult(
+                                    candidate = candidate,
+                                    sourceUrl = sourceUrl,
+                                    status = ImportItemStatus.FAILED,
+                                    reason = buildFailureReason(
+                                        candidate = candidate,
+                                        reason = importResult.message
+                                    )
+                                )
+                                AppResult.Loading -> ImportItemResult(
+                                    candidate = candidate,
+                                    sourceUrl = sourceUrl,
+                                    status = ImportItemStatus.FAILED,
+                                    reason = buildFailureReason(
+                                        candidate = candidate,
+                                        reason = "Loading state"
+                                    )
+                                )
+                            }
+                        }
+                        pending += (idx to deferred)
+                    }
+
+                    pending.forEach { (idx, deferred) ->
+                        groupResults[idx] = deferred.await()
+                    }
                 }
-                AppResult.Loading -> Unit
+
+                groupResults.filterNotNull().forEach { item ->
+                    processed += 1
+                    when (item.status) {
+                        ImportItemStatus.IMPORTED -> {
+                            imported += 1
+                            safeLog(
+                                status = "scanner_import_ok",
+                                message = "provider=${item.candidate.provider}, repo=${item.candidate.repository}, path=${item.candidate.path}, playlistId=${item.playlistId ?: "-"}, imported=$imported"
+                            )
+                        }
+                        ImportItemStatus.SKIPPED -> {
+                            skipped += 1
+                            safeLog(
+                                status = "scanner_import_skip_duplicate",
+                                message = "provider=${item.candidate.provider}, repo=${item.candidate.repository}, path=${item.candidate.path}"
+                            )
+                        }
+                        ImportItemStatus.FAILED -> {
+                            failed += 1
+                            val reason = item.reason ?: buildFailureReason(
+                                candidate = item.candidate,
+                                reason = "unknown"
+                            )
+                            failureReasons += reason
+                            safeLog(
+                                status = "scanner_import_error",
+                                message = "provider=${item.candidate.provider}, repo=${item.candidate.repository}, path=${item.candidate.path}, reason=$reason"
+                            )
+                        }
+                    }
+
+                    val currentText = when (item.status) {
+                        ImportItemStatus.SKIPPED -> "${item.candidate.name.ifBlank { item.candidate.path }} | duplicate"
+                        else -> "${item.candidate.name.ifBlank { item.candidate.path }} | ${item.sourceUrl.take(140)}"
+                    }
+                    onProgress?.invoke(
+                        ImportProgress(
+                            processed = processed,
+                            total = candidates.size,
+                            imported = imported,
+                            skipped = skipped,
+                            failed = failed,
+                            current = currentText
+                        )
+                    )
+
+                    if (processed % IMPORT_PROGRESS_LOG_EVERY == 0 || processed == candidates.size) {
+                        safeLog(
+                            status = "scanner_import_progress",
+                            message = "processed=$processed/${candidates.size}, imported=$imported, skipped=$skipped, failed=$failed"
+                        )
+                    }
+                }
             }
-
-            onProgress?.invoke(
-                ImportProgress(
-                    processed = index + 1,
-                    total = candidates.size,
-                    imported = imported,
-                    skipped = skipped,
-                    failed = failed,
-                    current = "${candidate.name.ifBlank { candidate.path }} | ${sourceUrl.take(140)}"
-                )
-            )
-
-            if ((index + 1) % IMPORT_PROGRESS_LOG_EVERY == 0 || index + 1 == candidates.size) {
-                safeLog(
-                    status = "scanner_import_progress",
-                    message = "processed=${index + 1}/${candidates.size}, imported=$imported, skipped=$skipped, failed=$failed"
-                )
+            if (stoppedByUser) {
+                break
             }
         }
 
         safeLog(
             status = "scanner_import_finish",
-            message = "imported=$imported, skipped=$skipped, failed=$failed"
+            message = "processed=$processed/${candidates.size}, imported=$imported, skipped=$skipped, failed=$failed, stopped=$stoppedByUser"
         )
 
         return ImportSummary(
             imported = imported,
             skipped = skipped,
             failed = failed,
-            failureReasons = failureReasons.take(MAX_IMPORT_FAILURE_DETAILS)
+            failureReasons = failureReasons.take(MAX_IMPORT_FAILURE_DETAILS),
+            stoppedByUser = stoppedByUser
         )
     }
 
@@ -1776,11 +2118,13 @@ class ScannerViewModel @Inject constructor(
         val github = byProvider["github"] ?: 0
         val gitlab = byProvider["gitlab"] ?: 0
         val bitbucket = byProvider["bitbucket"] ?: 0
-        val foundMessage = "Найдено ${results.size} (GitHub=$github, GitLab=$gitlab, Bitbucket=$bitbucket)"
+        val web = byProvider["web"] ?: 0
+        val foundMessage = "Найдено ${results.size} (GitHub=$github, GitLab=$gitlab, Bitbucket=$bitbucket, Web=$web)"
         val importMessage = importSummary?.let {
             val base = " | сохранено=${it.imported}, пропущено=${it.skipped}, ошибок=${it.failed}"
             val reason = it.failureReasons.firstOrNull()?.let { first -> " | причина: $first" }.orEmpty()
-            base + reason
+            val stopTail = if (it.stoppedByUser) " | сохранение остановлено пользователем" else ""
+            base + reason + stopTail
         }.orEmpty()
         return foundMessage + importMessage
     }
@@ -2033,6 +2377,60 @@ class ScannerViewModel @Inject constructor(
         )
     }
 
+    private suspend fun applyResultPostFilter(
+        attemptId: Long,
+        state: ScannerUiState,
+        candidates: List<PlaylistCandidate>,
+        stage: String
+    ): CandidateRefineOutcome {
+        if (candidates.isEmpty()) return CandidateRefineOutcome(emptyList(), 0, 0, 0)
+
+        val now = System.currentTimeMillis()
+        val localDays = state.updatedDaysBack.toLongOrNull()?.coerceAtLeast(0L)
+        val localUpdatedAfter = localDays?.let { now - TimeUnit.DAYS.toMillis(it) }
+
+        val withMeta = candidates.map { candidate ->
+            CandidateWithEpoch(candidate = candidate, updatedEpochMs = parseEpochOrNull(candidate.updatedAt))
+        }
+
+        var invalidUrlDropped = 0
+        val validUrlOnly = withMeta.filter { item ->
+            val url = item.candidate.downloadUrl.trim()
+            val keep = url.startsWith("http://", ignoreCase = true) ||
+                url.startsWith("https://", ignoreCase = true)
+            if (!keep) invalidUrlDropped += 1
+            keep
+        }
+
+        var staleDropped = 0
+        val filtered = validUrlOnly.filter { item ->
+            val keep = localUpdatedAfter == null || item.updatedEpochMs == null || item.updatedEpochMs >= localUpdatedAfter
+            if (!keep) staleDropped += 1
+            keep
+        }
+        val unknownUpdated = filtered.count { it.updatedEpochMs == null }
+
+        val sorted = filtered.sortedWith(
+            compareByDescending<CandidateWithEpoch> { it.updatedEpochMs != null }
+                .thenByDescending { it.updatedEpochMs ?: 0L }
+                .thenByDescending { it.candidate.sizeBytes ?: -1L }
+                .thenBy { it.candidate.provider.lowercase() }
+                .thenBy { it.candidate.repository.lowercase() }
+                .thenBy { it.candidate.path.lowercase() }
+        )
+
+        safeLog(
+            status = "scanner_result_refined",
+            message = "attempt=$attemptId, stage=$stage, in=${candidates.size}, out=${sorted.size}, invalidUrlDropped=$invalidUrlDropped, staleDropped=$staleDropped, unknownUpdated=$unknownUpdated, daysBack=${state.updatedDaysBack.ifBlank { "-" }}"
+        )
+        return CandidateRefineOutcome(
+            candidates = sorted.map { it.candidate },
+            invalidUrlDropped = invalidUrlDropped,
+            staleDropped = staleDropped,
+            unknownUpdated = unknownUpdated
+        )
+    }
+
     private fun buildNormalizedQuery(raw: String): String {
         val compact = raw
             .trim()
@@ -2050,6 +2448,31 @@ class ScannerViewModel @Inject constructor(
             .split(',', ' ')
             .map { it.trim() }
             .filter { it.isNotEmpty() }
+    }
+
+    private fun parseEpochOrNull(raw: String): Long? {
+        if (raw.isBlank()) return null
+        parseIsoEpoch(raw)?.let { return it }
+        return raw.toLongOrNull()?.let { epoch ->
+            if (epoch < 10_000_000_000L) epoch * 1000 else epoch
+        }
+    }
+
+    private fun parseIsoEpoch(raw: String): Long? {
+        val patterns = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSSX",
+            "yyyy-MM-dd'T'HH:mm:ssX",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        )
+        for (pattern in patterns) {
+            val parser = SimpleDateFormat(pattern, Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+                isLenient = false
+            }
+            val parsed = runCatching { parser.parse(raw)?.time }.getOrNull()
+            if (parsed != null) return parsed
+        }
+        return null
     }
 
     private fun inferIntentKeywords(query: String, manualKeywords: List<String>): List<String> {
@@ -2208,11 +2631,25 @@ class ScannerViewModel @Inject constructor(
         val providerName: String
     )
 
+    private data class CandidateWithEpoch(
+        val candidate: PlaylistCandidate,
+        val updatedEpochMs: Long?
+    )
+
     private data class LearnedQueryCandidate(
         val query: String,
         val score: Int,
         val hits: Int,
         val lastSuccessAt: Long
+    )
+
+    private data class ProviderHealthRuntime(
+        val successCount: Int = 0,
+        val timeoutCount: Int = 0,
+        val errorCount: Int = 0,
+        val timeoutStreak: Int = 0,
+        val lastIssue: String? = null,
+        val lastUpdatedAt: Long = 0L
     )
 
     private data class SearchPlanOutcome(
@@ -2226,7 +2663,15 @@ class ScannerViewModel @Inject constructor(
         val imported: Int = 0,
         val skipped: Int = 0,
         val failed: Int = 0,
-        val failureReasons: List<String> = emptyList()
+        val failureReasons: List<String> = emptyList(),
+        val stoppedByUser: Boolean = false
+    )
+
+    private data class CandidateRefineOutcome(
+        val candidates: List<PlaylistCandidate>,
+        val invalidUrlDropped: Int,
+        val staleDropped: Int,
+        val unknownUpdated: Int
     )
 
     private data class ImportProgress(
@@ -2237,6 +2682,20 @@ class ScannerViewModel @Inject constructor(
         val failed: Int,
         val current: String? = null
     )
+
+    private data class ImportItemResult(
+        val candidate: PlaylistCandidate,
+        val sourceUrl: String,
+        val status: ImportItemStatus,
+        val reason: String? = null,
+        val playlistId: Long? = null
+    )
+
+    private enum class ImportItemStatus {
+        IMPORTED,
+        SKIPPED,
+        FAILED
+    }
 
     private data class NetworkPreflight(
         val apiReachable: Boolean,
@@ -2264,8 +2723,14 @@ class ScannerViewModel @Inject constructor(
         const val MAX_LOG_MESSAGE = 1200
         const val NETWORK_PROBE_TIMEOUT_MS = 1_500L
         const val NETWORK_PROBE_CACHE_MS = 30_000L
+        const val PROVIDER_TIMEOUT_STREAK_TO_BACKOFF = 2
+        const val PROVIDER_TIMEOUT_BACKOFF_MS = 25_000L
+        const val PROVIDER_TIMEOUT_BACKOFF_MAX_MS = 90_000L
         const val MAX_IMPORT_FAILURE_DETAILS = 5
         const val IMPORT_PROGRESS_LOG_EVERY = 5
+        const val IMPORT_PARALLELISM = 4
+        const val IMPORT_BATCH_SIZE = 12
+        const val IMPORT_ITEM_TIMEOUT_MS = 25_000L
         const val PROXY_HTTP_HOST = "http.proxyHost"
         const val PROXY_HTTP_PORT = "http.proxyPort"
         const val PROXY_HTTPS_HOST = "https.proxyHost"
@@ -2279,6 +2744,41 @@ private data class ProbeCacheEntry(
     val ts: Long,
     val value: String
 )
+
+private fun defaultProviderHealthUi(): List<ScannerProviderHealthUi> {
+    return listOf(
+        ScannerProviderHealthUi(
+            provider = ScannerProviderScope.GITHUB,
+            providerName = "GitHub",
+            score = 70,
+            successCount = 0,
+            timeoutCount = 0,
+            errorCount = 0,
+            timeoutStreak = 0,
+            cooldownRemainingSec = 0
+        ),
+        ScannerProviderHealthUi(
+            provider = ScannerProviderScope.GITLAB,
+            providerName = "GitLab",
+            score = 70,
+            successCount = 0,
+            timeoutCount = 0,
+            errorCount = 0,
+            timeoutStreak = 0,
+            cooldownRemainingSec = 0
+        ),
+        ScannerProviderHealthUi(
+            provider = ScannerProviderScope.BITBUCKET,
+            providerName = "Bitbucket",
+            score = 70,
+            successCount = 0,
+            timeoutCount = 0,
+            errorCount = 0,
+            timeoutStreak = 0,
+            cooldownRemainingSec = 0
+        )
+    )
+}
 
 private fun buildFailureReason(
     candidate: PlaylistCandidate,
@@ -2442,6 +2942,14 @@ private fun scannerPresets(): List<ScannerPreset> {
             keywords = "hd, full hd, 4k, uhd, fhd, high quality, высокое качество, 4k каналы",
             provider = ScannerProviderScope.ALL,
             description = "Поиск HD/FHD/UHD каналов и качественных потоков."
+        ),
+        ScannerPreset(
+            id = "voxlist",
+            title = "Voxlist/Repo",
+            query = "voxlist iptv",
+            keywords = "voxlist, iptv, channel list, m3u, m3u8, github, gitlab, список каналов",
+            provider = ScannerProviderScope.ALL,
+            description = "Целевой пресет для известных репозиториев/брендовых названий списков."
         ),
         ScannerPreset(
             id = "ace",

@@ -139,6 +139,10 @@ fun ScannerScreen(
         }
 
         item {
+            ProviderHealthCard(items = state.providerHealth)
+        }
+
+        item {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -230,7 +234,7 @@ fun ScannerScreen(
                         modifier = Modifier.fillMaxWidth(0.32f),
                         label = { Text("Дней назад") },
                         placeholder = { Text("7") },
-                        supportingText = { Text("Только число.") },
+                        supportingText = { Text("Только число. Локально скроет более старые, результаты сортируются по свежести.") },
                         singleLine = true
                     )
                     OutlinedTextField(
@@ -288,6 +292,10 @@ fun ScannerScreen(
 
         item {
             Text(text = "Найдено: ${state.results.size}", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = "Список отсортирован: сначала более свежие обновления, затем без даты.",
+                style = MaterialTheme.typography.bodySmall
+            )
             if (state.progressFoundItems > state.results.size) {
                 Text(
                     text = "Всего найдено в этой сессии: ${state.progressFoundItems} (на экране показаны первые ${state.results.size})",
@@ -405,6 +413,43 @@ private fun StatusCard(state: ScannerUiState) {
                     text = "Осталось примерно: ${formatElapsed(remaining)}",
                     style = MaterialTheme.typography.bodySmall
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProviderHealthCard(items: List<ScannerProviderHealthUi>) {
+    Card(
+        modifier = Modifier.fillMaxWidth().tvFocusOutline(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("Health провайдеров", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Score влияет на порядок запросов и временный backoff при таймаутах.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            items.forEach { item ->
+                val stateText = when {
+                    item.cooldownRemainingSec > 0L -> "backoff ${item.cooldownRemainingSec}с"
+                    item.score >= 75 -> "stable"
+                    item.score >= 45 -> "degraded"
+                    else -> "unstable"
+                }
+                Text(
+                    "${item.providerName}: score=${item.score} | ok=${item.successCount} | timeout=${item.timeoutCount} | err=${item.errorCount} | streak=${item.timeoutStreak} | $stateText",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (!item.lastIssue.isNullOrBlank()) {
+                    Text(
+                        "Последняя ошибка: ${item.lastIssue}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
         }
     }

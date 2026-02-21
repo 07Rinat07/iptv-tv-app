@@ -79,15 +79,43 @@ internal class LocalAiQueryAssistant {
         variants += "site:github.com iptv m3u playlist"
         variants += "site:gitlab.com iptv m3u playlist"
         variants += "site:bitbucket.org iptv m3u playlist"
+        variants += "site:raw.githubusercontent.com iptv m3u"
+        variants += "site:raw.githubusercontent.com iptv m3u8"
+        variants += "site:gitlab.com raw iptv m3u"
         variants += "iptv channel list m3u"
         variants += "список каналов iptv m3u"
         variants += "списки m3u m3u8 iptv"
 
+        if (lowered.contains("voxlist")) {
+            variants += "voxlist iptv m3u"
+            variants += "voxlist playlist m3u8"
+            variants += "site:github.com voxlist m3u"
+            variants += "site:gitlab.com voxlist m3u"
+        }
+
         return variants
-            .map { it.replace(Regex("\\s+"), " ").trim() }
+            .map(::normalizeVariantQuery)
             .filter { it.length >= 4 }
             .filterNot { it.equals(normalized, ignoreCase = true) }
             .take(MAX_VARIANTS)
+    }
+
+    private fun normalizeVariantQuery(raw: String): String {
+        val compact = raw.replace(Regex("\\s+"), " ").trim()
+        if (compact.isBlank()) return compact
+
+        val seen = linkedSetOf<String>()
+        val normalized = mutableListOf<String>()
+        compact.split(" ").forEach { token ->
+            val clean = token.trim()
+            if (clean.isBlank()) return@forEach
+            val key = clean.trim(',', ';', '.').lowercase()
+            if (key.isBlank()) return@forEach
+            if (seen.add(key)) {
+                normalized += clean
+            }
+        }
+        return normalized.joinToString(" ")
     }
 
     private fun normalizeQuery(raw: String): String {
@@ -183,7 +211,7 @@ internal class LocalAiQueryAssistant {
         val kidsMarkers = setOf("kids", "дет", "cartoon", "cartoons", "animation", "family", "мульт", "мультфильм")
         val musicMarkers = setOf("music", "radio", "audio", "hits", "songs", "музыка", "радио")
         val freeMarkers = setOf("free", "public", "open", "бесплат", "открыт", "gratis")
-        val listMarkers = setOf("list", "lists", "playlist", "channels", "tv list", "channel list", "список", "списки", "каналы")
+        val listMarkers = setOf("list", "lists", "playlist", "channels", "tv list", "channel list", "список", "списки", "каналы", "voxlist")
 
         val intentKeywords = mapOf(
             Intent.RUSSIAN to listOf("russian", "russia", "ru", "рус", "россия", "каналы", "список"),

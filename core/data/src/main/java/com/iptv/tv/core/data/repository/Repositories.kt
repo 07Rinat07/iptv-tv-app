@@ -275,6 +275,33 @@ class PlaylistRepositoryImpl @Inject constructor(
         AppResult.Success(removedChannels)
     }
 
+    override suspend fun setPlaylistEpgSource(playlistId: Long, epgSourceUrl: String?): AppResult<Unit> = withContext(Dispatchers.IO) {
+        if (playlistId <= 0) return@withContext AppResult.Error("Invalid playlist id")
+        val playlist = playlistDao.findById(playlistId)
+            ?: return@withContext AppResult.Error("Playlist not found: id=$playlistId")
+
+        val normalized = epgSourceUrl?.trim()?.ifBlank { null }
+        if (normalized != null) {
+            val lowered = normalized.lowercase(Locale.US)
+            if (!lowered.startsWith("http://") && !lowered.startsWith("https://")) {
+                return@withContext AppResult.Error("EPG URL должен начинаться с http:// или https://")
+            }
+        }
+
+        val updated = playlistDao.updateEpgSourceUrl(playlistId, normalized)
+        if (updated <= 0) return@withContext AppResult.Error("Unable to update EPG source for playlist id=$playlistId")
+
+        syncLogDao.insert(
+            SyncLogEntity(
+                playlistId = playlistId,
+                status = "epg_source_updated",
+                message = "Playlist ${playlist.name}: epgSource=${normalized ?: "-"}",
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        AppResult.Success(Unit)
+    }
+
     override suspend fun getChannelById(channelId: Long): AppResult<Channel> = withContext(Dispatchers.IO) {
         if (channelId <= 0) return@withContext AppResult.Error("Invalid channel id")
         val channel = channelDao.findById(channelId)

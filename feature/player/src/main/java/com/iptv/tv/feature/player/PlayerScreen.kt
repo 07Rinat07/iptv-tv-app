@@ -51,12 +51,15 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.player.toLoadControl
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 
 private const val CHANNEL_QUICK_PANEL_LIMIT = 500
 
@@ -70,12 +73,13 @@ fun PlayerScreen(
 ) {
     val context = LocalContext.current
     val state by viewModel.uiState.collectAsState()
-    val filteredChannels = remember(state.channels, state.channelQuery, state.selectedGroup) {
+    var hideUnavailable by rememberSaveable { mutableStateOf(true) }
+    val filteredChannels = remember(state.channels, state.channelQuery, state.selectedGroup, hideUnavailable) {
         val query = state.channelQuery.trim().lowercase()
         val grouped = state.channels.filter { channel ->
             state.selectedGroup == null || channel.group?.trim() == state.selectedGroup
         }
-        if (query.isBlank()) {
+        val searched = if (query.isBlank()) {
             grouped
         } else {
             grouped.filter { channel ->
@@ -84,19 +88,41 @@ fun PlayerScreen(
                     channel.streamUrl.lowercase().contains(query)
             }
         }
+        val byHealth = if (hideUnavailable) {
+            searched.filter { it.health != ChannelHealth.UNAVAILABLE }
+        } else {
+            searched
+        }
+        byHealth.sortedWith(
+            compareBy<Channel> { healthPriority(it.health) }
+                .thenBy { it.name.lowercase() }
+        )
+    }
+    val healthStats = remember(state.channels) {
+        val available = state.channels.count { it.health == ChannelHealth.AVAILABLE }
+        val unstable = state.channels.count { it.health == ChannelHealth.UNSTABLE }
+        val unknown = state.channels.count { it.health == ChannelHealth.UNKNOWN }
+        val unavailable = state.channels.count { it.health == ChannelHealth.UNAVAILABLE }
+        Triple(available + unstable, unknown, unavailable)
     }
     var showTechnicalInfo by rememberSaveable { mutableStateOf(false) }
     var showPlaylists by rememberSaveable { mutableStateOf(false) }
-    var showChannels by rememberSaveable { mutableStateOf(true) }
+    var showQuickChannels by rememberSaveable { mutableStateOf(true) }
+    var showChannelCatalog by rememberSaveable { mutableStateOf(false) }
     var showActions by rememberSaveable { mutableStateOf(false) }
     var showStreamTools by rememberSaveable { mutableStateOf(false) }
+    var showEpgWizard by rememberSaveable { mutableStateOf(false) }
+    val selectedChannelName = state.channels.firstOrNull { it.id == state.selectedChannelId }?.name
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+    Box(
+        modifier = Modifier.fillMaxSize()
     ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
         item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
             Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
@@ -108,6 +134,10 @@ fun PlayerScreen(
                 "Счетчики: плейлистов=${state.playlists.size} | " +
                     "каналов в текущем=${state.channels.size} | " +
                     "по фильтру=${filteredChannels.size} | избранных=${state.favoriteChannelIds.size}"
+            )
+            Text(
+                "Health: рабочих=${healthStats.first} | unknown=${healthStats.second} | unavailable=${healthStats.third}",
+                style = MaterialTheme.typography.bodySmall
             )
             Text("Выбранный поток: ${state.selectedStreamKind}", style = MaterialTheme.typography.bodySmall)
             Text(state.epgStatus, style = MaterialTheme.typography.bodySmall)
@@ -127,8 +157,26 @@ fun PlayerScreen(
                 OutlinedButton(onClick = { showPlaylists = !showPlaylists }) {
                     Text(if (showPlaylists) "Свернуть плейлисты" else "Развернуть плейлисты")
                 }
-                OutlinedButton(onClick = { showChannels = !showChannels }) {
-                    Text(if (showChannels) "Свернуть каналы" else "Развернуть каналы")
+                OutlinedButton(onClick = { showQuickChannels = !showQuickChannels }) {
+                    Text(if (showQuickChannels) "Скрыть быстрый список каналов" else "Показать быстрый список каналов")
+                }
+                OutlinedButton(onClick = { showChannelCatalog = !showChannelCatalog }) {
+                    Text(if (showChannelCatalog) "Свернуть каталог каналов" else "Развернуть каталог каналов")
+                }
+                OutlinedButton(onClick = { showEpgWizard = !showEpgWizard }) {
+                    Text(if (showEpgWizard) "Скрыть EPG мастер" else "Показать EPG мастер")
+                }
+                OutlinedButton(onClick = { viewModel.toggleInternalPlayerSize() }) {
+                    Text(if (state.internalPlayerExpanded) "Выйти из fullscreen" else "Fullscreen плеер")
+                }
+                OutlinedButton(onClick = { hideUnavailable = !hideUnavailable }) {
+                    Text(
+                        if (hideUnavailable) {
+                            "Показывать UNAVAILABLE"
+                        } else {
+                            "Скрывать UNAVAILABLE"
+                        }
+                    )
                 }
             }
             if (showTechnicalInfo) {
@@ -143,8 +191,8 @@ fun PlayerScreen(
                         Text("Engine: connected=${state.engineConnected}, peers=${state.enginePeers}, speed=${state.engineSpeedKbps} kbps")
                         Text("Engine endpoint: ${state.engineEndpoint} | Tor=${state.torEnabled}")
                         Text("Engine message: ${state.engineMessage}")
-                        Text("Размер плеера: ${if (state.internalPlayerExpanded) "увеличенный" else "стандарт"} | Масштаб: ${state.playerVideoScale}")
-                        Text("Встроенный плеер: двойной клик по видео = полноэкранный/обычный режим.")
+                        Text("Режим плеера: ${if (state.internalPlayerExpanded) "fullscreen" else "обычный"} | Масштаб: ${state.playerVideoScale}")
+                        Text("Встроенный плеер: двойной клик по видео = fullscreen/обычный режим.")
                         Text("VLC: сначала запускается прямой fullscreen, затем fallback совместимости.")
                         val aceDescriptorLabel = state.selectedAceDescriptor?.let { descriptor ->
                             if (descriptor.length > 110) "${descriptor.take(110)}..." else descriptor
@@ -202,10 +250,10 @@ fun PlayerScreen(
                                 Text("Остановить встроенный")
                             }
                             Button(onClick = { viewModel.setInternalPlayerExpanded(false) }) {
-                                Text("Малый экран")
+                                Text("Обычный экран")
                             }
                             Button(onClick = { viewModel.setInternalPlayerExpanded(true) }) {
-                                Text("Большой экран")
+                                Text("Fullscreen")
                             }
                             Button(onClick = viewModel::cycleVideoScale) {
                                 Text("Кадр: ${state.playerVideoScale}")
@@ -267,9 +315,52 @@ fun PlayerScreen(
             }
         }
 
+        if (showEpgWizard) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("EPG мастер", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Настройка EPG для выбранного плейлиста: URL -> проверить -> сохранить.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            value = state.epgWizardUrl,
+                            onValueChange = viewModel::updateEpgWizardUrl,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("EPG URL (http/https)") },
+                            singleLine = true
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = viewModel::fillEpgWizardFromSelectedPlaylist,
+                                enabled = !state.isSavingEpgWizard
+                            ) {
+                                Text("Подставить из плейлиста")
+                            }
+                            Button(
+                                onClick = viewModel::saveEpgWizardAndTest,
+                                enabled = !state.isSavingEpgWizard
+                            ) {
+                                Text(if (state.isSavingEpgWizard) "Сохраняем..." else "Проверить и сохранить")
+                            }
+                        }
+                        Text(state.epgWizardStatus, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
         item {
             val session = state.internalSession
-            val selectedChannelName = state.channels.firstOrNull { it.id == state.selectedChannelId }?.name
             Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                 Column(
                     modifier = Modifier
@@ -285,7 +376,7 @@ fun PlayerScreen(
                         }
                     )
                     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                        val twoPane = maxWidth >= 900.dp && showChannels
+                        val twoPane = maxWidth >= 760.dp && showQuickChannels
                         if (twoPane) {
                             Row(
                                 modifier = Modifier
@@ -300,13 +391,13 @@ fun PlayerScreen(
                                             onReady = viewModel::onInternalPlaybackReady,
                                             onError = { message -> viewModel.onInternalPlaybackError(message, context) },
                                             scale = state.playerVideoScale,
-                                            expanded = state.internalPlayerExpanded,
+                                            expanded = false,
                                             onToggleExpanded = viewModel::toggleInternalPlayerSize,
                                             forceFullWidth = true
                                         )
                                     } else {
                                         InternalPlayerPlaceholder(
-                                            expanded = state.internalPlayerExpanded,
+                                            expanded = false,
                                             onToggleExpanded = viewModel::toggleInternalPlayerSize,
                                             forceFullWidth = true,
                                             selectedChannelName = selectedChannelName
@@ -330,17 +421,17 @@ fun PlayerScreen(
                                     onReady = viewModel::onInternalPlaybackReady,
                                     onError = { message -> viewModel.onInternalPlaybackError(message, context) },
                                     scale = state.playerVideoScale,
-                                    expanded = state.internalPlayerExpanded,
+                                    expanded = false,
                                     onToggleExpanded = viewModel::toggleInternalPlayerSize
                                 )
                             } else {
                                 InternalPlayerPlaceholder(
-                                    expanded = state.internalPlayerExpanded,
+                                    expanded = false,
                                     onToggleExpanded = viewModel::toggleInternalPlayerSize,
                                     selectedChannelName = selectedChannelName
                                 )
                             }
-                            if (showChannels) {
+                            if (showQuickChannels) {
                                 ChannelQuickPanel(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -393,7 +484,7 @@ fun PlayerScreen(
             }
         }
 
-        if (showChannels) {
+        if (showChannelCatalog) {
             item {
                 Text("Каналы (${filteredChannels.size}/${state.channels.size})", style = MaterialTheme.typography.titleMedium)
                 Text(
@@ -492,6 +583,96 @@ fun PlayerScreen(
             }
         }
     }
+
+        if (state.internalPlayerExpanded) {
+            FullscreenInternalPlayerOverlay(
+                session = state.internalSession,
+                selectedChannelName = selectedChannelName,
+                scale = state.playerVideoScale,
+                onReady = viewModel::onInternalPlaybackReady,
+                onError = { message -> viewModel.onInternalPlaybackError(message, context) },
+                onClose = { viewModel.setInternalPlayerExpanded(false) }
+            )
+        }
+    }
+}
+
+@Composable
+@UnstableApi
+private fun FullscreenInternalPlayerOverlay(
+    session: InternalPlaybackSession?,
+    selectedChannelName: String?,
+    scale: PlayerVideoScale,
+    onReady: () -> Unit,
+    onError: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp)
+                .tvFocusOutline()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (selectedChannelName != null) {
+                            "Fullscreen: $selectedChannelName"
+                        } else {
+                            "Fullscreen: встроенный плеер"
+                        },
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    OutlinedButton(onClick = onClose) {
+                        Text("Закрыть fullscreen")
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f)
+                ) {
+                    if (session != null) {
+                        InternalPlayerHost(
+                            session = session,
+                            onReady = onReady,
+                            onError = onError,
+                            scale = scale,
+                            expanded = true,
+                            onToggleExpanded = onClose,
+                            forceFullWidth = true,
+                            fullscreenMode = true
+                        )
+                    } else {
+                        InternalPlayerPlaceholder(
+                            expanded = true,
+                            onToggleExpanded = onClose,
+                            forceFullWidth = true,
+                            selectedChannelName = selectedChannelName,
+                            fullscreenMode = true
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -548,10 +729,15 @@ private fun InternalPlayerPlaceholder(
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
     forceFullWidth: Boolean = false,
-    selectedChannelName: String?
+    selectedChannelName: String?,
+    fullscreenMode: Boolean = false
 ) {
     Box(
-        modifier = playerViewportModifier(expanded = expanded, forceFullWidth = forceFullWidth)
+        modifier = playerViewportModifier(
+            expanded = expanded,
+            forceFullWidth = forceFullWidth,
+            fullscreenMode = fullscreenMode
+        )
             .tvFocusOutline()
             .pointerInput(expanded) {
                 detectTapGestures(onDoubleTap = { onToggleExpanded() })
@@ -585,9 +771,12 @@ private fun InternalPlayerPlaceholder(
 
 private fun playerViewportModifier(
     expanded: Boolean,
-    forceFullWidth: Boolean
+    forceFullWidth: Boolean,
+    fullscreenMode: Boolean = false
 ): Modifier {
-    return if (forceFullWidth) {
+    return if (fullscreenMode) {
+        Modifier.fillMaxSize()
+    } else if (forceFullWidth) {
         Modifier
             .fillMaxWidth()
             .aspectRatio(if (expanded) 16f / 9f else 4f / 3f)
@@ -611,7 +800,8 @@ private fun InternalPlayerHost(
     scale: PlayerVideoScale,
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
-    forceFullWidth: Boolean = false
+    forceFullWidth: Boolean = false,
+    fullscreenMode: Boolean = false
 ) {
     val context = LocalContext.current
     val playerBuildResult = remember(session.sessionId, session.requestHeaders) {
@@ -701,7 +891,8 @@ private fun InternalPlayerHost(
 
     val viewportModifier = playerViewportModifier(
         expanded = expanded,
-        forceFullWidth = forceFullWidth
+        forceFullWidth = forceFullWidth,
+        fullscreenMode = fullscreenMode
     )
 
     Box(
@@ -752,6 +943,15 @@ private fun inferMediaMimeType(url: String): String? {
         lowered.contains("/manifest") && lowered.contains("ism") -> MimeTypes.APPLICATION_SS
         lowered.startsWith("rtsp://") -> MimeTypes.APPLICATION_RTSP
         else -> null
+    }
+}
+
+private fun healthPriority(health: ChannelHealth): Int {
+    return when (health) {
+        ChannelHealth.AVAILABLE -> 0
+        ChannelHealth.UNSTABLE -> 1
+        ChannelHealth.UNKNOWN -> 2
+        ChannelHealth.UNAVAILABLE -> 3
     }
 }
 
