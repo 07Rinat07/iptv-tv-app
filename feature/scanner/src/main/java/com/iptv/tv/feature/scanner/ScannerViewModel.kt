@@ -39,6 +39,9 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.net.InetAddress
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -272,6 +275,7 @@ class ScannerViewModel @Inject constructor(
         }
 
         val candidates = currentMergedCandidates.values.toList().ifEmpty { _uiState.value.results }
+        val sourceQuery = _uiState.value.query
         if (candidates.isEmpty()) {
             _uiState.update {
                 it.copy(
@@ -284,31 +288,8 @@ class ScannerViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val now = System.currentTimeMillis()
-                    val content = buildString {
-                        appendLine("myscanerIPTV | Экспорт найденных плейлистов")
-                        appendLine("Найдено: ${candidates.size}")
-                        appendLine("Сформировано: $now")
-                        appendLine()
-                        candidates.forEachIndexed { index, candidate ->
-                            appendLine("${index + 1}. ${candidate.name.ifBlank { "Без названия" }}")
-                            appendLine("URL: ${candidate.downloadUrl.ifBlank { "-" }}")
-                            appendLine("Provider: ${candidate.provider} | Repo: ${candidate.repository} | Path: ${candidate.path}")
-                            appendLine()
-                        }
-                    }
-                    val targetDir = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                        ?: appContext.filesDir
-                    if (!targetDir.exists()) {
-                        targetDir.mkdirs()
-                    }
-                    val file = File(targetDir, "scanner-found-links-$now.txt")
-                    file.writeText(content)
-                    file.absolutePath
-                }
-            }.onSuccess { path ->
+            exportCandidatesToTxt(candidates = candidates, sourceQuery = sourceQuery)
+                .onSuccess { path ->
                 _uiState.update {
                     it.copy(
                         exportedLinksPath = path,
@@ -319,7 +300,7 @@ class ScannerViewModel @Inject constructor(
                 }
                 safeLog(
                     status = "scanner_export_links_ok",
-                    message = "count=${candidates.size}, path=$path"
+                    message = "mode=manual, query=${sourceQuery.take(80)}, count=${candidates.size}, path=$path"
                 )
             }.onFailure { throwable ->
                 val reason = throwable.message ?: throwable.javaClass.simpleName
@@ -332,8 +313,42 @@ class ScannerViewModel @Inject constructor(
                 }
                 safeLog(
                     status = "scanner_export_links_error",
-                    message = reason
+                    message = "mode=manual, query=${sourceQuery.take(80)}, reason=$reason"
                 )
+            }
+        }
+    }
+
+    private suspend fun exportCandidatesToTxt(
+        candidates: List<PlaylistCandidate>,
+        sourceQuery: String
+    ): Result<String> {
+        return runCatching {
+            withContext(Dispatchers.IO) {
+                val now = System.currentTimeMillis()
+                val content = buildString {
+                    appendLine("myscanerIPTV | Экспорт найденных плейлистов")
+                    appendLine("Поиск: $sourceQuery")
+                    appendLine("Найдено: ${candidates.size}")
+                    appendLine("Сформировано: $now")
+                    appendLine()
+                    candidates.forEachIndexed { index, candidate ->
+                        appendLine("${index + 1}. ${candidate.name.ifBlank { "Без названия" }}")
+                        appendLine("URL: ${candidate.downloadUrl.ifBlank { "-" }}")
+                        appendLine("Provider: ${candidate.provider} | Repo: ${candidate.repository} | Path: ${candidate.path}")
+                        appendLine()
+                    }
+                }
+                val targetDir = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                    ?: appContext.filesDir
+                if (!targetDir.exists()) {
+                    targetDir.mkdirs()
+                }
+                val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(now))
+                val queryPart = sourceQuery.toSafeFilePart()
+                val file = File(targetDir, "Tv_list_${queryPart}_$stamp.txt")
+                file.writeText(content)
+                file.absolutePath
             }
         }
     }
@@ -586,6 +601,30 @@ class ScannerViewModel @Inject constructor(
                 } else {
                     null
                 }
+                val autoExportPath = if (saveFoundResults && foundAll.isNotEmpty()) {
+                    withContext(NonCancellable) {
+                        val exportResult = exportCandidatesToTxt(
+                            candidates = foundAll,
+                            sourceQuery = runState.query
+                        )
+                        val path = exportResult.getOrNull()
+                        if (path != null) {
+                            safeLog(
+                                status = "scanner_export_links_ok",
+                                message = "mode=auto, attempt=$attemptId, query=${runState.query.take(80)}, count=${foundAll.size}, path=$path"
+                            )
+                        } else {
+                            val throwable = exportResult.exceptionOrNull()
+                            safeLog(
+                                status = "scanner_export_links_error",
+                                message = "mode=auto, attempt=$attemptId, query=${runState.query.take(80)}, reason=${throwable?.message ?: throwable?.javaClass?.simpleName ?: "unknown"}"
+                            )
+                        }
+                        path
+                    }
+                } else {
+                    null
+                }
                 if (foundAll.isNotEmpty()) {
                     val relatedQueries = outcome.successfulStepQueries
                         .filterNot { it.equals(runState.query, ignoreCase = true) }
@@ -658,6 +697,7 @@ class ScannerViewModel @Inject constructor(
                         hasSearched = true,
                         results = foundForDisplay,
                         selectedPreview = foundForDisplay.firstOrNull(),
+                        exportedLinksPath = autoExportPath,
                         statusType = statusType,
                         statusTitle = statusTitle,
                         statusDetails = statusDetails,
@@ -731,6 +771,30 @@ class ScannerViewModel @Inject constructor(
                 } else {
                     null
                 }
+                val autoExportPath = if (saveFoundResults && partial.isNotEmpty()) {
+                    withContext(NonCancellable) {
+                        val exportResult = exportCandidatesToTxt(
+                            candidates = partial,
+                            sourceQuery = runState.query
+                        )
+                        val path = exportResult.getOrNull()
+                        if (path != null) {
+                            safeLog(
+                                status = "scanner_export_links_ok",
+                                message = "mode=auto_cancel, attempt=$attemptId, query=${runState.query.take(80)}, count=${partial.size}, path=$path"
+                            )
+                        } else {
+                            val throwable = exportResult.exceptionOrNull()
+                            safeLog(
+                                status = "scanner_export_links_error",
+                                message = "mode=auto_cancel, attempt=$attemptId, query=${runState.query.take(80)}, reason=${throwable?.message ?: throwable?.javaClass?.simpleName ?: "unknown"}"
+                            )
+                        }
+                        path
+                    }
+                } else {
+                    null
+                }
                 val partialDetails = if (partial.isEmpty()) {
                     "Поиск остановлен вручную. Совпадений пока нет."
                 } else {
@@ -747,6 +811,7 @@ class ScannerViewModel @Inject constructor(
                         hasSearched = true,
                         results = partialForDisplay,
                         selectedPreview = partialForDisplay.firstOrNull(),
+                        exportedLinksPath = autoExportPath,
                         statusType = if (partial.isEmpty()) ScannerStatusType.INFO else ScannerStatusType.SUCCESS,
                         statusTitle = "Поиск остановлен пользователем",
                         statusDetails = partialDetails,
@@ -2194,6 +2259,14 @@ private fun buildFailureReason(
         else -> rawReason
     }
     return "${candidate.provider}/${candidate.repository}/${candidate.path}: $mappedReason"
+}
+
+private fun String.toSafeFilePart(): String {
+    return trim()
+        .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        .replace(Regex("\\s+"), "_")
+        .take(60)
+        .ifBlank { "search" }
 }
 
 private fun scannerPresets(): List<ScannerPreset> {

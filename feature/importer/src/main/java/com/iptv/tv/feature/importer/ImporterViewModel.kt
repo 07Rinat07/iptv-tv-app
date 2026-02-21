@@ -264,7 +264,7 @@ class ImporterViewModel @Inject constructor(
 
     private companion object {
         const val MAX_LOG_MESSAGE = 700
-        const val IMPORT_TIMEOUT_MS = 120_000L
+        const val IMPORT_TIMEOUT_MS = 300_000L
         const val IMPORT_WATCHDOG_MS = 10_000L
     }
 }

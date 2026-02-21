@@ -22,6 +22,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 
 const val EDITOR_PLAYLIST_ID_ARG = "playlistId"
@@ -323,7 +326,12 @@ class EditorViewModel @Inject constructor(
                         .ifBlank { "playlist-$playlistId" }
                 }
                 val ext = _uiState.value.exportFileExtension.ifBlank { lastExportExtension }
-                val fileName = "$playlistName-${System.currentTimeMillis()}.$ext"
+                val fileName = if (ext.equals("txt", ignoreCase = true)) {
+                    val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                    "Tv_list_$stamp.txt"
+                } else {
+                    "$playlistName-${System.currentTimeMillis()}.$ext"
+                }
                 val file = File(targetDir, fileName)
                 file.writeText(content)
                 file.absolutePath

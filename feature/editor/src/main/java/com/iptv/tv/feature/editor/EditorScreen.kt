@@ -25,6 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -164,6 +167,12 @@ fun EditorScreen(
                         }
                         Button(
                             onClick = {
+                                val ext = state.exportFileExtension.ifBlank { "m3u" }
+                                if (ext.equals("txt", ignoreCase = true)) {
+                                    val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                    saveDocumentLauncher.launch("Tv_list_$stamp.txt")
+                                    return@Button
+                                }
                                 val playlistName = state.playlists
                                     .firstOrNull { it.id == state.effectivePlaylistId }
                                     ?.name
@@ -182,7 +191,6 @@ fun EditorScreen(
                                     } else {
                                         "playlist"
                                     }
-                                val ext = state.exportFileExtension.ifBlank { "m3u" }
                                 saveDocumentLauncher.launch("$playlistName.$ext")
                             },
                             enabled = !state.isLoading

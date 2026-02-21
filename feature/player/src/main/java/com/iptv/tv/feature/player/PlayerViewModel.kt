@@ -121,6 +121,9 @@ class PlayerViewModel @Inject constructor(
     private var channelsJob: Job? = null
     private var overrideJob: Job? = null
     private var epgJob: Job? = null
+    private var lastEpgRequestedChannelId: Long? = null
+    private var lastEpgErrorSignature: String? = null
+    private var lastEpgErrorAtMs: Long = 0L
     private var internalStartElapsedMs: Long = 0L
     private val vlcLauncher = ExternalVlcLauncher()
 
@@ -132,6 +135,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun selectPlaylist(playlistId: Long) {
+        lastEpgRequestedChannelId = null
         _uiState.update {
             it.copy(
                 selectedPlaylistId = playlistId,
@@ -153,6 +157,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun selectChannel(channelId: Long) {
+        lastEpgRequestedChannelId = channelId
         val channel = _uiState.value.channels.firstOrNull { it.id == channelId }
         val aceDescriptor = channel?.let { detectAceDescriptor(it.streamUrl) }
         _uiState.update { state ->
@@ -202,6 +207,7 @@ class PlayerViewModel @Inject constructor(
         }
         val selectedId = _uiState.value.selectedChannelId
         if (selectedId != null) {
+            lastEpgRequestedChannelId = selectedId
             observeChannelOverride(selectedId)
             loadEpgForChannel(selectedId)
         } else {
@@ -383,6 +389,11 @@ class PlayerViewModel @Inject constructor(
 
     fun playSelectedInternal() {
         playSelectedWith(playerType = PlayerType.INTERNAL, context = null)
+    }
+
+    fun playChannelInternal(channelId: Long) {
+        selectChannel(channelId)
+        playSelectedInternal()
     }
 
     fun playSelectedVlc(context: Context) {
@@ -679,6 +690,7 @@ class PlayerViewModel @Inject constructor(
         channelsJob?.cancel()
         observedPlaylistId = playlistId
         if (playlistId == null) {
+            lastEpgRequestedChannelId = null
             _uiState.update {
                 it.copy(
                     channels = emptyList(),
@@ -746,10 +758,14 @@ class PlayerViewModel @Inject constructor(
                 val selectedId = _uiState.value.selectedChannelId
                 if (selectedId != null) {
                     observeChannelOverride(selectedId)
-                    loadEpgForChannel(selectedId)
+                    if (selectedId != lastEpgRequestedChannelId) {
+                        lastEpgRequestedChannelId = selectedId
+                        loadEpgForChannel(selectedId)
+                    }
                 } else {
                     overrideJob?.cancel()
                     epgJob?.cancel()
+                    lastEpgRequestedChannelId = null
                     _uiState.update {
                         it.copy(
                             channelPlayerOverride = null,
@@ -846,10 +862,20 @@ class PlayerViewModel @Inject constructor(
                 }
                 is AppResult.Error -> {
                     _uiState.update { it.copy(channelEpgInfo = null, epgStatus = "EPG: ${result.message}") }
-                    safeLog(
-                        status = "player_epg_error",
-                        message = "channelId=$channelId, reason=${result.message}"
-                    )
+                    val message = result.message
+                    val signature = "$channelId|$message"
+                    val now = System.currentTimeMillis()
+                    val suppressRepeat =
+                        signature == lastEpgErrorSignature &&
+                            now - lastEpgErrorAtMs < EPG_ERROR_LOG_COOLDOWN_MS
+                    if (!suppressRepeat) {
+                        safeLog(
+                            status = "player_epg_error",
+                            message = "channelId=$channelId, reason=$message"
+                        )
+                        lastEpgErrorSignature = signature
+                        lastEpgErrorAtMs = now
+                    }
                 }
                 AppResult.Loading -> Unit
             }
@@ -1287,6 +1313,7 @@ class PlayerViewModel @Inject constructor(
         const val MAX_PROBE_URL_LOG = 220
         const val PROBE_CONNECT_TIMEOUT_MS = 8_000
         const val PROBE_READ_TIMEOUT_MS = 12_000
+        const val EPG_ERROR_LOG_COOLDOWN_MS = 20_000L
         val HASH40_REGEX = Regex("^[a-fA-F0-9]{40}$")
         val ACE_QUERY_KEYS = setOf("id", "content_id", "infohash", "hash", "url")
     }
