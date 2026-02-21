@@ -1,12 +1,14 @@
 package com.iptv.tv.feature.diagnostics
 
 import android.annotation.SuppressLint
+import android.content.ContentValues
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Environment
 import android.os.SystemClock
+import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
@@ -22,7 +24,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.io.File
 import javax.inject.Inject
 
 data class DiagnosticsUiState(
@@ -168,15 +169,9 @@ class DiagnosticsViewModel @Inject constructor(
             }
 
             runCatching {
-                val targetDir = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                    ?: appContext.filesDir
-                if (!targetDir.exists()) {
-                    targetDir.mkdirs()
-                }
-                val file = File(targetDir, "diagnostics-logs-${System.currentTimeMillis()}.txt")
+                val fileName = "diagnostics-logs-${System.currentTimeMillis()}.txt"
                 val content = buildLogsText(logs)
-                file.writeText(content)
-                file.absolutePath
+                saveTextToPublicDownloads(fileName = fileName, content = content)
             }.onSuccess { path ->
                 _uiState.update {
                     it.copy(
@@ -189,6 +184,45 @@ class DiagnosticsViewModel @Inject constructor(
                 _uiState.update { it.copy(lastError = "Не удалось экспортировать логи: ${throwable.message}") }
             }
         }
+    }
+
+    private fun saveTextToPublicDownloads(fileName: String, content: String): String {
+        val resolver = appContext.contentResolver
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("Не удалось создать файл в публичной папке Download")
+
+            try {
+                resolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { writer ->
+                    writer.write(content)
+                } ?: error("Не удалось открыть файл для записи: $uri")
+
+                val complete = ContentValues().apply {
+                    put(MediaStore.Downloads.IS_PENDING, 0)
+                }
+                resolver.update(uri, complete, null, null)
+                return "/storage/emulated/0/Download/$fileName"
+            } catch (t: Throwable) {
+                runCatching { resolver.delete(uri, null, null) }
+                throw t
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        val publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!publicDownloads.exists()) {
+            publicDownloads.mkdirs()
+        }
+        val file = java.io.File(publicDownloads, fileName)
+        file.writeText(content)
+        return file.absolutePath
     }
 
     fun exportLogsToUri(uriString: String) {

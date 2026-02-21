@@ -1,6 +1,5 @@
 package com.iptv.tv.feature.scanner
 
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,8 +51,7 @@ fun ScannerScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp)
-                .focusable(),
+                .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
         item {

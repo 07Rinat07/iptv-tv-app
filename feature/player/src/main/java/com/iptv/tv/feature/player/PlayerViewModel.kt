@@ -124,6 +124,7 @@ class PlayerViewModel @Inject constructor(
     private var lastEpgRequestedChannelId: Long? = null
     private var lastEpgErrorSignature: String? = null
     private var lastEpgErrorAtMs: Long = 0L
+    private val missingEpgByPlaylistLoggedAtMs = mutableMapOf<Long, Long>()
     private var internalStartElapsedMs: Long = 0L
     private val vlcLauncher = ExternalVlcLauncher()
 
@@ -448,7 +449,8 @@ class PlayerViewModel @Inject constructor(
                     }
                 }
                 is AppResult.Error -> {
-                    _uiState.update { it.copy(lastError = "Ace Engine connect error: ${connect.message}") }
+                    val userMessage = formatEngineConnectError(endpoint = endpoint, rawMessage = connect.message)
+                    _uiState.update { it.copy(lastError = userMessage) }
                     safeLog(
                         status = "engine_manual_check_error",
                         message = "connect failed: ${connect.message}"
@@ -842,6 +844,22 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun loadEpgForChannel(channelId: Long) {
+        val stateSnapshot = _uiState.value
+        val channel = stateSnapshot.channels.firstOrNull { it.id == channelId }
+        val playlistId = channel?.playlistId ?: stateSnapshot.selectedPlaylistId
+        val playlist = playlistId?.let { id -> stateSnapshot.playlists.firstOrNull { it.id == id } }
+        val epgUrl = playlist?.epgSourceUrl?.trim().orEmpty()
+        if (playlist != null && epgUrl.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    channelEpgInfo = null,
+                    epgStatus = "EPG: источник не настроен для плейлиста ${playlist.name} (id=${playlist.id})"
+                )
+            }
+            logMissingEpgSourceOncePerCooldown(playlistId = playlist.id, channelId = channelId)
+            return
+        }
+
         epgJob?.cancel()
         epgJob = viewModelScope.launch {
             _uiState.update { it.copy(channelEpgInfo = null, epgStatus = "EPG: загрузка...") }
@@ -863,7 +881,12 @@ class PlayerViewModel @Inject constructor(
                 is AppResult.Error -> {
                     _uiState.update { it.copy(channelEpgInfo = null, epgStatus = "EPG: ${result.message}") }
                     val message = result.message
-                    val signature = "$channelId|$message"
+                    val signature = when {
+                        message.startsWith("EPG source URL is not configured", ignoreCase = true) ->
+                            "missing_epg_source|${playlistId ?: -1L}"
+                        else ->
+                            "$channelId|$message"
+                    }
                     val now = System.currentTimeMillis()
                     val suppressRepeat =
                         signature == lastEpgErrorSignature &&
@@ -880,6 +903,18 @@ class PlayerViewModel @Inject constructor(
                 AppResult.Loading -> Unit
             }
         }
+    }
+
+    private fun logMissingEpgSourceOncePerCooldown(playlistId: Long, channelId: Long) {
+        val now = System.currentTimeMillis()
+        val lastLoggedAt = missingEpgByPlaylistLoggedAtMs[playlistId] ?: 0L
+        if (now - lastLoggedAt < MISSING_EPG_SOURCE_LOG_COOLDOWN_MS) return
+        logAsync(
+            status = "player_epg_error",
+            message = "channelId=$channelId, reason=EPG source URL is not configured for playlist $playlistId",
+            playlistId = playlistId
+        )
+        missingEpgByPlaylistLoggedAtMs[playlistId] = now
     }
 
     private fun observeFavorites() {
@@ -1274,6 +1309,29 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    private fun formatEngineConnectError(endpoint: String, rawMessage: String?): String {
+        val lowered = rawMessage?.lowercase().orEmpty()
+        return when {
+            lowered.contains("econnrefused") ||
+                lowered.contains("connection refused") ||
+                lowered.contains("failed to connect") -> {
+                "Ace Engine недоступен на $endpoint. Проверьте, что Ace Engine запущен на ТВ-боксе."
+            }
+            lowered.contains("unknownhost") || lowered.contains("unable to resolve host") -> {
+                "Ace Engine: ошибка DNS/host для $endpoint. Проверьте endpoint в настройках."
+            }
+            lowered.contains("timeout") || lowered.contains("timed out") -> {
+                "Ace Engine не ответил вовремя ($endpoint). Проверьте, что сервис активен."
+            }
+            rawMessage.isNullOrBlank() -> {
+                "Ace Engine недоступен ($endpoint)."
+            }
+            else -> {
+                "Ace Engine connect error: $rawMessage"
+            }
+        }
+    }
+
     private fun classifyPlaybackError(message: String): PlaybackErrorKind {
         val lowered = message.lowercase()
         return when {
@@ -1314,6 +1372,7 @@ class PlayerViewModel @Inject constructor(
         const val PROBE_CONNECT_TIMEOUT_MS = 8_000
         const val PROBE_READ_TIMEOUT_MS = 12_000
         const val EPG_ERROR_LOG_COOLDOWN_MS = 20_000L
+        const val MISSING_EPG_SOURCE_LOG_COOLDOWN_MS = 60_000L
         val HASH40_REGEX = Regex("^[a-fA-F0-9]{40}$")
         val ACE_QUERY_KEYS = setOf("id", "content_id", "infohash", "hash", "url")
     }

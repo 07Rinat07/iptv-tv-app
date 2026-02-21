@@ -2,7 +2,6 @@ package com.iptv.tv.feature.diagnostics
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,8 +36,7 @@ fun DiagnosticsScreen(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp)
-            .focusable(),
+            .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {

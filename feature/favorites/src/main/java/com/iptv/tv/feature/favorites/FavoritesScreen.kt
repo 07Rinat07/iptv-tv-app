@@ -1,6 +1,5 @@
 package com.iptv.tv.feature.favorites
 
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,8 +28,7 @@ fun FavoritesScreen(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp)
-            .focusable(),
+            .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {

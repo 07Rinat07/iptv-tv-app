@@ -1,7 +1,10 @@
 package com.iptv.tv.feature.scanner
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
@@ -339,18 +342,51 @@ class ScannerViewModel @Inject constructor(
                         appendLine()
                     }
                 }
-                val targetDir = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                    ?: appContext.filesDir
-                if (!targetDir.exists()) {
-                    targetDir.mkdirs()
-                }
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(now))
                 val queryPart = sourceQuery.toSafeFilePart()
-                val file = File(targetDir, "Tv_list_${queryPart}_$stamp.txt")
-                file.writeText(content)
-                file.absolutePath
+                val fileName = "Tv_list_${queryPart}_$stamp.txt"
+                saveTextToPublicDownloads(fileName = fileName, content = content)
             }
         }
+    }
+
+    private fun saveTextToPublicDownloads(fileName: String, content: String): String {
+        val resolver = appContext.contentResolver
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("Не удалось создать файл в публичной папке Download")
+
+            try {
+                resolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { writer ->
+                    writer.write(content)
+                } ?: error("Не удалось открыть файл для записи: $uri")
+
+                val complete = ContentValues().apply {
+                    put(MediaStore.Downloads.IS_PENDING, 0)
+                }
+                resolver.update(uri, complete, null, null)
+                return "/storage/emulated/0/Download/$fileName"
+            } catch (t: Throwable) {
+                runCatching { resolver.delete(uri, null, null) }
+                throw t
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        val publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!publicDownloads.exists()) {
+            publicDownloads.mkdirs()
+        }
+        val file = File(publicDownloads, fileName)
+        file.writeText(content)
+        return file.absolutePath
     }
 
     private fun runSearch(saveFoundResults: Boolean) {
@@ -2274,32 +2310,32 @@ private fun scannerPresets(): List<ScannerPreset> {
         ScannerPreset(
             id = "general",
             title = "Общий IPTV",
-            query = "iptv",
-            keywords = "",
+            query = "iptv playlist m3u",
+            keywords = "iptv, playlist, tv channels, m3u, m3u8, channel list, список каналов",
             provider = ScannerProviderScope.ALL,
-            description = "Базовый поиск публичных IPTV плейлистов без узких фильтров."
+            description = "Базовый поиск RU/EN IPTV-плейлистов (широкий старт)."
         ),
         ScannerPreset(
             id = "ru",
             title = "Русские каналы",
-            query = "russian iptv",
-            keywords = "",
+            query = "russian iptv playlist",
+            keywords = "russian, russia, ru, русские каналы, россия, список каналов, m3u, m3u8",
             provider = ScannerProviderScope.ALL,
-            description = "Поиск списков с русскими каналами и русскоязычными метками."
+            description = "Поиск RU-каналов и русскоязычных IPTV-списков."
         ),
         ScannerPreset(
             id = "world",
             title = "Каналы мира",
-            query = "world iptv",
-            keywords = "",
+            query = "world international iptv",
+            keywords = "world, global, international, countries, tv channels, m3u, m3u8",
             provider = ScannerProviderScope.ALL,
             description = "Поиск международных и мульти-страночных IPTV списков."
         ),
         ScannerPreset(
             id = "sport",
             title = "Спорт",
-            query = "sport iptv",
-            keywords = "",
+            query = "sport iptv channels",
+            keywords = "sport, sports, football, soccer, hockey, tennis, basketball, спорт, футбол, хоккей, m3u, m3u8",
             provider = ScannerProviderScope.ALL,
             description = "Поиск спортивных плейлистов (футбол, хоккей и др.)."
         ),
@@ -2310,6 +2346,22 @@ private fun scannerPresets(): List<ScannerPreset> {
             keywords = "movie, series, serial, cinema, vod, action, thriller, horror, кино, сериалы, боевик, триллер, ужасы",
             provider = ScannerProviderScope.ALL,
             description = "Поиск плейлистов с фильмами, сериалами и VOD-каталогами."
+        ),
+        ScannerPreset(
+            id = "series",
+            title = "Сериалы/TV Shows",
+            query = "series iptv",
+            keywords = "series, serial, tv show, drama, seasons, episodes, сериалы, сериал, шоу, drama channels, m3u, m3u8",
+            provider = ScannerProviderScope.ALL,
+            description = "Отдельный пресет для сериалов и TV-шоу (RU/EN)."
+        ),
+        ScannerPreset(
+            id = "genres_action",
+            title = "Экшен/Триллер/Ужасы",
+            query = "action thriller horror iptv",
+            keywords = "action, thriller, horror, movie channels, боевик, триллер, ужасы, фильмы, m3u, m3u8",
+            provider = ScannerProviderScope.ALL,
+            description = "Жанровый поиск кино-каналов: action, thriller, horror."
         ),
         ScannerPreset(
             id = "news",
@@ -2338,10 +2390,26 @@ private fun scannerPresets(): List<ScannerPreset> {
         ScannerPreset(
             id = "tvlists",
             title = "Списки ТВ каналов",
-            query = "tv channels iptv list",
+            query = "iptv channel list m3u m3u8",
             keywords = "tv channels, iptv channel list, списки тв, каналы iptv, списки каналов iptv, m3u, m3u8",
             provider = ScannerProviderScope.ALL,
             description = "Широкий поиск списков каналов в форматах M3U/M3U8."
+        ),
+        ScannerPreset(
+            id = "mixed_ru_en",
+            title = "RU/EN Готовые запросы",
+            query = "iptv channels list",
+            keywords = "iptv channel list, tv list, live channels, список каналов, списки тв каналов, m3u, m3u8, playlist",
+            provider = ScannerProviderScope.ALL,
+            description = "Универсальный двуязычный пресет для поиска максимума списков."
+        ),
+        ScannerPreset(
+            id = "free_public",
+            title = "Бесплатные/Публичные",
+            query = "free public iptv",
+            keywords = "free, public, open, free tv channels, бесплатные каналы, открытые каналы, public playlist, m3u, m3u8",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск открытых и бесплатных IPTV-плейлистов."
         ),
         ScannerPreset(
             id = "documentary",

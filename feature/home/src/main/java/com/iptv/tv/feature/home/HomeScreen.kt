@@ -1,6 +1,5 @@
 package com.iptv.tv.feature.home
 
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -38,8 +37,7 @@ fun HomeScreen(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp)
-            .focusable(),
+            .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
@@ -56,7 +54,7 @@ fun HomeScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text("Сценарий работы", style = MaterialTheme.typography.titleMedium)
-                    Text("1) Сканер: найти и сохранить топ-10 плейлистов")
+                    Text("1) Сканер: найти и сохранить найденные плейлисты")
                     Text("2) Мои плейлисты: выбрать нужный список")
                     Text("3) Редактор: чистка, сортировка, экспорт")
                     Text("4) Плеер: встроенный, VLC или через Engine Stream")
@@ -75,7 +73,7 @@ fun HomeScreen(
                 onOpenScanner?.let { action ->
                     HomeActionCard(
                         title = "Сканер репозиториев",
-                        subtitle = "GitHub/GitLab/Bitbucket, автосохранение 10",
+                        subtitle = "GitHub/GitLab/Bitbucket, автосохранение всего найденного",
                         primary = true,
                         onClick = action
                     )

@@ -1,6 +1,5 @@
 package com.iptv.tv.feature.playlists
 
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -43,8 +42,7 @@ fun PlaylistsScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp)
-            .testTag(TAG_PLAYLISTS_LIST)
-            .focusable(),
+            .testTag(TAG_PLAYLISTS_LIST),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {

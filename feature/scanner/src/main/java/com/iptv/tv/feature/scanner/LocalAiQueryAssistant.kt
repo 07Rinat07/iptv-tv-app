@@ -47,19 +47,22 @@ internal class LocalAiQueryAssistant {
             .take(4)
             .joinToString(" ")
 
-        variants += "$normalized playlist m3u8"
-        variants += "$normalized channels m3u"
-        variants += "$normalized live tv m3u8"
+        variants += "$normalized iptv playlist m3u8"
+        variants += "$normalized iptv channels m3u"
         variants += "$normalized tv channel list m3u8"
-        variants += "$normalized iptv channel list m3u"
-        if (keywordChunk.isNotBlank()) {
-            variants += "$normalized $keywordChunk m3u"
-        }
+        variants += "$normalized live tv channels m3u8"
 
         detectIntents(lowered).forEach { intent ->
             intentTemplates[intent].orEmpty().forEach { template ->
                 variants += template
             }
+            webIntentTemplates[intent].orEmpty().forEach { template ->
+                variants += template
+            }
+        }
+
+        if (keywordChunk.isNotBlank()) {
+            variants += "$normalized $keywordChunk iptv m3u"
         }
 
         val transliterated = transliterateCyrillicToLatin(normalized)
@@ -69,21 +72,16 @@ internal class LocalAiQueryAssistant {
         }
 
         variants += "public iptv m3u playlist"
+        variants += "free public iptv channel list m3u"
         variants += "iptv channels list m3u8"
         variants += "iptv m3u github"
         variants += "iptv m3u gitlab"
+        variants += "site:github.com iptv m3u playlist"
+        variants += "site:gitlab.com iptv m3u playlist"
+        variants += "site:bitbucket.org iptv m3u playlist"
         variants += "iptv channel list m3u"
         variants += "список каналов iptv m3u"
         variants += "списки m3u m3u8 iptv"
-
-        val webFallbackIntents = detectIntents(lowered)
-        if (webFallbackIntents.isNotEmpty()) {
-            webFallbackIntents.forEach { intent ->
-                webIntentTemplates[intent].orEmpty().forEach { template ->
-                    variants += template
-                }
-            }
-        }
 
         return variants
             .map { it.replace(Regex("\\s+"), " ").trim() }
@@ -101,19 +99,6 @@ internal class LocalAiQueryAssistant {
 
         val lowered = compact.lowercase()
         return if (lowered.contains("iptv") || lowered.contains("m3u")) compact else "iptv $compact"
-    }
-
-    private fun detectIntents(text: String): Set<Intent> {
-        val lowered = text.lowercase()
-        return buildSet {
-            if (containsAny(lowered, russianMarkers)) add(Intent.RUSSIAN)
-            if (containsAny(lowered, worldMarkers)) add(Intent.WORLD)
-            if (containsAny(lowered, sportMarkers)) add(Intent.SPORT)
-            if (containsAny(lowered, movieMarkers)) add(Intent.MOVIE)
-            if (containsAny(lowered, newsMarkers)) add(Intent.NEWS)
-            if (containsAny(lowered, kidsMarkers)) add(Intent.KIDS)
-            if (containsAny(lowered, musicMarkers)) add(Intent.MUSIC)
-        }
     }
 
     private fun containsAny(text: String, markers: Set<String>): Boolean {
@@ -174,11 +159,13 @@ internal class LocalAiQueryAssistant {
         MOVIE,
         NEWS,
         KIDS,
-        MUSIC
+        MUSIC,
+        FREE,
+        LISTS
     }
 
     private companion object {
-        const val MAX_VARIANTS = 14
+        const val MAX_VARIANTS = 18
         const val MAX_KEYWORDS = 20
 
         val russianMarkers = setOf("рус", "росс", "russian", "russia", "снг")
@@ -195,6 +182,8 @@ internal class LocalAiQueryAssistant {
         val newsMarkers = setOf("news", "новост", "breaking", "business", "headlines", "live news", "новости")
         val kidsMarkers = setOf("kids", "дет", "cartoon", "cartoons", "animation", "family", "мульт", "мультфильм")
         val musicMarkers = setOf("music", "radio", "audio", "hits", "songs", "музыка", "радио")
+        val freeMarkers = setOf("free", "public", "open", "бесплат", "открыт", "gratis")
+        val listMarkers = setOf("list", "lists", "playlist", "channels", "tv list", "channel list", "список", "списки", "каналы")
 
         val intentKeywords = mapOf(
             Intent.RUSSIAN to listOf("russian", "russia", "ru", "рус", "россия", "каналы", "список"),
@@ -206,7 +195,9 @@ internal class LocalAiQueryAssistant {
             ),
             Intent.NEWS to listOf("news", "live", "breaking", "headlines", "новости"),
             Intent.KIDS to listOf("kids", "cartoon", "animation", "family", "мультфильмы"),
-            Intent.MUSIC to listOf("music", "radio", "audio", "hits", "музыка")
+            Intent.MUSIC to listOf("music", "radio", "audio", "hits", "музыка"),
+            Intent.FREE to listOf("free", "public", "open", "бесплатно", "бесплатные"),
+            Intent.LISTS to listOf("channel list", "tv list", "playlist", "список каналов", "списки тв")
         )
 
         val intentTemplates = mapOf(
@@ -244,6 +235,17 @@ internal class LocalAiQueryAssistant {
             Intent.MUSIC to listOf(
                 "music radio channels iptv m3u8",
                 "музыка радио каналы iptv m3u"
+            ),
+            Intent.FREE to listOf(
+                "free public iptv playlist m3u",
+                "open iptv channel list m3u8",
+                "бесплатные каналы iptv m3u"
+            ),
+            Intent.LISTS to listOf(
+                "iptv channel list m3u8",
+                "tv channels list iptv m3u",
+                "списки тв каналов iptv m3u8",
+                "список каналов iptv m3u"
             )
         )
 
@@ -279,7 +281,32 @@ internal class LocalAiQueryAssistant {
             Intent.MUSIC to listOf(
                 "radio iptv m3u github",
                 "music iptv m3u8 gitlab"
+            ),
+            Intent.FREE to listOf(
+                "free iptv m3u github",
+                "public iptv playlist m3u gitlab",
+                "бесплатные iptv m3u github"
+            ),
+            Intent.LISTS to listOf(
+                "iptv channel list m3u github",
+                "tv channels list m3u gitlab",
+                "список каналов iptv m3u github"
             )
         )
+    }
+
+    private fun detectIntents(text: String): Set<Intent> {
+        val lowered = text.lowercase()
+        return buildSet {
+            if (containsAny(lowered, russianMarkers)) add(Intent.RUSSIAN)
+            if (containsAny(lowered, worldMarkers)) add(Intent.WORLD)
+            if (containsAny(lowered, sportMarkers)) add(Intent.SPORT)
+            if (containsAny(lowered, movieMarkers)) add(Intent.MOVIE)
+            if (containsAny(lowered, newsMarkers)) add(Intent.NEWS)
+            if (containsAny(lowered, kidsMarkers)) add(Intent.KIDS)
+            if (containsAny(lowered, musicMarkers)) add(Intent.MUSIC)
+            if (containsAny(lowered, freeMarkers)) add(Intent.FREE)
+            if (containsAny(lowered, listMarkers)) add(Intent.LISTS)
+        }
     }
 }

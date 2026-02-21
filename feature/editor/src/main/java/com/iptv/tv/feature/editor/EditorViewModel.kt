@@ -1,7 +1,10 @@
 package com.iptv.tv.feature.editor
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
@@ -308,12 +311,6 @@ class EditorViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, lastError = null) }
             runCatching {
-                val targetDir = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                    ?: appContext.filesDir
-                if (!targetDir.exists()) {
-                    targetDir.mkdirs()
-                }
-
                 val playlistId = lastExportPlaylistId ?: _uiState.value.effectivePlaylistId
                 val playlistName = if (playlistId == null) {
                     "playlists-export"
@@ -332,9 +329,7 @@ class EditorViewModel @Inject constructor(
                 } else {
                     "$playlistName-${System.currentTimeMillis()}.$ext"
                 }
-                val file = File(targetDir, fileName)
-                file.writeText(content)
-                file.absolutePath
+                saveTextToPublicDownloads(fileName = fileName, content = content)
             }.onSuccess { path ->
                 _uiState.update {
                     it.copy(
@@ -353,6 +348,45 @@ class EditorViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun saveTextToPublicDownloads(fileName: String, content: String): String {
+        val resolver = appContext.contentResolver
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("Не удалось создать файл в публичной папке Download")
+
+            try {
+                resolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { writer ->
+                    writer.write(content)
+                } ?: error("Не удалось открыть файл для записи: $uri")
+
+                val complete = ContentValues().apply {
+                    put(MediaStore.Downloads.IS_PENDING, 0)
+                }
+                resolver.update(uri, complete, null, null)
+                return "/storage/emulated/0/Download/$fileName"
+            } catch (t: Throwable) {
+                runCatching { resolver.delete(uri, null, null) }
+                throw t
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        val publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!publicDownloads.exists()) {
+            publicDownloads.mkdirs()
+        }
+        val file = File(publicDownloads, fileName)
+        file.writeText(content)
+        return file.absolutePath
     }
 
     fun saveExportToUri(uriString: String) {
