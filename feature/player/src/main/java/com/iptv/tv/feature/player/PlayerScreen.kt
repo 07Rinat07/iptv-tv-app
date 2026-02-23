@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
@@ -31,7 +32,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -50,6 +54,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import coil.compose.AsyncImage
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.PlayerType
@@ -74,10 +79,20 @@ fun PlayerScreen(
     val context = LocalContext.current
     val state by viewModel.uiState.collectAsState()
     var hideUnavailable by rememberSaveable { mutableStateOf(true) }
-    val filteredChannels = remember(state.channels, state.channelQuery, state.selectedGroup, hideUnavailable) {
+    val filteredChannels = remember(
+        state.channels,
+        state.channelQuery,
+        state.selectedGroup,
+        state.selectedSubGroup,
+        hideUnavailable
+    ) {
         val query = state.channelQuery.trim().lowercase()
         val grouped = state.channels.filter { channel ->
-            state.selectedGroup == null || channel.group?.trim() == state.selectedGroup
+            channelMatchesGroup(
+                channel = channel,
+                selectedGroup = state.selectedGroup,
+                selectedSubGroup = state.selectedSubGroup
+            )
         }
         val searched = if (query.isBlank()) {
             grouped
@@ -108,7 +123,7 @@ fun PlayerScreen(
     var showTechnicalInfo by rememberSaveable { mutableStateOf(false) }
     var showPlaylists by rememberSaveable { mutableStateOf(false) }
     var showQuickChannels by rememberSaveable { mutableStateOf(true) }
-    var showChannelCatalog by rememberSaveable { mutableStateOf(false) }
+    var showChannelCatalog by rememberSaveable { mutableStateOf(true) }
     var showActions by rememberSaveable { mutableStateOf(false) }
     var showStreamTools by rememberSaveable { mutableStateOf(false) }
     var showEpgWizard by rememberSaveable { mutableStateOf(false) }
@@ -410,8 +425,7 @@ fun PlayerScreen(
                                         .fillMaxHeight(),
                                     channels = filteredChannels,
                                     selectedChannelId = state.selectedChannelId,
-                                    onSelect = viewModel::selectChannel,
-                                    onPlay = viewModel::playChannelInternal
+                                    onSelect = viewModel::playChannelInternal
                                 )
                             }
                         } else {
@@ -438,8 +452,7 @@ fun PlayerScreen(
                                         .padding(top = 10.dp),
                                     channels = filteredChannels,
                                     selectedChannelId = state.selectedChannelId,
-                                    onSelect = viewModel::selectChannel,
-                                    onPlay = viewModel::playChannelInternal
+                                    onSelect = viewModel::playChannelInternal
                                 )
                             }
                         }
@@ -488,7 +501,7 @@ fun PlayerScreen(
             item {
                 Text("Каналы (${filteredChannels.size}/${state.channels.size})", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Подсказка: кнопка `Играть` сразу запускает выбранный канал во встроенном плеере.",
+                    "Подсказка: выбор канала сразу запускает воспроизведение во встроенном плеере.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -531,6 +544,36 @@ fun PlayerScreen(
                     }
                 }
             }
+            if (state.selectedGroup != null && state.availableSubGroups.isNotEmpty()) {
+                item {
+                    Text("Подгруппы (${state.availableSubGroups.size})", style = MaterialTheme.typography.titleSmall)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (state.selectedSubGroup == null) {
+                            Button(onClick = { viewModel.selectSubGroup(null) }) {
+                                Text("Все подгруппы")
+                            }
+                        } else {
+                            OutlinedButton(onClick = { viewModel.selectSubGroup(null) }) {
+                                Text("Все подгруппы")
+                            }
+                        }
+                        state.availableSubGroups.forEach { subGroup ->
+                            if (state.selectedSubGroup == subGroup) {
+                                Button(onClick = { viewModel.selectSubGroup(subGroup) }) {
+                                    Text(subGroup)
+                                }
+                            } else {
+                                OutlinedButton(onClick = { viewModel.selectSubGroup(subGroup) }) {
+                                    Text(subGroup)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if (filteredChannels.isEmpty()) {
                 item {
                     Text("Нет каналов по текущему фильтру")
@@ -542,8 +585,17 @@ fun PlayerScreen(
                             modifier = Modifier.padding(10.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Column(
+                            Row(
                                 modifier = Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                ChannelLogo(
+                                    logoUrl = channel.logo,
+                                    modifier = Modifier.size(54.dp)
+                                )
+                                Column(
+                                    modifier = Modifier.weight(1f),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Text(channel.name, style = MaterialTheme.typography.titleSmall)
@@ -555,18 +607,10 @@ fun PlayerScreen(
                                     Text("URL: ${channel.streamUrl}", style = MaterialTheme.typography.bodySmall)
                                 }
                             }
+                            }
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Button(onClick = { viewModel.playChannelInternal(channel.id) }) {
-                                    Text("Играть")
-                                }
-                                OutlinedButton(onClick = { viewModel.selectChannel(channel.id) }) {
-                                    Text(
-                                        if (channel.id == state.selectedChannelId) {
-                                            "Выбран"
-                                        } else {
-                                            "Выбрать"
-                                        }
-                                    )
+                                    Text(if (channel.id == state.selectedChannelId) "Играет" else "Выбрать и играть")
                                 }
                             }
                         }
@@ -680,8 +724,7 @@ private fun ChannelQuickPanel(
     modifier: Modifier = Modifier,
     channels: List<Channel>,
     selectedChannelId: Long?,
-    onSelect: (Long) -> Unit,
-    onPlay: (Long) -> Unit
+    onSelect: (Long) -> Unit
 ) {
     Card(modifier = modifier.tvFocusOutline()) {
         Column(
@@ -693,7 +736,7 @@ private fun ChannelQuickPanel(
             Text("Список каналов", style = MaterialTheme.typography.titleSmall)
             val limited = channels.take(CHANNEL_QUICK_PANEL_LIMIT)
             Text(
-                "Прокрутка + OK: выбрать/играть. Показано: ${limited.size}${if (channels.size > limited.size) " из ${channels.size}" else ""}",
+                "Прокрутка + OK: выбрать и сразу играть. Показано: ${limited.size}${if (channels.size > limited.size) " из ${channels.size}" else ""}",
                 style = MaterialTheme.typography.bodySmall
             )
             LazyColumn(
@@ -703,25 +746,55 @@ private fun ChannelQuickPanel(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 items(limited, key = { it.id }) { channel ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    OutlinedButton(
+                        onClick = { onSelect(channel.id) },
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        OutlinedButton(
-                            onClick = { onSelect(channel.id) },
-                            modifier = Modifier.weight(1f)
+                        val mark = if (channel.id == selectedChannelId) "● " else ""
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val mark = if (channel.id == selectedChannelId) "● " else ""
-                            Text("$mark${channel.name}")
-                        }
-                        Button(onClick = { onPlay(channel.id) }) {
-                            Text("Играть")
+                            ChannelLogo(
+                                logoUrl = channel.logo,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Text(
+                                "$mark${channel.name}",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ChannelLogo(
+    logoUrl: String?,
+    modifier: Modifier = Modifier
+) {
+    val normalized = logoUrl?.trim().orEmpty()
+    if (normalized.isBlank()) {
+        Box(
+            modifier = modifier
+                .clip(MaterialTheme.shapes.small),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("TV", style = MaterialTheme.typography.labelSmall)
+        }
+        return
+    }
+    AsyncImage(
+        model = normalized,
+        contentDescription = "Логотип канала",
+        modifier = modifier.clip(MaterialTheme.shapes.small),
+        contentScale = ContentScale.Crop
+    )
 }
 
 @Composable
@@ -752,10 +825,10 @@ private fun InternalPlayerPlaceholder(
         ) {
             Text("Встроенный плеер")
             if (selectedChannelName == null) {
-                Text("Выберите канал и нажмите \"Играть\"")
+                Text("Выберите канал из списка справа")
             } else {
                 Text("Выбран: $selectedChannelName")
-                Text("Нажмите \"Играть\" для старта")
+                Text("Канал запускается сразу при выборе")
             }
         }
         OutlinedButton(
@@ -953,6 +1026,23 @@ private fun healthPriority(health: ChannelHealth): Int {
         ChannelHealth.UNKNOWN -> 2
         ChannelHealth.UNAVAILABLE -> 3
     }
+}
+
+private fun channelMatchesGroup(
+    channel: Channel,
+    selectedGroup: String?,
+    selectedSubGroup: String?
+): Boolean {
+    val groupRaw = channel.group?.trim().orEmpty()
+    if (groupRaw.isEmpty()) {
+        return selectedGroup == null && selectedSubGroup == null
+    }
+    val parts = groupRaw.split(Regex("\\s*(?:\\||/|>|::|\\\\\\\\)\\s*"), limit = 2)
+    val group = parts.firstOrNull()?.trim().orEmpty()
+    val subGroup = parts.getOrNull(1)?.trim().orEmpty()
+    if (selectedGroup != null && group != selectedGroup) return false
+    if (selectedSubGroup != null && subGroup != selectedSubGroup) return false
+    return true
 }
 
 private fun formatPlaybackException(error: PlaybackException): String {

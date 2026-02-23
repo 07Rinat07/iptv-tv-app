@@ -68,6 +68,8 @@ data class PlayerUiState(
     val channels: List<Channel> = emptyList(),
     val availableGroups: List<String> = emptyList(),
     val selectedGroup: String? = null,
+    val availableSubGroups: List<String> = emptyList(),
+    val selectedSubGroup: String? = null,
     val channelQuery: String = "",
     val selectedChannelId: Long? = null,
     val favoriteChannelIds: Set<Long> = emptySet(),
@@ -146,6 +148,7 @@ class PlayerViewModel @Inject constructor(
             it.copy(
                 selectedPlaylistId = playlistId,
                 selectedGroup = null,
+                selectedSubGroup = null,
                 selectedChannelId = null,
                 channelPlayerOverride = null,
                 selectedStreamKind = "Канал не выбран",
@@ -195,7 +198,20 @@ class PlayerViewModel @Inject constructor(
         _uiState.update { state ->
             val normalized = group?.trim()?.ifBlank { null }
             val channelsByGroup = state.channels.filter { channel ->
-                normalized == null || channel.group?.trim() == normalized
+                channelMatchesGroup(channel = channel, selectedGroup = normalized, selectedSubGroup = null)
+            }
+            val availableSubGroups = if (normalized == null) {
+                emptyList()
+            } else {
+                state.channels
+                    .asSequence()
+                    .filter { channel ->
+                        channelMatchesGroup(channel = channel, selectedGroup = normalized, selectedSubGroup = null)
+                    }
+                    .mapNotNull { channel -> channelGroupParts(channel.group).second }
+                    .distinct()
+                    .sorted()
+                    .toList()
             }
             val selected = state.selectedChannelId?.takeIf { selectedId ->
                 channelsByGroup.any { it.id == selectedId }
@@ -204,6 +220,57 @@ class PlayerViewModel @Inject constructor(
             val aceDescriptor = selectedChannel?.let { detectAceDescriptor(it.streamUrl) }
             state.copy(
                 selectedGroup = normalized,
+                availableSubGroups = availableSubGroups,
+                selectedSubGroup = null,
+                selectedChannelId = selected,
+                selectedStreamKind = selectedChannel?.let { describeStreamKind(it.streamUrl) } ?: "Канал не выбран",
+                selectedAceDescriptor = aceDescriptor,
+                selectedChannelAceCapable = aceDescriptor != null,
+                resolvedStreamUrl = null,
+                channelPlayerOverride = null,
+                channelEpgInfo = null,
+                epgStatus = if (selectedChannel != null) "EPG: загрузка..." else "EPG: канал не выбран",
+                internalSession = null,
+                lastError = null,
+                lastInfo = null
+            )
+        }
+        val selectedId = _uiState.value.selectedChannelId
+        if (selectedId != null) {
+            lastEpgRequestedChannelId = selectedId
+            observeChannelOverride(selectedId)
+            loadEpgForChannel(selectedId)
+        } else {
+            overrideJob?.cancel()
+            epgJob?.cancel()
+            _uiState.update {
+                it.copy(
+                    channelPlayerOverride = null,
+                    effectivePlayer = it.defaultPlayer,
+                    selectedAceDescriptor = null,
+                    selectedChannelAceCapable = false
+                )
+            }
+        }
+    }
+
+    fun selectSubGroup(subGroup: String?) {
+        _uiState.update { state ->
+            val normalizedSub = subGroup?.trim()?.ifBlank { null }
+            val channelsByGroup = state.channels.filter { channel ->
+                channelMatchesGroup(
+                    channel = channel,
+                    selectedGroup = state.selectedGroup,
+                    selectedSubGroup = normalizedSub
+                )
+            }
+            val selected = state.selectedChannelId?.takeIf { selectedId ->
+                channelsByGroup.any { it.id == selectedId }
+            } ?: channelsByGroup.firstOrNull()?.id
+            val selectedChannel = channelsByGroup.firstOrNull { it.id == selected }
+            val aceDescriptor = selectedChannel?.let { detectAceDescriptor(it.streamUrl) }
+            state.copy(
+                selectedSubGroup = normalizedSub,
                 selectedChannelId = selected,
                 selectedStreamKind = selectedChannel?.let { describeStreamKind(it.streamUrl) } ?: "Канал не выбран",
                 selectedAceDescriptor = aceDescriptor,
@@ -887,6 +954,8 @@ class PlayerViewModel @Inject constructor(
                     channels = emptyList(),
                     availableGroups = emptyList(),
                     selectedGroup = null,
+                    availableSubGroups = emptyList(),
+                    selectedSubGroup = null,
                     selectedChannelId = null,
                     selectedStreamKind = "Канал не выбран",
                     selectedAceDescriptor = null,
@@ -906,14 +975,38 @@ class PlayerViewModel @Inject constructor(
                 val visibleChannels = allChannels.filterNot { it.isHidden }
                 _uiState.update { state ->
                     val availableGroups = visibleChannels
-                        .mapNotNull { channel -> channel.group?.trim()?.takeIf { it.isNotEmpty() } }
+                        .mapNotNull { channel -> channelGroupParts(channel.group).first }
                         .distinct()
                         .sorted()
                     val selectedGroup = state.selectedGroup?.takeIf { group ->
                         availableGroups.contains(group)
                     }
+                    val availableSubGroups = if (selectedGroup == null) {
+                        emptyList()
+                    } else {
+                        visibleChannels
+                            .asSequence()
+                            .filter { channel ->
+                                channelMatchesGroup(
+                                    channel = channel,
+                                    selectedGroup = selectedGroup,
+                                    selectedSubGroup = null
+                                )
+                            }
+                            .mapNotNull { channel -> channelGroupParts(channel.group).second }
+                            .distinct()
+                            .sorted()
+                            .toList()
+                    }
+                    val selectedSubGroup = state.selectedSubGroup?.takeIf { sub ->
+                        availableSubGroups.contains(sub)
+                    }
                     val channelsByGroup = visibleChannels.filter { channel ->
-                        selectedGroup == null || channel.group?.trim() == selectedGroup
+                        channelMatchesGroup(
+                            channel = channel,
+                            selectedGroup = selectedGroup,
+                            selectedSubGroup = selectedSubGroup
+                        )
                     }
                     val requestedSelected = requestedChannelId?.takeIf { id ->
                         channelsByGroup.any { it.id == id }
@@ -934,6 +1027,8 @@ class PlayerViewModel @Inject constructor(
                         channels = visibleChannels,
                         availableGroups = availableGroups,
                         selectedGroup = selectedGroup,
+                        availableSubGroups = availableSubGroups,
+                        selectedSubGroup = selectedSubGroup,
                         selectedChannelId = selected,
                         selectedStreamKind = selectedChannel?.let { describeStreamKind(it.streamUrl) } ?: "Канал не выбран",
                         selectedAceDescriptor = aceDescriptor,
@@ -1376,6 +1471,25 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             historyRepository.add(channelId = channel.id, channelName = channel.name)
         }
+    }
+
+    private fun channelGroupParts(rawGroup: String?): Pair<String?, String?> {
+        val normalized = rawGroup?.trim()?.takeIf { it.isNotEmpty() } ?: return null to null
+        val parts = normalized.split(Regex("\\s*(?:\\||/|>|::|\\\\\\\\)\\s*"), limit = 2)
+        val root = parts.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+        val sub = parts.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
+        return root to sub
+    }
+
+    private fun channelMatchesGroup(
+        channel: Channel,
+        selectedGroup: String?,
+        selectedSubGroup: String?
+    ): Boolean {
+        val (group, subGroup) = channelGroupParts(channel.group)
+        if (selectedGroup != null && group != selectedGroup) return false
+        if (selectedSubGroup != null && subGroup != selectedSubGroup) return false
+        return true
     }
 
     private fun describeStreamKind(raw: String): String {

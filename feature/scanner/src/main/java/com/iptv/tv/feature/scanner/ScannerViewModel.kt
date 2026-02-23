@@ -1080,6 +1080,7 @@ class ScannerViewModel @Inject constructor(
         val base = state.toRequest()
         val plan = mutableListOf<SearchPlanStep>()
         val intentKeywords = inferIntentKeywords(base.query, base.keywords)
+        var aiFocusVariant: String? = null
 
         plan += SearchPlanStep(
             label = "Точный поиск",
@@ -1168,6 +1169,7 @@ class ScannerViewModel @Inject constructor(
                 keywords = base.keywords,
                 intentKeywords = intentKeywords
             )
+            aiFocusVariant = aiVariants.firstOrNull()
 
             aiVariants.take(AI_MAX_QUERY_VARIANTS).forEachIndexed { idx, variant ->
                 plan += SearchPlanStep(
@@ -1198,9 +1200,40 @@ class ScannerViewModel @Inject constructor(
             }
         }
 
-        return plan
+        val maxPlanSteps = if (state.aiEnabled) MAX_PLAN_STEPS_AI else MAX_PLAN_STEPS
+        val deduplicated = plan.distinctBy { it.request.key() }
+        val focusVariant = aiFocusVariant?.takeIf { it.isNotBlank() }
+        if (!state.aiEnabled || base.providerScope != ScannerProviderScope.ALL || focusVariant == null) {
+            return deduplicated.take(maxPlanSteps)
+        }
+
+        // Ensure both forced fallback probes survive plan truncation.
+        val mandatoryTail = listOf(
+            SearchPlanStep(
+                label = "AI-fallback GitHub",
+                request = relaxed.copy(
+                    providerScope = ScannerProviderScope.GITHUB,
+                    query = focusVariant
+                )
+            ),
+            SearchPlanStep(
+                label = "AI-fallback GitLab",
+                request = relaxed.copy(
+                    providerScope = ScannerProviderScope.GITLAB,
+                    query = focusVariant
+                )
+            )
+        ).distinctBy { it.request.key() }
+
+        val mandatoryKeys = mandatoryTail.mapTo(hashSetOf()) { it.request.key() }
+        val headLimit = (maxPlanSteps - mandatoryTail.size).coerceAtLeast(0)
+        val head = deduplicated
+            .filterNot { mandatoryKeys.contains(it.request.key()) }
+            .take(headLimit)
+
+        return (head + mandatoryTail)
             .distinctBy { it.request.key() }
-            .take(if (state.aiEnabled) MAX_PLAN_STEPS_AI else MAX_PLAN_STEPS)
+            .take(maxPlanSteps)
     }
 
     private suspend fun executeSearchPlan(
