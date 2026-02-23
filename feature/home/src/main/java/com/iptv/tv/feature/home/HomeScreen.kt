@@ -25,6 +25,7 @@ import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 fun HomeScreen(
     onOpenScanner: (() -> Unit)? = null,
     onOpenImporter: (() -> Unit)? = null,
+    onOpenReadyPlaylists: (() -> Unit)? = null,
     onOpenPlaylists: (() -> Unit)? = null,
     onOpenPlayer: (() -> Unit)? = null,
     onOpenSettings: (() -> Unit)? = null,
@@ -82,6 +83,13 @@ fun HomeScreen(
                     HomeActionCard(
                         title = "Ручной импорт",
                         subtitle = "URL, текст или локальный .m3u/.m3u8",
+                        onClick = action
+                    )
+                }
+                onOpenReadyPlaylists?.let { action ->
+                    HomeActionCard(
+                        title = "Готовые плейлисты",
+                        subtitle = "Тестовые и ознакомительные списки каналов",
                         onClick = action
                     )
                 }

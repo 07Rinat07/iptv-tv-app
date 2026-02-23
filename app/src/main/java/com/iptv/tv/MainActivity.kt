@@ -55,6 +55,7 @@ import com.iptv.tv.feature.editor.EditorScreen
 import com.iptv.tv.feature.favorites.FavoritesScreen
 import com.iptv.tv.feature.history.HistoryScreen
 import com.iptv.tv.feature.home.HomeScreen
+import com.iptv.tv.feature.home.ReadyPlaylistsScreen
 import com.iptv.tv.feature.importer.ImportPrefill
 import com.iptv.tv.feature.importer.ImportPrefillBus
 import com.iptv.tv.feature.importer.ImporterScreen
@@ -187,6 +188,7 @@ private fun AppRoot() {
                             HomeScreen(
                                 onOpenScanner = { navController.navigate(Routes.SCANNER) },
                                 onOpenImporter = { navController.navigate(Routes.IMPORTER) },
+                                onOpenReadyPlaylists = { navController.navigate(Routes.READY_PLAYLISTS) },
                                 onOpenPlaylists = { navController.navigate(Routes.PLAYLISTS) },
                                 onOpenPlayer = { navController.navigate(Routes.PLAYER) },
                                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
@@ -212,6 +214,20 @@ private fun AppRoot() {
                         }
                         composable(Routes.IMPORTER) {
                             ImporterScreen(onPrimaryAction = { navController.navigate(Routes.PLAYLISTS) }, primaryLabel = "Сохранить")
+                        }
+                        composable(Routes.READY_PLAYLISTS) {
+                            ReadyPlaylistsScreen(
+                                onImportPlaylist = { url, name ->
+                                    ImportPrefillBus.push(
+                                        ImportPrefill(
+                                            url = url,
+                                            playlistName = name,
+                                            autoImport = true
+                                        )
+                                    )
+                                    navController.navigate(Routes.IMPORTER)
+                                }
+                            )
                         }
                         composable(Routes.PLAYLISTS) {
                             PlaylistsScreen(
@@ -356,6 +372,7 @@ private fun SectionsMenuDialog(
         Routes.HOME to "Главная",
         Routes.SCANNER to "Сканер",
         Routes.IMPORTER to "Импорт",
+        Routes.READY_PLAYLISTS to "Готовые плейлисты",
         Routes.PLAYLISTS to "Плейлисты",
         Routes.EDITOR to "Редактор",
         Routes.FAVORITES to "Избранное",
@@ -408,6 +425,7 @@ private fun routeTitle(route: String): String = when {
         Routes.HOME -> "Главная"
         Routes.SCANNER -> "Сканер"
         Routes.IMPORTER -> "Импорт"
+        Routes.READY_PLAYLISTS -> "Готовые плейлисты"
         Routes.PLAYLISTS -> "Мои плейлисты"
         Routes.FAVORITES -> "Избранное"
         Routes.HISTORY -> "История"
@@ -432,6 +450,7 @@ object Routes {
     const val HOME = "home"
     const val SCANNER = "scanner"
     const val IMPORTER = "importer"
+    const val READY_PLAYLISTS = "ready_playlists"
     const val PLAYLISTS = "playlists"
     const val EDITOR = "editor"
     const val EDITOR_WITH_ARG = "editor/{playlistId}"

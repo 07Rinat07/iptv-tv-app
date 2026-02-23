@@ -1,6 +1,7 @@
 package com.iptv.tv.feature.player
 
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,7 +17,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Card
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -27,14 +30,22 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -65,8 +76,12 @@ import java.util.Date
 import java.util.Locale
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 private const val CHANNEL_QUICK_PANEL_LIMIT = 500
+private const val QUICK_SCROLL_STEP = 8
+private const val QUICK_PAGE_STEP = 24
 
 @Composable
 @UnstableApi
@@ -719,6 +734,7 @@ private fun FullscreenInternalPlayerOverlay(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChannelQuickPanel(
     modifier: Modifier = Modifier,
@@ -726,23 +742,94 @@ private fun ChannelQuickPanel(
     selectedChannelId: Long?,
     onSelect: (Long) -> Unit
 ) {
-    Card(modifier = modifier.tvFocusOutline()) {
+    val limited = channels.take(CHANNEL_QUICK_PANEL_LIMIT)
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun scrollQuick(delta: Int) {
+        if (limited.isEmpty()) return
+        val current = listState.firstVisibleItemIndex
+        val last = (limited.lastIndex).coerceAtLeast(0)
+        val target = wrappedIndex(current + delta, last)
+        scope.launch {
+            listState.animateScrollToItem(target)
+        }
+    }
+
+    fun scrollToStart() {
+        if (limited.isEmpty()) return
+        scope.launch { listState.animateScrollToItem(0) }
+    }
+
+    fun scrollToEnd() {
+        if (limited.isEmpty()) return
+        scope.launch { listState.animateScrollToItem(limited.lastIndex.coerceAtLeast(0)) }
+    }
+
+    LaunchedEffect(selectedChannelId, limited) {
+        val index = limited.indexOfFirst { it.id == selectedChannelId }
+        if (index >= 0) {
+            listState.scrollToItem(index)
+        }
+    }
+
+    Card(
+        modifier = modifier
+            .tvFocusOutline()
+            .onPreviewKeyEvent { event ->
+                handleQuickListKeyEvent(
+                    event = event,
+                    listState = listState,
+                    scope = scope,
+                    canScroll = limited.isNotEmpty()
+                )
+            }
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(8.dp),
+                .padding(8.dp)
+                .focusGroup(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text("Список каналов", style = MaterialTheme.typography.titleSmall)
-            val limited = channels.take(CHANNEL_QUICK_PANEL_LIMIT)
             Text(
                 "Прокрутка + OK: выбрать и сразу играть. Показано: ${limited.size}${if (channels.size > limited.size) " из ${channels.size}" else ""}",
                 style = MaterialTheme.typography.bodySmall
             )
+            Text(
+                "Пульт: кнопки ниже (▲/▼/Pg/края). За краем списка идет переход к началу/концу.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = ::scrollToStart, enabled = limited.isNotEmpty()) {
+                    Text("В начало")
+                }
+                OutlinedButton(onClick = { scrollQuick(-QUICK_PAGE_STEP) }, enabled = limited.isNotEmpty()) {
+                    Text("Pg -")
+                }
+                OutlinedButton(onClick = { scrollQuick(-QUICK_SCROLL_STEP) }, enabled = limited.isNotEmpty()) {
+                    Text("▲")
+                }
+                OutlinedButton(onClick = { scrollQuick(QUICK_SCROLL_STEP) }, enabled = limited.isNotEmpty()) {
+                    Text("▼")
+                }
+                OutlinedButton(onClick = { scrollQuick(QUICK_PAGE_STEP) }, enabled = limited.isNotEmpty()) {
+                    Text("Pg +")
+                }
+                OutlinedButton(onClick = ::scrollToEnd, enabled = limited.isNotEmpty()) {
+                    Text("В конец")
+                }
+            }
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 220.dp, max = 420.dp),
+                state = listState,
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 items(limited, key = { it.id }) { channel ->
@@ -770,6 +857,39 @@ private fun ChannelQuickPanel(
                 }
             }
         }
+    }
+}
+
+private fun wrappedIndex(rawIndex: Int, lastIndex: Int): Int {
+    if (lastIndex <= 0) return 0
+    return when {
+        rawIndex < 0 -> lastIndex
+        rawIndex > lastIndex -> 0
+        else -> rawIndex
+    }
+}
+
+private fun handleQuickListKeyEvent(
+    event: KeyEvent,
+    listState: LazyListState,
+    scope: CoroutineScope,
+    canScroll: Boolean
+): Boolean {
+    if (!canScroll || event.type != KeyEventType.KeyDown) return false
+    val lastIndex = (listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+    if (lastIndex == 0) return false
+    val current = listState.firstVisibleItemIndex
+    fun moveTo(index: Int): Boolean {
+        val target = wrappedIndex(index, lastIndex)
+        scope.launch { listState.animateScrollToItem(target) }
+        return true
+    }
+    return when (event.key) {
+        Key.PageUp -> moveTo(current - QUICK_PAGE_STEP)
+        Key.PageDown -> moveTo(current + QUICK_PAGE_STEP)
+        Key.MoveHome -> moveTo(0)
+        Key.MoveEnd -> moveTo(lastIndex)
+        else -> false
     }
 }
 

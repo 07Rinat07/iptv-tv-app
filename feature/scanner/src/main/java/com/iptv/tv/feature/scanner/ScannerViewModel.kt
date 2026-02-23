@@ -1148,6 +1148,18 @@ class ScannerViewModel @Inject constructor(
             )
         }
 
+        if (base.searchMode == ScannerSearchMode.AUTO) {
+            val webQuery = if (broadQuery.isNotBlank()) broadQuery else base.query
+            plan += SearchPlanStep(
+                label = "Web fallback (Search Engine)",
+                request = relaxed.copy(
+                    searchMode = ScannerSearchMode.SEARCH_ENGINE,
+                    providerScope = ScannerProviderScope.ALL,
+                    query = webQuery
+                )
+            )
+        }
+
         if (state.aiEnabled) {
             val learnedVariants = buildLearnedQueryVariants(
                 baseQuery = base.query,
@@ -1854,6 +1866,16 @@ class ScannerViewModel @Inject constructor(
                             return@forEachIndexed
                         }
 
+                        if (isLowQualitySearchCandidate(candidate)) {
+                            groupResults[idx] = ImportItemResult(
+                                candidate = candidate,
+                                sourceUrl = sourceUrl,
+                                status = ImportItemStatus.SKIPPED,
+                                reason = "low_quality"
+                            )
+                            return@forEachIndexed
+                        }
+
                         val normalizedSource = normalizeSource(sourceUrl)
                         if (existingSources.contains(normalizedSource)) {
                             groupResults[idx] = ImportItemResult(
@@ -1867,7 +1889,8 @@ class ScannerViewModel @Inject constructor(
 
                         existingSources += normalizedSource
                         val deferred = async {
-                            val importResult = withTimeoutOrNull(IMPORT_ITEM_TIMEOUT_MS) {
+                            val importTimeoutMs = resolveImportTimeoutMs(candidate)
+                            val importResult = withTimeoutOrNull(importTimeoutMs) {
                                 playlistRepository.importFromUrl(
                                     sourceUrl,
                                     candidate.name.ifBlank { "Imported Playlist" }
@@ -1881,7 +1904,7 @@ class ScannerViewModel @Inject constructor(
                                     status = ImportItemStatus.FAILED,
                                     reason = buildFailureReason(
                                         candidate = candidate,
-                                        reason = "Import timeout ${IMPORT_ITEM_TIMEOUT_MS / 1000}s"
+                                        reason = "Import timeout ${importTimeoutMs / 1000}s"
                                     )
                                 )
                                 is AppResult.Success -> ImportItemResult(
@@ -1930,10 +1953,20 @@ class ScannerViewModel @Inject constructor(
                         }
                         ImportItemStatus.SKIPPED -> {
                             skipped += 1
-                            safeLog(
-                                status = "scanner_import_skip_duplicate",
-                                message = "provider=${item.candidate.provider}, repo=${item.candidate.repository}, path=${item.candidate.path}"
-                            )
+                            when (item.reason) {
+                                "duplicate" -> safeLog(
+                                    status = "scanner_import_skip_duplicate",
+                                    message = "provider=${item.candidate.provider}, repo=${item.candidate.repository}, path=${item.candidate.path}"
+                                )
+                                "low_quality" -> safeLog(
+                                    status = "scanner_import_skip_low_quality",
+                                    message = "provider=${item.candidate.provider}, repo=${item.candidate.repository}, path=${item.candidate.path}"
+                                )
+                                else -> safeLog(
+                                    status = "scanner_import_skip",
+                                    message = "provider=${item.candidate.provider}, repo=${item.candidate.repository}, path=${item.candidate.path}, reason=${item.reason ?: "-"}"
+                                )
+                            }
                         }
                         ImportItemStatus.FAILED -> {
                             failed += 1
@@ -1950,7 +1983,7 @@ class ScannerViewModel @Inject constructor(
                     }
 
                     val currentText = when (item.status) {
-                        ImportItemStatus.SKIPPED -> "${item.candidate.name.ifBlank { item.candidate.path }} | duplicate"
+                        ImportItemStatus.SKIPPED -> "${item.candidate.name.ifBlank { item.candidate.path }} | ${item.reason ?: "skip"}"
                         else -> "${item.candidate.name.ifBlank { item.candidate.path }} | ${item.sourceUrl.take(140)}"
                     }
                     onProgress?.invoke(
@@ -2416,7 +2449,7 @@ class ScannerViewModel @Inject constructor(
         candidates: List<PlaylistCandidate>,
         stage: String
     ): CandidateRefineOutcome {
-        if (candidates.isEmpty()) return CandidateRefineOutcome(emptyList(), 0, 0, 0)
+        if (candidates.isEmpty()) return CandidateRefineOutcome(emptyList(), 0, 0, 0, 0)
 
         val now = System.currentTimeMillis()
         val localDays = state.updatedDaysBack.toLongOrNull()?.coerceAtLeast(0L)
@@ -2441,9 +2474,15 @@ class ScannerViewModel @Inject constructor(
             if (!keep) staleDropped += 1
             keep
         }
-        val unknownUpdated = filtered.count { it.updatedEpochMs == null }
+        var lowQualityDropped = 0
+        val qualityFiltered = filtered.filter { item ->
+            val keep = !isLowQualitySearchCandidate(item.candidate)
+            if (!keep) lowQualityDropped += 1
+            keep
+        }
+        val unknownUpdated = qualityFiltered.count { it.updatedEpochMs == null }
 
-        val sorted = filtered.sortedWith(
+        val sorted = qualityFiltered.sortedWith(
             compareByDescending<CandidateWithEpoch> { it.updatedEpochMs != null }
                 .thenByDescending { it.updatedEpochMs ?: 0L }
                 .thenByDescending { it.candidate.sizeBytes ?: -1L }
@@ -2454,14 +2493,53 @@ class ScannerViewModel @Inject constructor(
 
         safeLog(
             status = "scanner_result_refined",
-            message = "attempt=$attemptId, stage=$stage, in=${candidates.size}, out=${sorted.size}, invalidUrlDropped=$invalidUrlDropped, staleDropped=$staleDropped, unknownUpdated=$unknownUpdated, daysBack=${state.updatedDaysBack.ifBlank { "-" }}"
+            message = "attempt=$attemptId, stage=$stage, in=${candidates.size}, out=${sorted.size}, invalidUrlDropped=$invalidUrlDropped, staleDropped=$staleDropped, lowQualityDropped=$lowQualityDropped, unknownUpdated=$unknownUpdated, daysBack=${state.updatedDaysBack.ifBlank { "-" }}"
         )
         return CandidateRefineOutcome(
             candidates = sorted.map { it.candidate },
             invalidUrlDropped = invalidUrlDropped,
             staleDropped = staleDropped,
-            unknownUpdated = unknownUpdated
+            unknownUpdated = unknownUpdated,
+            lowQualityDropped = lowQualityDropped
         )
+    }
+
+    private fun isLowQualitySearchCandidate(candidate: PlaylistCandidate): Boolean {
+        val path = candidate.path.trim().lowercase()
+        val name = candidate.name.trim().lowercase()
+        if (path.isBlank()) return false
+
+        if (LOW_QUALITY_PATH_REGEX.containsMatchIn(path)) return true
+        if (name in LOW_QUALITY_FILE_NAMES) return true
+
+        val fileName = path.substringAfterLast('/')
+        val streamFolder = path.contains("/streams/") || path.contains("/stream/")
+        if (streamFolder && path.endsWith(".m3u8")) {
+            val hasKeepHints = QUALITY_PATH_KEEP_HINTS.any { hint -> path.contains(hint) }
+            if (!hasKeepHints && LOW_QUALITY_STREAM_FILE_REGEX.matches(fileName)) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private fun resolveImportTimeoutMs(candidate: PlaylistCandidate): Long {
+        val path = candidate.path.trim().lowercase()
+        if (path.endsWith(".m3u")) {
+            return if (HEAVY_PLAYLIST_HINTS.any { hint -> path.contains(hint) }) {
+                IMPORT_ITEM_TIMEOUT_M3U_HEAVY_MS
+            } else {
+                IMPORT_ITEM_TIMEOUT_M3U_MS
+            }
+        }
+        if (path.endsWith(".m3u8")) {
+            val isStreamFolder = path.contains("/streams/") || path.contains("/stream/")
+            if (!isStreamFolder && HEAVY_PLAYLIST_HINTS.any { hint -> path.contains(hint) }) {
+                return IMPORT_ITEM_TIMEOUT_M3U_MS
+            }
+        }
+        return IMPORT_ITEM_TIMEOUT_MS
     }
 
     private fun buildNormalizedQuery(raw: String): String {
@@ -2554,12 +2632,13 @@ class ScannerViewModel @Inject constructor(
         intentKeywords: List<String>
     ): List<String> {
         val normalizedBase = buildNormalizedQuery(baseQuery).lowercase()
-        val baseTokens = normalizedBase
-            .split(Regex("[^\\p{L}\\p{N}]+"))
-            .map { it.trim() }
+        val baseTokensAll = extractQueryTokens(normalizedBase)
+        val baseTokensInformative = baseTokensAll.filterNot { it in NON_INFORMATIVE_QUERY_TOKENS }.toSet()
+        val intentSetInformative = intentKeywords
+            .map { it.trim().lowercase() }
             .filter { it.length >= 2 }
+            .filterNot { it in NON_INFORMATIVE_QUERY_TOKENS }
             .toSet()
-        val intentSet = intentKeywords.map { it.lowercase() }.toSet()
         val normalizedPreset = presetId?.trim()?.ifBlank { null }
 
         return learnedQueryTemplates
@@ -2569,17 +2648,29 @@ class ScannerViewModel @Inject constructor(
                 if (normalizedCandidate.isBlank()) return@mapNotNull null
                 if (normalizedCandidate.lowercase() == normalizedBase) return@mapNotNull null
 
-                val candidateTokens = normalizedCandidate.lowercase()
-                    .split(Regex("[^\\p{L}\\p{N}]+"))
-                    .map { it.trim() }
-                    .filter { it.length >= 2 }
-                    .toSet()
+                val candidateTokensAll = extractQueryTokens(normalizedCandidate)
+                val candidateTokensInformative =
+                    candidateTokensAll.filterNot { it in NON_INFORMATIVE_QUERY_TOKENS }.toSet()
+                val overlapAll = candidateTokensAll.intersect(baseTokensAll).size
+                val overlapInformative = candidateTokensInformative.intersect(baseTokensInformative).size
+                val intentOverlap = candidateTokensInformative.intersect(intentSetInformative).size
 
-                val overlap = candidateTokens.intersect(baseTokens).size
-                val intentOverlap = candidateTokens.intersect(intentSet).size
+                val hasBaseInformative = baseTokensInformative.isNotEmpty()
+                if (hasBaseInformative) {
+                    val semanticallyRelated = overlapInformative > 0 || intentOverlap > 0
+                    val allowPresetFallback =
+                        normalizedPreset != null && entry.presetId == normalizedPreset && entry.hits >= 3
+                    if (!semanticallyRelated && !allowPresetFallback) return@mapNotNull null
+                }
+
                 val presetBoost = if (normalizedPreset != null && entry.presetId == normalizedPreset) 4 else 0
                 val recencyBoost = (entry.lastSuccessAt / 86_400_000L).coerceAtLeast(0L).toInt() % 3
-                val score = (entry.hits * 3) + (overlap * 4) + (intentOverlap * 3) + presetBoost + recencyBoost
+                val overlapScore = if (hasBaseInformative) {
+                    overlapInformative * 6
+                } else {
+                    overlapAll * 3
+                }
+                val score = (entry.hits * 3) + overlapScore + (intentOverlap * 4) + presetBoost + recencyBoost
                 if (score <= 0) return@mapNotNull null
                 LearnedQueryCandidate(query = normalizedCandidate, score = score, hits = entry.hits, lastSuccessAt = entry.lastSuccessAt)
             }
@@ -2592,6 +2683,14 @@ class ScannerViewModel @Inject constructor(
             .distinctBy { it.lowercase() }
             .take(MAX_LEARNED_QUERY_VARIANTS)
             .toList()
+    }
+
+    private fun extractQueryTokens(raw: String): Set<String> {
+        return raw.lowercase()
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .map { it.trim() }
+            .filter { it.length >= 2 }
+            .toSet()
     }
 
     private fun broadFallbackQuery(query: String): String {
@@ -2636,7 +2735,9 @@ class ScannerViewModel @Inject constructor(
 
     private fun isWorldIntent(lowered: String): Boolean {
         return lowered.contains("мир") || lowered.contains("world") ||
-            lowered.contains("global") || lowered.contains("international")
+            lowered.contains("global") || lowered.contains("international") ||
+            lowered.contains("turkey") || lowered.contains("turkiye") || lowered.contains("turk") ||
+            lowered.contains("турц")
     }
 
     private fun ScannerSearchRequest.key(): String {
@@ -2704,7 +2805,8 @@ class ScannerViewModel @Inject constructor(
         val candidates: List<PlaylistCandidate>,
         val invalidUrlDropped: Int,
         val staleDropped: Int,
-        val unknownUpdated: Int
+        val unknownUpdated: Int,
+        val lowQualityDropped: Int
     )
 
     private data class ImportProgress(
@@ -2764,12 +2866,42 @@ class ScannerViewModel @Inject constructor(
         const val IMPORT_PARALLELISM = 4
         const val IMPORT_BATCH_SIZE = 12
         const val IMPORT_ITEM_TIMEOUT_MS = 25_000L
+        const val IMPORT_ITEM_TIMEOUT_M3U_MS = 45_000L
+        const val IMPORT_ITEM_TIMEOUT_M3U_HEAVY_MS = 60_000L
         const val PROXY_HTTP_HOST = "http.proxyHost"
         const val PROXY_HTTP_PORT = "http.proxyPort"
         const val PROXY_HTTPS_HOST = "https.proxyHost"
         const val PROXY_HTTPS_PORT = "https.proxyPort"
         const val PROXY_SCANNER_USER = "myscaner.proxy.user"
         const val PROXY_SCANNER_PASS = "myscaner.proxy.pass"
+        val NON_INFORMATIVE_QUERY_TOKENS = setOf(
+            "iptv", "playlist", "playlists", "m3u", "m3u8",
+            "tv", "tvs", "live", "stream", "streams", "vod",
+            "channel", "channels", "list", "lists",
+            "канал", "каналы", "список", "списки", "плейлист", "тв",
+            "github", "gitlab", "bitbucket", "raw"
+        )
+        val LOW_QUALITY_PATH_REGEX = Regex(
+            "(^|/)(test|tests|sample|samples|fixture|fixtures|e2e|demo|mock)(/|\\.|$)",
+            setOf(RegexOption.IGNORE_CASE)
+        )
+        val LOW_QUALITY_STREAM_FILE_REGEX = Regex(
+            "^[a-z0-9]{2,6}([_-]?[a-z0-9]{1,4})?\\.m3u8$",
+            setOf(RegexOption.IGNORE_CASE)
+        )
+        val LOW_QUALITY_FILE_NAMES = setOf(
+            "test.m3u", "test.m3u8",
+            "sample.m3u", "sample.m3u8",
+            "example.m3u", "example.m3u8",
+            "fixture.m3u", "fixture.m3u8"
+        )
+        val QUALITY_PATH_KEEP_HINTS = setOf(
+            "playlist", "channels", "channel-list", "index", "country", "world", "iptv", "tv"
+        )
+        val HEAVY_PLAYLIST_HINTS = setOf(
+            "playlist", "channels", "channel-list", "index", "country", "world", "global",
+            "free", "freetv", "merged", "update", "all", "iptv", "tv"
+        )
     }
 }
 
@@ -2863,6 +2995,46 @@ private fun scannerPresets(): List<ScannerPreset> {
             keywords = "world, global, international, countries, tv channels, m3u, m3u8",
             provider = ScannerProviderScope.ALL,
             description = "Поиск международных и мульти-страночных IPTV списков."
+        ),
+        ScannerPreset(
+            id = "turkey",
+            title = "Turkey / Turkce",
+            query = "turkey turkiye iptv",
+            keywords = "turkey, turkiye, turkish, turk, turkce, tr, турция, турецкие каналы, kanal, canli tv, m3u, m3u8",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск турецких IPTV-списков и каналов (TR)."
+        ),
+        ScannerPreset(
+            id = "india",
+            title = "India / South Asia",
+            query = "india iptv channels",
+            keywords = "india, indian, hindi, tamil, telugu, bangla, pakistan, cricket, desi tv, m3u, m3u8",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск индийских и южноазиатских IPTV-списков."
+        ),
+        ScannerPreset(
+            id = "mena",
+            title = "Arabic / MENA",
+            query = "arabic iptv m3u",
+            keywords = "arabic, arab, mena, middle east, الخليج, عربي, قنوات, m3u, m3u8, islamic channels",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск арабских/ближневосточных IPTV-плейлистов."
+        ),
+        ScannerPreset(
+            id = "latam",
+            title = "LATAM / Espanol",
+            query = "latam iptv channels",
+            keywords = "latam, latino, spanish, espanol, mexico, argentina, chile, deportes, noticias, m3u, m3u8",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск испаноязычных и латиноамериканских списков."
+        ),
+        ScannerPreset(
+            id = "europe_local",
+            title = "Europe Local",
+            query = "europe country iptv m3u",
+            keywords = "europe, france, germany, italy, poland, balkans, local tv, country channels, m3u, m3u8",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск локальных европейских списков по странам."
         ),
         ScannerPreset(
             id = "sport",

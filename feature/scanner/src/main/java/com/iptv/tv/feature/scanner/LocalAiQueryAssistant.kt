@@ -182,6 +182,7 @@ internal class LocalAiQueryAssistant {
 
     private enum class Intent {
         RUSSIAN,
+        TURKEY,
         WORLD,
         SPORT,
         MOVIE,
@@ -197,6 +198,10 @@ internal class LocalAiQueryAssistant {
         const val MAX_KEYWORDS = 20
 
         val russianMarkers = setOf("рус", "росс", "russian", "russia", "снг")
+        val turkeyMarkers = setOf(
+            "turkey", "turkiye", "turkish", "turk", "turkce", "türkiye", "türk",
+            "turcei", "turkei", "турция", "турец", "турк"
+        )
         val worldMarkers = setOf("world", "global", "international", "мир", "стран")
         val sportMarkers = setOf(
             "sport", "sports", "football", "soccer", "hockey", "basketball", "tennis", "mma", "ufc",
@@ -215,6 +220,7 @@ internal class LocalAiQueryAssistant {
 
         val intentKeywords = mapOf(
             Intent.RUSSIAN to listOf("russian", "russia", "ru", "рус", "россия", "каналы", "список"),
+            Intent.TURKEY to listOf("turkey", "turkiye", "turkish", "turk", "turkce", "tr", "каналы"),
             Intent.WORLD to listOf("world", "global", "international", "countries", "tv channels"),
             Intent.SPORT to listOf("sport", "football", "soccer", "hockey", "basketball", "теннис"),
             Intent.MOVIE to listOf(
@@ -234,6 +240,12 @@ internal class LocalAiQueryAssistant {
                 "russia iptv playlist m3u",
                 "русские каналы iptv m3u",
                 "список каналов iptv россия m3u8"
+            ),
+            Intent.TURKEY to listOf(
+                "turkey turkiye iptv playlist m3u8",
+                "turkish tv channels iptv m3u",
+                "turkce canli tv iptv m3u8",
+                "turkiye kanal listesi iptv m3u"
             ),
             Intent.WORLD to listOf(
                 "world tv channels iptv m3u8",
@@ -283,6 +295,11 @@ internal class LocalAiQueryAssistant {
                 "русские iptv m3u gitlab",
                 "список русских каналов iptv m3u github"
             ),
+            Intent.TURKEY to listOf(
+                "turkey iptv m3u github",
+                "turkiye iptv m3u gitlab",
+                "turkish channels iptv m3u8 github"
+            ),
             Intent.WORLD to listOf(
                 "world iptv m3u github",
                 "global iptv m3u gitlab",
@@ -327,6 +344,7 @@ internal class LocalAiQueryAssistant {
         val lowered = text.lowercase()
         return buildSet {
             if (containsAny(lowered, russianMarkers)) add(Intent.RUSSIAN)
+            if (containsAny(lowered, turkeyMarkers)) add(Intent.TURKEY)
             if (containsAny(lowered, worldMarkers)) add(Intent.WORLD)
             if (containsAny(lowered, sportMarkers)) add(Intent.SPORT)
             if (containsAny(lowered, movieMarkers)) add(Intent.MOVIE)

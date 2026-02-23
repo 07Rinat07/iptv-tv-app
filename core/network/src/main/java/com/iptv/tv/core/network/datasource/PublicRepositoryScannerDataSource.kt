@@ -116,7 +116,20 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             WebFallbackResult(emptyList(), null)
         }
 
-        val finalResults = (filtered + webFallback.items)
+        val shouldUseSeeds =
+            normalized.providerScope == ScannerProviderScope.ALL &&
+                normalized.searchMode != ScannerSearchMode.DIRECT_API &&
+                (filtered.isNotEmpty() || webFallback.items.isNotEmpty())
+        val seedCandidates = if (shouldUseSeeds && (filtered.size + webFallback.items.size) < normalized.limit) {
+            buildKnownSeedCandidates(
+                request = normalized,
+                existing = filtered + webFallback.items
+            )
+        } else {
+            emptyList()
+        }
+
+        val finalResults = (filtered + webFallback.items + seedCandidates)
             .distinctBy { it.id }
             .filter { matchesFilters(it, normalized) }
             .sortedWith(
@@ -537,6 +550,53 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         )
     }
 
+    private suspend fun buildKnownSeedCandidates(
+        request: ScannerSearchRequest,
+        existing: List<PlaylistCandidate>
+    ): List<PlaylistCandidate> {
+        val queryTokens = extractQueryTokens(request.query)
+        val keywordTokens = request.keywords
+            .flatMap { extractQueryTokens(it).toList() }
+            .toSet()
+        val tokens = (queryTokens + keywordTokens)
+        val hasIptvIntent = tokens.any { it in IPTV_INTENT_TOKENS }
+        if (!hasIptvIntent) return emptyList()
+
+        val existingIds = existing.mapTo(mutableSetOf()) { it.id }
+        val existingUrls = existing.mapTo(mutableSetOf()) { it.downloadUrl.lowercase() }
+
+        val selected = KNOWN_PLAYLIST_SEEDS
+            .asSequence()
+            .filter { it.matchesScope(request.providerScope) }
+            .filter { seed ->
+                tokens.any { token -> token in seed.tags } ||
+                    tokens.contains("iptv") ||
+                    tokens.contains("m3u") ||
+                    tokens.contains("m3u8") ||
+                    tokens.contains("playlist") ||
+                    tokens.contains("tv")
+            }
+            .map { it.toCandidate() }
+            .filterNot { candidate ->
+                candidate.id in existingIds || candidate.downloadUrl.lowercase() in existingUrls
+            }
+            .take(request.limit)
+            .toList()
+
+        if (selected.isEmpty()) return emptyList()
+
+        return coroutineScope {
+            selected
+                .map { candidate ->
+                    async {
+                        if (isLikelyPlaylistUrl(candidate.downloadUrl)) candidate else null
+                    }
+                }
+                .awaitAll()
+                .filterNotNull()
+        }
+    }
+
     private fun buildWebSearchQueries(request: ScannerSearchRequest): List<String> {
         val base = request.query.trim().ifBlank { return emptyList() }
         val keywordTail = request.keywords.take(3).joinToString(" ")
@@ -765,7 +825,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                 val repo = segments[1]
                 val ref = segments[2]
                 path = segments.drop(3).joinToString("/")
-                if (!isPlaylistPath(path)) return null
+                if (!isPlaylistPath(path) && !canProbeExtensionlessPlaylist(host = host, path = path)) return null
                 repository = "$owner/$repo"
                 rawUrl = "https://raw.githubusercontent.com/$repository/$ref/${encodePathForRaw(path)}"
             }
@@ -774,7 +834,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                 val repo = segments[1]
                 val ref = segments[3]
                 path = segments.drop(4).joinToString("/")
-                if (!isPlaylistPath(path)) return null
+                if (!isPlaylistPath(path) && !canProbeExtensionlessPlaylist(host = host, path = path)) return null
                 repository = "$owner/$repo"
                 rawUrl = "https://raw.githubusercontent.com/$repository/$ref/${encodePathForRaw(path)}"
             }
@@ -860,9 +920,9 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         val path = parsed.pathSegments
             .filter { it.isNotBlank() }
             .joinToString("/")
-        if (!isPlaylistPath(path)) return null
-
         val host = parsed.host.lowercase()
+        if (!isPlaylistPath(path) && !canProbeExtensionlessPlaylist(host = host, path = path)) return null
+
         val name = path.substringAfterLast('/').ifBlank { host }
         val normalizedLink = parsed.newBuilder().query(parsed.query).build().toString()
         return PlaylistCandidate(
@@ -878,8 +938,10 @@ class PublicRepositoryScannerDataSource @Inject constructor(
     }
 
     private suspend fun isLikelyPlaylistUrl(url: String): Boolean {
-        val playlistPath = url.toHttpUrlOrNull()?.encodedPath ?: url
-        if (!isPlaylistPath(playlistPath)) {
+        val parsed = url.toHttpUrlOrNull()
+        val playlistPath = parsed?.encodedPath ?: url
+        val host = parsed?.host?.lowercase().orEmpty()
+        if (!isPlaylistPath(playlistPath) && !canProbeExtensionlessPlaylist(host = host, path = playlistPath)) {
             return false
         }
 
@@ -895,6 +957,13 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                     if (!response.isSuccessful) return@withTimeout false
                     val payload = response.body?.string().orEmpty()
                     if (payload.isBlank()) return@withTimeout false
+                    val contentType = response.header("Content-Type").orEmpty().lowercase()
+                    if (contentType.contains("application/vnd.apple.mpegurl") ||
+                        contentType.contains("application/x-mpegurl") ||
+                        contentType.contains("audio/mpegurl")
+                    ) {
+                        return@withTimeout true
+                    }
                     val normalized = payload.lowercase()
                     if (normalized.contains("<html")) return@withTimeout false
                     normalized.contains("#extm3u") || normalized.contains("#extinf")
@@ -1130,6 +1199,25 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         return path.endsWith(".m3u", ignoreCase = true) || path.endsWith(".m3u8", ignoreCase = true)
     }
 
+    private fun canProbeExtensionlessPlaylist(host: String, path: String): Boolean {
+        val normalizedPath = path.trim().trim('/')
+        if (normalizedPath.isBlank()) return false
+        if (isPlaylistPath(normalizedPath)) return true
+
+        val normalizedHost = host.lowercase()
+        return normalizedHost in EXTENSIONLESS_PLAYLIST_HOSTS ||
+            EXTENSIONLESS_PLAYLIST_HOST_SUFFIXES.any { normalizedHost.endsWith(it) }
+    }
+
+    private fun extractQueryTokens(raw: String): Set<String> {
+        return raw
+            .lowercase()
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .map { it.trim() }
+            .filter { it.length >= 2 }
+            .toSet()
+    }
+
     private fun encodePathForRaw(path: String): String {
         return path
             .split('/')
@@ -1279,6 +1367,43 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         BING(id = "bing", label = "Bing")
     }
 
+    private data class KnownPlaylistSeed(
+        val name: String,
+        val url: String,
+        val provider: String,
+        val repository: String,
+        val path: String,
+        val tags: Set<String>
+    ) {
+        fun matchesScope(scope: ScannerProviderScope): Boolean {
+            return when (scope) {
+                ScannerProviderScope.ALL -> true
+                ScannerProviderScope.GITHUB -> provider == PROVIDER_GITHUB
+                ScannerProviderScope.GITLAB -> provider == PROVIDER_GITLAB
+                ScannerProviderScope.BITBUCKET -> provider == PROVIDER_BITBUCKET
+            }
+        }
+
+        fun toCandidate(): PlaylistCandidate {
+            val normalizedSeedKey = url
+                .lowercase()
+                .replace(Regex("[^a-z0-9]+"), "_")
+                .trim('_')
+                .take(120)
+                .ifBlank { url.hashCode().toString() }
+            return PlaylistCandidate(
+                id = "seed:$normalizedSeedKey",
+                provider = provider,
+                repository = repository,
+                path = path,
+                name = name,
+                downloadUrl = url,
+                updatedAt = "",
+                sizeBytes = null
+            )
+        }
+    }
+
     private companion object {
         const val PROVIDER_GITHUB = "github"
         const val PROVIDER_GITLAB = "gitlab"
@@ -1315,6 +1440,63 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         const val WEB_PROBE_TIMEOUT_MS = 4_000L
 
         val HTML_LINK_REGEX = Regex("href=[\"']([^\"'#<>]+)[\"']", RegexOption.IGNORE_CASE)
+
+        val IPTV_INTENT_TOKENS = setOf(
+            "iptv", "m3u", "m3u8", "playlist", "playlists", "tv", "каналы", "список"
+        )
+
+        val EXTENSIONLESS_PLAYLIST_HOSTS = setOf(
+            "raw.githubusercontent.com",
+            "gist.githubusercontent.com",
+            "github.com"
+        )
+
+        val EXTENSIONLESS_PLAYLIST_HOST_SUFFIXES = setOf(
+            ".github.io"
+        )
+
+        val KNOWN_PLAYLIST_SEEDS = listOf(
+            KnownPlaylistSeed(
+                name = "Dimonovich TV",
+                url = "https://raw.githubusercontent.com/Dimonovich/TV/Dimonovich/FREE/TV",
+                provider = PROVIDER_GITHUB,
+                repository = "Dimonovich/TV",
+                path = "FREE/TV",
+                tags = setOf("iptv", "tv", "ru", "russian", "россия", "рус", "каналы")
+            ),
+            KnownPlaylistSeed(
+                name = "Voxlist",
+                url = "https://raw.githubusercontent.com/Voxlist/voxlist/refs/heads/main/voxlist.m3u",
+                provider = PROVIDER_GITHUB,
+                repository = "Voxlist/voxlist",
+                path = "voxlist.m3u",
+                tags = setOf("iptv", "voxlist", "tv", "ru", "world", "каналы")
+            ),
+            KnownPlaylistSeed(
+                name = "smolnp IPTVru",
+                url = "https://smolnp.github.io/IPTVru//IPTVstable.m3u8",
+                provider = PROVIDER_WEB,
+                repository = "smolnp.github.io",
+                path = "IPTVru/IPTVstable.m3u8",
+                tags = setOf("iptv", "tv", "ru", "russian", "каналы")
+            ),
+            KnownPlaylistSeed(
+                name = "iptv-org Countries",
+                url = "https://iptv-org.github.io/iptv/index.country.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv-org.github.io",
+                path = "iptv/index.country.m3u",
+                tags = setOf("iptv", "world", "countries", "global", "каналы")
+            ),
+            KnownPlaylistSeed(
+                name = "naggdd RU",
+                url = "https://raw.githubusercontent.com/naggdd/iptv/main/ru.m3u",
+                provider = PROVIDER_GITHUB,
+                repository = "naggdd/iptv",
+                path = "main/ru.m3u",
+                tags = setOf("iptv", "ru", "russian", "россия", "каналы")
+            )
+        )
     }
 
     private fun isRetriable(code: Int): Boolean {
