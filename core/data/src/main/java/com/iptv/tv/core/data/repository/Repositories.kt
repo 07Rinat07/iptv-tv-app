@@ -67,7 +67,9 @@ import java.io.IOException
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.GregorianCalendar
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -633,9 +635,13 @@ class PlaylistRepositoryImpl @Inject constructor(
         val second = matcher.groupValues[6].toIntOrNull() ?: 0
         val zoneRaw = matcher.groupValues.getOrNull(7).orEmpty().trim()
 
-        val utcMs = java.time.LocalDateTime.of(year, month, day, hour, minute, second)
-            .toInstant(java.time.ZoneOffset.UTC)
-            .toEpochMilli()
+        val utcMs = runCatching {
+            GregorianCalendar(TimeZone.getTimeZone("UTC")).apply {
+                isLenient = false
+                clear()
+                set(year, month - 1, day, hour, minute, second)
+            }.timeInMillis
+        }.getOrNull() ?: return null
 
         if (zoneRaw.isBlank()) return utcMs
 

@@ -7,7 +7,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.heightIn
@@ -47,6 +46,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.media3.common.util.UnstableApi
 import com.iptv.tv.core.designsystem.theme.IptvTheme
 import com.iptv.tv.feature.editor.EDITOR_PLAYLIST_ID_ARG
 import com.iptv.tv.feature.diagnostics.DiagnosticsScreen
@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+@androidx.annotation.OptIn(UnstableApi::class)
 private fun AppRoot() {
     val navController = rememberNavController()
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route ?: Routes.HOME
@@ -164,7 +165,7 @@ private fun AppRoot() {
                 }
             }
         ) { paddingValues ->
-            BoxWithConstraints(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
