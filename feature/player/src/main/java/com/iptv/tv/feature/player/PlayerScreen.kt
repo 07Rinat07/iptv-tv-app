@@ -66,6 +66,8 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import com.iptv.tv.core.utils.FileLogger
+import android.content.Context
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.PlayerType
@@ -76,6 +78,7 @@ import java.util.Date
 import java.util.Locale
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -153,98 +156,94 @@ fun PlayerScreen(
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-        item {
-            Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
-            Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                "Управление: пульт (стрелки + OK + BACK), мышь (двойной клик по видео = развернуть/свернуть).",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                "Счетчики: плейлистов=${state.playlists.size} | " +
-                    "каналов в текущем=${state.channels.size} | " +
-                    "по фильтру=${filteredChannels.size} | избранных=${state.favoriteChannelIds.size}"
-            )
-            Text(
-                "Health: рабочих=${healthStats.first} | unknown=${healthStats.second} | unavailable=${healthStats.third}",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text("Выбранный поток: ${state.selectedStreamKind}", style = MaterialTheme.typography.bodySmall)
-            Text(state.epgStatus, style = MaterialTheme.typography.bodySmall)
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(onClick = { showActions = !showActions }) {
-                    Text(if (showActions) "Скрыть действия" else "Показать действия")
-                }
-                OutlinedButton(onClick = { showStreamTools = !showStreamTools }) {
-                    Text(if (showStreamTools) "Скрыть тест потока" else "Показать тест потока")
-                }
-                OutlinedButton(onClick = { showTechnicalInfo = !showTechnicalInfo }) {
-                    Text(if (showTechnicalInfo) "Скрыть тех.инфо" else "Показать тех.инфо")
-                }
-                OutlinedButton(onClick = { showPlaylists = !showPlaylists }) {
-                    Text(if (showPlaylists) "Свернуть плейлисты" else "Развернуть плейлисты")
-                }
-                OutlinedButton(onClick = { showQuickChannels = !showQuickChannels }) {
-                    Text(if (showQuickChannels) "Скрыть быстрый список каналов" else "Показать быстрый список каналов")
-                }
-                OutlinedButton(onClick = { showChannelCatalog = !showChannelCatalog }) {
-                    Text(if (showChannelCatalog) "Свернуть каталог каналов" else "Развернуть каталог каналов")
-                }
-                OutlinedButton(onClick = { showEpgWizard = !showEpgWizard }) {
-                    Text(if (showEpgWizard) "Скрыть EPG мастер" else "Показать EPG мастер")
-                }
-                OutlinedButton(onClick = { viewModel.toggleInternalPlayerSize() }) {
-                    Text(if (state.internalPlayerExpanded) "Выйти из fullscreen" else "Fullscreen плеер")
-                }
-                OutlinedButton(onClick = { hideUnavailable = !hideUnavailable }) {
-                    Text(
-                        if (hideUnavailable) {
-                            "Показывать UNAVAILABLE"
-                        } else {
-                            "Скрывать UNAVAILABLE"
-                        }
-                    )
+            item {
+                Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
+                Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Health: рабочих=${healthStats.first} | unknown=${healthStats.second} | unavailable=${healthStats.third}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text("Выбранный поток: ${state.selectedStreamKind}", style = MaterialTheme.typography.bodySmall)
+                Text(state.epgStatus, style = MaterialTheme.typography.bodySmall)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(onClick = { showActions = !showActions }) {
+                        Text(if (showActions) "Скрыть действия" else "Показать действия")
+                    }
+                    OutlinedButton(onClick = { showStreamTools = !showStreamTools }) {
+                        Text(if (showStreamTools) "Скрыть тест потока" else "Показать тест потока")
+                    }
+                    OutlinedButton(onClick = { showTechnicalInfo = !showTechnicalInfo }) {
+                        Text(if (showTechnicalInfo) "Скрыть тех.инфо" else "Показать тех.инфо")
+                    }
+                    OutlinedButton(onClick = { showPlaylists = !showPlaylists }) {
+                        Text(if (showPlaylists) "Свернуть плейлисты" else "Развернуть плейлисты")
+                    }
+                    OutlinedButton(onClick = { showQuickChannels = !showQuickChannels }) {
+                        Text(if (showQuickChannels) "Скрыть быстрый список каналов" else "Показать быстрый список каналов")
+                    }
+                    OutlinedButton(onClick = { showChannelCatalog = !showChannelCatalog }) {
+                        Text(if (showChannelCatalog) "Свернуть каталог каналов" else "Развернуть каталог каналов")
+                    }
+                    OutlinedButton(onClick = { showEpgWizard = !showEpgWizard }) {
+                        Text(if (showEpgWizard) "Скрыть EPG мастер" else "Показать EPG мастер")
+                    }
+                    OutlinedButton(onClick = { viewModel.toggleInternalPlayerSize() }) {
+                        Text(if (state.internalPlayerExpanded) "Выйти из fullscreen" else "Fullscreen плеер")
+                    }
+                    OutlinedButton(onClick = { hideUnavailable = !hideUnavailable }) {
+                        Text(
+                            if (hideUnavailable) {
+                                "Показывать UNAVAILABLE"
+                            } else {
+                                "Скрывать UNAVAILABLE"
+                            }
+                        )
+                    }
+                    OutlinedButton(onClick = { viewModel.exportLogs(context) }) {
+                        Text("Экспорт логов")
+                    }
                 }
             }
             if (showTechnicalInfo) {
-                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text("Тех.информация", style = MaterialTheme.typography.titleSmall)
-                        Text("Effective player: ${state.effectivePlayer} | default: ${state.defaultPlayer} | override: ${state.channelPlayerOverride ?: "default"}")
-                        Text("Buffer: ${state.bufferProfile} | manual=${state.manualBuffer}")
-                        Text("Engine: connected=${state.engineConnected}, peers=${state.enginePeers}, speed=${state.engineSpeedKbps} kbps")
-                        Text("Engine endpoint: ${state.engineEndpoint} | Tor=${state.torEnabled}")
-                        Text("Engine message: ${state.engineMessage}")
-                        Text("Режим плеера: ${if (state.internalPlayerExpanded) "fullscreen" else "обычный"} | Масштаб: ${state.playerVideoScale}")
-                        Text("Встроенный плеер: двойной клик по видео = fullscreen/обычный режим.")
-                        Text("VLC: сначала запускается прямой fullscreen, затем fallback совместимости.")
-                        val aceDescriptorLabel = state.selectedAceDescriptor?.let { descriptor ->
-                            if (descriptor.length > 110) "${descriptor.take(110)}..." else descriptor
-                        } ?: "не обнаружен"
-                        Text("Ace-дескриптор: $aceDescriptorLabel")
-                        state.channelEpgInfo?.let { epg ->
-                            val nowText = epg.now?.let { "Сейчас: ${it.title}" } ?: "Сейчас: нет данных"
-                            val nextText = epg.next?.let { "Далее: ${it.title}" } ?: "Далее: нет данных"
-                            Text(nowText)
-                            Text(nextText)
-                            Text("EPG source: ${epg.epgSourceUrl ?: "-"}")
-                            epg.upcoming.take(4).forEach { item ->
-                                Text("• ${formatEpgTime(item.startEpochMs)} - ${formatEpgTime(item.endEpochMs)} | ${item.title}")
+                item {
+                    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text("Тех.информация", style = MaterialTheme.typography.titleSmall)
+                            Text("Effective player: ${state.effectivePlayer} | default: ${state.defaultPlayer} | override: ${state.channelPlayerOverride ?: "default"}")
+                            Text("Buffer: ${state.bufferProfile} | manual=${state.manualBuffer}")
+                            Text("Engine: connected=${state.engineConnected}, peers=${state.enginePeers}, speed=${state.engineSpeedKbps} kbps")
+                            Text("Engine endpoint: ${state.engineEndpoint} | Tor=${state.torEnabled}")
+                            Text("Engine message: ${state.engineMessage}")
+                            Text("Режим плеера: ${if (state.internalPlayerExpanded) "fullscreen" else "обычный"} | Масштаб: ${state.playerVideoScale}")
+                            Text("Встроенный плеер: двойной клик по видео = fullscreen/обычный режим.")
+                            Text("VLC: сначала запускается прямой fullscreen, затем fallback совместимости.")
+                            val aceDescriptorLabel = state.selectedAceDescriptor?.let { descriptor ->
+                                if (descriptor.length > 110) "${descriptor.take(110)}..." else descriptor
+                            } ?: "не обнаружен"
+                            Text("Ace-дескриптор: $aceDescriptorLabel")
+                            state.channelEpgInfo?.let { epg ->
+                                val nowText = epg.now?.let { "Сейчас: ${it.title}" } ?: "Сейчас: нет данных"
+                                val nextText = epg.next?.let { "Далее: ${it.title}" } ?: "Далее: нет данных"
+                                Text(nowText)
+                                Text(nextText)
+                                Text("EPG source: ${epg.epgSourceUrl ?: "-"}")
+                                epg.upcoming.take(4).forEach { item ->
+                                    Text("• ${formatEpgTime(item.startEpochMs)} - ${formatEpgTime(item.endEpochMs)} | ${item.title}")
+                                }
                             }
-                        }
-                        state.resolvedStreamUrl?.let { resolved ->
-                            Text("Подготовленный URL: $resolved")
+                            state.resolvedStreamUrl?.let { resolved ->
+                                Text("Подготовленный URL: $resolved")
+                            }
                         }
                     }
                 }
             }
-        }
 
         if (showActions) {
             item {
@@ -933,7 +932,7 @@ private fun InternalPlayerPlaceholder(
         )
             .tvFocusOutline()
             .pointerInput(expanded) {
-                detectTapGestures(onDoubleTap = { onToggleExpanded() })
+                detectTapGestures(onTap = { onToggleExpanded() }, onDoubleTap = { onToggleExpanded() })
             }
     ) {
         Column(
@@ -1054,7 +1053,11 @@ private fun InternalPlayerHost(
                     exoPlayer.prepare()
                     return
                 }
-                onError(formatPlaybackException(error))
+                val msg = formatPlaybackException(error)
+                onError(msg)
+                try {
+                    FileLogger.write(context, "ERROR", "Player", msg, error)
+                } catch (ignored: Exception) {}
             }
         }
 
@@ -1073,12 +1076,67 @@ private fun InternalPlayerHost(
             exoPlayer.playWhenReady = true
         }
         startResult.exceptionOrNull()?.let { throwable ->
-            onError(throwable.message ?: throwable.javaClass.simpleName)
+            val m = throwable.message ?: throwable.javaClass.simpleName
+            onError(m)
+            try { FileLogger.write(context, "ERROR", "PlayerInit", m, throwable) } catch (ignored: Exception) {}
         }
 
         onDispose {
             exoPlayer.removeListener(listener)
             exoPlayer.release()
+        }
+    }
+
+    // Простая авто-восстановительная логика: если плеер долго в состоянии BUFFERING,
+    // попытаться переподготовить поток (stop -> prepare -> play). Это помогает при зависаниях сети/декодера.
+    DisposableEffect(session.sessionId, exoPlayer) {
+        val recoveryJob = kotlinx.coroutines.Job()
+        val recoveryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + recoveryJob)
+        var bufferingSince = 0L
+
+        val stateListener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_BUFFERING) {
+                    bufferingSince = System.currentTimeMillis()
+                } else {
+                    bufferingSince = 0L
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                // пробуем небольшую очистку при ошибке
+                bufferingSince = 0L
+            }
+        }
+
+        exoPlayer.addListener(stateListener)
+
+        recoveryScope.launch {
+            try {
+                while (isActive) {
+                    kotlinx.coroutines.delay(3000)
+                    val since = bufferingSince
+                    if (since != 0L) {
+                        val elapsed = System.currentTimeMillis() - since
+                        if (elapsed > 10_000) {
+                            runCatching {
+                                exoPlayer.playWhenReady = false
+                                exoPlayer.playbackState // touch
+                                exoPlayer.stop()
+                                exoPlayer.prepare()
+                                exoPlayer.playWhenReady = true
+                            }
+                        }
+                    }
+                }
+            } finally {
+                // no-op
+            }
+        }
+
+        onDispose {
+            recoveryJob.cancel()
+            exoPlayer.removeListener(stateListener)
         }
     }
 
@@ -1190,4 +1248,3 @@ private fun formatEpgTime(epochMs: Long): String {
         formatter.format(Date(epochMs))
     }.getOrDefault("--:--")
 }
-

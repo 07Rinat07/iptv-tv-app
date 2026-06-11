@@ -85,6 +85,7 @@ dependencies {
     implementation(project(":core:designsystem"))
     implementation(project(":core:domain"))
     implementation(project(":core:data"))
+    implementation(project(":core:utils"))
     implementation(project(":sync"))
 
     implementation(project(":feature:home"))

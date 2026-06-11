@@ -9,3 +9,5 @@
 .externalNativeBuild/
 .cxx/
 /.tools/
+__pycache__/
+*.pyc

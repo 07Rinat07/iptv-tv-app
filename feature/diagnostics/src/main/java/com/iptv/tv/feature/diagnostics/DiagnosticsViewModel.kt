@@ -14,21 +14,43 @@ import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.EngineRepository
+import com.iptv.tv.core.domain.repository.PlaylistRepository
+import com.iptv.tv.core.domain.repository.ScannerRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
+import com.iptv.tv.core.model.ScannerSearchMode
+import com.iptv.tv.core.model.ScannerSearchRequest
 import com.iptv.tv.core.model.SyncLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
+
+data class PlaylistEntry(
+    val url: String,
+    val host: String?,
+    val status: Int?,
+    val contentType: String?,
+    val m3uEntries: Int
+)
+
+data class ScanCandidate(
+    val downloadUrl: String,
+    val repository: String?,
+    val name: String?,
+    val sizeBytes: Long?,
+    val updatedAt: String?
+)
 
 data class DiagnosticsUiState(
     val title: String = "Диагностика",
-    val description: String = "Статус сети/движка, логи и тест torrent-resolve",
+    val description: String = "Сеть, движок, индекс плейлистов, помощник и журналы приложения",
     val engineEndpoint: String = "http://127.0.0.1:6878",
     val torrentDescriptor: String = "",
     val torEnabled: Boolean = false,
@@ -46,7 +68,18 @@ data class DiagnosticsUiState(
     val logs: List<SyncLog> = emptyList(),
     val isBusy: Boolean = false,
     val lastError: String? = null,
-    val lastInfo: String? = null
+    val lastInfo: String? = null,
+    val lastCandidateValidation: String? = null,
+    val lastImportedUrl: String? = null,
+    val scanQuery: String = "iptv",
+    val scanResults: List<ScanCandidate> = emptyList(),
+    val assistantNotes: String? = null,
+    val playlists: List<PlaylistEntry> = emptyList(),
+    val allPlaylists: List<PlaylistEntry> = emptyList(),
+    val playlistSearchQuery: String = "",
+    val playlistMinEntries: String = "0",
+    val playlistOnlyOk: Boolean = false,
+    val logSearchQuery: String = ""
 )
 
 @HiltViewModel
@@ -54,6 +87,8 @@ class DiagnosticsViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val engineRepository: EngineRepository,
     private val settingsRepository: SettingsRepository,
+    private val playlistRepository: PlaylistRepository,
+    private val scannerRepository: ScannerRepository,
     private val diagnosticsRepository: DiagnosticsRepository
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(DiagnosticsUiState())
@@ -77,6 +112,43 @@ class DiagnosticsViewModel @Inject constructor(
 
     fun updateTorrentDescriptor(value: String) {
         _uiState.update { it.copy(torrentDescriptor = value, lastError = null) }
+    }
+
+    fun updatePlaylistSearchQuery(q: String) {
+        _uiState.update { state ->
+            state.copy(playlistSearchQuery = q).withFilteredPlaylists()
+        }
+    }
+
+    fun updatePlaylistMinEntries(value: String) {
+        val normalized = value.filter { it.isDigit() }.take(5)
+        _uiState.update { state ->
+            state.copy(playlistMinEntries = normalized).withFilteredPlaylists()
+        }
+    }
+
+    fun togglePlaylistOnlyOk() {
+        _uiState.update { state ->
+            state.copy(playlistOnlyOk = !state.playlistOnlyOk).withFilteredPlaylists()
+        }
+    }
+
+    fun clearPlaylistFilters() {
+        _uiState.update { state ->
+            state.copy(
+                playlistSearchQuery = "",
+                playlistMinEntries = "0",
+                playlistOnlyOk = false
+            ).withFilteredPlaylists()
+        }
+    }
+
+    fun updateLogSearchQuery(value: String) {
+        _uiState.update { it.copy(logSearchQuery = value) }
+    }
+
+    fun updateScanQuery(value: String) {
+        _uiState.update { it.copy(scanQuery = value, lastError = null, assistantNotes = null) }
     }
 
     fun connectEngine() {
@@ -149,6 +221,277 @@ class DiagnosticsViewModel @Inject constructor(
                 AppResult.Loading -> Unit
             }
         }
+    }
+
+    // --- Playlist index import / search ---
+    fun importIndexedJsonl(uri: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBusy = true, lastError = null, lastInfo = null) }
+            try {
+                val input = appContext.contentResolver.openInputStream(android.net.Uri.parse(uri))
+                    ?: throw IllegalStateException("Не удалось открыть указанный URI")
+
+                val entries = mutableListOf<PlaylistEntry>()
+                input.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        if (line.isBlank()) return@forEach
+                        try {
+                            val jo = org.json.JSONObject(line)
+                            val url = jo.optString("url").takeIf { it.isNotBlank() } ?: return@forEach
+                            val host = jo.optString("host").takeIf { it.isNotBlank() }
+                            val status = if (jo.has("status")) jo.optInt("status") else null
+                            val contentType = jo.optString("content_type").takeIf { it.isNotBlank() }
+                            val m3uEntries = jo.optInt("m3u_entries", 0)
+                            entries += PlaylistEntry(url, host, status, contentType, m3uEntries)
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+
+                _uiState.update {
+                    it.copy(
+                        playlists = entries,
+                        allPlaylists = entries,
+                        lastInfo = "Импортировано записей: ${entries.size}",
+                        isBusy = false
+                    ).withFilteredPlaylists()
+                }
+            } catch (t: Throwable) {
+                _uiState.update { it.copy(lastError = "Не удалось импортировать индекс: ${t.message}", isBusy = false) }
+            }
+        }
+    }
+
+    fun loadTopPlaylists(limit: Int = 50) {
+        viewModelScope.launch {
+            val top = _uiState.value.allPlaylists.ifEmpty { _uiState.value.playlists }
+                .sortedByDescending { it.m3uEntries }
+                .take(limit)
+            _uiState.update {
+                it.copy(
+                    playlists = top,
+                    lastInfo = "Показаны лучшие кандидаты: ${top.size}"
+                )
+            }
+        }
+    }
+
+    fun searchPlaylists(query: String) {
+        viewModelScope.launch {
+            _uiState.update { state ->
+                state.copy(
+                    playlistSearchQuery = query,
+                    lastInfo = "Фильтр применён"
+                ).withFilteredPlaylists()
+            }
+        }
+    }
+
+    fun runAssistant(minEntries: Int = 5) {
+        viewModelScope.launch {
+            val importedCandidates = _uiState.value.playlists.map { p ->
+                p to (p.m3uEntries + if (p.status == 200) 50 else 0)
+            }
+            val scanCandidates = _uiState.value.scanResults.map { c ->
+                c to ((c.sizeBytes ?: 0) / 1_000 + if (c.downloadUrl.contains("m3u", ignoreCase = true)) 20 else 0)
+            }
+
+            val imported = importedCandidates
+                .filter { it.second > minEntries }
+                .sortedByDescending { it.second }
+                .map { it.first }
+            val scan = scanCandidates
+                .filter { it.second > minEntries }
+                .sortedByDescending { it.second }
+                .map { it.first }
+
+            val note = buildString {
+                append("Помощник нашёл кандидатов из индекса: ${imported.size}; свежих кандидатов сканера: ${scan.size}.")
+                if (imported.isNotEmpty()) append(" Сначала проверьте плейлисты с большим числом EXTINF и HTTP 200.")
+                if (scan.isNotEmpty()) append(" Свежие ссылки из сканера можно импортировать после проверки.")
+            }
+
+            _uiState.update {
+                it.copy(
+                    assistantNotes = note,
+                    lastInfo = note
+                )
+            }
+        }
+    }
+
+    fun runIndexer() {
+        val query = _uiState.value.scanQuery.trim().ifEmpty { "iptv" }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBusy = true, lastError = null, lastInfo = "Запуск краулера: $query", assistantNotes = null) }
+            val request = ScannerSearchRequest(
+                query = query,
+                providerScope = com.iptv.tv.core.model.ScannerProviderScope.ALL,
+                searchMode = ScannerSearchMode.AUTO,
+                limit = 40
+            )
+            when (val result = scannerRepository.search(request)) {
+                is AppResult.Success -> {
+                    val candidates = result.data.map { candidate ->
+                        ScanCandidate(
+                            downloadUrl = candidate.downloadUrl,
+                            repository = candidate.repository,
+                            name = candidate.name,
+                            sizeBytes = candidate.sizeBytes,
+                            updatedAt = candidate.updatedAt
+                        )
+                    }
+                    _uiState.update {
+                        it.copy(
+                            isBusy = false,
+                            scanResults = candidates,
+                            lastInfo = "Краулер вернул кандидатов: ${candidates.size}",
+                            assistantNotes = "Краулер нашёл ${candidates.size} кандидатов"
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    diagnosticsRepository.addLog("diagnostics_scan_error", result.message)
+                    _uiState.update {
+                        it.copy(
+                            isBusy = false,
+                            lastError = "Краулер завершился с ошибкой: ${result.message}"
+                        )
+                    }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun importPlaylistUrl(url: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBusy = true, lastError = null, lastInfo = null, lastCandidateValidation = null) }
+            when (val validation = validateCandidateUrl(url)) {
+                is AppResult.Success -> {
+                    _uiState.update { it.copy(lastCandidateValidation = validation.data, lastInfo = "Кандидат прошёл проверку") }
+                }
+                is AppResult.Error -> {
+                    diagnosticsRepository.addLog("diagnostics_candidate_validation_failed", "url=$url reason=${validation.message}")
+                    _uiState.update { it.copy(isBusy = false, lastError = "Проверка кандидата не пройдена: ${validation.message}") }
+                    return@launch
+                }
+                AppResult.Loading -> Unit
+            }
+
+            val playlistName = buildPlaylistName(url)
+            when (val result = playlistRepository.importFromUrl(url, playlistName)) {
+                is AppResult.Success -> {
+                    diagnosticsRepository.addLog("diagnostics_import_playlist", "Imported playlist=$url into $playlistName")
+                    _uiState.update {
+                        it.copy(
+                            isBusy = false,
+                            lastInfo = "Плейлист добавлен: $playlistName",
+                            lastImportedUrl = url
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    diagnosticsRepository.addLog("diagnostics_import_playlist_error", result.message)
+                    _uiState.update { it.copy(isBusy = false, lastError = result.message) }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    private suspend fun validateCandidateUrl(url: String): AppResult<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val parsed = java.net.URL(url)
+                val connection = (parsed.openConnection() as java.net.HttpURLConnection).apply {
+                    requestMethod = "HEAD"
+                    connectTimeout = 8_000
+                    readTimeout = 8_000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "IPTV-TV-App/1.0")
+                    setRequestProperty("Accept", "application/vnd.apple.mpegurl, audio/x-mpegurl, application/x-mpegurl, text/plain, */*")
+                }
+                val code = connection.responseCode
+                val contentType = connection.contentType
+                connection.disconnect()
+
+                if (code !in 200..299) {
+                    if (code == 405 || code == 501) {
+                        return@withContext probeWithGet(url)
+                    }
+                    return@withContext AppResult.Error("HTTP $code")
+                }
+
+                if (!isAcceptableMime(contentType)) {
+                    return@withContext AppResult.Error("Недопустимый content-type: $contentType")
+                }
+
+                AppResult.Success("validated code=$code contentType=$contentType")
+            } catch (throwable: Throwable) {
+                AppResult.Error(throwable.message ?: "Проверка не удалась")
+            }
+        }
+    }
+
+    private suspend fun probeWithGet(url: String): AppResult<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val parsed = java.net.URL(url)
+                val connection = (parsed.openConnection() as java.net.HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 8_000
+                    readTimeout = 8_000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "IPTV-TV-App/1.0")
+                    setRequestProperty("Accept", "application/vnd.apple.mpegurl, audio/x-mpegurl, application/x-mpegurl, text/plain, */*")
+                }
+                val code = connection.responseCode
+                val contentType = connection.contentType
+                val length = connection.inputStream.use { input ->
+                    val buffer = ByteArray(256)
+                    var total = 0
+                    while (true) {
+                        val read = input.read(buffer, total, buffer.size - total)
+                        if (read <= 0) break
+                        total += read
+                        if (total >= buffer.size) break
+                    }
+                    total
+                }
+                connection.disconnect()
+
+                if (code !in 200..299) {
+                    return@withContext AppResult.Error("HTTP $code")
+                }
+                if (!isAcceptableMime(contentType)) {
+                    return@withContext AppResult.Error("Недопустимый content-type: $contentType")
+                }
+                AppResult.Success("validated code=$code contentType=$contentType length=$length")
+            } catch (throwable: Throwable) {
+                AppResult.Error(throwable.message ?: "Проверка GET не удалась")
+            }
+        }
+    }
+
+    private fun isAcceptableMime(contentType: String?): Boolean {
+        if (contentType.isNullOrBlank()) return true
+        val normalized = contentType.substringBefore(';').trim().lowercase()
+        return normalized in setOf(
+            "application/vnd.apple.mpegurl",
+            "audio/x-mpegurl",
+            "application/x-mpegurl",
+            "application/octet-stream",
+            "text/plain",
+            "application/json"
+        )
+    }
+
+    private fun buildPlaylistName(url: String): String {
+        return runCatching {
+            val host = android.net.Uri.parse(url).host
+            if (!host.isNullOrBlank()) "Найденные плейлисты — $host" else "Imported playlist"
+        }.getOrDefault("Imported playlist")
     }
 
     @SuppressLint("MissingPermission")
@@ -363,8 +706,30 @@ class DiagnosticsViewModel @Inject constructor(
         }
     }
 
+    private fun DiagnosticsUiState.withFilteredPlaylists(): DiagnosticsUiState {
+        val source = allPlaylists.ifEmpty { playlists }
+        val query = playlistSearchQuery.trim()
+        val minEntries = playlistMinEntries.toIntOrNull() ?: 0
+        val filtered = source
+            .asSequence()
+            .filter { entry ->
+                query.isBlank() ||
+                    entry.url.contains(query, ignoreCase = true) ||
+                    entry.host?.contains(query, ignoreCase = true) == true ||
+                    entry.contentType?.contains(query, ignoreCase = true) == true
+            }
+            .filter { entry -> entry.m3uEntries >= minEntries }
+            .filter { entry -> !playlistOnlyOk || entry.status == 200 }
+            .sortedWith(
+                compareByDescending<PlaylistEntry> { it.m3uEntries }
+                    .thenBy { if (it.status == 200) 0 else 1 }
+                    .thenBy { it.host.orEmpty() }
+            )
+            .toList()
+        return copy(playlists = filtered)
+    }
+
     private companion object {
         const val MB = 1024L * 1024L
     }
 }
-

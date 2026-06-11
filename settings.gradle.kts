@@ -25,6 +25,7 @@ include(
     ":core:network",
     ":core:parser",
     ":core:player",
+    ":core:utils",
     ":core:engine",
     ":core:designsystem",
     ":core:data",

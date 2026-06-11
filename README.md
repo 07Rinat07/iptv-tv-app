@@ -4,7 +4,7 @@ Production-oriented MVP IPTV-приложения для Android TV/TV Box (minS
 Для энтузиастов, желающих быстро найти и смотреть IPTV-каналы с помощью удобного интерфейса и встроенного плеера.
 
 ## Текущий статус ===> Приложение в РАЗРАБОТКЕ
-Обновлено: `23.02.2026 (18:10)`.
+Обновлено: `11.06.2026 (11:43)`.
 - Приложение запускается без PIN-кода.
 - Работают ключевые сценарии:
   - `Сканировать -> Найти -> Сохранить -> Мои плейлисты -> Редактор -> Воспроизвести`.
@@ -12,6 +12,20 @@ Production-oriented MVP IPTV-приложения для Android TV/TV Box (minS
 - Улучшен TV-фокус: убран перехват фокуса корневыми списками, стартовый фокус в шапке на кнопке `Разделы`.
 
 ### Последнее обновление (этот билд)
+- Собрана свежая debug-версия для установки на TV Box:
+  - `build-artifacts/myscanerIPTV-tvbox-debug-latest.apk`;
+  - SHA256: `2bfc06d6abf8ac064d3aed83f9d2c4e614893c665d921269e395a3a73f395ef6`.
+- Доработан экран `Диагностика`:
+  - вкладки `Обзор / Индекс / Краулер / Движок / Логи`;
+  - импорт JSONL-индекса плейлистов;
+  - фильтры по URL/host/content-type, минимальному `EXTINF`, режим `только HTTP 200`;
+  - отдельный фильтр логов и более понятные русские подписи.
+- Добавлен offline workflow в `tools/ai`:
+  - crawler найденных ссылок;
+  - indexer JSONL с HTTP/MIME/EXTINF metadata;
+  - SQLite ranking index;
+  - optional vector-search PoC без тяжёлых ML-зависимостей в Android-приложении.
+- Почищены старые APK-артефакты: в `build-artifacts` оставлен один актуальный APK для копирования на флешку.
 - Добавлен отдельный видимый раздел `Готовые плейлисты`:
   - доступ из `Главная` и из меню `Разделы`;
   - пресеты: `Freetv.m3u`, `Плейлист ТВ`, `Сборник ТВ`, `smolnp.github.io ТВ`, `Страны мира`, `TV ALL list ru`;
@@ -144,18 +158,29 @@ $env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"
 .\gradlew.bat :app:assembleDebug -x lint
 ```
 
+## Сборка и тесты (Linux)
+```bash
+env JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew :app:assembleDebug -x lint
+env JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew testDebugUnitTest -x lint
+```
+
+Примечание: если системный `java` указывает на JDK без `jlink`, Android Gradle
+может падать на `androidJdkImage`. В этом окружении проверенная сборка выполнялась
+через JDK 17: `/usr/lib/jvm/java-17-openjdk-amd64`.
+
 ## Готовый APK для установки на TV Box
-- Локальный debug APK после сборки:
+- Текущая сборка для проверки и установки (рекомендуется):
+  - `build-artifacts/myscanerIPTV-tvbox-debug-latest.apk`
+- Размер: `17,712,740` bytes.
+- SHA256:
+  - `2bfc06d6abf8ac064d3aed83f9d2c4e614893c665d921269e395a3a73f395ef6`
+- Локальный debug APK после новой сборки Gradle:
   - `app/build/outputs/apk/debug/app-debug.apk`
-- Текущая сборка для проверки (рекомендуется):
-  - `build-artifacts/iptv-tv-app-debug-20260223-154746.apk`
-- Также сохраняются версии с таймстампом:
-  - `build-artifacts/iptv-tv-app-debug-YYYYMMDD-HHMMSS.apk`
+  - после `./gradlew clean` этот файл удаляется, а готовый APK остаётся в `build-artifacts`.
 
 ## Установка на Android TV Box через USB
-1. Скопируйте на флешку любой из файлов:
-   - `app/build/outputs/apk/debug/app-debug.apk` (прямо после локальной сборки);
-   - или один из `build-artifacts/*.apk` (рекомендуется последний `iptv-tv-app-debug-YYYYMMDD-HHMMSS.apk`).
+1. Скопируйте на флешку файл:
+   - `build-artifacts/myscanerIPTV-tvbox-debug-latest.apk`.
 2. Подключите флешку к TV Box.
 3. Откройте любой файловый менеджер на TV Box.
 4. Запустите APK и подтвердите установку.
@@ -194,6 +219,7 @@ $env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"
 
 ## Обучение AI-помощника сканера
 - Подробный гайд: `docs/ai-agent-training-ru.md`.
+- Workflow для поиска и индексации плейлистов: `docs/ai-playlist-index-workflow.md`.
 - Скрипт для подготовки обучающего датасета из экспортированных логов:
   - `tools/ai/build_scanner_training_dataset.py`
 
@@ -205,6 +231,22 @@ python tools/ai/build_scanner_training_dataset.py --input "D:\myscanerIPTV-logs-
 Скрипт создаёт:
 - `tools/ai/training_dataset.jsonl` (попытки поиска с label success/failed/empty);
 - `tools/ai/training_summary.md` (успешные запросы и частые причины ошибок).
+
+## Индекс плейлистов и Diagnostics
+Экспериментальный offline workflow вынесен в `tools/ai`, чтобы не тянуть тяжёлые
+зависимости в Android-приложение:
+
+```bash
+python tools/ai/playlist_crawler.py --seeds seeds.txt --out tools/ai/found_playlists.txt --max-depth 2 --same-host
+python tools/ai/playlist_indexer.py --input tools/ai/found_playlists.txt --out tools/ai/indexed_playlists.jsonl
+python tools/ai/playlist_db.py --db tools/ai/playlists.db --import-jsonl tools/ai/indexed_playlists.jsonl
+python tools/ai/playlist_vector_search.py --db tools/ai/playlists_vectors.db --build-jsonl tools/ai/indexed_playlists.jsonl
+```
+
+В приложении откройте `Диагностика -> Индекс -> Импорт JSONL`, выберите
+`indexed_playlists.jsonl`, отфильтруйте кандидаты по host/status/EXTINF и
+нажмите `Проверить и добавить`. Перед импортом URL проходит быструю HTTP/MIME
+проверку.
 
 ## Ручной прокси сканера
 - Где: `Настройки` -> блок `Прокси для сканера`.

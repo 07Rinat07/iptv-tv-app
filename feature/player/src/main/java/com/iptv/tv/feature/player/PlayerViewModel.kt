@@ -41,6 +41,12 @@ import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
+import androidx.core.content.FileProvider
+import android.content.Intent
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.io.File
 
 const val PLAYER_PLAYLIST_ID_ARG = "playlistId"
 const val PLAYER_CHANNEL_ID_ARG = "channelId"
@@ -646,6 +652,36 @@ class PlayerViewModel @Inject constructor(
 
     fun playSelectedVlc(context: Context) {
         playSelectedWith(playerType = PlayerType.VLC, context = context)
+    }
+
+    fun exportLogs(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val src = com.iptv.tv.core.utils.FileLogger.logFile(context)
+                if (!src.exists()) {
+                    _uiState.update { it.copy(lastInfo = "Лог файл не найден", lastError = null) }
+                    return@launch
+                }
+                val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val dst = File(context.cacheDir, "logs_$ts.log")
+                src.copyTo(dst, overwrite = true)
+
+                val authority = "${context.packageName}.fileprovider"
+                val uri = FileProvider.getUriForFile(context, authority, dst)
+
+                val share = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "App logs $ts")
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(Intent.createChooser(share, "Share logs"))
+                _uiState.update { it.copy(lastInfo = "Экспорт логов запущен", lastError = null) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(lastError = "Не удалось экспортировать логи: ${e.message}") }
+                com.iptv.tv.core.utils.FileLogger.write(context, "ERROR", "Diagnostics", "Export logs failed", e)
+            }
+        }
     }
 
     fun playSelectedViaAce(context: Context) {
@@ -1755,7 +1791,8 @@ class PlayerViewModel @Inject constructor(
 
     private companion object {
         const val MAX_AUTO_RETRIES = 3
-        val RETRY_DELAYS_MS = listOf(800L, 1_600L, 2_400L)
+        // Exponential-ish backoff for retries to allow network recovery
+        val RETRY_DELAYS_MS = listOf(1_000L, 3_000L, 7_000L)
         const val MAX_LOG_MESSAGE = 700
         const val MAX_PROBE_URL_LOG = 220
         const val PROBE_CONNECT_TIMEOUT_MS = 8_000

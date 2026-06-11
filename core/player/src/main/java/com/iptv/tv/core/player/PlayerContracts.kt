@@ -20,8 +20,9 @@ data class BufferConfig(
 fun bufferConfigForProfile(profile: BufferProfile, manual: ManualBufferSettings? = null): BufferConfig =
     when (profile) {
         BufferProfile.MINIMAL -> BufferConfig(5_000, 20_000, 800, 1_500)
-        BufferProfile.STANDARD -> BufferConfig(10_000, 40_000, 1_000, 2_000)
-        BufferProfile.HIGH -> BufferConfig(20_000, 70_000, 1_200, 2_500)
+        // Более консервативные значения по умолчанию для стабильности при нестабильной сети
+        BufferProfile.STANDARD -> BufferConfig(15_000, 60_000, 2_000, 3_000)
+        BufferProfile.HIGH -> BufferConfig(30_000, 120_000, 3_000, 5_000)
         BufferProfile.MANUAL -> {
             val boundedStart = (manual?.startMs ?: 12_000).coerceIn(250, 120_000)
             val boundedMax = (manual?.maxMs ?: 50_000).coerceIn(1_000, 240_000).coerceAtLeast(boundedStart)
@@ -38,8 +39,9 @@ fun bufferConfigForProfile(profile: BufferProfile, manual: ManualBufferSettings?
 @UnstableApi
 fun BufferConfig.toLoadControl(): DefaultLoadControl {
     return DefaultLoadControl.Builder()
-        .setBufferDurationsMs(minBufferMs, maxBufferMs, bufferForPlaybackMs, bufferForPlaybackAfterRebufferMs)
-        .build()
+    .setBufferDurationsMs(minBufferMs, maxBufferMs, bufferForPlaybackMs, bufferForPlaybackAfterRebufferMs)
+    .setPrioritizeTimeOverSizeThresholds(true)
+    .build()
 }
 
 class ExternalVlcLauncher {
