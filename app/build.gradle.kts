@@ -95,6 +95,7 @@ dependencies {
     implementation(project(":feature:editor"))
     implementation(project(":feature:favorites"))
     implementation(project(":feature:history"))
+    implementation(project(":feature:epg"))
     implementation(project(":feature:player"))
     implementation(project(":feature:downloads"))
     implementation(project(":feature:settings"))

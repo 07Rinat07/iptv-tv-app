@@ -27,6 +27,7 @@ fun HomeScreen(
     onOpenImporter: (() -> Unit)? = null,
     onOpenReadyPlaylists: (() -> Unit)? = null,
     onOpenPlaylists: (() -> Unit)? = null,
+    onOpenEpg: (() -> Unit)? = null,
     onOpenPlayer: (() -> Unit)? = null,
     onOpenSettings: (() -> Unit)? = null,
     onOpenDiagnostics: (() -> Unit)? = null,
@@ -97,6 +98,13 @@ fun HomeScreen(
                     HomeActionCard(
                         title = "Мои плейлисты",
                         subtitle = "Обновление, выбор, переход в редактор",
+                        onClick = action
+                    )
+                }
+                onOpenEpg?.let { action ->
+                    HomeActionCard(
+                        title = "Телепрограмма",
+                        subtitle = "EPG: сейчас, сегодня, завтра и поиск передач",
                         onClick = action
                     )
                 }

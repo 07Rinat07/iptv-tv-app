@@ -10,6 +10,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.FavoritesRepository
+import com.iptv.tv.core.domain.repository.ChannelMetadataRepository
 import com.iptv.tv.core.domain.repository.PlaylistEditorRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.Channel
@@ -55,6 +56,7 @@ data class EditorUiState(
     val exportFileExtension: String = "m3u",
     val exportedFilePath: String? = null,
     val isLoading: Boolean = false,
+    val isRefreshingMetadata: Boolean = false,
     val lastError: String? = null,
     val lastInfo: String? = null
 )
@@ -65,6 +67,7 @@ class EditorViewModel @Inject constructor(
     private val playlistRepository: PlaylistRepository,
     private val editorRepository: PlaylistEditorRepository,
     private val favoritesRepository: FavoritesRepository,
+    private val channelMetadataRepository: ChannelMetadataRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(EditorUiState())
@@ -474,6 +477,47 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    fun saveDraftLogoAsManual() {
+        val draft = _uiState.value.editDraft
+        val channelId = draft.channelId
+        if (channelId == null) {
+            _uiState.update { it.copy(lastError = "Выберите канал для ручного логотипа") }
+            return
+        }
+        viewModelScope.launch {
+            when (val result = channelMetadataRepository.setManualLogo(channelId, draft.logo)) {
+                is AppResult.Success -> _uiState.update {
+                    it.copy(
+                        lastInfo = "Ручной логотип сохранён",
+                        lastError = null
+                    )
+                }
+                is AppResult.Error -> _uiState.update { it.copy(lastError = result.message) }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun refreshCurrentPlaylistMetadata() {
+        val playlistId = currentPlaylistIdOrError() ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRefreshingMetadata = true, lastError = null, lastInfo = null) }
+            when (val result = channelMetadataRepository.refreshMetadata(playlistId)) {
+                is AppResult.Success -> _uiState.update {
+                    it.copy(
+                        isRefreshingMetadata = false,
+                        lastInfo = "Метаданные обновлены, логотипов применено: ${result.data}",
+                        lastError = null
+                    )
+                }
+                is AppResult.Error -> _uiState.update {
+                    it.copy(isRefreshingMetadata = false, lastError = result.message)
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
     fun toggleChannelFavorite(channelId: Long) {
         viewModelScope.launch {
             val wasFavorite = _uiState.value.favoriteChannelIds.contains(channelId)
@@ -634,4 +678,3 @@ private fun String.sanitizeFileName(): String {
         .replace(Regex("\\s+"), "_")
         .take(50)
 }
-

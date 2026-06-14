@@ -6,6 +6,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
+import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistValidationReport
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -25,11 +26,17 @@ data class ImporterUiState(
     val description: String = "Импорт по URL, тексту или локальному файлу",
     val playlistName: String = "Новый плейлист",
     val url: String = "",
+    val xtreamBaseUrl: String = "",
+    val xtreamUsername: String = "",
+    val xtreamPassword: String = "",
+    val stalkerPortalUrl: String = "",
+    val stalkerMacAddress: String = "",
     val filePathOrUri: String = "",
     val rawText: String = "",
     val isLoading: Boolean = false,
     val lastError: String? = null,
     val lastImportReport: PlaylistImportReport? = null,
+    val lastContentSummary: PlaylistContentSummary? = null,
     val lastValidationReport: PlaylistValidationReport? = null
 )
 
@@ -48,6 +55,11 @@ class ImporterViewModel @Inject constructor(
 
     fun updatePlaylistName(value: String) = _uiState.update { it.copy(playlistName = value) }
     fun updateUrl(value: String) = _uiState.update { it.copy(url = value) }
+    fun updateXtreamBaseUrl(value: String) = _uiState.update { it.copy(xtreamBaseUrl = value) }
+    fun updateXtreamUsername(value: String) = _uiState.update { it.copy(xtreamUsername = value) }
+    fun updateXtreamPassword(value: String) = _uiState.update { it.copy(xtreamPassword = value) }
+    fun updateStalkerPortalUrl(value: String) = _uiState.update { it.copy(stalkerPortalUrl = value) }
+    fun updateStalkerMacAddress(value: String) = _uiState.update { it.copy(stalkerMacAddress = value) }
     fun updateFilePath(value: String) = _uiState.update { it.copy(filePathOrUri = value) }
     fun updateRawText(value: String) = _uiState.update { it.copy(rawText = value) }
 
@@ -71,6 +83,88 @@ class ImporterViewModel @Inject constructor(
                 )
             }
             playlistRepository.importFromUrl(url, state.playlistName.trim())
+        }
+    }
+
+    fun importFromXtream() {
+        if (_uiState.value.isLoading) {
+            logAsync(status = "import_click_ignored", message = "Import already running (xtream)")
+            return
+        }
+        val state = _uiState.value
+        val baseUrl = state.xtreamBaseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL сервера Xtream") }
+            logAsync(status = "import_ui_error", message = "Xtream server URL is blank")
+            return
+        }
+        if (!baseUrl.startsWith("http://", ignoreCase = true) && !baseUrl.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL Xtream должен начинаться с http:// или https://") }
+            logAsync(status = "import_ui_error", message = "Xtream server URL has no http scheme")
+            return
+        }
+        if (state.xtreamUsername.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите логин Xtream") }
+            logAsync(status = "import_ui_error", message = "Xtream username is blank")
+            return
+        }
+        if (state.xtreamPassword.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите пароль Xtream") }
+            logAsync(status = "import_ui_error", message = "Xtream password is blank")
+            return
+        }
+
+        executeImport(importKind = "xtream", source = "$baseUrl/player_api.php") {
+            val insecureAllowed = settingsRepository.observeAllowInsecureUrls().first()
+            if (!isSecureOrLocalUrl(baseUrl) && !insecureAllowed) {
+                return@executeImport AppResult.Error(
+                    "Безопасный режим: разрешены HTTPS URL. Для HTTP включите настройку 'Разрешить HTTP URL'."
+                )
+            }
+            playlistRepository.importFromXtream(
+                baseUrl = baseUrl,
+                username = state.xtreamUsername.trim(),
+                password = state.xtreamPassword.trim(),
+                name = state.playlistName.trim()
+            )
+        }
+    }
+
+    fun importFromStalker() {
+        if (_uiState.value.isLoading) {
+            logAsync(status = "import_click_ignored", message = "Import already running (stalker)")
+            return
+        }
+        val state = _uiState.value
+        val portalUrl = state.stalkerPortalUrl.trim().trimEnd('/')
+        if (portalUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL Stalker Portal") }
+            logAsync(status = "import_ui_error", message = "Stalker portal URL is blank")
+            return
+        }
+        if (!portalUrl.startsWith("http://", ignoreCase = true) && !portalUrl.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL Stalker должен начинаться с http:// или https://") }
+            logAsync(status = "import_ui_error", message = "Stalker portal URL has no http scheme")
+            return
+        }
+        if (state.stalkerMacAddress.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите MAC Stalker/MAG") }
+            logAsync(status = "import_ui_error", message = "Stalker MAC is blank")
+            return
+        }
+
+        executeImport(importKind = "stalker", source = portalUrl) {
+            val insecureAllowed = settingsRepository.observeAllowInsecureUrls().first()
+            if (!isSecureOrLocalUrl(portalUrl) && !insecureAllowed) {
+                return@executeImport AppResult.Error(
+                    "Безопасный режим: разрешены HTTPS URL. Для HTTP включите настройку 'Разрешить HTTP URL'."
+                )
+            }
+            playlistRepository.importFromStalker(
+                portalUrl = portalUrl,
+                macAddress = state.stalkerMacAddress.trim(),
+                name = state.playlistName.trim()
+            )
         }
     }
 
@@ -191,9 +285,11 @@ class ImporterViewModel @Inject constructor(
                         it.copy(
                             isLoading = false,
                             lastImportReport = result.data,
+                            lastContentSummary = null,
                             lastError = null
                         )
                     }
+                    loadContentSummary(result.data.playlistId)
                     safeLog(
                         status = "import_ok",
                         message = "kind=$importKind, playlistId=${result.data.playlistId}, imported=${result.data.totalImported}, parsed=${result.data.totalParsed}, duplicates=${result.data.removedDuplicates}"
@@ -236,6 +332,24 @@ class ImporterViewModel @Inject constructor(
 
         if (prefill.autoImport) {
             importFromUrl()
+        }
+    }
+
+    private fun loadContentSummary(playlistId: Long) {
+        viewModelScope.launch {
+            when (val result = playlistRepository.getPlaylistContentSummary(playlistId)) {
+                is AppResult.Success -> {
+                    _uiState.update { it.copy(lastContentSummary = result.data) }
+                }
+                is AppResult.Error -> {
+                    safeLog(
+                        status = "import_summary_error",
+                        message = "playlistId=$playlistId, reason=${result.message}",
+                        playlistId = playlistId
+                    )
+                }
+                AppResult.Loading -> Unit
+            }
         }
     }
 

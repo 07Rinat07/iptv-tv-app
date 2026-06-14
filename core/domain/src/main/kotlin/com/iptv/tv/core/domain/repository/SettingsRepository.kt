@@ -2,6 +2,7 @@ package com.iptv.tv.core.domain.repository
 
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.ManualBufferSettings
+import com.iptv.tv.core.model.ParentalControlSettings
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.ScannerLearnedQuery
 import com.iptv.tv.core.model.ScannerProxySettings
@@ -21,6 +22,7 @@ interface SettingsRepository {
     fun observeScannerAiEnabled(): Flow<Boolean>
     fun observeScannerProxySettings(): Flow<ScannerProxySettings>
     fun observeScannerLearnedQueries(): Flow<List<ScannerLearnedQuery>>
+    fun observeParentalControlSettings(): Flow<ParentalControlSettings>
     suspend fun setDefaultPlayer(playerType: PlayerType)
     suspend fun setBufferProfile(profile: BufferProfile)
     suspend fun setManualBuffer(startMs: Int, rebufferMs: Int, maxMs: Int)
@@ -35,4 +37,11 @@ interface SettingsRepository {
     suspend fun setScannerProxySettings(settings: ScannerProxySettings)
     suspend fun recordScannerLearning(query: String, relatedQueries: List<String>, presetId: String?)
     suspend fun clearScannerLearning()
+    suspend fun setParentalControl(
+        enabled: Boolean,
+        pin: String?,
+        hideAdultChannels: Boolean,
+        blockedKeywords: List<String>
+    )
+    suspend fun verifyParentalPin(pin: String): Boolean
 }

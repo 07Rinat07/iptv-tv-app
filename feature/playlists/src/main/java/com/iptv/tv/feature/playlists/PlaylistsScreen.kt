@@ -1,12 +1,15 @@
 package com.iptv.tv.feature.playlists
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -19,10 +22,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil.compose.AsyncImage
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import com.iptv.tv.core.model.ChannelPreview
+import com.iptv.tv.core.model.PlaylistContentSummary
 
 const val TAG_PLAYLISTS_LIST = "playlists_list"
 const val TAG_PLAYLISTS_REFRESH = "playlists_refresh"
@@ -73,7 +80,16 @@ fun PlaylistsScreen(
                         Text("Ссылка/путь: ${it.source}")
                         Text("Каналов: ${it.channelCount} | Последняя синхронизация: ${formatSyncTime(it.lastSyncedAt)}")
                     }
+                    if (state.isLoadingSummary) {
+                        Text("Сводка плейлиста загружается...")
+                    }
                 }
+            }
+        }
+
+        state.selectedSummary?.let { summary ->
+            item {
+                PlaylistContentSummaryCard(summary)
             }
         }
 
@@ -186,6 +202,70 @@ fun PlaylistsScreen(
     }
 }
 
+@Composable
+private fun PlaylistContentSummaryCard(summary: PlaylistContentSummary) {
+    Card(
+        modifier = Modifier.fillMaxWidth().tvFocusOutline(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Содержимое выбранного плейлиста", style = MaterialTheme.typography.titleMedium)
+            Text("Источник: ${sourceTypeLabel(summary.sourceType.name)} | ${summary.source}")
+            Text("EPG: ${summary.epgSourceUrl?.takeIf { it.isNotBlank() } ?: "не задан"}")
+            Text(
+                "Каналы: всего=${summary.totalChannels}, видимых=${summary.visibleChannels}, " +
+                    "скрытых=${summary.hiddenChannels}"
+            )
+            Text(
+                "Лого: ${summary.channelsWithLogo}/${summary.totalChannels} | " +
+                    "tvg-id: ${summary.channelsWithTvgId}/${summary.totalChannels} | групп=${summary.groupCount}"
+            )
+            Text(
+                "Health: ok=${summary.availableChannels}, unstable=${summary.unstableChannels}, " +
+                    "down=${summary.unavailableChannels}, unknown=${summary.unknownHealthChannels}"
+            )
+            if (summary.topGroups.isNotEmpty()) {
+                Text("Топ групп: ${summary.topGroups.joinToString { "${it.first} (${it.second})" }}")
+            }
+            Text("Примеры каналов и логотипов", style = MaterialTheme.typography.titleSmall)
+            summary.channelPreviews.take(12).forEach { preview ->
+                SummaryChannelPreviewRow(preview)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryChannelPreviewRow(preview: ChannelPreview) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(modifier = Modifier.size(42.dp), contentAlignment = Alignment.Center) {
+            if (!preview.logo.isNullOrBlank()) {
+                AsyncImage(
+                    model = preview.logo,
+                    contentDescription = preview.name,
+                    modifier = Modifier.size(38.dp)
+                )
+            } else {
+                Text("—", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(preview.name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "${preview.group ?: "Без группы"} | ${preview.health} | скрыт=${if (preview.isHidden) "да" else "нет"}",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
 private fun sourceTypeLabel(raw: String): String {
     return when (raw.uppercase()) {
         "URL" -> "URL"
@@ -194,6 +274,12 @@ private fun sourceTypeLabel(raw: String): String {
         "GITHUB" -> "GitHub"
         "GITLAB" -> "GitLab"
         "BITBUCKET" -> "Bitbucket"
+        "XTREAM" -> "Xtream Codes"
+        "STALKER" -> "Stalker Portal"
+        "JELLYFIN" -> "Jellyfin"
+        "PLEX" -> "Plex"
+        "TVHEADEND" -> "Tvheadend"
+        "HDHOMERUN" -> "HdHomeRun"
         "CUSTOM" -> "Пользовательский"
         else -> raw
     }
@@ -204,4 +290,3 @@ private fun formatSyncTime(value: Long?): String {
     val formatter = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
     return formatter.format(java.util.Date(value))
 }
-

@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.model.BufferProfile as CoreBufferProfile
@@ -339,6 +340,89 @@ fun SettingsScreen(
 
         item {
             SettingsSectionCard(
+                title = "Родительский контроль",
+                subtitle = "PIN и скрытие adult-групп/каналов по ключевым словам"
+            ) {
+                Text(
+                    "Статус: ${if (state.parentalEnabled) "Включен" else "Выключен"} | " +
+                        "PIN: ${if (state.parentalPinConfigured) "задан" else "не задан"}"
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SelectionButton(
+                        selected = state.parentalEnabled,
+                        label = "PIN Вкл",
+                        onClick = { viewModel.setParentalEnabled(true) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = !state.parentalEnabled,
+                        label = "PIN Выкл",
+                        onClick = { viewModel.setParentalEnabled(false) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                }
+                Text("Adult-фильтр: ${if (state.parentalHideAdultChannels) "скрывать" else "не скрывать"}")
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SelectionButton(
+                        selected = state.parentalHideAdultChannels,
+                        label = "Скрывать adult",
+                        onClick = { viewModel.setParentalHideAdultChannels(true) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = !state.parentalHideAdultChannels,
+                        label = "Не скрывать",
+                        onClick = { viewModel.setParentalHideAdultChannels(false) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                }
+                if (state.parentalPinConfigured) {
+                    OutlinedTextField(
+                        value = state.parentalCurrentPin,
+                        onValueChange = viewModel::updateParentalCurrentPin,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Текущий PIN") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                }
+                OutlinedTextField(
+                    value = state.parentalNewPin,
+                    onValueChange = viewModel::updateParentalNewPin,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = {
+                        Text(
+                            if (state.parentalPinConfigured) {
+                                "Новый PIN (опционально)"
+                            } else {
+                                "Новый PIN"
+                            }
+                        )
+                    },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation()
+                )
+                OutlinedTextField(
+                    value = state.parentalKeywordsText,
+                    onValueChange = viewModel::updateParentalKeywords,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Ключевые слова через запятую") },
+                    minLines = 2
+                )
+                Button(onClick = viewModel::saveParentalControl, enabled = !state.isSaving) {
+                    Text(if (state.isSaving) "Сохранение..." else "Сохранить родительский контроль")
+                }
+            }
+        }
+
+        item {
+            SettingsSectionCard(
                 title = "Загрузки",
                 subtitle = "Ограничения сети и количества задач"
             ) {
@@ -371,6 +455,24 @@ fun SettingsScreen(
                 Button(onClick = viewModel::saveMaxParallelDownloads) {
                     Text("Сохранить лимит")
                 }
+            }
+        }
+
+        item {
+            SettingsSectionCard(
+                title = "Android TV Home",
+                subtitle = "Публикация рядов Недавние, Избранное, Watch Next и Записи на главный экран TV Box"
+            ) {
+                Button(
+                    onClick = viewModel::publishTvHomeNow,
+                    enabled = !state.isPublishingTvHome
+                ) {
+                    Text(if (state.isPublishingTvHome) "Публикация..." else "Опубликовать сейчас")
+                }
+                Text(
+                    text = "Автообновление выполняется worker-ом каждые 6 часов.",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
 

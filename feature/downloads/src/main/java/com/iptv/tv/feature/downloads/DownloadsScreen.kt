@@ -20,6 +20,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import com.iptv.tv.core.model.RecordingSchedule
+import com.iptv.tv.core.model.RecordingTask
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun DownloadsScreen(
@@ -64,6 +69,65 @@ fun DownloadsScreen(
                 }
                 Button(onClick = viewModel::processQueueNow, enabled = !state.isBusy) {
                     Text(if (state.isBusy) "Обработка..." else "Обработать сейчас")
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Запись эфира", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "MVP-захват прямых HTTP/HTTPS потоков во внутреннюю папку приложения. Worker проверяет очередь каждые 15 минут.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = state.recordingChannelIdInput,
+                        onValueChange = viewModel::updateRecordingChannelId,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Channel ID") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = state.recordingTitleInput,
+                        onValueChange = viewModel::updateRecordingTitle,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Название передачи/записи") },
+                        singleLine = true
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = state.recordingDelayMinutesInput,
+                            onValueChange = viewModel::updateRecordingDelayMinutes,
+                            modifier = Modifier.weight(1f),
+                            label = { Text("Старт через, мин") },
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = state.recordingDurationMinutesInput,
+                            onValueChange = viewModel::updateRecordingDurationMinutes,
+                            modifier = Modifier.weight(1f),
+                            label = { Text("Длительность, мин") },
+                            singleLine = true
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = viewModel::recordNow) {
+                            Text("Записать сейчас")
+                        }
+                        Button(onClick = viewModel::scheduleRecording) {
+                            Text("Запланировать")
+                        }
+                        Button(
+                            onClick = viewModel::processRecordingsNow,
+                            enabled = !state.isProcessingRecordings
+                        ) {
+                            Text(if (state.isProcessingRecordings) "Запись..." else "Обработать")
+                        }
+                    }
                 }
             }
         }
@@ -120,5 +184,117 @@ fun DownloadsScreen(
                 }
             }
         }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Записи (${state.recordings.size})", style = MaterialTheme.typography.titleMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { viewModel.cleanupRecordings(7) },
+                            enabled = !state.isProcessingRecordings
+                        ) {
+                            Text("Очистить старше 7 дней")
+                        }
+                        Button(
+                            onClick = { viewModel.cleanupRecordings(30) },
+                            enabled = !state.isProcessingRecordings
+                        ) {
+                            Text("Очистить старше 30 дней")
+                        }
+                    }
+                }
+            }
+        }
+        if (state.recordings.isEmpty()) {
+            item {
+                Text("Очередь записей пуста")
+            }
+        } else {
+            items(state.recordings, key = { it.id }) { recording ->
+                RecordingCard(
+                    recording = recording,
+                    canCancel = viewModel.canCancelRecording(recording.status),
+                    canDelete = viewModel.canDeleteRecording(recording.status),
+                    onCancel = { viewModel.cancelRecording(recording.id) },
+                    onDelete = { viewModel.deleteRecording(recording.id) }
+                )
+            }
+        }
+
+        item {
+            Text("Расписания записей (${state.schedules.size})", style = MaterialTheme.typography.titleMedium)
+        }
+        if (state.schedules.isEmpty()) {
+            item {
+                Text("Расписаний пока нет")
+            }
+        } else {
+            items(state.schedules, key = { it.id }) { schedule ->
+                ScheduleCard(
+                    schedule = schedule,
+                    onDelete = { viewModel.deleteSchedule(schedule.id) }
+                )
+            }
+        }
     }
+}
+
+@Composable
+private fun RecordingCard(
+    recording: RecordingTask,
+    canCancel: Boolean,
+    canDelete: Boolean,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("Recording #${recording.id} | ${recording.status}", style = MaterialTheme.typography.titleSmall)
+            Text(recording.programTitle ?: recording.channelName)
+            Text("Канал: ${recording.channelName} (id=${recording.channelId})")
+            Text("Старт: ${recording.scheduledStartAt?.let(::formatEpoch) ?: "-"}")
+            Text("Финиш: ${recording.scheduledEndAt?.let(::formatEpoch) ?: "-"}")
+            Text("Файл: ${recording.filePath ?: "ещё не создан"}")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onCancel, enabled = canCancel) {
+                    Text("Отменить запись")
+                }
+                Button(onClick = onDelete, enabled = canDelete) {
+                    Text("Удалить запись и файл")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScheduleCard(
+    schedule: RecordingSchedule,
+    onDelete: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("Schedule #${schedule.id} | ${schedule.repeatMode} | ${if (schedule.enabled) "enabled" else "disabled"}")
+            Text(schedule.programTitle ?: schedule.channelName)
+            Text("Канал: ${schedule.channelName} (id=${schedule.channelId})")
+            Text("${formatEpoch(schedule.startAt)} - ${formatEpoch(schedule.endAt)}")
+            Button(onClick = onDelete) {
+                Text("Удалить расписание")
+            }
+        }
+    }
+}
+
+private fun formatEpoch(value: Long): String {
+    return SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date(value))
 }

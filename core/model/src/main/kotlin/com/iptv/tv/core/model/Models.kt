@@ -7,6 +7,12 @@ enum class PlaylistSourceType {
     GITHUB,
     GITLAB,
     BITBUCKET,
+    XTREAM,
+    STALKER,
+    JELLYFIN,
+    PLEX,
+    TVHEADEND,
+    HDHOMERUN,
     CUSTOM
 }
 
@@ -60,6 +66,35 @@ data class Playlist(
     val lastSyncedAt: Long?,
     val channelCount: Int,
     val isCustom: Boolean
+)
+
+data class ChannelPreview(
+    val id: Long,
+    val name: String,
+    val group: String?,
+    val logo: String?,
+    val health: ChannelHealth,
+    val isHidden: Boolean
+)
+
+data class PlaylistContentSummary(
+    val playlistId: Long,
+    val playlistName: String,
+    val sourceType: PlaylistSourceType,
+    val source: String,
+    val epgSourceUrl: String?,
+    val totalChannels: Int,
+    val visibleChannels: Int,
+    val hiddenChannels: Int,
+    val channelsWithLogo: Int,
+    val channelsWithTvgId: Int,
+    val availableChannels: Int,
+    val unstableChannels: Int,
+    val unavailableChannels: Int,
+    val unknownHealthChannels: Int,
+    val groupCount: Int,
+    val topGroups: List<Pair<String, Int>>,
+    val channelPreviews: List<ChannelPreview>
 )
 
 data class Channel(
@@ -148,12 +183,129 @@ enum class DownloadStatus {
     CANCELED
 }
 
+enum class RecordingStatus {
+    SCHEDULED,
+    RECORDING,
+    COMPLETED,
+    FAILED,
+    CANCELED
+}
+
+enum class RecordingRepeatMode {
+    ONCE,
+    DAILY,
+    WEEKLY,
+    SERIES
+}
+
+enum class ProviderAuthType {
+    NONE,
+    USER_PASSWORD,
+    TOKEN,
+    MAC_ADDRESS
+}
+
+enum class ProviderType {
+    M3U,
+    XTREAM,
+    STALKER,
+    JELLYFIN,
+    PLEX,
+    TVHEADEND,
+    HDHOMERUN
+}
+
+enum class TvHomeChannelType {
+    RECENT_CHANNELS,
+    FAVORITES,
+    WATCH_NEXT,
+    RECORDINGS
+}
+
 data class DownloadTask(
     val id: Long,
     val source: String,
     val progress: Int,
     val status: DownloadStatus,
     val createdAt: Long
+)
+
+data class RecordingTask(
+    val id: Long,
+    val channelId: Long,
+    val channelName: String,
+    val programTitle: String?,
+    val streamUrl: String,
+    val filePath: String?,
+    val status: RecordingStatus,
+    val startedAt: Long?,
+    val endedAt: Long?,
+    val scheduledStartAt: Long?,
+    val scheduledEndAt: Long?,
+    val createdAt: Long
+)
+
+data class RecordingSchedule(
+    val id: Long,
+    val channelId: Long,
+    val channelName: String,
+    val programTitle: String?,
+    val startAt: Long,
+    val endAt: Long,
+    val repeatMode: RecordingRepeatMode,
+    val enabled: Boolean,
+    val createdAt: Long
+)
+
+data class PlaylistProvider(
+    val id: Long,
+    val type: ProviderType,
+    val name: String,
+    val baseUrl: String,
+    val username: String?,
+    val password: String?,
+    val token: String?,
+    val macAddress: String?,
+    val authType: ProviderAuthType,
+    val linkedPlaylistId: Long?,
+    val lastSyncedAt: Long?,
+    val createdAt: Long
+)
+
+data class ParentalControlProfile(
+    val id: Long,
+    val name: String,
+    val pinHash: String,
+    val blockedKeywords: List<String>,
+    val lockedSettings: Boolean,
+    val enabled: Boolean,
+    val createdAt: Long
+)
+
+data class ParentalControlSettings(
+    val enabled: Boolean,
+    val pinConfigured: Boolean,
+    val hideAdultChannels: Boolean,
+    val blockedKeywords: List<String>
+)
+
+data class ChannelMetadata(
+    val channelId: Long,
+    val normalizedName: String?,
+    val country: String?,
+    val language: String?,
+    val category: String?,
+    val resolvedLogoUrl: String?,
+    val manualLogoUrl: String?,
+    val metadataSource: String?,
+    val updatedAt: Long
+)
+
+data class TvHomeChannelState(
+    val type: TvHomeChannelType,
+    val providerChannelId: Long?,
+    val enabled: Boolean,
+    val lastPublishedAt: Long?
 )
 
 data class PlaybackHistoryItem(

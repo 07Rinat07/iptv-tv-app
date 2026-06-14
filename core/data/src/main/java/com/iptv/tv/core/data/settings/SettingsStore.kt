@@ -29,4 +29,8 @@ object SettingsKeys {
     val scannerProxyUsername: Preferences.Key<String> = stringPreferencesKey("scanner_proxy_username")
     val scannerProxyPassword: Preferences.Key<String> = stringPreferencesKey("scanner_proxy_password")
     val scannerLearnedQueries: Preferences.Key<String> = stringPreferencesKey("scanner_learned_queries")
+    val parentalEnabled: Preferences.Key<Boolean> = booleanPreferencesKey("parental_enabled")
+    val parentalPinHash: Preferences.Key<String> = stringPreferencesKey("parental_pin_hash")
+    val parentalHideAdultChannels: Preferences.Key<Boolean> = booleanPreferencesKey("parental_hide_adult_channels")
+    val parentalBlockedKeywords: Preferences.Key<String> = stringPreferencesKey("parental_blocked_keywords")
 }

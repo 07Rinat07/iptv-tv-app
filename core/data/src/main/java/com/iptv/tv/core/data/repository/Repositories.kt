@@ -29,13 +29,16 @@ import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.engine.data.EngineStreamClient
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.ChannelEpgInfo
+import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.EngineStatus
 import com.iptv.tv.core.model.ManualBufferSettings
+import com.iptv.tv.core.model.ParentalControlSettings
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.Playlist
+import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.model.PlaylistValidationReport
@@ -52,12 +55,16 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserException
 import org.xmlpull.v1.XmlPullParserFactory
@@ -67,6 +74,7 @@ import java.io.IOException
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.GregorianCalendar
 import java.util.Locale
 import java.util.TimeZone
@@ -143,6 +151,140 @@ class PlaylistRepositoryImpl @Inject constructor(
             )
         }.getOrElse { throwable ->
             AppResult.Error("Unable to import by URL: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
+        }
+    }
+
+    override suspend fun importFromXtream(
+        baseUrl: String,
+        username: String,
+        password: String,
+        name: String
+    ): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
+        val normalizedBaseUrl = baseUrl.trim().trimEnd('/')
+        val normalizedUsername = username.trim()
+        val normalizedPassword = password.trim()
+        if (normalizedBaseUrl.isBlank()) return@withContext AppResult.Error("Xtream server URL is empty")
+        if (normalizedUsername.isBlank()) return@withContext AppResult.Error("Xtream username is empty")
+        if (normalizedPassword.isBlank()) return@withContext AppResult.Error("Xtream password is empty")
+
+        runCatching {
+            val liveStreamsUrl = normalizedBaseUrl.toHttpUrl()
+                .newBuilder()
+                .addPathSegment("player_api.php")
+                .addQueryParameter("username", normalizedUsername)
+                .addQueryParameter("password", normalizedPassword)
+                .addQueryParameter("action", "get_live_streams")
+                .build()
+            val liveCategoriesUrl = normalizedBaseUrl.toHttpUrl()
+                .newBuilder()
+                .addPathSegment("player_api.php")
+                .addQueryParameter("username", normalizedUsername)
+                .addQueryParameter("password", normalizedPassword)
+                .addQueryParameter("action", "get_live_categories")
+                .build()
+
+            val body = okHttpClient.newCall(Request.Builder().url(liveStreamsUrl).build())
+                .execute()
+                .use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    response.body?.string().orEmpty()
+                }
+                .trim()
+            if (!body.startsWith("[")) {
+                error("Xtream did not return live channel list; check server, login and password")
+            }
+            val categoryById = runCatching {
+                val categoriesBody = okHttpClient.newCall(Request.Builder().url(liveCategoriesUrl).build())
+                    .execute()
+                    .use { response ->
+                        if (response.isSuccessful) {
+                            response.body?.string().orEmpty()
+                        } else {
+                            ""
+                        }
+                    }
+                    .trim()
+                if (categoriesBody.startsWith("[")) {
+                    parseXtreamCategoryNames(JSONArray(categoriesBody))
+                } else {
+                    emptyMap()
+                }
+            }.getOrDefault(emptyMap())
+
+            val streams = JSONArray(body)
+            val rawPlaylist = buildXtreamM3u(
+                baseUrl = normalizedBaseUrl,
+                username = normalizedUsername,
+                password = normalizedPassword,
+                streams = streams,
+                categoryById = categoryById
+            )
+            importParsedPlaylist(
+                playlistName = name,
+                rawPlaylist = rawPlaylist,
+                sourceType = PlaylistSourceType.XTREAM,
+                source = "$normalizedBaseUrl/player_api.php?username=${urlEncode(normalizedUsername)}&action=get_live_streams"
+            )
+        }.getOrElse { throwable ->
+            AppResult.Error("Unable to import Xtream Codes: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
+        }
+    }
+
+    override suspend fun importFromStalker(
+        portalUrl: String,
+        macAddress: String,
+        name: String
+    ): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
+        val normalizedPortalUrl = normalizeStalkerPortalUrl(portalUrl)
+        val normalizedMac = macAddress.trim().uppercase(Locale.US)
+        if (normalizedPortalUrl.isBlank()) return@withContext AppResult.Error("Stalker portal URL is empty")
+        if (!STALKER_MAC_REGEX.matches(normalizedMac)) {
+            return@withContext AppResult.Error("Stalker MAC must look like 00:1A:79:00:00:00")
+        }
+
+        runCatching {
+            val token = requestStalkerJson(
+                portalUrl = normalizedPortalUrl,
+                macAddress = normalizedMac,
+                token = null,
+                type = "stb",
+                action = "handshake"
+            ).optJSONObject("js")?.optString("token").orEmpty()
+            if (token.isBlank()) error("Stalker portal did not return auth token")
+
+            val genresResponse = requestStalkerJson(
+                portalUrl = normalizedPortalUrl,
+                macAddress = normalizedMac,
+                token = token,
+                type = "itv",
+                action = "get_genres"
+            )
+            val genreById = parseStalkerGenres(genresResponse.optJSONArray("js") ?: JSONArray())
+
+            val channelsResponse = requestStalkerJson(
+                portalUrl = normalizedPortalUrl,
+                macAddress = normalizedMac,
+                token = token,
+                type = "itv",
+                action = "get_all_channels"
+            )
+            val channels = channelsResponse.optJSONObject("js")
+                ?.optJSONArray("data")
+                ?: channelsResponse.optJSONArray("js")
+                ?: JSONArray()
+            val rawPlaylist = buildStalkerM3u(
+                channels = channels,
+                genreById = genreById
+            )
+
+            importParsedPlaylist(
+                playlistName = name,
+                rawPlaylist = rawPlaylist,
+                sourceType = PlaylistSourceType.STALKER,
+                source = "$normalizedPortalUrl/server/load.php?type=itv&action=get_all_channels&mac=$normalizedMac"
+            )
+        }.getOrElse { throwable ->
+            AppResult.Error("Unable to import Stalker Portal: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
         }
     }
 
@@ -311,6 +453,61 @@ class PlaylistRepositoryImpl @Inject constructor(
         AppResult.Success(channel.toModel())
     }
 
+    override suspend fun getPlaylistContentSummary(playlistId: Long): AppResult<PlaylistContentSummary> = withContext(Dispatchers.IO) {
+        if (playlistId <= 0) return@withContext AppResult.Error("Invalid playlist id")
+        val playlist = playlistDao.findById(playlistId)
+            ?: return@withContext AppResult.Error("Playlist not found: id=$playlistId")
+        val channels = channelDao.getChannels(playlistId).map { it.toModel() }
+        val healthCounts = channels.groupingBy { it.health }.eachCount()
+        val groups = channels
+            .asSequence()
+            .map { it.group?.trim().orEmpty().ifBlank { "Без группы" } }
+            .groupingBy { it }
+            .eachCount()
+        val previews = channels
+            .sortedWith(
+                compareByDescending<Channel> { !it.logo.isNullOrBlank() }
+                    .thenBy { it.isHidden }
+                    .thenBy { it.orderIndex }
+            )
+            .take(16)
+            .map { channel ->
+                ChannelPreview(
+                    id = channel.id,
+                    name = channel.name,
+                    group = channel.group,
+                    logo = channel.logo,
+                    health = channel.health,
+                    isHidden = channel.isHidden
+                )
+            }
+
+        AppResult.Success(
+            PlaylistContentSummary(
+                playlistId = playlist.id,
+                playlistName = playlist.name,
+                sourceType = PlaylistSourceType.valueOf(playlist.sourceType),
+                source = playlist.source,
+                epgSourceUrl = playlist.epgSourceUrl,
+                totalChannels = channels.size,
+                visibleChannels = channels.count { !it.isHidden },
+                hiddenChannels = channels.count { it.isHidden },
+                channelsWithLogo = channels.count { !it.logo.isNullOrBlank() },
+                channelsWithTvgId = channels.count { !it.tvgId.isNullOrBlank() },
+                availableChannels = healthCounts[ChannelHealth.AVAILABLE].orZero(),
+                unstableChannels = healthCounts[ChannelHealth.UNSTABLE].orZero(),
+                unavailableChannels = healthCounts[ChannelHealth.UNAVAILABLE].orZero(),
+                unknownHealthChannels = healthCounts[ChannelHealth.UNKNOWN].orZero(),
+                groupCount = groups.size,
+                topGroups = groups.entries
+                    .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+                    .take(8)
+                    .map { it.key to it.value },
+                channelPreviews = previews
+            )
+        )
+    }
+
     override suspend fun getChannelEpgNowNext(channelId: Long): AppResult<ChannelEpgInfo> = withContext(Dispatchers.IO) {
         if (channelId <= 0) return@withContext AppResult.Error("Invalid channel id")
         val channelEntity = channelDao.findById(channelId)
@@ -354,6 +551,58 @@ class PlaylistRepositoryImpl @Inject constructor(
                 upcoming = upcoming
             )
         )
+    }
+
+    override suspend fun getPlaylistEpgWindow(
+        playlistId: Long,
+        startEpochMs: Long,
+        endEpochMs: Long,
+        query: String?
+    ): AppResult<Map<Long, List<EpgProgram>>> = withContext(Dispatchers.IO) {
+        if (playlistId <= 0) return@withContext AppResult.Error("Invalid playlist id")
+        if (endEpochMs <= startEpochMs) return@withContext AppResult.Error("Invalid EPG time window")
+
+        val playlist = playlistDao.findById(playlistId)
+            ?: return@withContext AppResult.Error("Playlist not found: id=$playlistId")
+        val epgUrl = playlist.epgSourceUrl?.trim().orEmpty()
+        if (epgUrl.isBlank()) {
+            return@withContext AppResult.Error("EPG source URL is not configured for playlist ${playlist.id}")
+        }
+
+        val epgData = runCatching { getOrLoadXmlTv(epgUrl) }.getOrElse { throwable ->
+            return@withContext AppResult.Error(
+                "Unable to load EPG: ${throwable.toLogSummary(maxDepth = 4)}",
+                throwable
+            )
+        }
+
+        val normalizedQuery = query?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        val result = channelDao.getChannels(playlistId)
+            .asSequence()
+            .filter { !it.isHidden }
+            .mapNotNull { channel ->
+                val match = matchChannelToEpg(
+                    channelName = channel.name,
+                    tvgId = channel.tvgId,
+                    data = epgData
+                )
+                val programs = match.programs
+                    .asSequence()
+                    .filter { it.endEpochMs > startEpochMs && it.startEpochMs < endEpochMs }
+                    .filter { program ->
+                        normalizedQuery.isBlank() ||
+                            program.title.lowercase(Locale.ROOT).contains(normalizedQuery) ||
+                            program.description?.lowercase(Locale.ROOT)?.contains(normalizedQuery) == true ||
+                            program.category?.lowercase(Locale.ROOT)?.contains(normalizedQuery) == true ||
+                            channel.name.lowercase(Locale.ROOT).contains(normalizedQuery)
+                    }
+                    .sortedBy { it.startEpochMs }
+                    .toList()
+                if (programs.isEmpty()) null else channel.id to programs
+            }
+            .toMap()
+
+        AppResult.Success(result)
     }
 
     private suspend fun importParsedPlaylist(
@@ -443,6 +692,183 @@ class PlaylistRepositoryImpl @Inject constructor(
         } else {
             File(pathOrUri).readText()
         }
+    }
+
+    private fun normalizeStalkerPortalUrl(portalUrl: String): String {
+        return portalUrl
+            .trim()
+            .trimEnd('/')
+            .removeSuffix("/c")
+            .let { value ->
+                if (value.endsWith("/stalker_portal", ignoreCase = true)) value else "$value/stalker_portal"
+            }
+    }
+
+    private fun requestStalkerJson(
+        portalUrl: String,
+        macAddress: String,
+        token: String?,
+        type: String,
+        action: String
+    ): JSONObject {
+        val url = portalUrl.toHttpUrl()
+            .newBuilder()
+            .addPathSegment("server")
+            .addPathSegment("load.php")
+            .addQueryParameter("type", type)
+            .addQueryParameter("action", action)
+            .addQueryParameter("JsHttpRequest", "1-xml")
+            .build()
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .header("User-Agent", STALKER_USER_AGENT)
+            .header("Cookie", "mac=$macAddress; stb_lang=en; timezone=UTC")
+            .header("X-User-Agent", STALKER_USER_AGENT)
+            .header("Referer", "$portalUrl/c/")
+        if (!token.isNullOrBlank()) {
+            requestBuilder.header("Authorization", "Bearer $token")
+        }
+
+        val body = okHttpClient.newCall(requestBuilder.build())
+            .execute()
+            .use { response ->
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                response.body?.string().orEmpty()
+            }
+            .trim()
+        if (!body.startsWith("{")) {
+            error("Stalker portal returned non-JSON response")
+        }
+        return JSONObject(body)
+    }
+
+    private fun parseStalkerGenres(genres: JSONArray): Map<String, String> {
+        val result = linkedMapOf<String, String>()
+        for (index in 0 until genres.length()) {
+            val item = genres.optJSONObject(index) ?: continue
+            val id = item.optString("id").trim()
+            val title = item.optString("title").trim()
+            if (id.isNotBlank() && title.isNotBlank()) {
+                result[id] = title
+            }
+        }
+        return result
+    }
+
+    private fun buildStalkerM3u(
+        channels: JSONArray,
+        genreById: Map<String, String>
+    ): String {
+        val builder = StringBuilder("#EXTM3U\n")
+        for (index in 0 until channels.length()) {
+            val item = channels.optJSONObject(index) ?: continue
+            val name = item.optString("name").trim()
+            val streamUrl = normalizeStalkerStreamUrl(item.optString("cmd"))
+            if (name.isBlank() || streamUrl.isNullOrBlank()) continue
+
+            val tvgId = item.optString("xmltv_id").trim()
+                .ifBlank { item.optString("id").trim() }
+            val logo = item.optString("logo").trim()
+            val group = genreById[item.optString("tv_genre_id").trim()].orEmpty()
+
+            builder
+                .append("#EXTINF:-1")
+                .appendM3uAttribute("tvg-id", tvgId)
+                .appendM3uAttribute("tvg-logo", logo)
+                .appendM3uAttribute("group-title", group)
+                .append(',')
+                .append(name)
+                .append('\n')
+                .append(streamUrl)
+                .append('\n')
+        }
+        return builder.toString()
+    }
+
+    private fun normalizeStalkerStreamUrl(rawCommand: String): String? {
+        val cleaned = rawCommand
+            .trim()
+            .removePrefix("ffmpeg ")
+            .removePrefix("auto ")
+            .trim()
+        return cleaned
+            .takeIf {
+                it.startsWith("http://", ignoreCase = true) ||
+                    it.startsWith("https://", ignoreCase = true)
+            }
+            ?.substringBefore(' ')
+    }
+
+    private fun buildXtreamM3u(
+        baseUrl: String,
+        username: String,
+        password: String,
+        streams: JSONArray,
+        categoryById: Map<String, String>
+    ): String {
+        val builder = StringBuilder("#EXTM3U\n")
+        for (index in 0 until streams.length()) {
+            val item = streams.optJSONObject(index) ?: continue
+            val streamId = item.optString("stream_id").trim()
+            val channelName = item.optString("name").trim()
+            if (streamId.isBlank() || channelName.isBlank()) continue
+
+            val tvgId = item.optString("epg_channel_id").trim()
+            val logo = item.optString("stream_icon").trim()
+            val categoryId = item.optString("category_id").trim()
+            val group = item.optString("category_name").trim()
+                .ifBlank { categoryById[categoryId].orEmpty() }
+            val extension = item.optString("container_extension")
+                .trim()
+                .ifBlank { "ts" }
+                .trimStart('.')
+
+            builder
+                .append("#EXTINF:-1")
+                .appendM3uAttribute("tvg-id", tvgId)
+                .appendM3uAttribute("tvg-logo", logo)
+                .appendM3uAttribute("group-title", group)
+                .append(',')
+                .append(channelName)
+                .append('\n')
+                .append(baseUrl)
+                .append("/live/")
+                .append(urlEncode(username))
+                .append('/')
+                .append(urlEncode(password))
+                .append('/')
+                .append(urlEncode(streamId))
+                .append('.')
+                .append(extension)
+                .append('\n')
+        }
+        return builder.toString()
+    }
+
+    private fun parseXtreamCategoryNames(categories: JSONArray): Map<String, String> {
+        val result = linkedMapOf<String, String>()
+        for (index in 0 until categories.length()) {
+            val item = categories.optJSONObject(index) ?: continue
+            val categoryId = item.optString("category_id").trim()
+            val categoryName = item.optString("category_name").trim()
+            if (categoryId.isNotBlank() && categoryName.isNotBlank()) {
+                result[categoryId] = categoryName
+            }
+        }
+        return result
+    }
+
+    private fun StringBuilder.appendM3uAttribute(key: String, value: String): StringBuilder {
+        if (value.isBlank()) return this
+        return append(' ')
+            .append(key)
+            .append("=\"")
+            .append(value.replace("\"", "'"))
+            .append('"')
+    }
+
+    private fun urlEncode(value: String): String {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8.name())
     }
 
     private fun deduplicate(channels: List<Channel>): List<Channel> {
@@ -839,8 +1265,10 @@ class PlaylistRepositoryImpl @Inject constructor(
         const val HEALTH_CHECK_RETRIES = 2
         const val HEALTH_RETRY_DELAY_MS = 450L
         const val EPG_CACHE_TTL_MS = 15 * 60 * 1000L
+        const val STALKER_USER_AGENT = "Mozilla/5.0 (QtEmbedded; U; Linux; MAG200; en-US) AppleWebKit/533.3"
         val XMLTV_TIME_REGEX =
             Regex("^(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})?\\s*([+\\-]\\d{4})?.*$")
+        val STALKER_MAC_REGEX = Regex("^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
         val RETRIABLE_HTTP_CODES = setOf(408, 429, 500, 502, 503, 504)
         val LOGO_BY_TVG_ID = mapOf(
             "bbcone.uk" to "https://upload.wikimedia.org/wikipedia/commons/4/47/BBC_One_logo.svg",
@@ -1025,6 +1453,20 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
+    override fun observeParentalControlSettings(): Flow<ParentalControlSettings> {
+        return context.settingsDataStore.data.map { prefs ->
+            ParentalControlSettings(
+                enabled = prefs[SettingsKeys.parentalEnabled] ?: false,
+                pinConfigured = !prefs[SettingsKeys.parentalPinHash].isNullOrBlank(),
+                hideAdultChannels = prefs[SettingsKeys.parentalHideAdultChannels] ?: true,
+                blockedKeywords = decodeKeywordList(
+                    prefs[SettingsKeys.parentalBlockedKeywords],
+                    DEFAULT_PARENTAL_KEYWORDS
+                )
+            )
+        }
+    }
+
     override suspend fun setDefaultPlayer(playerType: PlayerType) {
         context.settingsDataStore.edit { prefs ->
             prefs[SettingsKeys.defaultPlayer] = playerType.name
@@ -1185,6 +1627,32 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun setParentalControl(
+        enabled: Boolean,
+        pin: String?,
+        hideAdultChannels: Boolean,
+        blockedKeywords: List<String>
+    ) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[SettingsKeys.parentalEnabled] = enabled
+            prefs[SettingsKeys.parentalHideAdultChannels] = hideAdultChannels
+            prefs[SettingsKeys.parentalBlockedKeywords] = encodeKeywordList(blockedKeywords)
+            val normalizedPin = pin?.trim().orEmpty()
+            if (normalizedPin.isNotBlank()) {
+                prefs[SettingsKeys.parentalPinHash] = hashPin(normalizedPin)
+            }
+        }
+    }
+
+    override suspend fun verifyParentalPin(pin: String): Boolean {
+        val normalized = pin.trim()
+        if (normalized.isBlank()) return false
+        val storedHash = context.settingsDataStore.data.map { prefs ->
+            prefs[SettingsKeys.parentalPinHash].orEmpty()
+        }.first()
+        return storedHash.isNotBlank() && storedHash == hashPin(normalized)
+    }
+
     private fun parseChannelOverrides(raw: String?): Map<Long, PlayerType> {
         if (raw.isNullOrBlank()) return emptyMap()
         return raw.split(';')
@@ -1267,6 +1735,31 @@ class SettingsRepositoryImpl @Inject constructor(
         }.getOrDefault(raw)
     }
 
+    private fun encodeKeywordList(items: List<String>): String {
+        return items
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .joinToString("|") { safeUrlEncode(it) }
+    }
+
+    private fun decodeKeywordList(raw: String?, fallback: List<String>): List<String> {
+        if (raw.isNullOrBlank()) return fallback
+        return raw.split("|")
+            .map { safeUrlDecode(it).trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .ifEmpty { fallback }
+    }
+
+    private fun hashPin(pin: String): String {
+        val input = "$PIN_HASH_SALT:$pin"
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(input.toByteArray(StandardCharsets.UTF_8))
+        return digest.joinToString("") { byte -> "%02x".format(byte) }
+    }
+
     private companion object {
         const val DEFAULT_MANUAL_START_MS = 12_000
         const val DEFAULT_MANUAL_REBUFFER_MS = 2_000
@@ -1278,6 +1771,19 @@ class SettingsRepositoryImpl @Inject constructor(
         const val MAX_SCANNER_LEARN_RELATED = 8
         const val MAX_SCANNER_LEARN_HITS = 9_999
         const val MAX_SCANNER_LEARN_QUERY_LENGTH = 120
+        const val PIN_HASH_SALT = "myscanerIPTV-parental-v1"
+        val DEFAULT_PARENTAL_KEYWORDS = listOf(
+            "adult",
+            "xxx",
+            "18+",
+            "porn",
+            "porno",
+            "erotic",
+            "sex",
+            "для взрослых",
+            "взрослые",
+            "эротика"
+        )
     }
 }
 
@@ -1346,3 +1852,5 @@ class EngineRepositoryImpl @Inject constructor(
         }
     }
 }
+
+private fun Int?.orZero(): Int = this ?: 0

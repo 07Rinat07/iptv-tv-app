@@ -1,0 +1,487 @@
+package com.iptv.tv.feature.epg
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import com.iptv.tv.core.model.EpgProgram
+import com.iptv.tv.core.model.Playlist
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+import kotlin.math.ceil
+import kotlin.math.max
+import kotlin.math.min
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun EpgGuideScreen(
+    onOpenPlayer: (playlistId: Long, channelId: Long) -> Unit,
+    onOpenPlayerSettings: (() -> Unit)? = null,
+    viewModel: EpgGuideViewModel = hiltViewModel()
+) {
+    val state by viewModel.uiState.collectAsState()
+    val gridScrollState = rememberScrollState()
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Text(state.title, style = MaterialTheme.typography.headlineMedium)
+            Text(
+                text = "Окно: ${formatWindow(state.windowStartMs, state.windowEndMs)}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    PlaylistPicker(
+                        playlists = state.playlists,
+                        selectedPlaylistId = state.selectedPlaylistId,
+                        onSelected = viewModel::selectPlaylist
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        EpgPresetChip("Сейчас", EpgWindowPreset.NOW, state.selectedPreset, viewModel::selectPreset)
+                        EpgPresetChip("Сегодня", EpgWindowPreset.TODAY, state.selectedPreset, viewModel::selectPreset)
+                        EpgPresetChip("Завтра", EpgWindowPreset.TOMORROW, state.selectedPreset, viewModel::selectPreset)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = state.query,
+                            onValueChange = viewModel::updateQuery,
+                            label = { Text("Поиск по передачам") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(onClick = viewModel::applySearch) {
+                            Text("Найти")
+                        }
+                        Button(onClick = viewModel::refresh) {
+                            Text("Обновить")
+                        }
+                    }
+                    Text(
+                        text = state.error ?: state.status,
+                        color = if (state.error == null) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (state.error != null && onOpenPlayerSettings != null) {
+                        Button(onClick = onOpenPlayerSettings) {
+                            Text("Открыть плеер и EPG мастер")
+                        }
+                    }
+                    if (state.isLoading) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        }
+
+        if (state.rows.isEmpty() && !state.isLoading) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                    Text(
+                        text = "Нет программ для выбранного окна. Проверьте EPG URL плейлиста или выберите другой день.",
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+            }
+        }
+
+        if (state.rows.isNotEmpty()) {
+            item {
+                EpgGridHeader(
+                    windowStartMs = state.windowStartMs,
+                    windowEndMs = state.windowEndMs,
+                    scrollState = gridScrollState
+                )
+            }
+            items(state.rows, key = { "grid-${it.channel.id}" }) { row ->
+                EpgGridRow(
+                    row = row,
+                    windowStartMs = state.windowStartMs,
+                    windowEndMs = state.windowEndMs,
+                    scrollState = gridScrollState,
+                    isSchedulingRecording = state.isSchedulingRecording,
+                    onOpenPlayer = {
+                        onOpenPlayer(row.channel.playlistId, row.channel.id)
+                    },
+                    onRecordProgram = { program -> viewModel.scheduleRecording(row, program) }
+                )
+            }
+            item {
+                Text(
+                    text = "Ниже тот же EPG списком: удобно читать описания передач.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        items(state.rows, key = { it.channel.id }) { row ->
+            EpgChannelCard(
+                row = row,
+                isSchedulingRecording = state.isSchedulingRecording,
+                onOpenPlayer = {
+                    onOpenPlayer(row.channel.playlistId, row.channel.id)
+                },
+                onRecordProgram = { program -> viewModel.scheduleRecording(row, program) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun EpgGridHeader(
+    windowStartMs: Long,
+    windowEndMs: Long,
+    scrollState: androidx.compose.foundation.ScrollState
+) {
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Row(modifier = Modifier.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "Канал",
+                modifier = Modifier.width(CHANNEL_COLUMN_WIDTH),
+                style = MaterialTheme.typography.titleSmall
+            )
+            Row(modifier = Modifier.horizontalScroll(scrollState)) {
+                val hours = gridHourCount(windowStartMs, windowEndMs)
+                repeat(hours) { index ->
+                    val slotStart = windowStartMs + TimeUnit.HOURS.toMillis(index.toLong())
+                    Text(
+                        text = formatTime(slotStart),
+                        modifier = Modifier.width(HOUR_WIDTH),
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpgGridRow(
+    row: EpgChannelRow,
+    windowStartMs: Long,
+    windowEndMs: Long,
+    scrollState: androidx.compose.foundation.ScrollState,
+    isSchedulingRecording: Boolean,
+    onOpenPlayer: () -> Unit,
+    onRecordProgram: (EpgProgram) -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(
+                modifier = Modifier.width(CHANNEL_COLUMN_WIDTH),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = row.channel.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = row.channel.group ?: "Без группы",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Button(onClick = onOpenPlayer) {
+                    Text("Смотреть")
+                }
+            }
+            Row(modifier = Modifier.horizontalScroll(scrollState)) {
+                var cursorMs = windowStartMs
+                row.programs
+                    .filter { it.endEpochMs > windowStartMs && it.startEpochMs < windowEndMs }
+                    .sortedBy { it.startEpochMs }
+                    .forEach { program ->
+                        val clippedStart = max(program.startEpochMs, windowStartMs)
+                        val clippedEnd = min(program.endEpochMs, windowEndMs)
+                        if (clippedStart > cursorMs) {
+                            Spacer(modifier = Modifier.width(widthForDuration(clippedStart - cursorMs)))
+                        }
+                        ProgramGridCard(
+                            program = program,
+                            width = widthForDuration(clippedEnd - clippedStart),
+                            isSchedulingRecording = isSchedulingRecording,
+                            onOpenPlayer = onOpenPlayer,
+                            onRecordProgram = { onRecordProgram(program) }
+                        )
+                        cursorMs = clippedEnd
+                    }
+                if (cursorMs < windowEndMs) {
+                    Spacer(modifier = Modifier.width(widthForDuration(windowEndMs - cursorMs)))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgramGridCard(
+    program: EpgProgram,
+    width: androidx.compose.ui.unit.Dp,
+    isSchedulingRecording: Boolean,
+    onOpenPlayer: () -> Unit,
+    onRecordProgram: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .width(width)
+            .heightIn(min = 92.dp)
+            .padding(end = 6.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "${formatTime(program.startEpochMs)}-${formatTime(program.endEpochMs)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+            Text(
+                text = program.title,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (width.value >= 150f) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Button(onClick = onOpenPlayer) {
+                        Text("Открыть")
+                    }
+                    Button(
+                        onClick = onRecordProgram,
+                        enabled = !isSchedulingRecording && program.endEpochMs > System.currentTimeMillis()
+                    ) {
+                        Text(if (isSchedulingRecording) "..." else "Записать")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaylistPicker(
+    playlists: List<Playlist>,
+    selectedPlaylistId: Long?,
+    onSelected: (Long) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = playlists.firstOrNull { it.id == selectedPlaylistId }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = selected?.name ?: "Плейлист не выбран",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Плейлист") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            playlists.forEach { playlist ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = if (playlist.epgSourceUrl.isNullOrBlank()) {
+                                "${playlist.name} (EPG не задан)"
+                            } else {
+                                playlist.name
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        onSelected(playlist.id)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpgPresetChip(
+    label: String,
+    preset: EpgWindowPreset,
+    selectedPreset: EpgWindowPreset,
+    onSelected: (EpgWindowPreset) -> Unit
+) {
+    FilterChip(
+        selected = preset == selectedPreset,
+        onClick = { onSelected(preset) },
+        label = { Text(label) }
+    )
+}
+
+@Composable
+private fun EpgChannelCard(
+    row: EpgChannelRow,
+    isSchedulingRecording: Boolean,
+    onOpenPlayer: () -> Unit,
+    onRecordProgram: (EpgProgram) -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(row.channel.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        text = row.channel.group ?: "Без группы",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Button(onClick = onOpenPlayer) {
+                    Text("Смотреть")
+                }
+            }
+            row.programs.take(8).forEach { program ->
+                ProgramRow(
+                    program = program,
+                    isSchedulingRecording = isSchedulingRecording,
+                    onRecordProgram = { onRecordProgram(program) }
+                )
+            }
+            if (row.programs.size > 8) {
+                Text(
+                    text = "Еще передач: ${row.programs.size - 8}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgramRow(
+    program: EpgProgram,
+    isSchedulingRecording: Boolean,
+    onRecordProgram: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = "${formatTime(program.startEpochMs)}-${formatTime(program.endEpochMs)}  ${program.title}",
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Button(
+                onClick = onRecordProgram,
+                enabled = !isSchedulingRecording && program.endEpochMs > System.currentTimeMillis()
+            ) {
+                Text(if (isSchedulingRecording) "..." else "Записать")
+            }
+        }
+        val details = listOfNotNull(program.category, program.description).joinToString(" | ")
+        if (details.isNotBlank()) {
+            Text(
+                text = details,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+private fun formatTime(epochMs: Long): String {
+    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epochMs))
+}
+
+private fun formatWindow(startMs: Long, endMs: Long): String {
+    if (startMs <= 0L || endMs <= 0L) return "-"
+    val formatter = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
+    return "${formatter.format(Date(startMs))} - ${formatter.format(Date(endMs))}"
+}
+
+private fun gridHourCount(startMs: Long, endMs: Long): Int {
+    val durationMs = (endMs - startMs).coerceAtLeast(TimeUnit.HOURS.toMillis(1))
+    return ceil(durationMs / TimeUnit.HOURS.toMillis(1).toDouble()).toInt().coerceAtLeast(1)
+}
+
+private fun widthForDuration(durationMs: Long): androidx.compose.ui.unit.Dp {
+    val minutes = TimeUnit.MILLISECONDS.toMinutes(durationMs).coerceAtLeast(1)
+    val width = (minutes / 60f) * HOUR_WIDTH.value
+    return width.coerceAtLeast(16f).dp
+}
+
+private val CHANNEL_COLUMN_WIDTH = 184.dp
+private val HOUR_WIDTH = 220.dp

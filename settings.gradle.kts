@@ -37,6 +37,7 @@ include(
     ":feature:editor",
     ":feature:favorites",
     ":feature:history",
+    ":feature:epg",
     ":feature:player",
     ":feature:downloads",
     ":feature:settings",

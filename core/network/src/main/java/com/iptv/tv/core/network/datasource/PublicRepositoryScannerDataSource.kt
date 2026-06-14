@@ -212,9 +212,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
     private suspend fun searchGitHubCode(request: ScannerSearchRequest): List<PlaylistCandidate> {
         val results = mutableListOf<PlaylistCandidate>()
         val perPage = request.limit.coerceAtMost(30)
-        val extensions = listOf("m3u", "m3u8")
-
-        extensions.forEach { extension ->
+        PLAYLIST_EXTENSIONS.forEach { extension ->
             val response = executeWithRetry(provider = PROVIDER_GITHUB) {
                 gitHubApi.searchCode(
                     query = buildGitHubCodeQuery(request, extension),
@@ -324,27 +322,35 @@ class PublicRepositoryScannerDataSource @Inject constructor(
     }
 
     private suspend fun searchGitLabBlobs(request: ScannerSearchRequest): List<PlaylistCandidate> {
-        val response = executeWithRetry(provider = PROVIDER_GITLAB) {
-            gitLabApi.searchBlobs(
-                search = "${request.query} m3u",
-                perPage = request.limit.coerceAtMost(50)
-            )
-        } ?: return emptyList()
+        val results = mutableListOf<PlaylistCandidate>()
+        PLAYLIST_EXTENSIONS.forEach { extension ->
+            val response = executeWithRetry(provider = PROVIDER_GITLAB) {
+                gitLabApi.searchBlobs(
+                    search = "${request.query} $extension",
+                    perPage = request.limit.coerceAtMost(50)
+                )
+            } ?: return@forEach
 
-        return response.map { item ->
-            val encodedPath = encodePathForApi(item.path)
-            val refQuery = item.ref?.takeIf { it.isNotBlank() }?.let { "?ref=${urlEncode(it)}" }.orEmpty()
-            PlaylistCandidate(
-                id = "gl:${item.project_id}/${item.path}",
-                provider = PROVIDER_GITLAB,
-                repository = item.project_id.toString(),
-                path = item.path,
-                name = item.filename,
-                downloadUrl = "https://gitlab.com/api/v4/projects/${item.project_id}/repository/files/$encodedPath/raw$refQuery",
-                updatedAt = "",
-                sizeBytes = null
-            )
+            response
+                .asSequence()
+                .filter { isPlaylistPath(it.path) || it.path.endsWith(".$extension", ignoreCase = true) }
+                .forEach { item ->
+                    val encodedPath = encodePathForApi(item.path)
+                    val refQuery = item.ref?.takeIf { it.isNotBlank() }?.let { "?ref=${urlEncode(it)}" }.orEmpty()
+                    results += PlaylistCandidate(
+                        id = "gl:${item.project_id}/${item.path}",
+                        provider = PROVIDER_GITLAB,
+                        repository = item.project_id.toString(),
+                        path = item.path,
+                        name = item.filename,
+                        downloadUrl = "https://gitlab.com/api/v4/projects/${item.project_id}/repository/files/$encodedPath/raw$refQuery",
+                        updatedAt = "",
+                        sizeBytes = null
+                    )
+                }
         }
+
+        return results.distinctBy { it.id }.take(request.limit)
     }
 
     private suspend fun searchGitLabProjectTrees(request: ScannerSearchRequest): List<PlaylistCandidate> {
@@ -624,14 +630,20 @@ class PublicRepositoryScannerDataSource @Inject constructor(
 
         if (request.providerScope == ScannerProviderScope.ALL) {
             variations += "$searchBase iptv m3u github"
+            variations += "$searchBase iptv m3u8 github"
             variations += "$searchBase iptv m3u gitlab"
+            variations += "$searchBase iptv m3u8 gitlab"
             variations += "$searchBase iptv m3u bitbucket"
+            variations += "$searchBase iptv m3u8 bitbucket"
             variations += "$searchBase m3u8 url"
             variations += "$searchBase filetype:m3u"
             variations += "$searchBase filetype:m3u8"
             variations += "$searchBase forum m3u"
+            variations += "$searchBase forum m3u8"
             variations += "$searchBase reddit m3u"
+            variations += "$searchBase reddit m3u8"
             variations += "$searchBase 4pda m3u"
+            variations += "$searchBase 4pda m3u8"
         }
 
         return variations
@@ -958,10 +970,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                     val payload = response.body?.string().orEmpty()
                     if (payload.isBlank()) return@withTimeout false
                     val contentType = response.header("Content-Type").orEmpty().lowercase()
-                    if (contentType.contains("application/vnd.apple.mpegurl") ||
-                        contentType.contains("application/x-mpegurl") ||
-                        contentType.contains("audio/mpegurl")
-                    ) {
+                    if (isPlaylistContentType(contentType)) {
                         return@withTimeout true
                     }
                     val normalized = payload.lowercase()
@@ -1196,7 +1205,12 @@ class PublicRepositoryScannerDataSource @Inject constructor(
     }
 
     private fun isPlaylistPath(path: String): Boolean {
-        return path.endsWith(".m3u", ignoreCase = true) || path.endsWith(".m3u8", ignoreCase = true)
+        return PLAYLIST_EXTENSIONS.any { extension -> path.endsWith(".$extension", ignoreCase = true) }
+    }
+
+    private fun isPlaylistContentType(contentType: String): Boolean {
+        val normalized = contentType.substringBefore(';').trim().lowercase()
+        return normalized in PLAYLIST_CONTENT_TYPES || normalized.contains("mpegurl")
     }
 
     private fun canProbeExtensionlessPlaylist(host: String, path: String): Boolean {
@@ -1434,12 +1448,21 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         const val BITBUCKET_SOURCE_PAGE_SIZE = 100
         const val MAX_BITBUCKET_PAGES = 3
 
-        const val MAX_WEB_SEARCH_QUERIES = 14
+        const val MAX_WEB_SEARCH_QUERIES = 20
         const val MAX_WEB_LINKS_PER_QUERY = 36
         const val MAX_WEB_PROBES = 48
         const val WEB_PROBE_TIMEOUT_MS = 4_000L
 
         val HTML_LINK_REGEX = Regex("href=[\"']([^\"'#<>]+)[\"']", RegexOption.IGNORE_CASE)
+        val PLAYLIST_EXTENSIONS = listOf("m3u", "m3u8")
+        val PLAYLIST_CONTENT_TYPES = setOf(
+            "application/vnd.apple.mpegurl",
+            "application/x-mpegurl",
+            "audio/x-mpegurl",
+            "audio/mpegurl",
+            "application/mpegurl",
+            "vnd.apple.mpegurl"
+        )
 
         val IPTV_INTENT_TOKENS = setOf(
             "iptv", "m3u", "m3u8", "playlist", "playlists", "tv", "каналы", "список"

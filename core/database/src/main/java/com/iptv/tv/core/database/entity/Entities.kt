@@ -101,3 +101,120 @@ data class DownloadEntity(
     val status: String,
     val createdAt: Long
 )
+
+@Entity(
+    tableName = "recordings",
+    indices = [
+        Index(value = ["channelId"]),
+        Index(value = ["status"]),
+        Index(value = ["scheduledStartAt"]),
+        Index(value = ["createdAt"])
+    ]
+)
+data class RecordingEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val channelId: Long,
+    val channelName: String,
+    val programTitle: String?,
+    val streamUrl: String,
+    val filePath: String?,
+    val status: String,
+    val startedAt: Long?,
+    val endedAt: Long?,
+    val scheduledStartAt: Long?,
+    val scheduledEndAt: Long?,
+    val createdAt: Long
+)
+
+@Entity(
+    tableName = "recording_schedules",
+    indices = [
+        Index(value = ["channelId"]),
+        Index(value = ["startAt"]),
+        Index(value = ["enabled"])
+    ]
+)
+data class RecordingScheduleEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val channelId: Long,
+    val channelName: String,
+    val programTitle: String?,
+    val startAt: Long,
+    val endAt: Long,
+    val repeatMode: String,
+    val enabled: Boolean,
+    val createdAt: Long
+)
+
+@Entity(
+    tableName = "playlist_providers",
+    indices = [
+        Index(value = ["type"]),
+        Index(value = ["baseUrl"]),
+        Index(value = ["linkedPlaylistId"])
+    ]
+)
+data class PlaylistProviderEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val type: String,
+    val name: String,
+    val baseUrl: String,
+    val username: String?,
+    val password: String?,
+    val token: String?,
+    val macAddress: String?,
+    val authType: String,
+    val linkedPlaylistId: Long?,
+    val lastSyncedAt: Long?,
+    val createdAt: Long
+)
+
+@Entity(
+    tableName = "parental_profiles",
+    indices = [
+        Index(value = ["enabled"])
+    ]
+)
+data class ParentalProfileEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val pinHash: String,
+    val blockedKeywordsCsv: String,
+    val lockedSettings: Boolean,
+    val enabled: Boolean,
+    val createdAt: Long
+)
+
+@Entity(
+    tableName = "channel_metadata",
+    indices = [
+        Index(value = ["country"]),
+        Index(value = ["language"]),
+        Index(value = ["category"])
+    ]
+)
+data class ChannelMetadataEntity(
+    @PrimaryKey val channelId: Long,
+    val normalizedName: String?,
+    val country: String?,
+    val language: String?,
+    val category: String?,
+    val resolvedLogoUrl: String?,
+    val manualLogoUrl: String?,
+    val metadataSource: String?,
+    val updatedAt: Long
+)
+
+@Entity(
+    tableName = "tv_home_channels",
+    indices = [
+        Index(value = ["enabled"]),
+        Index(value = ["lastPublishedAt"])
+    ]
+)
+data class TvHomeChannelEntity(
+    @PrimaryKey val type: String,
+    val providerChannelId: Long?,
+    val enabled: Boolean,
+    val lastPublishedAt: Long?
+)

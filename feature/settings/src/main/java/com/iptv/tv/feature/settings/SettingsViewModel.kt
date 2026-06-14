@@ -2,7 +2,9 @@ package com.iptv.tv.feature.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.SettingsRepository
+import com.iptv.tv.core.domain.repository.TvHomeIntegrationRepository
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.ScannerProxySettings
@@ -34,14 +36,22 @@ data class SettingsUiState(
     val scannerProxyPort: String = "",
     val scannerProxyUsername: String = "",
     val scannerProxyPassword: String = "",
+    val parentalEnabled: Boolean = false,
+    val parentalPinConfigured: Boolean = false,
+    val parentalHideAdultChannels: Boolean = true,
+    val parentalKeywordsText: String = "adult, xxx, 18+, porn, porno, erotic, sex, для взрослых, взрослые, эротика",
+    val parentalCurrentPin: String = "",
+    val parentalNewPin: String = "",
     val isSaving: Boolean = false,
+    val isPublishingTvHome: Boolean = false,
     val lastError: String? = null,
     val lastInfo: String? = null
 )
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val tvHomeIntegrationRepository: TvHomeIntegrationRepository
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
@@ -190,6 +200,26 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(scannerProxyPassword = value, lastError = null) }
     }
 
+    fun setParentalEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(parentalEnabled = enabled, lastError = null) }
+    }
+
+    fun setParentalHideAdultChannels(enabled: Boolean) {
+        _uiState.update { it.copy(parentalHideAdultChannels = enabled, lastError = null) }
+    }
+
+    fun updateParentalKeywords(value: String) {
+        _uiState.update { it.copy(parentalKeywordsText = value, lastError = null) }
+    }
+
+    fun updateParentalCurrentPin(value: String) {
+        _uiState.update { it.copy(parentalCurrentPin = value.filter { ch -> ch.isDigit() }.take(8), lastError = null) }
+    }
+
+    fun updateParentalNewPin(value: String) {
+        _uiState.update { it.copy(parentalNewPin = value.filter { ch -> ch.isDigit() }.take(8), lastError = null) }
+    }
+
     fun saveScannerProxySettings() {
         val state = _uiState.value
         val enabled = state.scannerProxyEnabled
@@ -220,6 +250,65 @@ class SettingsViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     lastInfo = if (enabled) "Прокси сканера сохранен и включен" else "Прокси сканера выключен",
+                    lastError = null
+                )
+            }
+        }
+    }
+
+    fun saveParentalControl() {
+        val state = _uiState.value
+        val keywords = state.parentalKeywordsText
+            .split(',', '\n', ';')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        val newPin = state.parentalNewPin.trim().ifBlank { null }
+
+        if (state.parentalEnabled && !state.parentalPinConfigured && newPin == null) {
+            _uiState.update { it.copy(lastError = "Для включения родительского контроля задайте PIN") }
+            return
+        }
+        if (newPin != null && newPin.length < 4) {
+            _uiState.update { it.copy(lastError = "PIN должен быть минимум 4 цифры") }
+            return
+        }
+        if (keywords.isEmpty()) {
+            _uiState.update { it.copy(lastError = "Добавьте хотя бы одно ключевое слово для adult-фильтра") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSaving = true, lastError = null, lastInfo = null) }
+            if (state.parentalPinConfigured) {
+                val verified = settingsRepository.verifyParentalPin(state.parentalCurrentPin)
+                if (!verified) {
+                    _uiState.update {
+                        it.copy(
+                            isSaving = false,
+                            lastError = "Текущий PIN неверный",
+                            lastInfo = null
+                        )
+                    }
+                    return@launch
+                }
+            }
+
+            settingsRepository.setParentalControl(
+                enabled = state.parentalEnabled,
+                pin = newPin,
+                hideAdultChannels = state.parentalHideAdultChannels,
+                blockedKeywords = keywords
+            )
+            _uiState.update {
+                it.copy(
+                    isSaving = false,
+                    parentalCurrentPin = "",
+                    parentalNewPin = "",
+                    lastInfo = if (state.parentalEnabled) {
+                        "Родительский контроль сохранён"
+                    } else {
+                        "Родительский контроль выключен"
+                    },
                     lastError = null
                 )
             }
@@ -257,6 +346,12 @@ class SettingsViewModel @Inject constructor(
                     password = ""
                 )
             )
+            settingsRepository.setParentalControl(
+                enabled = false,
+                pin = null,
+                hideAdultChannels = true,
+                blockedKeywords = DEFAULT_PARENTAL_KEYWORDS
+            )
 
             _uiState.update {
                 it.copy(
@@ -282,6 +377,35 @@ class SettingsViewModel @Inject constructor(
             _uiState.update { it.copy(isSaving = true, lastError = null, lastInfo = null) }
             settingsRepository.setManualBuffer(startMs = start, rebufferMs = rebuffer, maxMs = max)
             _uiState.update { it.copy(isSaving = false, lastInfo = "Ручные параметры буфера сохранены") }
+        }
+    }
+
+    fun publishTvHomeNow() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isPublishingTvHome = true, lastError = null, lastInfo = null) }
+            val results = listOf(
+                "Недавние" to tvHomeIntegrationRepository.publishRecentChannels(),
+                "Избранное" to tvHomeIntegrationRepository.publishFavorites(),
+                "Записи" to tvHomeIntegrationRepository.publishRecordings(),
+                "Watch Next" to tvHomeIntegrationRepository.publishWatchNext()
+            )
+            val errors = results.mapNotNull { (label, result) ->
+                if (result is AppResult.Error) "$label: ${result.message}" else null
+            }
+            val published = results.sumOf { (_, result) ->
+                (result as? AppResult.Success<Int>)?.data ?: 0
+            }
+            _uiState.update {
+                it.copy(
+                    isPublishingTvHome = false,
+                    lastInfo = if (errors.isEmpty()) {
+                        "Android TV Home обновлён: $published карточек"
+                    } else {
+                        null
+                    },
+                    lastError = errors.joinToString("; ").takeIf { text -> text.isNotBlank() }
+                )
+            }
         }
     }
 
@@ -355,6 +479,18 @@ class SettingsViewModel @Inject constructor(
                 }
             }
         }
+        viewModelScope.launch {
+            settingsRepository.observeParentalControlSettings().collect { parental ->
+                _uiState.update {
+                    it.copy(
+                        parentalEnabled = parental.enabled,
+                        parentalPinConfigured = parental.pinConfigured,
+                        parentalHideAdultChannels = parental.hideAdultChannels,
+                        parentalKeywordsText = parental.blockedKeywords.joinToString(", ")
+                    )
+                }
+            }
+        }
     }
 
     private companion object {
@@ -362,6 +498,17 @@ class SettingsViewModel @Inject constructor(
         const val DEFAULT_MANUAL_START_MS = 12_000
         const val DEFAULT_MANUAL_REBUFFER_MS = 2_000
         const val DEFAULT_MANUAL_MAX_MS = 50_000
+        val DEFAULT_PARENTAL_KEYWORDS = listOf(
+            "adult",
+            "xxx",
+            "18+",
+            "porn",
+            "porno",
+            "erotic",
+            "sex",
+            "для взрослых",
+            "взрослые",
+            "эротика"
+        )
     }
 }
-

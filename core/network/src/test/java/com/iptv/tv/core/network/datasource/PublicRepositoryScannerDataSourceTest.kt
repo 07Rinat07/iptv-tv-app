@@ -529,6 +529,48 @@ class PublicRepositoryScannerDataSourceTest {
         assertTrue(result.first().repository.contains("world", ignoreCase = true))
     }
 
+    @Test
+    fun gitLabBlobSearchQueriesM3uAndM3u8Formats() = runTest {
+        val gitLabApi = FakeGitLabApi(
+            blobsBySearch = mapOf(
+                "iptv m3u" to listOf(
+                    GitLabBlob(
+                        path = "tv/list.m3u",
+                        filename = "list.m3u",
+                        project_id = 10,
+                        ref = "main"
+                    )
+                ),
+                "iptv m3u8" to listOf(
+                    GitLabBlob(
+                        path = "live/list.m3u8",
+                        filename = "list.m3u8",
+                        project_id = 11,
+                        ref = "main"
+                    )
+                )
+            )
+        )
+        val source = PublicRepositoryScannerDataSource(
+            gitHubApi = FakeGitHubApi(),
+            gitLabApi = gitLabApi,
+            bitbucketApi = FakeBitbucketApi()
+        )
+
+        val result = source.search(
+            ScannerSearchRequest(
+                query = "iptv",
+                providerScope = ScannerProviderScope.GITLAB,
+                limit = 10
+            )
+        )
+
+        assertTrue(gitLabApi.blobSearchQueries.any { it.endsWith("m3u") })
+        assertTrue(gitLabApi.blobSearchQueries.any { it.endsWith("m3u8") })
+        assertTrue(result.any { it.path.endsWith(".m3u", ignoreCase = true) })
+        assertTrue(result.any { it.path.endsWith(".m3u8", ignoreCase = true) })
+    }
+
     private class FakeGitHubApi(
         private val codeSearch: GitHubSearchResponse = GitHubSearchResponse(total_count = 0, items = emptyList()),
         private val repositorySearch: GitHubRepositorySearchResponse = GitHubRepositorySearchResponse(
@@ -569,16 +611,20 @@ class PublicRepositoryScannerDataSourceTest {
 
     private class FakeGitLabApi(
         private val blobs: List<GitLabBlob> = emptyList(),
+        private val blobsBySearch: Map<String, List<GitLabBlob>> = emptyMap(),
         private val projects: List<GitLabProject> = emptyList(),
         private val treeItems: List<GitLabTreeItem> = emptyList()
     ) : GitLabApi {
+        val blobSearchQueries = mutableListOf<String>()
+
         override suspend fun searchBlobs(
             scope: String,
             search: String,
             perPage: Int,
             page: Int
         ): Response<List<GitLabBlob>> {
-            return Response.success(blobs)
+            blobSearchQueries += search
+            return Response.success(blobsBySearch[search] ?: blobs)
         }
 
         override suspend fun searchProjects(

@@ -31,5 +31,7 @@ class IptvApp : Application(), Configuration.Provider {
         val workManager = WorkManager.getInstance(this)
         SyncScheduler.schedulePlaylistSync(workManager, repeatHours = 12)
         SyncScheduler.scheduleDownloadQueue(workManager, repeatMinutes = 15)
+        SyncScheduler.scheduleRecordingQueue(workManager, repeatMinutes = 15)
+        SyncScheduler.scheduleTvHomePublish(workManager, repeatHours = 6)
     }
 }

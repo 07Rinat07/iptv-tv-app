@@ -3,7 +3,9 @@ package com.iptv.tv.core.domain.repository
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.model.ChannelEpgInfo
 import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.PlaylistImportReport
+import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistValidationReport
 import com.iptv.tv.core.model.Playlist
 import kotlinx.coroutines.flow.Flow
@@ -12,6 +14,17 @@ interface PlaylistRepository {
     fun observePlaylists(): Flow<List<Playlist>>
     fun observeChannels(playlistId: Long): Flow<List<Channel>>
     suspend fun importFromUrl(url: String, name: String): AppResult<PlaylistImportReport>
+    suspend fun importFromXtream(
+        baseUrl: String,
+        username: String,
+        password: String,
+        name: String
+    ): AppResult<PlaylistImportReport>
+    suspend fun importFromStalker(
+        portalUrl: String,
+        macAddress: String,
+        name: String
+    ): AppResult<PlaylistImportReport>
     suspend fun importFromText(text: String, name: String): AppResult<PlaylistImportReport>
     suspend fun importFromFile(pathOrUri: String, name: String): AppResult<PlaylistImportReport>
     suspend fun validatePlaylist(playlistId: Long): AppResult<PlaylistValidationReport>
@@ -20,5 +33,12 @@ interface PlaylistRepository {
     suspend fun deletePlaylist(playlistId: Long): AppResult<Int>
     suspend fun setPlaylistEpgSource(playlistId: Long, epgSourceUrl: String?): AppResult<Unit>
     suspend fun getChannelById(channelId: Long): AppResult<Channel>
+    suspend fun getPlaylistContentSummary(playlistId: Long): AppResult<PlaylistContentSummary>
     suspend fun getChannelEpgNowNext(channelId: Long): AppResult<ChannelEpgInfo>
+    suspend fun getPlaylistEpgWindow(
+        playlistId: Long,
+        startEpochMs: Long,
+        endEpochMs: Long,
+        query: String? = null
+    ): AppResult<Map<Long, List<EpgProgram>>>
 }

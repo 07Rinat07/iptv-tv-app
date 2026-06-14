@@ -7,8 +7,10 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -25,13 +27,25 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil.compose.AsyncImage
+import com.iptv.tv.core.model.ChannelPreview
+import com.iptv.tv.core.model.PlaylistContentSummary
 
 const val TAG_IMPORTER_PLAYLIST_NAME = "importer_playlist_name"
 const val TAG_IMPORTER_URL = "importer_url"
 const val TAG_IMPORTER_IMPORT_URL = "importer_import_url"
+const val TAG_IMPORTER_XTREAM_URL = "importer_xtream_url"
+const val TAG_IMPORTER_XTREAM_USERNAME = "importer_xtream_username"
+const val TAG_IMPORTER_XTREAM_PASSWORD = "importer_xtream_password"
+const val TAG_IMPORTER_IMPORT_XTREAM = "importer_import_xtream"
+const val TAG_IMPORTER_STALKER_URL = "importer_stalker_url"
+const val TAG_IMPORTER_STALKER_MAC = "importer_stalker_mac"
+const val TAG_IMPORTER_IMPORT_STALKER = "importer_import_stalker"
 const val TAG_IMPORTER_FILE_PATH = "importer_file_path"
 const val TAG_IMPORTER_IMPORT_FILE = "importer_import_file"
 const val TAG_IMPORTER_RAW_TEXT = "importer_raw_text"
@@ -114,6 +128,80 @@ fun ImporterScreen(
                     enabled = !state.isLoading
                 ) {
                     Text(if (state.isLoading) "Импорт..." else "Импорт URL")
+                }
+            }
+        }
+
+        item {
+            Text(text = "Xtream Codes", style = MaterialTheme.typography.titleMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = state.xtreamBaseUrl,
+                    onValueChange = viewModel::updateXtreamBaseUrl,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TAG_IMPORTER_XTREAM_URL),
+                    label = { Text("https://server.example:8080") },
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = state.xtreamUsername,
+                        onValueChange = viewModel::updateXtreamUsername,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag(TAG_IMPORTER_XTREAM_USERNAME),
+                        label = { Text("Логин") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = state.xtreamPassword,
+                        onValueChange = viewModel::updateXtreamPassword,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag(TAG_IMPORTER_XTREAM_PASSWORD),
+                        label = { Text("Пароль") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                }
+                Button(
+                    onClick = viewModel::importFromXtream,
+                    modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_XTREAM),
+                    enabled = !state.isLoading
+                ) {
+                    Text(if (state.isLoading) "Импорт..." else "Импорт Xtream")
+                }
+            }
+        }
+
+        item {
+            Text(text = "Stalker Portal", style = MaterialTheme.typography.titleMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = state.stalkerPortalUrl,
+                    onValueChange = viewModel::updateStalkerPortalUrl,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TAG_IMPORTER_STALKER_URL),
+                    label = { Text("http://portal.example/stalker_portal") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = state.stalkerMacAddress,
+                    onValueChange = viewModel::updateStalkerMacAddress,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TAG_IMPORTER_STALKER_MAC),
+                    label = { Text("00:1A:79:00:00:00") },
+                    singleLine = true
+                )
+                Button(
+                    onClick = viewModel::importFromStalker,
+                    modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_STALKER),
+                    enabled = !state.isLoading
+                ) {
+                    Text(if (state.isLoading) "Импорт..." else "Импорт Stalker")
                 }
             }
         }
@@ -237,6 +325,11 @@ fun ImporterScreen(
                     }
                 }
             }
+            state.lastContentSummary?.let { summary ->
+                item {
+                    ImportContentSummaryCard(summary)
+                }
+            }
             if (report.warnings.isNotEmpty()) {
                 items(report.warnings.take(20)) { warning ->
                     Text(text = warning, style = MaterialTheme.typography.bodySmall)
@@ -256,6 +349,64 @@ fun ImporterScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ImportContentSummaryCard(summary: PlaylistContentSummary) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Что сохранено", style = MaterialTheme.typography.titleMedium)
+            Text("Источник: ${summary.sourceType} | ${summary.source}")
+            Text("EPG: ${summary.epgSourceUrl?.takeIf { it.isNotBlank() } ?: "не задан"}")
+            Text(
+                "Каналы: всего=${summary.totalChannels}, видимых=${summary.visibleChannels}, " +
+                    "скрытых=${summary.hiddenChannels}"
+            )
+            Text(
+                "Лого: ${summary.channelsWithLogo}/${summary.totalChannels} | " +
+                    "tvg-id: ${summary.channelsWithTvgId}/${summary.totalChannels} | групп=${summary.groupCount}"
+            )
+            Text(
+                "Проверка: ok=${summary.availableChannels}, unstable=${summary.unstableChannels}, " +
+                    "down=${summary.unavailableChannels}, unknown=${summary.unknownHealthChannels}"
+            )
+            if (summary.topGroups.isNotEmpty()) {
+                Text("Группы: ${summary.topGroups.joinToString { "${it.first} (${it.second})" }}")
+            }
+            Text("Примеры каналов", style = MaterialTheme.typography.titleSmall)
+            summary.channelPreviews.take(10).forEach { preview ->
+                ChannelPreviewRow(preview)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChannelPreviewRow(preview: ChannelPreview) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(modifier = Modifier.size(42.dp), contentAlignment = Alignment.Center) {
+            if (!preview.logo.isNullOrBlank()) {
+                AsyncImage(
+                    model = preview.logo,
+                    contentDescription = preview.name,
+                    modifier = Modifier.size(38.dp)
+                )
+            } else {
+                Text("—", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(preview.name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "${preview.group ?: "Без группы"} | health=${preview.health} | hidden=${if (preview.isHidden) "да" else "нет"}",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }

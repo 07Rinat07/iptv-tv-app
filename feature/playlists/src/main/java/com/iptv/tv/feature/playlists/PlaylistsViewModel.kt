@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.Playlist
+import com.iptv.tv.core.model.PlaylistContentSummary
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +19,8 @@ data class PlaylistsUiState(
     val description: String = "Выберите список для редактирования или обновления",
     val playlists: List<Playlist> = emptyList(),
     val selectedPlaylistId: Long? = null,
+    val selectedSummary: PlaylistContentSummary? = null,
+    val isLoadingSummary: Boolean = false,
     val isRefreshing: Boolean = false,
     val isDeleting: Boolean = false,
     val lastError: String? = null,
@@ -36,17 +39,28 @@ class PlaylistsViewModel @Inject constructor(
             playlistRepository.observePlaylists().collect { playlists ->
                 _uiState.update { current ->
                     val selected = current.selectedPlaylistId?.takeIf { id -> playlists.any { it.id == id } }
+                    val effectiveSelected = selected ?: playlists.firstOrNull()?.id
                     current.copy(
                         playlists = playlists,
-                        selectedPlaylistId = selected ?: playlists.firstOrNull()?.id
+                        selectedPlaylistId = effectiveSelected,
+                        selectedSummary = current.selectedSummary?.takeIf { it.playlistId == effectiveSelected }
                     )
                 }
+                _uiState.value.selectedPlaylistId?.let { loadSummary(it) }
             }
         }
     }
 
     fun selectPlaylist(playlistId: Long) {
-        _uiState.update { it.copy(selectedPlaylistId = playlistId, lastError = null, lastInfo = null) }
+        _uiState.update {
+            it.copy(
+                selectedPlaylistId = playlistId,
+                selectedSummary = null,
+                lastError = null,
+                lastInfo = null
+            )
+        }
+        loadSummary(playlistId)
     }
 
     fun refreshSelectedPlaylist() {
@@ -112,5 +126,29 @@ class PlaylistsViewModel @Inject constructor(
             }
         }
     }
-}
 
+    private fun loadSummary(playlistId: Long) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingSummary = true) }
+            when (val result = playlistRepository.getPlaylistContentSummary(playlistId)) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            selectedSummary = result.data,
+                            isLoadingSummary = false
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update {
+                        it.copy(
+                            isLoadingSummary = false,
+                            lastError = result.message
+                        )
+                    }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+}

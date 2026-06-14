@@ -88,6 +88,9 @@ data class PlayerUiState(
     val manualBuffer: ManualBufferSettings = ManualBufferSettings(12_000, 2_000, 50_000),
     val engineEndpoint: String = "http://127.0.0.1:6878",
     val torEnabled: Boolean = false,
+    val parentalControlEnabled: Boolean = false,
+    val parentalHideAdultChannels: Boolean = true,
+    val parentalBlockedKeywords: List<String> = emptyList(),
     val engineConnected: Boolean = false,
     val enginePeers: Int = 0,
     val engineSpeedKbps: Int = 0,
@@ -100,6 +103,8 @@ data class PlayerUiState(
     val epgWizardStatus: String = "EPG мастер: выберите плейлист",
     val isSavingEpgWizard: Boolean = false,
     val internalSession: InternalPlaybackSession? = null,
+    val secondaryInternalSession: InternalPlaybackSession? = null,
+    val multiviewEnabled: Boolean = false,
     val playerVideoScale: PlayerVideoScale = PlayerVideoScale.FIT,
     val internalPlayerExpanded: Boolean = false,
     val testStreamUrl: String = "",
@@ -170,6 +175,8 @@ class PlayerViewModel @Inject constructor(
                     "EPG мастер: выберите плейлист"
                 },
                 internalSession = null,
+                secondaryInternalSession = null,
+                multiviewEnabled = false,
                 lastError = null,
                 lastInfo = null
             )
@@ -650,6 +657,25 @@ class PlayerViewModel @Inject constructor(
         playSelectedInternal()
     }
 
+    fun playChannelInSecondPane(channelId: Long) {
+        val channel = _uiState.value.channels.firstOrNull { it.id == channelId }
+        if (channel == null) {
+            _uiState.update { it.copy(lastError = "Канал для второго окна не найден", lastInfo = null) }
+            return
+        }
+        val aceDescriptor = detectAceDescriptor(channel.streamUrl)
+        if (aceDescriptor != null) {
+            _uiState.update {
+                it.copy(
+                    lastError = "Multiview 2-up пока поддерживает прямые http/https потоки. Ace/torrent канал откройте основным плеером.",
+                    lastInfo = null
+                )
+            }
+            return
+        }
+        startSecondaryInternalPlayback(channel)
+    }
+
     fun playSelectedVlc(context: Context) {
         playSelectedWith(playerType = PlayerType.VLC, context = context)
     }
@@ -826,6 +852,31 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    fun toggleMultiview() {
+        _uiState.update { state ->
+            val enabled = !state.multiviewEnabled
+            state.copy(
+                multiviewEnabled = enabled,
+                lastInfo = if (enabled) {
+                    "Multiview 2-up включен"
+                } else {
+                    "Multiview выключен"
+                },
+                lastError = null
+            )
+        }
+    }
+
+    fun stopSecondPane() {
+        _uiState.update {
+            it.copy(
+                secondaryInternalSession = null,
+                lastInfo = "Второе окно остановлено",
+                lastError = null
+            )
+        }
+    }
+
     fun installVlc(context: Context) {
         runCatching {
             context.startActivity(vlcLauncher.createInstallIntent())
@@ -850,6 +901,35 @@ class PlayerViewModel @Inject constructor(
             )
         }
         _uiState.update { it.copy(isStartingPlayback = false, lastError = null) }
+    }
+
+    fun onSecondaryPlaybackReady() {
+        viewModelScope.launch {
+            diagnosticsRepository.addLog(
+                status = "player_multiview_ready",
+                message = "Second pane ready",
+                playlistId = _uiState.value.selectedPlaylistId
+            )
+        }
+        _uiState.update { it.copy(lastError = null) }
+    }
+
+    fun onSecondaryPlaybackError(message: String) {
+        val session = _uiState.value.secondaryInternalSession ?: return
+        viewModelScope.launch {
+            diagnosticsRepository.addLog(
+                status = "player_multiview_error",
+                message = "Second pane failed: channelId=${session.channelId}, msg=${message.take(250)}",
+                playlistId = _uiState.value.selectedPlaylistId
+            )
+        }
+        _uiState.update {
+            it.copy(
+                secondaryInternalSession = null,
+                lastError = "Второе окно остановлено: $message",
+                lastInfo = null
+            )
+        }
     }
 
     fun onInternalPlaybackError(message: String, context: Context? = null) {
@@ -1130,6 +1210,17 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.observeTorEnabled().collect { enabled ->
                 _uiState.update { it.copy(torEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.observeParentalControlSettings().collect { parental ->
+                _uiState.update {
+                    it.copy(
+                        parentalControlEnabled = parental.enabled,
+                        parentalHideAdultChannels = parental.hideAdultChannels,
+                        parentalBlockedKeywords = parental.blockedKeywords
+                    )
+                }
             }
         }
     }
@@ -1503,6 +1594,52 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    private fun startSecondaryInternalPlayback(channel: Channel) {
+        val state = _uiState.value
+        val preparedStream = parseKodiStyleStream(channel.streamUrl)
+        val lowered = preparedStream.streamUrl.lowercase(Locale.ROOT)
+        if (!lowered.startsWith("http://") && !lowered.startsWith("https://")) {
+            _uiState.update {
+                it.copy(
+                    lastError = "Второе окно поддерживает только прямые http/https потоки",
+                    lastInfo = null
+                )
+            }
+            return
+        }
+        val config = bufferConfigForProfile(
+            profile = BufferProfile.MINIMAL,
+            manual = state.manualBuffer
+        )
+        val nextSessionId = (state.secondaryInternalSession?.sessionId ?: 0L) + 1L
+        _uiState.update {
+            it.copy(
+                secondaryInternalSession = InternalPlaybackSession(
+                    sessionId = nextSessionId,
+                    channelId = channel.id,
+                    channelName = channel.name,
+                    streamUrl = preparedStream.streamUrl,
+                    requestHeaders = preparedStream.headers,
+                    bufferConfig = config
+                ),
+                multiviewEnabled = true,
+                lastInfo = if (preparedStream.headers.isEmpty()) {
+                    "Второе окно: ${channel.name}"
+                } else {
+                    "Второе окно: ${channel.name} (применены HTTP-заголовки)"
+                },
+                lastError = null
+            )
+        }
+        viewModelScope.launch {
+            diagnosticsRepository.addLog(
+                status = "player_multiview_start",
+                message = "Second pane start: channelId=${channel.id}",
+                playlistId = channel.playlistId
+            )
+        }
+    }
+
     private fun addToHistory(channel: Channel) {
         viewModelScope.launch {
             historyRepository.add(channelId = channel.id, channelName = channel.name)
@@ -1822,4 +1959,3 @@ class PlayerViewModel @Inject constructor(
         }
     }
 }
-

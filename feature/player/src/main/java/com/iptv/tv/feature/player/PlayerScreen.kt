@@ -52,10 +52,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -86,6 +90,14 @@ private const val CHANNEL_QUICK_PANEL_LIMIT = 500
 private const val QUICK_SCROLL_STEP = 8
 private const val QUICK_PAGE_STEP = 24
 
+private data class PlayerTrackOption(
+    val groupIndex: Int,
+    val trackIndex: Int,
+    val label: String,
+    val selected: Boolean,
+    val supported: Boolean
+)
+
 @Composable
 @UnstableApi
 @OptIn(ExperimentalLayoutApi::class)
@@ -102,7 +114,10 @@ fun PlayerScreen(
         state.channelQuery,
         state.selectedGroup,
         state.selectedSubGroup,
-        hideUnavailable
+        hideUnavailable,
+        state.parentalControlEnabled,
+        state.parentalHideAdultChannels,
+        state.parentalBlockedKeywords
     ) {
         val query = state.channelQuery.trim().lowercase()
         val grouped = state.channels.filter { channel ->
@@ -126,10 +141,29 @@ fun PlayerScreen(
         } else {
             searched
         }
-        byHealth.sortedWith(
+        val byParental = if (state.parentalControlEnabled && state.parentalHideAdultChannels) {
+            byHealth.filterNot { channel ->
+                channel.matchesParentalKeywords(state.parentalBlockedKeywords)
+            }
+        } else {
+            byHealth
+        }
+        byParental.sortedWith(
             compareBy<Channel> { healthPriority(it.health) }
                 .thenBy { it.name.lowercase() }
         )
+    }
+    val parentalHiddenCount = remember(
+        state.channels,
+        state.parentalControlEnabled,
+        state.parentalHideAdultChannels,
+        state.parentalBlockedKeywords
+    ) {
+        if (state.parentalControlEnabled && state.parentalHideAdultChannels) {
+            state.channels.count { it.matchesParentalKeywords(state.parentalBlockedKeywords) }
+        } else {
+            0
+        }
     }
     val healthStats = remember(state.channels) {
         val available = state.channels.count { it.health == ChannelHealth.AVAILABLE }
@@ -165,6 +199,9 @@ fun PlayerScreen(
                 )
                 Text("Выбранный поток: ${state.selectedStreamKind}", style = MaterialTheme.typography.bodySmall)
                 Text(state.epgStatus, style = MaterialTheme.typography.bodySmall)
+                if (state.parentalControlEnabled && state.parentalHideAdultChannels) {
+                    Text("Parental: скрыто adult-каналов=$parentalHiddenCount", style = MaterialTheme.typography.bodySmall)
+                }
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -221,6 +258,10 @@ fun PlayerScreen(
                             Text("Engine endpoint: ${state.engineEndpoint} | Tor=${state.torEnabled}")
                             Text("Engine message: ${state.engineMessage}")
                             Text("Режим плеера: ${if (state.internalPlayerExpanded) "fullscreen" else "обычный"} | Масштаб: ${state.playerVideoScale}")
+                            Text(
+                                "Multiview: ${if (state.multiviewEnabled) "2-up" else "выкл"} | " +
+                                    "второе окно=${state.secondaryInternalSession?.channelName ?: "-"}"
+                            )
                             Text("Встроенный плеер: двойной клик по видео = fullscreen/обычный режим.")
                             Text("VLC: сначала запускается прямой fullscreen, затем fallback совместимости.")
                             val aceDescriptorLabel = state.selectedAceDescriptor?.let { descriptor ->
@@ -277,6 +318,12 @@ fun PlayerScreen(
                             }
                             Button(onClick = viewModel::stopInternalPlayback) {
                                 Text("Остановить встроенный")
+                            }
+                            Button(onClick = viewModel::toggleMultiview) {
+                                Text(if (state.multiviewEnabled) "Multiview: выкл" else "Multiview: 2-up")
+                            }
+                            Button(onClick = viewModel::stopSecondPane, enabled = state.secondaryInternalSession != null) {
+                                Text("Остановить окно 2")
                             }
                             Button(onClick = { viewModel.setInternalPlayerExpanded(false) }) {
                                 Text("Обычный экран")
@@ -404,70 +451,95 @@ fun PlayerScreen(
                             else -> "Встроенный плеер готов к запуску"
                         }
                     )
-                    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                        val twoPane = maxWidth >= 760.dp && showQuickChannels
-                        if (twoPane) {
-                            Row(
+                    if (state.multiviewEnabled) {
+                        MultiviewTwoUpPanel(
+                            primarySession = session,
+                            secondarySession = state.secondaryInternalSession,
+                            selectedChannelName = selectedChannelName,
+                            scale = state.playerVideoScale,
+                            onPrimaryReady = viewModel::onInternalPlaybackReady,
+                            onPrimaryError = { message -> viewModel.onInternalPlaybackError(message, context) },
+                            onSecondaryReady = viewModel::onSecondaryPlaybackReady,
+                            onSecondaryError = viewModel::onSecondaryPlaybackError,
+                            onTogglePrimaryExpanded = viewModel::toggleInternalPlayerSize,
+                            onStopSecondary = viewModel::stopSecondPane
+                        )
+                        if (showQuickChannels) {
+                            ChannelQuickPanel(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(min = 320.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Column(modifier = Modifier.weight(1.15f)) {
-                                    if (session != null) {
-                                        InternalPlayerHost(
-                                            session = session,
-                                            onReady = viewModel::onInternalPlaybackReady,
-                                            onError = { message -> viewModel.onInternalPlaybackError(message, context) },
-                                            scale = state.playerVideoScale,
-                                            expanded = false,
-                                            onToggleExpanded = viewModel::toggleInternalPlayerSize,
-                                            forceFullWidth = true
-                                        )
-                                    } else {
-                                        InternalPlayerPlaceholder(
-                                            expanded = false,
-                                            onToggleExpanded = viewModel::toggleInternalPlayerSize,
-                                            forceFullWidth = true,
-                                            selectedChannelName = selectedChannelName
-                                        )
-                                    }
-                                }
-                                ChannelQuickPanel(
-                                    modifier = Modifier
-                                        .weight(0.85f)
-                                        .fillMaxHeight(),
-                                    channels = filteredChannels,
-                                    selectedChannelId = state.selectedChannelId,
-                                    onSelect = viewModel::playChannelInternal
-                                )
-                            }
-                        } else {
-                            if (session != null) {
-                                InternalPlayerHost(
-                                    session = session,
-                                    onReady = viewModel::onInternalPlaybackReady,
-                                    onError = { message -> viewModel.onInternalPlaybackError(message, context) },
-                                    scale = state.playerVideoScale,
-                                    expanded = false,
-                                    onToggleExpanded = viewModel::toggleInternalPlayerSize
-                                )
-                            } else {
-                                InternalPlayerPlaceholder(
-                                    expanded = false,
-                                    onToggleExpanded = viewModel::toggleInternalPlayerSize,
-                                    selectedChannelName = selectedChannelName
-                                )
-                            }
-                            if (showQuickChannels) {
-                                ChannelQuickPanel(
+                                    .padding(top = 10.dp),
+                                channels = filteredChannels,
+                                selectedChannelId = state.selectedChannelId,
+                                onSelect = viewModel::playChannelInternal
+                            )
+                        }
+                    } else {
+                        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                            val twoPane = maxWidth >= 760.dp && showQuickChannels
+                            if (twoPane) {
+                                Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(top = 10.dp),
-                                    channels = filteredChannels,
-                                    selectedChannelId = state.selectedChannelId,
-                                    onSelect = viewModel::playChannelInternal
-                                )
+                                        .heightIn(min = 320.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Column(modifier = Modifier.weight(1.15f)) {
+                                        if (session != null) {
+                                            InternalPlayerHost(
+                                                session = session,
+                                                onReady = viewModel::onInternalPlaybackReady,
+                                                onError = { message -> viewModel.onInternalPlaybackError(message, context) },
+                                                scale = state.playerVideoScale,
+                                                expanded = false,
+                                                onToggleExpanded = viewModel::toggleInternalPlayerSize,
+                                                forceFullWidth = true
+                                            )
+                                        } else {
+                                            InternalPlayerPlaceholder(
+                                                expanded = false,
+                                                onToggleExpanded = viewModel::toggleInternalPlayerSize,
+                                                forceFullWidth = true,
+                                                selectedChannelName = selectedChannelName
+                                            )
+                                        }
+                                    }
+                                    ChannelQuickPanel(
+                                        modifier = Modifier
+                                            .weight(0.85f)
+                                            .fillMaxHeight(),
+                                        channels = filteredChannels,
+                                        selectedChannelId = state.selectedChannelId,
+                                        onSelect = viewModel::playChannelInternal
+                                    )
+                                }
+                            } else {
+                                if (session != null) {
+                                    InternalPlayerHost(
+                                        session = session,
+                                        onReady = viewModel::onInternalPlaybackReady,
+                                        onError = { message -> viewModel.onInternalPlaybackError(message, context) },
+                                        scale = state.playerVideoScale,
+                                        expanded = false,
+                                        onToggleExpanded = viewModel::toggleInternalPlayerSize
+                                    )
+                                } else {
+                                    InternalPlayerPlaceholder(
+                                        expanded = false,
+                                        onToggleExpanded = viewModel::toggleInternalPlayerSize,
+                                        selectedChannelName = selectedChannelName
+                                    )
+                                }
+                                if (showQuickChannels) {
+                                    ChannelQuickPanel(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 10.dp),
+                                        channels = filteredChannels,
+                                        selectedChannelId = state.selectedChannelId,
+                                        onSelect = viewModel::playChannelInternal
+                                    )
+                                }
                             }
                         }
                     }
@@ -626,6 +698,9 @@ fun PlayerScreen(
                                 Button(onClick = { viewModel.playChannelInternal(channel.id) }) {
                                     Text(if (channel.id == state.selectedChannelId) "Играет" else "Выбрать и играть")
                                 }
+                                OutlinedButton(onClick = { viewModel.playChannelInSecondPane(channel.id) }) {
+                                    Text("В окно 2")
+                                }
                             }
                         }
                     }
@@ -650,6 +725,127 @@ fun PlayerScreen(
                 onReady = viewModel::onInternalPlaybackReady,
                 onError = { message -> viewModel.onInternalPlaybackError(message, context) },
                 onClose = { viewModel.setInternalPlayerExpanded(false) }
+            )
+        }
+    }
+}
+
+@Composable
+@UnstableApi
+private fun MultiviewTwoUpPanel(
+    primarySession: InternalPlaybackSession?,
+    secondarySession: InternalPlaybackSession?,
+    selectedChannelName: String?,
+    scale: PlayerVideoScale,
+    onPrimaryReady: () -> Unit,
+    onPrimaryError: (String) -> Unit,
+    onSecondaryReady: () -> Unit,
+    onSecondaryError: (String) -> Unit,
+    onTogglePrimaryExpanded: () -> Unit,
+    onStopSecondary: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Multiview 2-up", style = MaterialTheme.typography.titleSmall)
+            OutlinedButton(onClick = onStopSecondary, enabled = secondarySession != null) {
+                Text("Остановить окно 2")
+            }
+        }
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val wide = maxWidth >= 760.dp
+            if (wide) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    MultiviewPane(
+                        title = "Окно 1",
+                        session = primarySession,
+                        selectedChannelName = selectedChannelName,
+                        scale = scale,
+                        onReady = onPrimaryReady,
+                        onError = onPrimaryError,
+                        onToggleExpanded = onTogglePrimaryExpanded,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MultiviewPane(
+                        title = "Окно 2",
+                        session = secondarySession,
+                        selectedChannelName = secondarySession?.channelName,
+                        scale = scale,
+                        onReady = onSecondaryReady,
+                        onError = onSecondaryError,
+                        onToggleExpanded = {},
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    MultiviewPane(
+                        title = "Окно 1",
+                        session = primarySession,
+                        selectedChannelName = selectedChannelName,
+                        scale = scale,
+                        onReady = onPrimaryReady,
+                        onError = onPrimaryError,
+                        onToggleExpanded = onTogglePrimaryExpanded,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    MultiviewPane(
+                        title = "Окно 2",
+                        session = secondarySession,
+                        selectedChannelName = secondarySession?.channelName,
+                        scale = scale,
+                        onReady = onSecondaryReady,
+                        onError = onSecondaryError,
+                        onToggleExpanded = {},
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+@UnstableApi
+private fun MultiviewPane(
+    title: String,
+    session: InternalPlaybackSession?,
+    selectedChannelName: String?,
+    scale: PlayerVideoScale,
+    onReady: () -> Unit,
+    onError: (String) -> Unit,
+    onToggleExpanded: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = if (session != null) "$title: ${session.channelName}" else "$title: канал не выбран",
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (session != null) {
+            InternalPlayerHost(
+                session = session,
+                onReady = onReady,
+                onError = onError,
+                scale = scale,
+                expanded = false,
+                onToggleExpanded = onToggleExpanded,
+                forceFullWidth = true
+            )
+        } else {
+            InternalPlayerPlaceholder(
+                expanded = false,
+                onToggleExpanded = onToggleExpanded,
+                forceFullWidth = true,
+                selectedChannelName = selectedChannelName
             )
         }
     }
@@ -868,6 +1064,17 @@ private fun wrappedIndex(rawIndex: Int, lastIndex: Int): Int {
     }
 }
 
+private fun Channel.matchesParentalKeywords(keywords: List<String>): Boolean {
+    if (keywords.isEmpty()) return false
+    val haystack = listOf(name, group.orEmpty())
+        .joinToString(" ")
+        .lowercase(Locale.ROOT)
+    return keywords.any { keyword ->
+        val normalized = keyword.trim().lowercase(Locale.ROOT)
+        normalized.isNotBlank() && haystack.contains(normalized)
+    }
+}
+
 private fun handleQuickListKeyEvent(
     event: KeyEvent,
     listState: LazyListState,
@@ -1026,6 +1233,7 @@ private fun InternalPlayerHost(
     }
     val exoPlayer = playerBuildResult.getOrNull()
     val initError = playerBuildResult.exceptionOrNull()
+    var currentTracks by remember(session.sessionId) { mutableStateOf(Tracks.EMPTY) }
 
     if (exoPlayer == null) {
         DisposableEffect(session.sessionId, initError?.message) {
@@ -1058,6 +1266,10 @@ private fun InternalPlayerHost(
                 try {
                     FileLogger.write(context, "ERROR", "Player", msg, error)
                 } catch (ignored: Exception) {}
+            }
+
+            override fun onTracksChanged(tracks: Tracks) {
+                currentTracks = tracks
             }
         }
 
@@ -1184,6 +1396,185 @@ private fun InternalPlayerHost(
             Text(if (expanded) "Свернуть" else "Развернуть")
         }
     }
+
+    TrackSelectionPanel(
+        tracks = currentTracks,
+        onSelectAuto = { trackType ->
+            val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+            selector.setParameters(
+                selector.buildUponParameters()
+                    .setTrackTypeDisabled(trackType, false)
+                    .clearOverridesOfType(trackType)
+            )
+        },
+        onDisable = { trackType ->
+            val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+            selector.setParameters(
+                selector.buildUponParameters()
+                    .clearOverridesOfType(trackType)
+                    .setTrackTypeDisabled(trackType, true)
+            )
+        },
+        onSelectTrack = { trackType, group, trackIndex ->
+            val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+            selector.setParameters(
+                selector.buildUponParameters()
+                    .setTrackTypeDisabled(trackType, false)
+                    .clearOverridesOfType(trackType)
+                    .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, trackIndex))
+            )
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TrackSelectionPanel(
+    tracks: Tracks,
+    onSelectAuto: (Int) -> Unit,
+    onDisable: (Int) -> Unit,
+    onSelectTrack: (Int, Tracks.Group, Int) -> Unit
+) {
+    val groups = tracks.groups
+    val videoOptions = remember(groups) { trackOptions(groups, C.TRACK_TYPE_VIDEO) }
+    val audioOptions = remember(groups) { trackOptions(groups, C.TRACK_TYPE_AUDIO) }
+    val textOptions = remember(groups) { trackOptions(groups, C.TRACK_TYPE_TEXT) }
+
+    if (videoOptions.isEmpty() && audioOptions.isEmpty() && textOptions.isEmpty()) {
+        Text("Дорожки: поток ещё не отдал список аудио/субтитров/видео", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+
+    Card(modifier = Modifier.fillMaxWidth().padding(top = 8.dp).tvFocusOutline()) {
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Дорожки плеера", style = MaterialTheme.typography.titleSmall)
+            TrackTypeRow(
+                title = "Видео",
+                trackType = C.TRACK_TYPE_VIDEO,
+                options = videoOptions,
+                groups = groups,
+                onSelectAuto = onSelectAuto,
+                onDisable = onDisable,
+                onSelectTrack = onSelectTrack
+            )
+            TrackTypeRow(
+                title = "Аудио",
+                trackType = C.TRACK_TYPE_AUDIO,
+                options = audioOptions,
+                groups = groups,
+                onSelectAuto = onSelectAuto,
+                onDisable = onDisable,
+                onSelectTrack = onSelectTrack
+            )
+            TrackTypeRow(
+                title = "Субтитры",
+                trackType = C.TRACK_TYPE_TEXT,
+                options = textOptions,
+                groups = groups,
+                onSelectAuto = onSelectAuto,
+                onDisable = onDisable,
+                onSelectTrack = onSelectTrack
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TrackTypeRow(
+    title: String,
+    trackType: Int,
+    options: List<PlayerTrackOption>,
+    groups: List<Tracks.Group>,
+    onSelectAuto: (Int) -> Unit,
+    onDisable: (Int) -> Unit,
+    onSelectTrack: (Int, Tracks.Group, Int) -> Unit
+) {
+    if (options.isEmpty()) return
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = MaterialTheme.typography.bodyMedium)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(onClick = { onSelectAuto(trackType) }) {
+                Text("Авто")
+            }
+            OutlinedButton(onClick = { onDisable(trackType) }) {
+                Text("Выкл")
+            }
+            options.forEach { option ->
+                val group = groups.getOrNull(option.groupIndex) ?: return@forEach
+                val buttonText = if (option.selected) {
+                    "✓ ${option.label}"
+                } else {
+                    option.label
+                }
+                if (option.selected) {
+                    Button(
+                        onClick = { onSelectTrack(trackType, group, option.trackIndex) },
+                        enabled = option.supported
+                    ) {
+                        Text(buttonText)
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { onSelectTrack(trackType, group, option.trackIndex) },
+                        enabled = option.supported
+                    ) {
+                        Text(buttonText)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun trackOptions(groups: List<Tracks.Group>, trackType: Int): List<PlayerTrackOption> {
+    return groups.flatMapIndexed { groupIndex, group ->
+        if (group.type != trackType) {
+            emptyList()
+        } else {
+            (0 until group.length).map { trackIndex ->
+                PlayerTrackOption(
+                    groupIndex = groupIndex,
+                    trackIndex = trackIndex,
+                    label = formatTrackLabel(group.getTrackFormat(trackIndex), trackType, trackIndex),
+                    selected = group.isTrackSelected(trackIndex),
+                    supported = group.isTrackSupported(trackIndex)
+                )
+            }
+        }
+    }
+}
+
+private fun formatTrackLabel(format: Format, trackType: Int, trackIndex: Int): String {
+    val language = format.language?.takeIf { it.isNotBlank() && it != C.LANGUAGE_UNDETERMINED }
+    val label = format.label?.takeIf { it.isNotBlank() }
+    val codec = format.codecs?.takeIf { it.isNotBlank() }
+    val details = when (trackType) {
+        C.TRACK_TYPE_VIDEO -> buildList {
+            if (format.width > 0 && format.height > 0) add("${format.width}x${format.height}")
+            if (format.bitrate > 0) add("${format.bitrate / 1000} kbps")
+            codec?.let { add(it) }
+        }
+        C.TRACK_TYPE_AUDIO -> buildList {
+            language?.let { add(it.uppercase(Locale.ROOT)) }
+            if (format.channelCount > 0) add("${format.channelCount}ch")
+            if (format.sampleRate > 0) add("${format.sampleRate / 1000} kHz")
+            codec?.let { add(it) }
+        }
+        C.TRACK_TYPE_TEXT -> buildList {
+            language?.let { add(it.uppercase(Locale.ROOT)) }
+            codec?.let { add(it) }
+        }
+        else -> emptyList()
+    }
+    return listOfNotNull(label, details.joinToString(" | ").takeIf { it.isNotBlank() })
+        .takeIf { it.isNotEmpty() }
+        ?.joinToString(" | ")
+        ?: "Дорожка ${trackIndex + 1}"
 }
 
 private fun inferMediaMimeType(url: String): String? {

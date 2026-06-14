@@ -3,12 +3,15 @@ package com.iptv.tv.feature.editor
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -20,10 +23,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil.compose.AsyncImage
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import com.iptv.tv.core.model.Channel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,6 +60,15 @@ fun EditorScreen(
                     channel.streamUrl.lowercase().contains(query)
             }
         }
+    }
+    val visibleLogoCount = remember(filteredChannels) {
+        filteredChannels.count { !it.logo.isNullOrBlank() }
+    }
+    val visibleGroups = remember(filteredChannels) {
+        filteredChannels
+            .map { it.group?.trim().orEmpty().ifBlank { "Без группы" } }
+            .distinct()
+            .size
     }
 
     LazyColumn(
@@ -228,6 +243,23 @@ fun EditorScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = viewModel::saveDraftLogoAsManual,
+                            enabled = state.editDraft.channelId != null && !state.isLoading
+                        ) {
+                            Text("Сохранить как ручной логотип")
+                        }
+                        Button(
+                            onClick = viewModel::refreshCurrentPlaylistMetadata,
+                            enabled = !state.isRefreshingMetadata
+                        ) {
+                            Text(if (state.isRefreshingMetadata) "Подбор..." else "Подобрать логотипы")
+                        }
+                    }
                     OutlinedTextField(
                         value = state.editDraft.streamUrl,
                         onValueChange = viewModel::updateDraftStreamUrl,
@@ -316,6 +348,30 @@ fun EditorScreen(
                     Text("Каналы не найдены по текущему фильтру")
                 }
             } else {
+                item {
+                    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text("Сводка видимых каналов", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Показано=${filteredChannels.size} из ${state.channels.size} | " +
+                                    "с логотипами=$visibleLogoCount | групп=$visibleGroups"
+                            )
+                            Text(
+                                "Выбрано=${state.selectedChannelIds.size} | " +
+                                    "скрытых в фильтре=${filteredChannels.count { it.isHidden }}"
+                            )
+                            Button(
+                                onClick = viewModel::refreshCurrentPlaylistMetadata,
+                                enabled = !state.isRefreshingMetadata
+                            ) {
+                                Text(if (state.isRefreshingMetadata) "Подбираю логотипы..." else "Подобрать логотипы для плейлиста")
+                            }
+                        }
+                    }
+                }
                 items(filteredChannels, key = { it.id }) { channel ->
                     val selected = channel.id in state.selectedChannelIds
                     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
@@ -324,10 +380,7 @@ fun EditorScreen(
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             val isFavorite = state.favoriteChannelIds.contains(channel.id)
-                            Text(
-                                text = if (selected) "[x] ${channel.name}" else "[ ] ${channel.name}",
-                                style = MaterialTheme.typography.titleSmall
-                            )
+                            ChannelTitleWithLogo(channel = channel, selected = selected)
                             Text("Group: ${channel.group ?: "-"} | health=${channel.health} | hidden=${channel.isHidden}")
                             channel.logo?.takeIf { it.isNotBlank() }?.let { logo ->
                                 Text("Logo: $logo")
@@ -361,6 +414,37 @@ fun EditorScreen(
     }
 }
 
+@Composable
+private fun ChannelTitleWithLogo(channel: Channel, selected: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(modifier = Modifier.size(46.dp), contentAlignment = Alignment.Center) {
+            if (!channel.logo.isNullOrBlank()) {
+                AsyncImage(
+                    model = channel.logo,
+                    contentDescription = channel.name,
+                    modifier = Modifier.size(42.dp)
+                )
+            } else {
+                Text("—", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = if (selected) "[x] ${channel.name}" else "[ ] ${channel.name}",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Text(
+                text = "ID=${channel.id} | tvg-id=${channel.tvgId ?: "-"}",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
 private fun editorSourceTypeLabel(raw: String): String {
     return when (raw.uppercase()) {
         "URL" -> "URL"
@@ -369,8 +453,13 @@ private fun editorSourceTypeLabel(raw: String): String {
         "GITHUB" -> "GitHub"
         "GITLAB" -> "GitLab"
         "BITBUCKET" -> "Bitbucket"
+        "XTREAM" -> "Xtream Codes"
+        "STALKER" -> "Stalker Portal"
+        "JELLYFIN" -> "Jellyfin"
+        "PLEX" -> "Plex"
+        "TVHEADEND" -> "Tvheadend"
+        "HDHOMERUN" -> "HdHomeRun"
         "CUSTOM" -> "Пользовательский"
         else -> raw
     }
 }
-

@@ -4,11 +4,17 @@ import android.content.Context
 import androidx.room.Room
 import com.iptv.tv.core.database.IptvDatabase
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.DownloadDao
 import com.iptv.tv.core.database.dao.FavoriteDao
 import com.iptv.tv.core.database.dao.HistoryDao
+import com.iptv.tv.core.database.dao.ParentalProfileDao
 import com.iptv.tv.core.database.dao.PlaylistDao
+import com.iptv.tv.core.database.dao.PlaylistProviderDao
+import com.iptv.tv.core.database.dao.RecordingDao
+import com.iptv.tv.core.database.dao.RecordingScheduleDao
 import com.iptv.tv.core.database.dao.SyncLogDao
+import com.iptv.tv.core.database.dao.TvHomeChannelDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -44,4 +50,22 @@ object DatabaseModule {
 
     @Provides
     fun provideDownloadDao(database: IptvDatabase): DownloadDao = database.downloadDao()
+
+    @Provides
+    fun provideRecordingDao(database: IptvDatabase): RecordingDao = database.recordingDao()
+
+    @Provides
+    fun provideRecordingScheduleDao(database: IptvDatabase): RecordingScheduleDao = database.recordingScheduleDao()
+
+    @Provides
+    fun providePlaylistProviderDao(database: IptvDatabase): PlaylistProviderDao = database.playlistProviderDao()
+
+    @Provides
+    fun provideParentalProfileDao(database: IptvDatabase): ParentalProfileDao = database.parentalProfileDao()
+
+    @Provides
+    fun provideChannelMetadataDao(database: IptvDatabase): ChannelMetadataDao = database.channelMetadataDao()
+
+    @Provides
+    fun provideTvHomeChannelDao(database: IptvDatabase): TvHomeChannelDao = database.tvHomeChannelDao()
 }

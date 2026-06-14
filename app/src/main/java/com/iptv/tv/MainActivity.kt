@@ -52,6 +52,7 @@ import com.iptv.tv.feature.editor.EDITOR_PLAYLIST_ID_ARG
 import com.iptv.tv.feature.diagnostics.DiagnosticsScreen
 import com.iptv.tv.feature.downloads.DownloadsScreen
 import com.iptv.tv.feature.editor.EditorScreen
+import com.iptv.tv.feature.epg.EpgGuideScreen
 import com.iptv.tv.feature.favorites.FavoritesScreen
 import com.iptv.tv.feature.history.HistoryScreen
 import com.iptv.tv.feature.home.HomeScreen
@@ -191,6 +192,7 @@ private fun AppRoot() {
                                 onOpenImporter = { navController.navigate(Routes.IMPORTER) },
                                 onOpenReadyPlaylists = { navController.navigate(Routes.READY_PLAYLISTS) },
                                 onOpenPlaylists = { navController.navigate(Routes.PLAYLISTS) },
+                                onOpenEpg = { navController.navigate(Routes.EPG) },
                                 onOpenPlayer = { navController.navigate(Routes.PLAYER) },
                                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                                 onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
@@ -258,6 +260,16 @@ private fun AppRoot() {
                             HistoryScreen(
                                 onOpenPlayer = { playlistId ->
                                     navController.navigate(Routes.playerRoute(playlistId))
+                                }
+                            )
+                        }
+                        composable(Routes.EPG) {
+                            EpgGuideScreen(
+                                onOpenPlayer = { playlistId, channelId ->
+                                    navController.navigate(Routes.playerRoute(playlistId, channelId))
+                                },
+                                onOpenPlayerSettings = {
+                                    navController.navigate(Routes.PLAYER)
                                 }
                             )
                         }
@@ -378,6 +390,7 @@ private fun SectionsMenuDialog(
         Routes.EDITOR to "Редактор",
         Routes.FAVORITES to "Избранное",
         Routes.HISTORY to "История",
+        Routes.EPG to "Телепрограмма",
         Routes.PLAYER to "Плеер",
         Routes.DOWNLOADS to "Загрузки",
         Routes.SETTINGS to "Настройки",
@@ -430,6 +443,7 @@ private fun routeTitle(route: String): String = when {
         Routes.PLAYLISTS -> "Мои плейлисты"
         Routes.FAVORITES -> "Избранное"
         Routes.HISTORY -> "История"
+        Routes.EPG -> "Телепрограмма"
         Routes.DOWNLOADS -> "Загрузки"
         Routes.SETTINGS -> "Настройки"
         Routes.NETWORK_TEST -> "Сетевой тест"
@@ -457,6 +471,7 @@ object Routes {
     const val EDITOR_WITH_ARG = "editor/{playlistId}"
     const val FAVORITES = "favorites"
     const val HISTORY = "history"
+    const val EPG = "epg"
     const val PLAYER = "player"
     const val PLAYER_WITH_ARG = "player/{playlistId}"
     const val PLAYER_WITH_CHANNEL_ARG = "player/{playlistId}/{channelId}"
