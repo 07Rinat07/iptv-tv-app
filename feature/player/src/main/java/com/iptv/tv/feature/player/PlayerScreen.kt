@@ -1132,7 +1132,7 @@ private fun InternalPlayerPlaceholder(
     fullscreenMode: Boolean = false
 ) {
     Box(
-        modifier = playerViewportModifier(
+        modifier = Modifier.playerViewportModifier(
             expanded = expanded,
             forceFullWidth = forceFullWidth,
             fullscreenMode = fullscreenMode
@@ -1168,24 +1168,21 @@ private fun InternalPlayerPlaceholder(
     }
 }
 
-private fun playerViewportModifier(
+private fun Modifier.playerViewportModifier(
     expanded: Boolean,
     forceFullWidth: Boolean,
     fullscreenMode: Boolean = false
 ): Modifier {
     return if (fullscreenMode) {
-        Modifier.fillMaxSize()
+        fillMaxSize()
     } else if (forceFullWidth) {
-        Modifier
-            .fillMaxWidth()
+        fillMaxWidth()
             .aspectRatio(if (expanded) 16f / 9f else 4f / 3f)
     } else if (expanded) {
-        Modifier
-            .fillMaxWidth()
+        fillMaxWidth()
             .aspectRatio(16f / 9f)
     } else {
-        Modifier
-            .fillMaxWidth(0.56f)
+        fillMaxWidth(0.56f)
             .aspectRatio(4f / 3f)
     }
 }
@@ -1352,7 +1349,7 @@ private fun InternalPlayerHost(
         }
     }
 
-    val viewportModifier = playerViewportModifier(
+    val viewportModifier = Modifier.playerViewportModifier(
         expanded = expanded,
         forceFullWidth = forceFullWidth,
         fullscreenMode = fullscreenMode
@@ -1428,6 +1425,7 @@ private fun InternalPlayerHost(
 }
 
 @OptIn(ExperimentalLayoutApi::class)
+@UnstableApi
 @Composable
 private fun TrackSelectionPanel(
     tracks: Tracks,
@@ -1531,6 +1529,7 @@ private fun TrackTypeRow(
     }
 }
 
+@UnstableApi
 private fun trackOptions(groups: List<Tracks.Group>, trackType: Int): List<PlayerTrackOption> {
     return groups.flatMapIndexed { groupIndex, group ->
         if (group.type != trackType) {
@@ -1549,6 +1548,7 @@ private fun trackOptions(groups: List<Tracks.Group>, trackType: Int): List<Playe
     }
 }
 
+@UnstableApi
 private fun formatTrackLabel(format: Format, trackType: Int, trackIndex: Int): String {
     val language = format.language?.takeIf { it.isNotBlank() && it != C.LANGUAGE_UNDETERMINED }
     val label = format.label?.takeIf { it.isNotBlank() }
