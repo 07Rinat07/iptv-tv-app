@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -301,21 +302,34 @@ private fun ProgramGridCard(
     onShowDetails: () -> Unit,
     onRecordProgram: () -> Unit
 ) {
+    val isOnNow = program.isOnNow()
     Card(
         modifier = Modifier
             .width(width)
             .heightIn(min = 92.dp)
             .padding(end = 6.dp)
-            .clickable(onClick = onShowDetails)
+            .clickable(onClick = onShowDetails),
+        colors = if (isOnNow) {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        } else {
+            CardDefaults.cardColors()
+        }
     ) {
         Column(
             modifier = Modifier.padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            if (isOnNow) {
+                Text(
+                    text = "Сейчас",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             Text(
                 text = "${formatTime(program.startEpochMs)}-${formatTime(program.endEpochMs)}",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (isOnNow) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
             )
             Text(
@@ -456,11 +470,16 @@ private fun ProgramRow(
     onShowDetails: () -> Unit,
     onRecordProgram: () -> Unit
 ) {
+    val isOnNow = program.isOnNow()
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Text(
-                text = "${formatTime(program.startEpochMs)}-${formatTime(program.endEpochMs)}  ${program.title}",
+                text = buildString {
+                    if (isOnNow) append("Сейчас | ")
+                    append("${formatTime(program.startEpochMs)}-${formatTime(program.endEpochMs)}  ${program.title}")
+                },
                 style = MaterialTheme.typography.bodyLarge,
+                color = if (isOnNow) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
@@ -500,6 +519,7 @@ private fun EpgProgramDetailDialog(
 ) {
     val program = selected.program
     val channel = selected.row.channel
+    val isOnNow = program.isOnNow()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -511,6 +531,13 @@ private fun EpgProgramDetailDialog(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (isOnNow) {
+                    Text(
+                        text = "Сейчас в эфире",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Text(channel.name, style = MaterialTheme.typography.titleSmall)
                 Text(
                     text = "${formatWindow(program.startEpochMs, program.endEpochMs)} | ${channel.group ?: "Без группы"}",
@@ -566,6 +593,10 @@ private fun widthForDuration(durationMs: Long): androidx.compose.ui.unit.Dp {
     val minutes = TimeUnit.MILLISECONDS.toMinutes(durationMs).coerceAtLeast(1)
     val width = (minutes / 60f) * HOUR_WIDTH.value
     return width.coerceAtLeast(16f).dp
+}
+
+private fun EpgProgram.isOnNow(nowMs: Long = System.currentTimeMillis()): Boolean {
+    return startEpochMs <= nowMs && endEpochMs > nowMs
 }
 
 private val CHANNEL_COLUMN_WIDTH = 184.dp
