@@ -7,6 +7,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.common.toLogSummary
 import com.iptv.tv.core.data.mapper.toEntity
 import com.iptv.tv.core.data.mapper.toModel
+import com.iptv.tv.core.data.security.ProviderSecretCipher
 import com.iptv.tv.core.data.settings.SettingsKeys
 import com.iptv.tv.core.data.settings.settingsDataStore
 import com.iptv.tv.core.database.dao.ChannelDao
@@ -1307,17 +1308,20 @@ class PlaylistRepositoryImpl @Inject constructor(
 @Singleton
 class ProviderAccountRepositoryImpl @Inject constructor(
     private val providerDao: PlaylistProviderDao,
-    private val playlistRepository: PlaylistRepository
+    private val playlistRepository: PlaylistRepository,
+    private val secretCipher: ProviderSecretCipher
 ) : ProviderAccountRepository {
     override fun observeProviders(): Flow<List<PlaylistProvider>> {
-        return providerDao.observeProviders().map { rows -> rows.map { it.toModel() } }
+        return providerDao.observeProviders().map { rows ->
+            rows.map { it.toModel().toProviderDisplayModel() }
+        }
     }
 
     override suspend fun saveProvider(provider: PlaylistProvider): AppResult<Long> = withContext(Dispatchers.IO) {
         if (provider.name.isBlank()) return@withContext AppResult.Error("Provider name is empty")
         if (provider.baseUrl.isBlank()) return@withContext AppResult.Error("Provider URL is empty")
         runCatching {
-            providerDao.upsert(provider.toEntity())
+            providerDao.upsert(provider.withEncryptedSecrets().toEntity())
         }.fold(
             onSuccess = { AppResult.Success(it) },
             onFailure = { throwable -> AppResult.Error("Unable to save provider: ${throwable.toLogSummary(4)}", throwable) }
@@ -1325,8 +1329,11 @@ class ProviderAccountRepositoryImpl @Inject constructor(
     }
 
     override suspend fun syncProvider(providerId: Long): AppResult<Long> = withContext(Dispatchers.IO) {
-        val provider = providerDao.findById(providerId)?.toModel()
-            ?: return@withContext AppResult.Error("Provider not found")
+        val provider = runCatching {
+            providerDao.findById(providerId)?.toModel()?.withDecryptedSecrets()
+        }.getOrElse { throwable ->
+            return@withContext AppResult.Error("Unable to decrypt provider secrets: ${throwable.toLogSummary(4)}", throwable)
+        } ?: return@withContext AppResult.Error("Provider not found")
         val result = when (provider.type) {
             ProviderType.XTREAM -> playlistRepository.importFromXtream(
                 baseUrl = provider.baseUrl,
@@ -1366,11 +1373,47 @@ class ProviderAccountRepositoryImpl @Inject constructor(
 
     override suspend fun getProvidersByType(type: ProviderType): AppResult<List<PlaylistProvider>> = withContext(Dispatchers.IO) {
         runCatching {
-            providerDao.findByType(type.name).map { it.toModel() }
+            providerDao.findByType(type.name).map { it.toModel().toProviderDisplayModel() }
         }.fold(
             onSuccess = { AppResult.Success(it) },
             onFailure = { throwable -> AppResult.Error("Unable to load providers: ${throwable.toLogSummary(4)}", throwable) }
         )
+    }
+
+    private fun PlaylistProvider.withEncryptedSecrets(): PlaylistProvider {
+        return copy(
+            password = secretCipher.encryptOrNull(password),
+            token = secretCipher.encryptOrNull(token),
+            macAddress = secretCipher.encryptOrNull(macAddress)
+        )
+    }
+
+    private fun PlaylistProvider.withDecryptedSecrets(): PlaylistProvider {
+        return try {
+            copy(
+                password = secretCipher.decryptOrNull(password),
+                token = secretCipher.decryptOrNull(token),
+                macAddress = secretCipher.decryptOrNull(macAddress)
+            )
+        } catch (throwable: Throwable) {
+            throw IllegalStateException("Unable to decrypt provider secrets", throwable)
+        }
+    }
+
+    private fun PlaylistProvider.toProviderDisplayModel(): PlaylistProvider {
+        val displayMac = runCatching { secretCipher.decryptOrNull(macAddress).maskProviderSecret() }
+            .getOrDefault("скрыто")
+        return copy(
+            password = null,
+            token = null,
+            macAddress = displayMac
+        )
+    }
+
+    private fun String?.maskProviderSecret(): String? {
+        val raw = this?.takeIf { it.isNotBlank() } ?: return this
+        if (raw.length <= 5) return "скрыто"
+        return "${raw.take(2)}...${raw.takeLast(2)}"
     }
 }
 
