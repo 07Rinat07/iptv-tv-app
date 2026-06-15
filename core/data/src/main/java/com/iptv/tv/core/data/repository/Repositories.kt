@@ -986,7 +986,7 @@ class PlaylistRepositoryImpl @Inject constructor(
                                 if (!currentChannelId.isNullOrBlank()) {
                                     val value = parser.nextText().trim()
                                     if (value.isNotBlank()) {
-                                        channelDisplayNames.getOrPut(currentChannelId!!) { linkedSetOf() } += value
+                                        channelDisplayNames.getOrPut(currentChannelId) { linkedSetOf() } += value
                                     }
                                 }
                             }

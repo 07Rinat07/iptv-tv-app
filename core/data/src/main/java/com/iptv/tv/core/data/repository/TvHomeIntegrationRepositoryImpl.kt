@@ -1,5 +1,6 @@
 package com.iptv.tv.core.data.repository
 
+import android.annotation.TargetApi
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
@@ -151,6 +152,7 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
         }
     }
 
+    @TargetApi(26)
     private suspend fun ensureProviderChannel(
         type: TvHomeChannelType,
         displayName: String,
@@ -177,6 +179,7 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
         return channelId
     }
 
+    @TargetApi(26)
     private fun previewValuesForChannel(
         channel: ChannelEntity,
         providerChannelId: Long? = null,
@@ -203,6 +206,7 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
         }
     }
 
+    @TargetApi(26)
     private fun previewValuesForRecording(
         recording: RecordingEntity,
         providerChannelId: Long,
@@ -232,6 +236,7 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
         return ids.mapNotNull { byId[it] }
     }
 
+    @TargetApi(26)
     private fun deletePreviewPrograms(providerChannelId: Long) {
         context.contentResolver.query(
             TvContract.buildPreviewProgramsUriForChannel(providerChannelId),
@@ -248,6 +253,7 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
         }
     }
 
+    @TargetApi(26)
     private fun deleteExistingWatchNext() {
         context.contentResolver.query(
             TvContract.WatchNextPrograms.CONTENT_URI,
