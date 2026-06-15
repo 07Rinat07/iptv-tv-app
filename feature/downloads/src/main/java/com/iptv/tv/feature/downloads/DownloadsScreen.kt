@@ -1,5 +1,8 @@
 package com.iptv.tv.feature.downloads
 
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,11 +20,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.RecordingSchedule
+import com.iptv.tv.core.model.RecordingStatus
 import com.iptv.tv.core.model.RecordingTask
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -31,6 +38,7 @@ fun DownloadsScreen(
     viewModel: DownloadsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -219,6 +227,7 @@ fun DownloadsScreen(
                     recording = recording,
                     canCancel = viewModel.canCancelRecording(recording.status),
                     canDelete = viewModel.canDeleteRecording(recording.status),
+                    onOpen = { openRecordingFile(context, recording) },
                     onCancel = { viewModel.cancelRecording(recording.id) },
                     onDelete = { viewModel.deleteRecording(recording.id) }
                 )
@@ -249,9 +258,14 @@ private fun RecordingCard(
     recording: RecordingTask,
     canCancel: Boolean,
     canDelete: Boolean,
+    onOpen: () -> Unit,
     onCancel: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val recordingPath = recording.filePath
+    val canOpen = recording.status == RecordingStatus.COMPLETED &&
+        !recordingPath.isNullOrBlank() &&
+        File(recordingPath).exists()
     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -264,6 +278,9 @@ private fun RecordingCard(
             Text("Финиш: ${recording.scheduledEndAt?.let(::formatEpoch) ?: "-"}")
             Text("Файл: ${recording.filePath ?: "ещё не создан"}")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onOpen, enabled = canOpen) {
+                    Text("Открыть запись")
+                }
                 Button(onClick = onCancel, enabled = canCancel) {
                     Text("Отменить запись")
                 }
@@ -272,6 +289,41 @@ private fun RecordingCard(
                 }
             }
         }
+    }
+}
+
+private fun openRecordingFile(context: Context, recording: RecordingTask) {
+    val path = recording.filePath
+    if (recording.status != RecordingStatus.COMPLETED || path.isNullOrBlank()) {
+        Toast.makeText(context, "Файл записи ещё не готов", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val file = File(path)
+    if (!file.exists()) {
+        Toast.makeText(context, "Файл записи не найден", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, mimeTypeForRecording(file))
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    runCatching {
+        context.startActivity(Intent.createChooser(intent, "Открыть запись"))
+    }.onFailure {
+        Toast.makeText(context, "Не найдено приложение для открытия записи", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun mimeTypeForRecording(file: File): String {
+    return when (file.extension.lowercase(Locale.US)) {
+        "mp4", "m4v" -> "video/mp4"
+        "mkv" -> "video/x-matroska"
+        "ts", "m2ts" -> "video/mp2t"
+        "webm" -> "video/webm"
+        "mp3" -> "audio/mpeg"
+        "aac" -> "audio/aac"
+        else -> "video/*"
     }
 }
 
