@@ -182,6 +182,36 @@ class RecordingRepositoryImpl @Inject constructor(
         AppResult.Success(removed)
     }
 
+    override suspend fun setScheduleEnabled(scheduleId: Long, enabled: Boolean): AppResult<Int> = withContext(Dispatchers.IO) {
+        val schedule = recordingScheduleDao.findById(scheduleId)
+            ?: return@withContext AppResult.Error("Расписание не найдено: id=$scheduleId")
+        val updated = recordingScheduleDao.setEnabled(scheduleId, enabled)
+        if (updated <= 0) return@withContext AppResult.Error("Расписание не обновлено: id=$scheduleId")
+
+        val now = System.currentTimeMillis()
+        val linkedUpdates = if (!enabled) {
+            recordingDao.updateMatchingScheduledStatus(
+                channelId = schedule.channelId,
+                startAt = schedule.startAt,
+                endAt = schedule.endAt,
+                currentStatus = RecordingStatus.SCHEDULED.name,
+                status = RecordingStatus.CANCELED.name,
+                endedAt = now
+            )
+        } else {
+            ensureScheduledRecording(schedule.toModel(), now)
+        }
+        syncLogDao.insert(
+            SyncLogEntity(
+                playlistId = null,
+                status = "recording_schedule_enabled_changed",
+                message = "scheduleId=$scheduleId, enabled=$enabled, linkedUpdates=$linkedUpdates",
+                createdAt = now
+            )
+        )
+        AppResult.Success(updated + linkedUpdates)
+    }
+
     override suspend fun processDueRecordings(maxConcurrent: Int): AppResult<Int> = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
         val due = recordingDao.findByStatus(RecordingStatus.SCHEDULED.name)
@@ -199,6 +229,33 @@ class RecordingRepositoryImpl @Inject constructor(
             }
         }
         AppResult.Success(processed)
+    }
+
+    private suspend fun ensureScheduledRecording(schedule: RecordingSchedule, now: Long): Int {
+        val existing = recordingDao.findMatchingScheduled(
+            channelId = schedule.channelId,
+            startAt = schedule.startAt,
+            endAt = schedule.endAt,
+            statuses = listOf(RecordingStatus.SCHEDULED.name, RecordingStatus.RECORDING.name)
+        )
+        if (existing != null) return 0
+        val channel = channelDao.findById(schedule.channelId) ?: return 0
+        recordingDao.upsert(
+            RecordingEntity(
+                channelId = channel.id,
+                channelName = channel.name,
+                programTitle = schedule.programTitle,
+                streamUrl = channel.streamUrl,
+                filePath = null,
+                status = RecordingStatus.SCHEDULED.name,
+                startedAt = null,
+                endedAt = null,
+                scheduledStartAt = schedule.startAt,
+                scheduledEndAt = schedule.endAt,
+                createdAt = now
+            )
+        )
+        return 1
     }
 
     private suspend fun recordToInternalFile(recording: RecordingEntity): Boolean {

@@ -38,6 +38,7 @@ interface RecordingRepository {
     suspend fun cancelRecording(recordingId: Long): AppResult<Int>
     suspend fun deleteRecording(recordingId: Long, deleteFile: Boolean = true): AppResult<Int>
     suspend fun cleanupOldRecordings(maxAgeDays: Int): AppResult<Int>
+    suspend fun setScheduleEnabled(scheduleId: Long, enabled: Boolean): AppResult<Int>
     suspend fun deleteSchedule(scheduleId: Long): AppResult<Int>
     suspend fun processDueRecordings(maxConcurrent: Int = 1): AppResult<Int>
 }

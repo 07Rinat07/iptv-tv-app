@@ -236,6 +236,7 @@ fun DownloadsScreen(
             items(state.schedules, key = { it.id }) { schedule ->
                 ScheduleCard(
                     schedule = schedule,
+                    onToggleEnabled = { enabled -> viewModel.setScheduleEnabled(schedule.id, enabled) },
                     onDelete = { viewModel.deleteSchedule(schedule.id) }
                 )
             }
@@ -277,6 +278,7 @@ private fun RecordingCard(
 @Composable
 private fun ScheduleCard(
     schedule: RecordingSchedule,
+    onToggleEnabled: (Boolean) -> Unit,
     onDelete: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
@@ -288,8 +290,13 @@ private fun ScheduleCard(
             Text(schedule.programTitle ?: schedule.channelName)
             Text("Канал: ${schedule.channelName} (id=${schedule.channelId})")
             Text("${formatEpoch(schedule.startAt)} - ${formatEpoch(schedule.endAt)}")
-            Button(onClick = onDelete) {
-                Text("Удалить расписание")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { onToggleEnabled(!schedule.enabled) }) {
+                    Text(if (schedule.enabled) "Выключить" else "Включить")
+                }
+                Button(onClick = onDelete) {
+                    Text("Удалить расписание")
+                }
             }
         }
     }

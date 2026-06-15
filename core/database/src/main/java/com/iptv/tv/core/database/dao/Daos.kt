@@ -203,6 +203,17 @@ interface RecordingDao {
     @Query("SELECT * FROM recordings WHERE id = :recordingId LIMIT 1")
     suspend fun findById(recordingId: Long): RecordingEntity?
 
+    @Query(
+        "SELECT * FROM recordings WHERE channelId = :channelId AND scheduledStartAt = :startAt " +
+            "AND scheduledEndAt = :endAt AND status IN (:statuses) LIMIT 1"
+    )
+    suspend fun findMatchingScheduled(
+        channelId: Long,
+        startAt: Long,
+        endAt: Long,
+        statuses: List<String>
+    ): RecordingEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: RecordingEntity): Long
 
@@ -212,6 +223,19 @@ interface RecordingDao {
     @Query("UPDATE recordings SET status = :status, endedAt = :endedAt WHERE id = :recordingId")
     suspend fun markFinished(recordingId: Long, status: String, endedAt: Long): Int
 
+    @Query(
+        "UPDATE recordings SET status = :status, endedAt = :endedAt WHERE channelId = :channelId " +
+            "AND scheduledStartAt = :startAt AND scheduledEndAt = :endAt AND status = :currentStatus"
+    )
+    suspend fun updateMatchingScheduledStatus(
+        channelId: Long,
+        startAt: Long,
+        endAt: Long,
+        currentStatus: String,
+        status: String,
+        endedAt: Long
+    ): Int
+
     @Query("DELETE FROM recordings WHERE id = :recordingId")
     suspend fun deleteById(recordingId: Long): Int
 }
@@ -220,6 +244,9 @@ interface RecordingDao {
 interface RecordingScheduleDao {
     @Query("SELECT * FROM recording_schedules ORDER BY startAt ASC")
     fun observeSchedules(): Flow<List<RecordingScheduleEntity>>
+
+    @Query("SELECT * FROM recording_schedules WHERE id = :scheduleId LIMIT 1")
+    suspend fun findById(scheduleId: Long): RecordingScheduleEntity?
 
     @Query("SELECT * FROM recording_schedules WHERE enabled = 1 AND startAt <= :beforeEpochMs ORDER BY startAt ASC")
     suspend fun findDueSchedules(beforeEpochMs: Long): List<RecordingScheduleEntity>

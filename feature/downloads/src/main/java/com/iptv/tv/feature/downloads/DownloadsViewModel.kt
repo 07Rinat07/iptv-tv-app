@@ -238,6 +238,27 @@ class DownloadsViewModel @Inject constructor(
         }
     }
 
+    fun setScheduleEnabled(scheduleId: Long, enabled: Boolean) {
+        viewModelScope.launch {
+            when (val result = recordingRepository.setScheduleEnabled(scheduleId, enabled)) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            lastInfo = if (enabled) {
+                                "Расписание включено, обновлено: ${result.data}"
+                            } else {
+                                "Расписание выключено, обновлено: ${result.data}"
+                            },
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> _uiState.update { it.copy(lastError = result.message) }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
     fun processRecordingsNow() {
         viewModelScope.launch {
             _uiState.update { it.copy(isProcessingRecordings = true, lastError = null) }
