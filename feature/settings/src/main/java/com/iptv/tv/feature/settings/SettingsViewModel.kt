@@ -7,6 +7,7 @@ import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.domain.repository.TvHomeIntegrationRepository
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.PlayerType
+import com.iptv.tv.core.model.RecordingStorageInfo
 import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.ScannerProxySettings
 import com.iptv.tv.core.model.TvHomeChannelState
@@ -34,6 +35,7 @@ data class SettingsUiState(
     val downloadsWifiOnly: Boolean = true,
     val maxParallelDownloads: String = "1",
     val recordingStorageLocation: RecordingStorageLocation = RecordingStorageLocation.INTERNAL,
+    val recordingStorageInfo: RecordingStorageInfo? = null,
     val scannerAiEnabled: Boolean = true,
     val scannerProxyEnabled: Boolean = false,
     val scannerProxyHost: String = "",
@@ -176,13 +178,23 @@ class SettingsViewModel @Inject constructor(
     fun setRecordingStorageLocation(location: RecordingStorageLocation) {
         viewModelScope.launch {
             settingsRepository.setRecordingStorageLocation(location)
+            val info = settingsRepository.getRecordingStorageInfo(location)
             _uiState.update {
                 it.copy(
                     recordingStorageLocation = location,
+                    recordingStorageInfo = info,
                     lastInfo = "Папка записей: ${location.toUiLabel()}",
                     lastError = null
                 )
             }
+        }
+    }
+
+    fun refreshRecordingStorageInfo() {
+        viewModelScope.launch {
+            val location = _uiState.value.recordingStorageLocation
+            val info = settingsRepository.getRecordingStorageInfo(location)
+            _uiState.update { it.copy(recordingStorageInfo = info, lastError = null) }
         }
     }
 
@@ -511,6 +523,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.observeRecordingStorageLocation().collect { location ->
                 _uiState.update { it.copy(recordingStorageLocation = location) }
+                refreshRecordingStorageInfo()
             }
         }
         viewModelScope.launch {

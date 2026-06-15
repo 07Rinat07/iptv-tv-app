@@ -48,6 +48,7 @@ import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.ProviderAccountStatus
 import com.iptv.tv.core.model.PlaylistValidationReport
 import com.iptv.tv.core.model.ProviderType
+import com.iptv.tv.core.model.RecordingStorageInfo
 import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.ScannerLearnedQuery
 import com.iptv.tv.core.model.ScannerProxySettings
@@ -1821,6 +1822,21 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun getRecordingStorageInfo(location: RecordingStorageLocation): RecordingStorageInfo {
+        return withContext(Dispatchers.IO) {
+            val directory = recordingStorageDirectory(location)
+            RecordingStorageInfo(
+                location = location,
+                path = directory.absolutePath,
+                exists = directory.exists(),
+                writable = directory.isDirectory && directory.canWrite(),
+                freeBytes = directory.usableSpace,
+                usingFallback = location == RecordingStorageLocation.APP_EXTERNAL &&
+                    context.getExternalFilesDir(null) == null
+            )
+        }
+    }
+
     override suspend fun setScannerAiEnabled(enabled: Boolean) {
         context.settingsDataStore.edit { prefs ->
             prefs[SettingsKeys.scannerAiEnabled] = enabled
@@ -1933,6 +1949,16 @@ class SettingsRepositoryImpl @Inject constructor(
             prefs[SettingsKeys.parentalPinHash].orEmpty()
         }.first()
         return storedHash.isNotBlank() && storedHash == hashPin(normalized)
+    }
+
+    private fun recordingStorageDirectory(location: RecordingStorageLocation): File {
+        return when (location) {
+            RecordingStorageLocation.INTERNAL -> File(context.filesDir, "recordings")
+            RecordingStorageLocation.APP_EXTERNAL -> {
+                context.getExternalFilesDir(null)?.let { File(it, "recordings") }
+                    ?: File(context.filesDir, "recordings")
+            }
+        }
     }
 
     private fun parseChannelOverrides(raw: String?): Map<Long, PlayerType> {

@@ -4,6 +4,7 @@ import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.ManualBufferSettings
 import com.iptv.tv.core.model.ParentalControlSettings
 import com.iptv.tv.core.model.PlayerType
+import com.iptv.tv.core.model.RecordingStorageInfo
 import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.ScannerLearnedQuery
 import com.iptv.tv.core.model.ScannerProxySettings
@@ -36,6 +37,7 @@ interface SettingsRepository {
     suspend fun setDownloadsWifiOnly(enabled: Boolean)
     suspend fun setMaxParallelDownloads(value: Int)
     suspend fun setRecordingStorageLocation(location: RecordingStorageLocation)
+    suspend fun getRecordingStorageInfo(location: RecordingStorageLocation): RecordingStorageInfo
     suspend fun setScannerAiEnabled(enabled: Boolean)
     suspend fun setScannerProxySettings(settings: ScannerProxySettings)
     suspend fun recordScannerLearning(query: String, relatedQueries: List<String>, presetId: String?)

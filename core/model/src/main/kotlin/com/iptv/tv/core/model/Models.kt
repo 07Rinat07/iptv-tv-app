@@ -203,6 +203,15 @@ enum class RecordingStorageLocation {
     APP_EXTERNAL
 }
 
+data class RecordingStorageInfo(
+    val location: RecordingStorageLocation,
+    val path: String,
+    val exists: Boolean,
+    val writable: Boolean,
+    val freeBytes: Long,
+    val usingFallback: Boolean
+)
+
 enum class ProviderAuthType {
     NONE,
     USER_PASSWORD,

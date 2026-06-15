@@ -483,6 +483,27 @@ fun SettingsScreen(
                     text = "Новые записи сохраняются в выбранную app-specific папку; старые записи остаются на месте.",
                     style = MaterialTheme.typography.bodySmall
                 )
+                state.recordingStorageInfo?.let { info ->
+                    Text(
+                        text = "Путь: ${info.path}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "Статус: ${info.toRecordingStorageStatusLabel()} | " +
+                            "свободно: ${info.freeBytes.toStorageSizeLabel()}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (info.usingFallback) {
+                        Text(
+                            text = "Внешняя папка недоступна, используется внутренняя папка приложения.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+                OutlinedButton(onClick = viewModel::refreshRecordingStorageInfo) {
+                    Text("Обновить статус папки")
+                }
             }
         }
 
@@ -655,6 +676,21 @@ private fun RecordingStorageLocation.toRecordingStorageLabel(): String {
         RecordingStorageLocation.INTERNAL -> "внутренняя папка приложения"
         RecordingStorageLocation.APP_EXTERNAL -> "внешняя папка приложения"
     }
+}
+
+private fun com.iptv.tv.core.model.RecordingStorageInfo.toRecordingStorageStatusLabel(): String {
+    return when {
+        !exists -> "папка ещё не создана"
+        writable -> "доступна для записи"
+        else -> "нет доступа на запись"
+    }
+}
+
+private fun Long.toStorageSizeLabel(): String {
+    val gib = this / (1024.0 * 1024.0 * 1024.0)
+    if (gib >= 1.0) return String.format(Locale.getDefault(), "%.1f GB", gib)
+    val mib = this / (1024.0 * 1024.0)
+    return String.format(Locale.getDefault(), "%.0f MB", mib)
 }
 
 private fun Long?.toPublishedAtLabel(): String {
