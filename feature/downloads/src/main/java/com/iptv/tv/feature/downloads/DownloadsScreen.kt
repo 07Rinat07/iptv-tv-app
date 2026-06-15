@@ -25,6 +25,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import com.iptv.tv.core.model.DownloadStatus
+import com.iptv.tv.core.model.RecordingRepeatMode
 import com.iptv.tv.core.model.RecordingSchedule
 import com.iptv.tv.core.model.RecordingStatus
 import com.iptv.tv.core.model.RecordingTask
@@ -162,7 +164,7 @@ fun DownloadsScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text("Task #${task.id} | ${task.status}")
+                        Text("Задача #${task.id} | ${task.status.toDownloadStatusLabel()}")
                         Text("Progress: ${task.progress}%")
                         Text("Source: ${task.source}")
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -200,6 +202,10 @@ fun DownloadsScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text("Записи (${state.recordings.size})", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = state.recordings.toRecordingSummaryLabel(),
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = { viewModel.cleanupRecordings(7) },
@@ -236,6 +242,10 @@ fun DownloadsScreen(
 
         item {
             Text("Расписания записей (${state.schedules.size})", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = state.schedules.toScheduleSummaryLabel(),
+                style = MaterialTheme.typography.bodySmall
+            )
         }
         if (state.schedules.isEmpty()) {
             item {
@@ -271,7 +281,10 @@ private fun RecordingCard(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("Recording #${recording.id} | ${recording.status}", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Запись #${recording.id} | ${recording.status.toRecordingStatusLabel()}",
+                style = MaterialTheme.typography.titleSmall
+            )
             Text(recording.programTitle ?: recording.channelName)
             Text("Канал: ${recording.channelName} (id=${recording.channelId})")
             Text("Старт: ${recording.scheduledStartAt?.let(::formatEpoch) ?: "-"}")
@@ -363,6 +376,23 @@ private fun RecordingTask.toActualRecordingDurationLabel(): String {
     }
 }
 
+private fun List<RecordingTask>.toRecordingSummaryLabel(): String {
+    if (isEmpty()) return "Нет активных или завершённых записей"
+    val scheduled = count { it.status == RecordingStatus.SCHEDULED }
+    val recording = count { it.status == RecordingStatus.RECORDING }
+    val completed = count { it.status == RecordingStatus.COMPLETED }
+    val failed = count { it.status == RecordingStatus.FAILED }
+    val canceled = count { it.status == RecordingStatus.CANCELED }
+    return "Очередь: $scheduled | пишется: $recording | готово: $completed | ошибки: $failed | отменено: $canceled"
+}
+
+private fun List<RecordingSchedule>.toScheduleSummaryLabel(): String {
+    if (isEmpty()) return "Нет расписаний"
+    val enabled = count { it.enabled }
+    val disabled = size - enabled
+    return "Включено: $enabled | выключено: $disabled"
+}
+
 @Composable
 private fun ScheduleCard(
     schedule: RecordingSchedule,
@@ -374,10 +404,15 @@ private fun ScheduleCard(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("Schedule #${schedule.id} | ${schedule.repeatMode} | ${if (schedule.enabled) "enabled" else "disabled"}")
+            Text(
+                "Расписание #${schedule.id} | ${schedule.repeatMode.toRecordingRepeatModeLabel()} | " +
+                    if (schedule.enabled) "включено" else "выключено"
+            )
             Text(schedule.programTitle ?: schedule.channelName)
             Text("Канал: ${schedule.channelName} (id=${schedule.channelId})")
             Text("${formatEpoch(schedule.startAt)} - ${formatEpoch(schedule.endAt)}")
+            Text("Длительность: ${schedule.toScheduleDurationLabel()}")
+            Text("Старт: ${schedule.toScheduleStartStatusLabel()}")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { onToggleEnabled(!schedule.enabled) }) {
                     Text(if (schedule.enabled) "Выключить" else "Включить")
@@ -392,4 +427,62 @@ private fun ScheduleCard(
 
 private fun formatEpoch(value: Long): String {
     return SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date(value))
+}
+
+private fun RecordingSchedule.toScheduleDurationLabel(): String {
+    return formatDuration((endAt - startAt).coerceAtLeast(0L))
+}
+
+private fun DownloadStatus.toDownloadStatusLabel(): String {
+    return when (this) {
+        DownloadStatus.QUEUED -> "в очереди"
+        DownloadStatus.RUNNING -> "выполняется"
+        DownloadStatus.PAUSED -> "пауза"
+        DownloadStatus.COMPLETED -> "готово"
+        DownloadStatus.FAILED -> "ошибка"
+        DownloadStatus.CANCELED -> "отменено"
+    }
+}
+
+private fun RecordingStatus.toRecordingStatusLabel(): String {
+    return when (this) {
+        RecordingStatus.SCHEDULED -> "запланирована"
+        RecordingStatus.RECORDING -> "идёт запись"
+        RecordingStatus.COMPLETED -> "готова"
+        RecordingStatus.FAILED -> "ошибка"
+        RecordingStatus.CANCELED -> "отменена"
+    }
+}
+
+private fun RecordingRepeatMode.toRecordingRepeatModeLabel(): String {
+    return when (this) {
+        RecordingRepeatMode.ONCE -> "один раз"
+        RecordingRepeatMode.DAILY -> "ежедневно"
+        RecordingRepeatMode.WEEKLY -> "еженедельно"
+        RecordingRepeatMode.SERIES -> "серия"
+    }
+}
+
+private fun RecordingSchedule.toScheduleStartStatusLabel(): String {
+    if (!enabled) return "выключено"
+    val now = System.currentTimeMillis()
+    return when {
+        now < startAt -> "через ${formatDuration(startAt - now)}"
+        now in startAt..endAt -> "идёт окно записи"
+        else -> "время прошло"
+    }
+}
+
+private fun formatDuration(durationMs: Long): String {
+    val totalSeconds = durationMs / 1000L
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0) {
+        String.format(Locale.getDefault(), "%d ч %02d мин", hours, minutes)
+    } else if (minutes > 0) {
+        String.format(Locale.getDefault(), "%d мин", minutes)
+    } else {
+        String.format(Locale.getDefault(), "%d сек", seconds)
+    }
 }
