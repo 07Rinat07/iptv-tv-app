@@ -8,6 +8,7 @@ import com.iptv.tv.core.data.repository.DownloadRepositoryImpl
 import com.iptv.tv.core.data.repository.DiagnosticsRepositoryImpl
 import com.iptv.tv.core.data.repository.PlaylistEditorRepositoryImpl
 import com.iptv.tv.core.data.repository.PlaylistRepositoryImpl
+import com.iptv.tv.core.data.repository.ProviderAccountRepositoryImpl
 import com.iptv.tv.core.data.repository.RecordingRepositoryImpl
 import com.iptv.tv.core.data.repository.ScannerRepositoryImpl
 import com.iptv.tv.core.data.repository.SettingsRepositoryImpl
@@ -20,6 +21,7 @@ import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.HistoryRepository
 import com.iptv.tv.core.domain.repository.PlaylistEditorRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
+import com.iptv.tv.core.domain.repository.ProviderAccountRepository
 import com.iptv.tv.core.domain.repository.RecordingRepository
 import com.iptv.tv.core.domain.repository.ScannerRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
@@ -46,6 +48,10 @@ abstract class RepositoryBindings {
     @Binds
     @Singleton
     abstract fun bindPlaylistEditorRepository(impl: PlaylistEditorRepositoryImpl): PlaylistEditorRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindProviderAccountRepository(impl: ProviderAccountRepositoryImpl): ProviderAccountRepository
 
     @Binds
     @Singleton

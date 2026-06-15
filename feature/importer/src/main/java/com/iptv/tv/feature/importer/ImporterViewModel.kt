@@ -5,10 +5,14 @@ import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
+import com.iptv.tv.core.domain.repository.ProviderAccountRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
+import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistValidationReport
+import com.iptv.tv.core.model.ProviderAuthType
+import com.iptv.tv.core.model.ProviderType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
@@ -35,6 +39,9 @@ data class ImporterUiState(
     val rawText: String = "",
     val isLoading: Boolean = false,
     val lastError: String? = null,
+    val providerMessage: String? = null,
+    val savedProviders: List<PlaylistProvider> = emptyList(),
+    val syncingProviderId: Long? = null,
     val lastImportReport: PlaylistImportReport? = null,
     val lastContentSummary: PlaylistContentSummary? = null,
     val lastValidationReport: PlaylistValidationReport? = null
@@ -43,6 +50,7 @@ data class ImporterUiState(
 @HiltViewModel
 class ImporterViewModel @Inject constructor(
     private val playlistRepository: PlaylistRepository,
+    private val providerAccountRepository: ProviderAccountRepository,
     private val settingsRepository: SettingsRepository,
     private val diagnosticsRepository: DiagnosticsRepository
 ) : ViewModel() {
@@ -50,6 +58,7 @@ class ImporterViewModel @Inject constructor(
     val uiState: StateFlow<ImporterUiState> = _uiState.asStateFlow()
 
     init {
+        observeProviders()
         applyScannerPrefill()
     }
 
@@ -165,6 +174,99 @@ class ImporterViewModel @Inject constructor(
                 macAddress = state.stalkerMacAddress.trim(),
                 name = state.playlistName.trim()
             )
+        }
+    }
+
+    fun saveXtreamProvider() {
+        val state = _uiState.value
+        val baseUrl = state.xtreamBaseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank() || state.xtreamUsername.isBlank() || state.xtreamPassword.isBlank()) {
+            _uiState.update { it.copy(lastError = "Заполните URL, логин и пароль Xtream") }
+            return
+        }
+        saveProvider(
+            PlaylistProvider(
+                id = 0,
+                type = ProviderType.XTREAM,
+                name = state.playlistName.trim().ifBlank { "Xtream Codes" },
+                baseUrl = baseUrl,
+                username = state.xtreamUsername.trim(),
+                password = state.xtreamPassword.trim(),
+                token = null,
+                macAddress = null,
+                authType = ProviderAuthType.USER_PASSWORD,
+                linkedPlaylistId = null,
+                lastSyncedAt = null,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    fun saveStalkerProvider() {
+        val state = _uiState.value
+        val portalUrl = state.stalkerPortalUrl.trim().trimEnd('/')
+        if (portalUrl.isBlank() || state.stalkerMacAddress.isBlank()) {
+            _uiState.update { it.copy(lastError = "Заполните URL портала и MAC Stalker") }
+            return
+        }
+        saveProvider(
+            PlaylistProvider(
+                id = 0,
+                type = ProviderType.STALKER,
+                name = state.playlistName.trim().ifBlank { "Stalker Portal" },
+                baseUrl = portalUrl,
+                username = null,
+                password = null,
+                token = null,
+                macAddress = state.stalkerMacAddress.trim(),
+                authType = ProviderAuthType.MAC_ADDRESS,
+                linkedPlaylistId = null,
+                lastSyncedAt = null,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    fun syncProvider(providerId: Long) {
+        if (_uiState.value.syncingProviderId != null) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(syncingProviderId = providerId, lastError = null, providerMessage = null) }
+            safeLog(status = "provider_sync_start", message = "providerId=$providerId")
+            when (val result = providerAccountRepository.syncProvider(providerId)) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            syncingProviderId = null,
+                            providerMessage = "Провайдер синхронизирован, playlistId=${result.data}"
+                        )
+                    }
+                    loadContentSummary(result.data)
+                    safeLog(status = "provider_sync_ok", message = "providerId=$providerId, playlistId=${result.data}")
+                }
+                is AppResult.Error -> {
+                    _uiState.update {
+                        it.copy(syncingProviderId = null, lastError = result.message)
+                    }
+                    safeLog(status = "provider_sync_error", message = "providerId=$providerId, reason=${result.message}")
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun deleteProvider(providerId: Long) {
+        viewModelScope.launch {
+            when (val result = providerAccountRepository.deleteProvider(providerId)) {
+                is AppResult.Success -> {
+                    _uiState.update { it.copy(providerMessage = "Провайдер удалён", lastError = null) }
+                    safeLog(status = "provider_delete_ok", message = "providerId=$providerId, deleted=${result.data}")
+                }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(lastError = result.message) }
+                    safeLog(status = "provider_delete_error", message = "providerId=$providerId, reason=${result.message}")
+                }
+                AppResult.Loading -> Unit
+            }
         }
     }
 
@@ -314,6 +416,31 @@ class ImporterViewModel @Inject constructor(
                 status = "import_finish",
                 message = "kind=$importKind, durationMs=${System.currentTimeMillis() - startedAt}, isLoading=${_uiState.value.isLoading}"
             )
+        }
+    }
+
+    private fun observeProviders() {
+        viewModelScope.launch {
+            providerAccountRepository.observeProviders().collect { providers ->
+                _uiState.update { it.copy(savedProviders = providers) }
+            }
+        }
+    }
+
+    private fun saveProvider(provider: PlaylistProvider) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(lastError = null, providerMessage = null) }
+            when (val result = providerAccountRepository.saveProvider(provider)) {
+                is AppResult.Success -> {
+                    _uiState.update { it.copy(providerMessage = "Провайдер сохранён") }
+                    safeLog(status = "provider_save_ok", message = "providerId=${result.data}, type=${provider.type}")
+                }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(lastError = result.message) }
+                    safeLog(status = "provider_save_error", message = "type=${provider.type}, reason=${result.message}")
+                }
+                AppResult.Loading -> Unit
+            }
         }
     }
 

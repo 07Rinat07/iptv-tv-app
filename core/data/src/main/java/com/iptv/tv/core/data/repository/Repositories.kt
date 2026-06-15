@@ -13,6 +13,7 @@ import com.iptv.tv.core.database.dao.ChannelDao
 import com.iptv.tv.core.database.dao.FavoriteDao
 import com.iptv.tv.core.database.dao.HistoryDao
 import com.iptv.tv.core.database.dao.PlaylistDao
+import com.iptv.tv.core.database.dao.PlaylistProviderDao
 import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.FavoriteEntity
@@ -24,6 +25,7 @@ import com.iptv.tv.core.domain.repository.EngineRepository
 import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.HistoryRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
+import com.iptv.tv.core.domain.repository.ProviderAccountRepository
 import com.iptv.tv.core.domain.repository.ScannerRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.engine.data.EngineStreamClient
@@ -41,7 +43,9 @@ import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistSourceType
+import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.PlaylistValidationReport
+import com.iptv.tv.core.model.ProviderType
 import com.iptv.tv.core.model.ScannerLearnedQuery
 import com.iptv.tv.core.model.ScannerProxySettings
 import com.iptv.tv.core.model.ScannerSearchRequest
@@ -1296,6 +1300,76 @@ class PlaylistRepositoryImpl @Inject constructor(
             "mtv" to "https://upload.wikimedia.org/wikipedia/commons/e/ea/MTV_Logo_2010.svg",
             "eurosport" to "https://upload.wikimedia.org/wikipedia/commons/e/e7/Eurosport_2023.svg",
             "espn" to "https://upload.wikimedia.org/wikipedia/commons/2/2f/ESPN_wordmark.svg"
+        )
+    }
+}
+
+@Singleton
+class ProviderAccountRepositoryImpl @Inject constructor(
+    private val providerDao: PlaylistProviderDao,
+    private val playlistRepository: PlaylistRepository
+) : ProviderAccountRepository {
+    override fun observeProviders(): Flow<List<PlaylistProvider>> {
+        return providerDao.observeProviders().map { rows -> rows.map { it.toModel() } }
+    }
+
+    override suspend fun saveProvider(provider: PlaylistProvider): AppResult<Long> = withContext(Dispatchers.IO) {
+        if (provider.name.isBlank()) return@withContext AppResult.Error("Provider name is empty")
+        if (provider.baseUrl.isBlank()) return@withContext AppResult.Error("Provider URL is empty")
+        runCatching {
+            providerDao.upsert(provider.toEntity())
+        }.fold(
+            onSuccess = { AppResult.Success(it) },
+            onFailure = { throwable -> AppResult.Error("Unable to save provider: ${throwable.toLogSummary(4)}", throwable) }
+        )
+    }
+
+    override suspend fun syncProvider(providerId: Long): AppResult<Long> = withContext(Dispatchers.IO) {
+        val provider = providerDao.findById(providerId)?.toModel()
+            ?: return@withContext AppResult.Error("Provider not found")
+        val result = when (provider.type) {
+            ProviderType.XTREAM -> playlistRepository.importFromXtream(
+                baseUrl = provider.baseUrl,
+                username = provider.username.orEmpty(),
+                password = provider.password.orEmpty(),
+                name = provider.name
+            )
+            ProviderType.STALKER -> playlistRepository.importFromStalker(
+                portalUrl = provider.baseUrl,
+                macAddress = provider.macAddress.orEmpty(),
+                name = provider.name
+            )
+            ProviderType.M3U -> playlistRepository.importFromUrl(
+                url = provider.baseUrl,
+                name = provider.name
+            )
+            else -> return@withContext AppResult.Error("${provider.type} sync is not implemented yet")
+        }
+        when (result) {
+            is AppResult.Success -> {
+                providerDao.markSynced(providerId, result.data.playlistId, System.currentTimeMillis())
+                AppResult.Success(result.data.playlistId)
+            }
+            is AppResult.Error -> AppResult.Error(result.message, result.cause)
+            AppResult.Loading -> AppResult.Error("Provider sync is still loading")
+        }
+    }
+
+    override suspend fun deleteProvider(providerId: Long): AppResult<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            providerDao.deleteById(providerId)
+        }.fold(
+            onSuccess = { AppResult.Success(it) },
+            onFailure = { throwable -> AppResult.Error("Unable to delete provider: ${throwable.toLogSummary(4)}", throwable) }
+        )
+    }
+
+    override suspend fun getProvidersByType(type: ProviderType): AppResult<List<PlaylistProvider>> = withContext(Dispatchers.IO) {
+        runCatching {
+            providerDao.findByType(type.name).map { it.toModel() }
+        }.fold(
+            onSuccess = { AppResult.Success(it) },
+            onFailure = { throwable -> AppResult.Error("Unable to load providers: ${throwable.toLogSummary(4)}", throwable) }
         )
     }
 }

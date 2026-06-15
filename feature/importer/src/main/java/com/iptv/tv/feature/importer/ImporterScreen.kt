@@ -35,6 +35,11 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.PlaylistContentSummary
+import com.iptv.tv.core.model.PlaylistProvider
+import com.iptv.tv.core.model.ProviderType
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 const val TAG_IMPORTER_PLAYLIST_NAME = "importer_playlist_name"
 const val TAG_IMPORTER_URL = "importer_url"
@@ -43,9 +48,11 @@ const val TAG_IMPORTER_XTREAM_URL = "importer_xtream_url"
 const val TAG_IMPORTER_XTREAM_USERNAME = "importer_xtream_username"
 const val TAG_IMPORTER_XTREAM_PASSWORD = "importer_xtream_password"
 const val TAG_IMPORTER_IMPORT_XTREAM = "importer_import_xtream"
+const val TAG_IMPORTER_SAVE_XTREAM = "importer_save_xtream"
 const val TAG_IMPORTER_STALKER_URL = "importer_stalker_url"
 const val TAG_IMPORTER_STALKER_MAC = "importer_stalker_mac"
 const val TAG_IMPORTER_IMPORT_STALKER = "importer_import_stalker"
+const val TAG_IMPORTER_SAVE_STALKER = "importer_save_stalker"
 const val TAG_IMPORTER_FILE_PATH = "importer_file_path"
 const val TAG_IMPORTER_IMPORT_FILE = "importer_import_file"
 const val TAG_IMPORTER_RAW_TEXT = "importer_raw_text"
@@ -165,12 +172,21 @@ fun ImporterScreen(
                         visualTransformation = PasswordVisualTransformation()
                     )
                 }
-                Button(
-                    onClick = viewModel::importFromXtream,
-                    modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_XTREAM),
-                    enabled = !state.isLoading
-                ) {
-                    Text(if (state.isLoading) "Импорт..." else "Импорт Xtream")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = viewModel::importFromXtream,
+                        modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_XTREAM),
+                        enabled = !state.isLoading
+                    ) {
+                        Text(if (state.isLoading) "Импорт..." else "Импорт Xtream")
+                    }
+                    Button(
+                        onClick = viewModel::saveXtreamProvider,
+                        modifier = Modifier.testTag(TAG_IMPORTER_SAVE_XTREAM),
+                        enabled = !state.isLoading
+                    ) {
+                        Text("Сохранить аккаунт")
+                    }
                 }
             }
         }
@@ -196,14 +212,32 @@ fun ImporterScreen(
                     label = { Text("00:1A:79:00:00:00") },
                     singleLine = true
                 )
-                Button(
-                    onClick = viewModel::importFromStalker,
-                    modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_STALKER),
-                    enabled = !state.isLoading
-                ) {
-                    Text(if (state.isLoading) "Импорт..." else "Импорт Stalker")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = viewModel::importFromStalker,
+                        modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_STALKER),
+                        enabled = !state.isLoading
+                    ) {
+                        Text(if (state.isLoading) "Импорт..." else "Импорт Stalker")
+                    }
+                    Button(
+                        onClick = viewModel::saveStalkerProvider,
+                        modifier = Modifier.testTag(TAG_IMPORTER_SAVE_STALKER),
+                        enabled = !state.isLoading
+                    ) {
+                        Text("Сохранить аккаунт")
+                    }
                 }
             }
+        }
+
+        item {
+            SavedProvidersSection(
+                providers = state.savedProviders,
+                syncingProviderId = state.syncingProviderId,
+                onSync = viewModel::syncProvider,
+                onDelete = viewModel::deleteProvider
+            )
         }
 
         item {
@@ -307,6 +341,16 @@ fun ImporterScreen(
             }
         }
 
+        state.providerMessage?.let { message ->
+            item {
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
         state.lastImportReport?.let { report ->
             item {
                 Card(
@@ -351,6 +395,82 @@ fun ImporterScreen(
             }
         }
     }
+}
+
+@Composable
+private fun SavedProvidersSection(
+    providers: List<PlaylistProvider>,
+    syncingProviderId: Long?,
+    onSync: (Long) -> Unit,
+    onDelete: (Long) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Сохранённые провайдеры", style = MaterialTheme.typography.titleMedium)
+        if (providers.isEmpty()) {
+            Text("Пока нет сохранённых Xtream/Stalker аккаунтов", style = MaterialTheme.typography.bodySmall)
+        } else {
+            providers.forEach { provider ->
+                ProviderAccountCard(
+                    provider = provider,
+                    isSyncing = syncingProviderId == provider.id,
+                    syncBlocked = syncingProviderId != null,
+                    onSync = { onSync(provider.id) },
+                    onDelete = { onDelete(provider.id) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProviderAccountCard(
+    provider: PlaylistProvider,
+    isSyncing: Boolean,
+    syncBlocked: Boolean,
+    onSync: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(provider.name, style = MaterialTheme.typography.titleSmall)
+            Text("${provider.type.displayName()} | ${provider.baseUrl}", style = MaterialTheme.typography.bodySmall)
+            provider.username?.takeIf { it.isNotBlank() }?.let {
+                Text("Логин: $it", style = MaterialTheme.typography.bodySmall)
+            }
+            provider.macAddress?.takeIf { it.isNotBlank() }?.let {
+                Text("MAC: $it", style = MaterialTheme.typography.bodySmall)
+            }
+            Text(
+                "Плейлист: ${provider.linkedPlaylistId ?: "не привязан"} | sync: ${provider.lastSyncedAt.formatProviderTime()}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onSync, enabled = !syncBlocked || isSyncing) {
+                    Text(if (isSyncing) "Синхронизация..." else "Синхронизировать")
+                }
+                Button(onClick = onDelete, enabled = !syncBlocked) {
+                    Text("Удалить")
+                }
+            }
+        }
+    }
+}
+
+private fun ProviderType.displayName(): String {
+    return when (this) {
+        ProviderType.XTREAM -> "Xtream Codes"
+        ProviderType.STALKER -> "Stalker Portal"
+        ProviderType.M3U -> "M3U URL"
+        ProviderType.JELLYFIN -> "Jellyfin"
+        ProviderType.PLEX -> "Plex"
+        ProviderType.TVHEADEND -> "Tvheadend"
+        ProviderType.HDHOMERUN -> "HdHomeRun"
+    }
+}
+
+private fun Long?.formatProviderTime(): String {
+    val value = this ?: return "никогда"
+    return SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(value))
 }
 
 @Composable
