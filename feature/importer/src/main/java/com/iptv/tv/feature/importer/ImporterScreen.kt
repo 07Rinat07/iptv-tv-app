@@ -45,6 +45,7 @@ import java.util.Locale
 const val TAG_IMPORTER_PLAYLIST_NAME = "importer_playlist_name"
 const val TAG_IMPORTER_URL = "importer_url"
 const val TAG_IMPORTER_IMPORT_URL = "importer_import_url"
+const val TAG_IMPORTER_SAVE_M3U = "importer_save_m3u"
 const val TAG_IMPORTER_XTREAM_URL = "importer_xtream_url"
 const val TAG_IMPORTER_XTREAM_USERNAME = "importer_xtream_username"
 const val TAG_IMPORTER_XTREAM_PASSWORD = "importer_xtream_password"
@@ -136,6 +137,13 @@ fun ImporterScreen(
                     enabled = !state.isLoading
                 ) {
                     Text(if (state.isLoading) "Импорт..." else "Импорт URL")
+                }
+                Button(
+                    onClick = viewModel::saveM3uProvider,
+                    modifier = Modifier.testTag(TAG_IMPORTER_SAVE_M3U),
+                    enabled = !state.isLoading
+                ) {
+                    Text("Сохранить источник")
                 }
             }
         }
@@ -414,7 +422,7 @@ private fun SavedProvidersSection(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Сохранённые провайдеры", style = MaterialTheme.typography.titleMedium)
         if (providers.isEmpty()) {
-            Text("Пока нет сохранённых Xtream/Stalker аккаунтов", style = MaterialTheme.typography.bodySmall)
+            Text("Пока нет сохранённых M3U/Xtream/Stalker источников", style = MaterialTheme.typography.bodySmall)
         } else {
             providers.forEach { provider ->
                 ProviderAccountCard(

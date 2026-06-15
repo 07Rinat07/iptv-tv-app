@@ -37,9 +37,9 @@ Production-oriented MVP IPTV-приложения для Android TV/TV Box (minS
   - поддержан стандартный MAG/STB flow `handshake -> get_genres -> get_all_channels`;
   - каналы сохраняются как обычный плейлист, группы берутся из жанров портала, команды `ffmpeg/auto http...` превращаются в stream URL.
 - Добавлен первый рабочий контур `Provider Accounts`:
-  - на экране `Импорт` можно сохранить Xtream/Stalker как аккаунт провайдера;
+  - на экране `Импорт` можно сохранить M3U URL, Xtream и Stalker как аккаунт/источник провайдера;
   - сохранённые провайдеры показывают тип, URL, логин/MAC, привязанный playlistId и время последней синхронизации;
-  - добавлена кнопка `Проверить`: Xtream проверяется через `player_api.php/user_info`, Stalker через MAG/STB `handshake`;
+  - добавлена кнопка `Проверить`: M3U проверяется через HTTP `HEAD`, Xtream через `player_api.php/user_info`, Stalker через MAG/STB `handshake`;
   - кнопка `Синхронизировать` повторно импортирует источник и обновляет привязку к созданному плейлисту;
   - сохранённые аккаунты можно удалить без удаления уже импортированных плейлистов;
   - секреты провайдера (`password/token/MAC`) сохраняются в Room только в зашифрованном виде через Android Keystore `AES/GCM`.
@@ -218,7 +218,7 @@ Production-oriented MVP IPTV-приложения для Android TV/TV Box (minS
 
 ## Roadmap расширенных TV-функций
 1. `EPG Guide`: отдельный grid-экран телепрограммы с временной шкалой, фильтрами `сейчас/сегодня/завтра`, поиском по передачам и переходом из передачи в плеер.
-2. `Provider Accounts`: сохранение, проверка статуса и синхронизация `Xtream Codes`/`Stalker Portal` уже доступны в MVP; секреты шифруются через Android Keystore; дальше нужны адаптеры `Jellyfin/Plex/Tvheadend/HdHomeRun`.
+2. `Provider Accounts`: сохранение, проверка статуса и синхронизация `M3U URL`/`Xtream Codes`/`Stalker Portal` уже доступны в MVP; секреты шифруются через Android Keystore; дальше нужны адаптеры `Jellyfin/Plex/Tvheadend/HdHomeRun`.
 3. `Recording/Timeshift`: запись текущего эфира, запись по EPG, расписания, папка записей, статусы и автоочистка старых файлов.
 4. `Player Tracks`: UI выбора аудиодорожки, субтитров и видеотрека на базе Media3.
 5. `Multiview`: стартовый режим `2-up`, затем опциональный `4-up` для устройств, которые выдерживают несколько потоков.

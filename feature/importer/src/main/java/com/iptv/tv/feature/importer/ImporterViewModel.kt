@@ -98,6 +98,35 @@ class ImporterViewModel @Inject constructor(
         }
     }
 
+    fun saveM3uProvider() {
+        val state = _uiState.value
+        val url = state.url.trim()
+        if (url.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL M3U/M3U8") }
+            return
+        }
+        if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL M3U должен начинаться с http:// или https://") }
+            return
+        }
+        saveProvider(
+            PlaylistProvider(
+                id = 0,
+                type = ProviderType.M3U,
+                name = state.playlistName.trim().ifBlank { "M3U URL" },
+                baseUrl = url,
+                username = null,
+                password = null,
+                token = null,
+                macAddress = null,
+                authType = ProviderAuthType.NONE,
+                linkedPlaylistId = null,
+                lastSyncedAt = null,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
     fun importFromXtream() {
         if (_uiState.value.isLoading) {
             logAsync(status = "import_click_ignored", message = "Import already running (xtream)")
