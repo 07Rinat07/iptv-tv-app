@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+private const val EPG_INITIAL_VISIBLE_ROWS = 40
+private const val EPG_VISIBLE_ROWS_STEP = 40
+
 enum class EpgWindowPreset {
     NOW,
     TODAY,
@@ -43,6 +46,8 @@ data class EpgGuideUiState(
     val selectedPreset: EpgWindowPreset = EpgWindowPreset.NOW,
     val query: String = "",
     val rows: List<EpgChannelRow> = emptyList(),
+    val totalRowCount: Int = 0,
+    val visibleRowLimit: Int = EPG_INITIAL_VISIBLE_ROWS,
     val isLoading: Boolean = false,
     val isSchedulingRecording: Boolean = false,
     val selectedProgram: SelectedEpgProgram? = null,
@@ -63,6 +68,7 @@ class EpgGuideViewModel @Inject constructor(
     private var channelsJob: Job? = null
     private var loadJob: Job? = null
     private var channelsByPlaylist: List<Channel> = emptyList()
+    private var loadedRows: List<EpgChannelRow> = emptyList()
 
     init {
         observePlaylists()
@@ -73,15 +79,18 @@ class EpgGuideViewModel @Inject constructor(
             it.copy(
                 selectedPlaylistId = playlistId,
                 rows = emptyList(),
+                totalRowCount = 0,
+                visibleRowLimit = EPG_INITIAL_VISIBLE_ROWS,
                 error = null,
                 status = "Загрузка каналов..."
             )
         }
+        loadedRows = emptyList()
         observeChannels(playlistId)
     }
 
     fun selectPreset(preset: EpgWindowPreset) {
-        _uiState.update { it.copy(selectedPreset = preset) }
+        _uiState.update { it.copy(selectedPreset = preset, visibleRowLimit = EPG_INITIAL_VISIBLE_ROWS) }
         loadGuide()
     }
 
@@ -90,11 +99,24 @@ class EpgGuideViewModel @Inject constructor(
     }
 
     fun applySearch() {
+        _uiState.update { it.copy(visibleRowLimit = EPG_INITIAL_VISIBLE_ROWS) }
         loadGuide()
     }
 
     fun refresh() {
+        _uiState.update { it.copy(visibleRowLimit = EPG_INITIAL_VISIBLE_ROWS) }
         loadGuide()
+    }
+
+    fun showMoreRows() {
+        _uiState.update { state ->
+            val nextLimit = (state.visibleRowLimit + EPG_VISIBLE_ROWS_STEP).coerceAtMost(loadedRows.size)
+            state.copy(
+                visibleRowLimit = nextLimit,
+                rows = loadedRows.take(nextLimit),
+                status = buildEpgStatus(loadedRows.size, nextLimit)
+            )
+        }
     }
 
     fun selectProgram(row: EpgChannelRow, program: EpgProgram) {
@@ -215,11 +237,15 @@ class EpgGuideViewModel @Inject constructor(
                             val programs = result.data[channel.id].orEmpty()
                             if (programs.isEmpty()) null else EpgChannelRow(channel, programs)
                         }
+                    loadedRows = rows
+                    val visibleLimit = _uiState.value.visibleRowLimit.coerceAtMost(rows.size)
                     _uiState.update {
                         it.copy(
-                            rows = rows,
+                            rows = rows.take(visibleLimit),
+                            totalRowCount = rows.size,
+                            visibleRowLimit = visibleLimit,
                             isLoading = false,
-                            status = "Найдено каналов с EPG: ${rows.size}",
+                            status = buildEpgStatus(rows.size, visibleLimit),
                             error = null
                         )
                     }
@@ -228,6 +254,8 @@ class EpgGuideViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             rows = emptyList(),
+                            totalRowCount = 0,
+                            visibleRowLimit = EPG_INITIAL_VISIBLE_ROWS,
                             isLoading = false,
                             status = "EPG недоступен",
                             error = result.message
@@ -265,4 +293,13 @@ class EpgGuideViewModel @Inject constructor(
             }
         }
     }
+
+    private fun buildEpgStatus(totalRows: Int, visibleRows: Int): String {
+        return if (totalRows <= visibleRows) {
+            "Найдено каналов с EPG: $totalRows"
+        } else {
+            "Показано каналов с EPG: $visibleRows из $totalRows"
+        }
+    }
+
 }

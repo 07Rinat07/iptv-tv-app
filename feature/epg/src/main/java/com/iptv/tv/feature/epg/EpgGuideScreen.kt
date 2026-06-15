@@ -179,6 +179,16 @@ fun EpgGuideScreen(
                     onRecordProgram = { program -> viewModel.scheduleRecording(row, program) }
                 )
             }
+            if (state.totalRowCount > state.rows.size) {
+                item {
+                    Button(
+                        onClick = viewModel::showMoreRows,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Показать ещё каналы EPG (${state.rows.size} из ${state.totalRowCount})")
+                    }
+                }
+            }
             item {
                 Text(
                     text = "Ниже тот же EPG списком: удобно читать описания передач.",
