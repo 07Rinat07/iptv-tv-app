@@ -61,6 +61,15 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
 
     override suspend fun publishWatchNext(): AppResult<Int> = withContext(Dispatchers.IO) {
         if (!supportsTvHome()) return@withContext unsupportedResult()
+        val state = tvHomeChannelDao.findByType(TvHomeChannelType.WATCH_NEXT.name)?.toModel()
+            ?: TvHomeChannelState(
+                type = TvHomeChannelType.WATCH_NEXT,
+                providerChannelId = null,
+                enabled = true,
+                lastPublishedAt = null
+            )
+        if (!state.enabled) return@withContext AppResult.Success(0)
+
         runCatching {
             deleteExistingWatchNext()
             val channel = recentChannels(limit = 1).firstOrNull()

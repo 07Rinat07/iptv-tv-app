@@ -8,6 +8,8 @@ import com.iptv.tv.core.domain.repository.TvHomeIntegrationRepository
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.ScannerProxySettings
+import com.iptv.tv.core.model.TvHomeChannelState
+import com.iptv.tv.core.model.TvHomeChannelType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +44,7 @@ data class SettingsUiState(
     val parentalKeywordsText: String = "adult, xxx, 18+, porn, porno, erotic, sex, для взрослых, взрослые, эротика",
     val parentalCurrentPin: String = "",
     val parentalNewPin: String = "",
+    val tvHomeStates: List<TvHomeChannelState> = emptyList(),
     val isSaving: Boolean = false,
     val isPublishingTvHome: Boolean = false,
     val lastError: String? = null,
@@ -58,6 +61,7 @@ class SettingsViewModel @Inject constructor(
 
     init {
         observeSettings()
+        observeTvHomeStates()
     }
 
     fun setDefaultPlayer(playerType: PlayerType) {
@@ -409,6 +413,33 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setTvHomeRowEnabled(type: TvHomeChannelType, enabled: Boolean) {
+        val currentState = _uiState.value.tvHomeStates.firstOrNull { it.type == type }
+            ?: TvHomeChannelState(
+                type = type,
+                providerChannelId = null,
+                enabled = true,
+                lastPublishedAt = null
+            )
+
+        viewModelScope.launch {
+            when (val result = tvHomeIntegrationRepository.setEnabled(currentState.copy(enabled = enabled))) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            lastInfo = "${type.toUiLabel()}: ${if (enabled) "включено" else "выключено"}",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(lastError = result.message, lastInfo = null) }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
     private fun observeSettings() {
         viewModelScope.launch {
             settingsRepository.observeDefaultPlayer().collect { player ->
@@ -493,6 +524,23 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    private fun observeTvHomeStates() {
+        viewModelScope.launch {
+            tvHomeIntegrationRepository.observeChannelStates().collect { storedStates ->
+                val statesByType = storedStates.associateBy { it.type }
+                val states = TvHomeChannelType.entries.map { type ->
+                    statesByType[type] ?: TvHomeChannelState(
+                        type = type,
+                        providerChannelId = null,
+                        enabled = true,
+                        lastPublishedAt = null
+                    )
+                }
+                _uiState.update { it.copy(tvHomeStates = states) }
+            }
+        }
+    }
+
     private companion object {
         const val DEFAULT_ENGINE_ENDPOINT = "http://127.0.0.1:6878"
         const val DEFAULT_MANUAL_START_MS = 12_000
@@ -510,5 +558,14 @@ class SettingsViewModel @Inject constructor(
             "взрослые",
             "эротика"
         )
+    }
+}
+
+private fun TvHomeChannelType.toUiLabel(): String {
+    return when (this) {
+        TvHomeChannelType.RECENT_CHANNELS -> "Недавние каналы"
+        TvHomeChannelType.FAVORITES -> "Избранные каналы"
+        TvHomeChannelType.WATCH_NEXT -> "Watch Next"
+        TvHomeChannelType.RECORDINGS -> "Записи эфира"
     }
 }

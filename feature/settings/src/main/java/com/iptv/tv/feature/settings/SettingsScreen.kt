@@ -22,6 +22,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.iptv.tv.core.model.TvHomeChannelType
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.iptv.tv.core.model.BufferProfile as CoreBufferProfile
 import com.iptv.tv.core.model.PlayerType as CorePlayerType
 
@@ -463,6 +467,37 @@ fun SettingsScreen(
                 title = "Android TV Home",
                 subtitle = "Публикация рядов Недавние, Избранное, Watch Next и Записи на главный экран TV Box"
             ) {
+                state.tvHomeStates.forEach { rowState ->
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "${rowState.type.toTvHomeLabel()}: ${
+                                if (rowState.enabled) "публиковать" else "не публиковать"
+                            }",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Последняя публикация: ${rowState.lastPublishedAt.toPublishedAtLabel()}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            SelectionButton(
+                                selected = rowState.enabled,
+                                label = "Вкл",
+                                onClick = { viewModel.setTvHomeRowEnabled(rowState.type, true) },
+                                modifier = Modifier.fillMaxWidth(0.48f)
+                            )
+                            SelectionButton(
+                                selected = !rowState.enabled,
+                                label = "Выкл",
+                                onClick = { viewModel.setTvHomeRowEnabled(rowState.type, false) },
+                                modifier = Modifier.fillMaxWidth(0.48f)
+                            )
+                        }
+                    }
+                }
                 Button(
                     onClick = viewModel::publishTvHomeNow,
                     enabled = !state.isPublishingTvHome
@@ -580,4 +615,18 @@ private fun CoreBufferProfile.toUiLabel(): String {
         CoreBufferProfile.HIGH -> "Повышенный"
         CoreBufferProfile.MANUAL -> "Ручной"
     }
+}
+
+private fun TvHomeChannelType.toTvHomeLabel(): String {
+    return when (this) {
+        TvHomeChannelType.RECENT_CHANNELS -> "Недавние каналы"
+        TvHomeChannelType.FAVORITES -> "Избранные каналы"
+        TvHomeChannelType.WATCH_NEXT -> "Watch Next"
+        TvHomeChannelType.RECORDINGS -> "Записи эфира"
+    }
+}
+
+private fun Long?.toPublishedAtLabel(): String {
+    if (this == null || this <= 0L) return "ещё не публиковалось"
+    return SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(this))
 }
