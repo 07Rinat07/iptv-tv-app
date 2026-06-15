@@ -273,7 +273,7 @@ class RecordingRepositoryImpl @Inject constructor(
         }
 
         val storageLocation = settingsRepository.observeRecordingStorageLocation().first()
-        val directory = recordingDirectory(storageLocation).apply { mkdirs() }
+        val directory = prepareRecordingDirectory(recording, storageLocation) ?: return false
         val extension = extensionForStreamUrl(streamUrl)
         val file = File(directory, recordingFileName(recording, extension))
         val startedAt = System.currentTimeMillis()
@@ -335,6 +335,29 @@ class RecordingRepositoryImpl @Inject constructor(
                 createdAt = System.currentTimeMillis()
             )
         )
+    }
+
+    private suspend fun prepareRecordingDirectory(
+        recording: RecordingEntity,
+        location: RecordingStorageLocation
+    ): File? {
+        val directory = recordingDirectory(location)
+        if (!directory.exists() && !directory.mkdirs()) {
+            markRecordingFailed(recording, "Cannot create recording folder: ${directory.absolutePath}")
+            return null
+        }
+        if (!directory.isDirectory || !directory.canWrite()) {
+            markRecordingFailed(recording, "Recording folder is not writable: ${directory.absolutePath}")
+            return null
+        }
+        if (directory.usableSpace < MIN_RECORDING_FREE_BYTES) {
+            markRecordingFailed(
+                recording,
+                "Not enough free space in recording folder: ${directory.usableSpace} bytes"
+            )
+            return null
+        }
+        return directory
     }
 
     private fun deleteRecordingFile(filePath: String?) {
@@ -415,6 +438,7 @@ class RecordingRepositoryImpl @Inject constructor(
         const val DEFAULT_RECORDING_DURATION_MS = 2 * 60 * 60 * 1000L
         const val MAX_RECORDING_DURATION_MS = 15 * 60 * 1000L
         const val MAX_RECORDING_BYTES = 256L * 1024L * 1024L
+        const val MIN_RECORDING_FREE_BYTES = 64L * 1024L * 1024L
         const val MAX_CONCURRENT_RECORDINGS = 2
     }
 }
