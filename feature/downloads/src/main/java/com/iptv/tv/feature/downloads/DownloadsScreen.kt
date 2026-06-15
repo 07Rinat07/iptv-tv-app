@@ -276,6 +276,8 @@ private fun RecordingCard(
             Text("Канал: ${recording.channelName} (id=${recording.channelId})")
             Text("Старт: ${recording.scheduledStartAt?.let(::formatEpoch) ?: "-"}")
             Text("Финиш: ${recording.scheduledEndAt?.let(::formatEpoch) ?: "-"}")
+            Text("Фактически: ${recording.toActualRecordingWindowLabel()}")
+            Text("Длительность: ${recording.toActualRecordingDurationLabel()}")
             Text("Файл: ${recording.filePath ?: "ещё не создан"}")
             Text("Размер: ${recording.filePath.toRecordingFileSizeLabel()}")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -338,6 +340,27 @@ private fun String?.toRecordingFileSizeLabel(): String {
     if (mib >= 1.0) return String.format(Locale.getDefault(), "%.1f MB", mib)
     val kib = bytes / 1024.0
     return String.format(Locale.getDefault(), "%.0f KB", kib)
+}
+
+private fun RecordingTask.toActualRecordingWindowLabel(): String {
+    val start = startedAt?.let(::formatEpoch) ?: "-"
+    val end = endedAt?.let(::formatEpoch) ?: "-"
+    return "$start - $end"
+}
+
+private fun RecordingTask.toActualRecordingDurationLabel(): String {
+    val start = startedAt ?: return "-"
+    val end = endedAt ?: System.currentTimeMillis().takeIf { status == RecordingStatus.RECORDING } ?: return "-"
+    val durationMs = (end - start).coerceAtLeast(0L)
+    val totalSeconds = durationMs / 1000L
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0) {
+        String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.getDefault(), "%d:%02d", minutes, seconds)
+    }
 }
 
 @Composable
