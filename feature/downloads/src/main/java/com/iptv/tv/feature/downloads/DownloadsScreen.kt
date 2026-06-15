@@ -89,7 +89,7 @@ fun DownloadsScreen(
                 ) {
                     Text("Запись эфира", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "MVP-захват прямых HTTP/HTTPS потоков во внутреннюю папку приложения. Worker проверяет очередь каждые 15 минут.",
+                        "MVP-захват прямых HTTP/HTTPS потоков в выбранную папку записей. Worker проверяет очередь каждые 15 минут.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
@@ -277,6 +277,7 @@ private fun RecordingCard(
             Text("Старт: ${recording.scheduledStartAt?.let(::formatEpoch) ?: "-"}")
             Text("Финиш: ${recording.scheduledEndAt?.let(::formatEpoch) ?: "-"}")
             Text("Файл: ${recording.filePath ?: "ещё не создан"}")
+            Text("Размер: ${recording.filePath.toRecordingFileSizeLabel()}")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onOpen, enabled = canOpen) {
                     Text("Открыть запись")
@@ -325,6 +326,18 @@ private fun mimeTypeForRecording(file: File): String {
         "aac" -> "audio/aac"
         else -> "video/*"
     }
+}
+
+private fun String?.toRecordingFileSizeLabel(): String {
+    val file = this?.takeIf { it.isNotBlank() }?.let(::File) ?: return "-"
+    if (!file.exists() || !file.isFile) return "-"
+    val bytes = file.length()
+    val gib = bytes / (1024.0 * 1024.0 * 1024.0)
+    if (gib >= 1.0) return String.format(Locale.getDefault(), "%.1f GB", gib)
+    val mib = bytes / (1024.0 * 1024.0)
+    if (mib >= 1.0) return String.format(Locale.getDefault(), "%.1f MB", mib)
+    val kib = bytes / 1024.0
+    return String.format(Locale.getDefault(), "%.0f KB", kib)
 }
 
 @Composable
