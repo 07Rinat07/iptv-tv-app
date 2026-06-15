@@ -22,6 +22,7 @@ object SettingsKeys {
     val allowInsecureUrls: Preferences.Key<Boolean> = booleanPreferencesKey("allow_insecure_urls")
     val downloadsWifiOnly: Preferences.Key<Boolean> = booleanPreferencesKey("downloads_wifi_only")
     val maxParallelDownloads: Preferences.Key<Int> = intPreferencesKey("downloads_max_parallel")
+    val recordingStorageLocation: Preferences.Key<String> = stringPreferencesKey("recording_storage_location")
     val scannerAiEnabled: Preferences.Key<Boolean> = booleanPreferencesKey("scanner_ai_enabled")
     val scannerProxyEnabled: Preferences.Key<Boolean> = booleanPreferencesKey("scanner_proxy_enabled")
     val scannerProxyHost: Preferences.Key<String> = stringPreferencesKey("scanner_proxy_host")

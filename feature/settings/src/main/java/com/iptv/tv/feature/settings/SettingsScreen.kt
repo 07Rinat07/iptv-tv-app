@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.TvHomeChannelType
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -459,6 +460,29 @@ fun SettingsScreen(
                 Button(onClick = viewModel::saveMaxParallelDownloads) {
                     Text("Сохранить лимит")
                 }
+
+                Text("Папка записей: ${state.recordingStorageLocation.toRecordingStorageLabel()}")
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SelectionButton(
+                        selected = state.recordingStorageLocation == RecordingStorageLocation.INTERNAL,
+                        label = "Внутренняя",
+                        onClick = { viewModel.setRecordingStorageLocation(RecordingStorageLocation.INTERNAL) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = state.recordingStorageLocation == RecordingStorageLocation.APP_EXTERNAL,
+                        label = "Внешняя app",
+                        onClick = { viewModel.setRecordingStorageLocation(RecordingStorageLocation.APP_EXTERNAL) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                }
+                Text(
+                    text = "Новые записи сохраняются в выбранную app-specific папку; старые записи остаются на месте.",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
 
@@ -623,6 +647,13 @@ private fun TvHomeChannelType.toTvHomeLabel(): String {
         TvHomeChannelType.FAVORITES -> "Избранные каналы"
         TvHomeChannelType.WATCH_NEXT -> "Watch Next"
         TvHomeChannelType.RECORDINGS -> "Записи эфира"
+    }
+}
+
+private fun RecordingStorageLocation.toRecordingStorageLabel(): String {
+    return when (this) {
+        RecordingStorageLocation.INTERNAL -> "внутренняя папка приложения"
+        RecordingStorageLocation.APP_EXTERNAL -> "внешняя папка приложения"
     }
 }
 

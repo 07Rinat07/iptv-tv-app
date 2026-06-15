@@ -7,6 +7,7 @@ import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.domain.repository.TvHomeIntegrationRepository
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.PlayerType
+import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.ScannerProxySettings
 import com.iptv.tv.core.model.TvHomeChannelState
 import com.iptv.tv.core.model.TvHomeChannelType
@@ -32,6 +33,7 @@ data class SettingsUiState(
     val allowInsecureUrls: Boolean = false,
     val downloadsWifiOnly: Boolean = true,
     val maxParallelDownloads: String = "1",
+    val recordingStorageLocation: RecordingStorageLocation = RecordingStorageLocation.INTERNAL,
     val scannerAiEnabled: Boolean = true,
     val scannerProxyEnabled: Boolean = false,
     val scannerProxyHost: String = "",
@@ -168,6 +170,19 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.setMaxParallelDownloads(value)
             _uiState.update { it.copy(lastInfo = "Максимум параллельных загрузок обновлён", lastError = null) }
+        }
+    }
+
+    fun setRecordingStorageLocation(location: RecordingStorageLocation) {
+        viewModelScope.launch {
+            settingsRepository.setRecordingStorageLocation(location)
+            _uiState.update {
+                it.copy(
+                    recordingStorageLocation = location,
+                    lastInfo = "Папка записей: ${location.toUiLabel()}",
+                    lastError = null
+                )
+            }
         }
     }
 
@@ -340,6 +355,7 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.setAllowInsecureUrls(false)
             settingsRepository.setDownloadsWifiOnly(true)
             settingsRepository.setMaxParallelDownloads(1)
+            settingsRepository.setRecordingStorageLocation(RecordingStorageLocation.INTERNAL)
             settingsRepository.setScannerAiEnabled(true)
             settingsRepository.setScannerProxySettings(
                 ScannerProxySettings(
@@ -493,6 +509,11 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsRepository.observeRecordingStorageLocation().collect { location ->
+                _uiState.update { it.copy(recordingStorageLocation = location) }
+            }
+        }
+        viewModelScope.launch {
             settingsRepository.observeScannerAiEnabled().collect { enabled ->
                 _uiState.update { it.copy(scannerAiEnabled = enabled) }
             }
@@ -567,5 +588,12 @@ private fun TvHomeChannelType.toUiLabel(): String {
         TvHomeChannelType.FAVORITES -> "Избранные каналы"
         TvHomeChannelType.WATCH_NEXT -> "Watch Next"
         TvHomeChannelType.RECORDINGS -> "Записи эфира"
+    }
+}
+
+private fun RecordingStorageLocation.toUiLabel(): String {
+    return when (this) {
+        RecordingStorageLocation.INTERNAL -> "Внутренняя папка приложения"
+        RecordingStorageLocation.APP_EXTERNAL -> "Внешняя папка приложения"
     }
 }

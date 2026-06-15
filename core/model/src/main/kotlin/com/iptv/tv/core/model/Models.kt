@@ -198,6 +198,11 @@ enum class RecordingRepeatMode {
     SERIES
 }
 
+enum class RecordingStorageLocation {
+    INTERNAL,
+    APP_EXTERNAL
+}
+
 enum class ProviderAuthType {
     NONE,
     USER_PASSWORD,

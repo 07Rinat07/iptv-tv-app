@@ -48,6 +48,7 @@ import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.ProviderAccountStatus
 import com.iptv.tv.core.model.PlaylistValidationReport
 import com.iptv.tv.core.model.ProviderType
+import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.ScannerLearnedQuery
 import com.iptv.tv.core.model.ScannerProxySettings
 import com.iptv.tv.core.model.ScannerSearchRequest
@@ -1697,6 +1698,13 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
+    override fun observeRecordingStorageLocation(): Flow<RecordingStorageLocation> {
+        return context.settingsDataStore.data.map { prefs ->
+            val stored = prefs[SettingsKeys.recordingStorageLocation] ?: RecordingStorageLocation.INTERNAL.name
+            runCatching { RecordingStorageLocation.valueOf(stored) }.getOrDefault(RecordingStorageLocation.INTERNAL)
+        }
+    }
+
     override fun observeScannerAiEnabled(): Flow<Boolean> {
         return context.settingsDataStore.data.map { prefs ->
             prefs[SettingsKeys.scannerAiEnabled] ?: true
@@ -1804,6 +1812,12 @@ class SettingsRepositoryImpl @Inject constructor(
     override suspend fun setMaxParallelDownloads(value: Int) {
         context.settingsDataStore.edit { prefs ->
             prefs[SettingsKeys.maxParallelDownloads] = value.coerceIn(1, 5)
+        }
+    }
+
+    override suspend fun setRecordingStorageLocation(location: RecordingStorageLocation) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[SettingsKeys.recordingStorageLocation] = location.name
         }
     }
 

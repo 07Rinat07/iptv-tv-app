@@ -11,12 +11,15 @@ import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.RecordingEntity
 import com.iptv.tv.core.database.entity.SyncLogEntity
 import com.iptv.tv.core.domain.repository.RecordingRepository
+import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.RecordingSchedule
 import com.iptv.tv.core.model.RecordingStatus
+import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.RecordingTask
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -36,6 +39,7 @@ class RecordingRepositoryImpl @Inject constructor(
     private val recordingScheduleDao: RecordingScheduleDao,
     private val channelDao: ChannelDao,
     private val syncLogDao: SyncLogDao,
+    private val settingsRepository: SettingsRepository,
     private val okHttpClient: OkHttpClient
 ) : RecordingRepository {
     override fun observeRecordings(limit: Int): Flow<List<RecordingTask>> {
@@ -268,7 +272,8 @@ class RecordingRepositoryImpl @Inject constructor(
             return false
         }
 
-        val directory = File(context.filesDir, "recordings").apply { mkdirs() }
+        val storageLocation = settingsRepository.observeRecordingStorageLocation().first()
+        val directory = recordingDirectory(storageLocation).apply { mkdirs() }
         val extension = extensionForStreamUrl(streamUrl)
         val file = File(directory, recordingFileName(recording, extension))
         val startedAt = System.currentTimeMillis()
@@ -309,7 +314,7 @@ class RecordingRepositoryImpl @Inject constructor(
                 SyncLogEntity(
                     playlistId = null,
                     status = "recording_completed",
-                    message = "recordingId=${recording.id}, file=${file.absolutePath}",
+                    message = "recordingId=${recording.id}, storage=${storageLocation.name}, file=${file.absolutePath}",
                     createdAt = System.currentTimeMillis()
                 )
             )
@@ -336,10 +341,33 @@ class RecordingRepositoryImpl @Inject constructor(
         val normalizedPath = filePath?.trim().orEmpty()
         if (normalizedPath.isBlank()) return
         val file = File(normalizedPath)
-        val recordingsDir = File(context.filesDir, "recordings").canonicalFile
         val target = runCatching { file.canonicalFile }.getOrNull() ?: return
-        if (!target.path.startsWith(recordingsDir.path)) return
+        val allowedRoots = recordingDirectories().mapNotNull { root ->
+            runCatching { root.canonicalFile }.getOrNull()
+        }
+        if (allowedRoots.none { root -> target.path.startsWith(root.path) }) return
         if (target.exists()) target.delete()
+    }
+
+    private fun recordingDirectory(location: RecordingStorageLocation): File {
+        return when (location) {
+            RecordingStorageLocation.INTERNAL -> File(context.filesDir, "recordings")
+            RecordingStorageLocation.APP_EXTERNAL -> {
+                val external = context.getExternalFilesDir(null)
+                if (external == null) {
+                    File(context.filesDir, "recordings")
+                } else {
+                    File(external, "recordings")
+                }
+            }
+        }
+    }
+
+    private fun recordingDirectories(): List<File> {
+        return listOfNotNull(
+            File(context.filesDir, "recordings"),
+            context.getExternalFilesDir(null)?.let { File(it, "recordings") }
+        )
     }
 
     private fun recordingFileName(recording: RecordingEntity, extension: String): String {
