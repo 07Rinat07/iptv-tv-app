@@ -7,6 +7,7 @@ import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.domain.repository.ProviderAccountRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
+import com.iptv.tv.core.model.ProviderAccountStatus
 import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistImportReport
@@ -42,6 +43,8 @@ data class ImporterUiState(
     val providerMessage: String? = null,
     val savedProviders: List<PlaylistProvider> = emptyList(),
     val syncingProviderId: Long? = null,
+    val checkingProviderId: Long? = null,
+    val lastProviderStatus: ProviderAccountStatus? = null,
     val lastImportReport: PlaylistImportReport? = null,
     val lastContentSummary: PlaylistContentSummary? = null,
     val lastValidationReport: PlaylistValidationReport? = null
@@ -248,6 +251,36 @@ class ImporterViewModel @Inject constructor(
                         it.copy(syncingProviderId = null, lastError = result.message)
                     }
                     safeLog(status = "provider_sync_error", message = "providerId=$providerId, reason=${result.message}")
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun checkProvider(providerId: Long) {
+        if (_uiState.value.checkingProviderId != null) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(checkingProviderId = providerId, lastError = null, providerMessage = null) }
+            safeLog(status = "provider_check_start", message = "providerId=$providerId")
+            when (val result = providerAccountRepository.checkProvider(providerId)) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            checkingProviderId = null,
+                            lastProviderStatus = result.data,
+                            providerMessage = "Проверка провайдера: ${result.data.statusText}"
+                        )
+                    }
+                    safeLog(
+                        status = "provider_check_ok",
+                        message = "providerId=$providerId, ok=${result.data.ok}, status=${result.data.statusText}"
+                    )
+                }
+                is AppResult.Error -> {
+                    _uiState.update {
+                        it.copy(checkingProviderId = null, lastError = result.message)
+                    }
+                    safeLog(status = "provider_check_error", message = "providerId=$providerId, reason=${result.message}")
                 }
                 AppResult.Loading -> Unit
             }

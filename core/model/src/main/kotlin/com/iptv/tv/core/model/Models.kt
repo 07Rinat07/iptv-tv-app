@@ -272,6 +272,15 @@ data class PlaylistProvider(
     val createdAt: Long
 )
 
+data class ProviderAccountStatus(
+    val providerId: Long,
+    val type: ProviderType,
+    val ok: Boolean,
+    val statusText: String,
+    val detail: String?,
+    val checkedAt: Long
+)
+
 data class ParentalControlProfile(
     val id: Long,
     val name: String,

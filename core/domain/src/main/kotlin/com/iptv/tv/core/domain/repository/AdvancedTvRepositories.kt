@@ -4,6 +4,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.model.ChannelMetadata
 import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.ParentalControlProfile
+import com.iptv.tv.core.model.ProviderAccountStatus
 import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.ProviderType
 import com.iptv.tv.core.model.RecordingSchedule
@@ -23,6 +24,7 @@ interface EpgGuideRepository {
 interface ProviderAccountRepository {
     fun observeProviders(): Flow<List<PlaylistProvider>>
     suspend fun saveProvider(provider: PlaylistProvider): AppResult<Long>
+    suspend fun checkProvider(providerId: Long): AppResult<ProviderAccountStatus>
     suspend fun syncProvider(providerId: Long): AppResult<Long>
     suspend fun deleteProvider(providerId: Long): AppResult<Int>
     suspend fun getProvidersByType(type: ProviderType): AppResult<List<PlaylistProvider>>

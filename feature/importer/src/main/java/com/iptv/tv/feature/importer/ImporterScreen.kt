@@ -35,6 +35,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.PlaylistContentSummary
+import com.iptv.tv.core.model.ProviderAccountStatus
 import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.ProviderType
 import java.text.SimpleDateFormat
@@ -235,6 +236,9 @@ fun ImporterScreen(
             SavedProvidersSection(
                 providers = state.savedProviders,
                 syncingProviderId = state.syncingProviderId,
+                checkingProviderId = state.checkingProviderId,
+                lastProviderStatus = state.lastProviderStatus,
+                onCheck = viewModel::checkProvider,
                 onSync = viewModel::syncProvider,
                 onDelete = viewModel::deleteProvider
             )
@@ -401,6 +405,9 @@ fun ImporterScreen(
 private fun SavedProvidersSection(
     providers: List<PlaylistProvider>,
     syncingProviderId: Long?,
+    checkingProviderId: Long?,
+    lastProviderStatus: ProviderAccountStatus?,
+    onCheck: (Long) -> Unit,
     onSync: (Long) -> Unit,
     onDelete: (Long) -> Unit
 ) {
@@ -413,7 +420,10 @@ private fun SavedProvidersSection(
                 ProviderAccountCard(
                     provider = provider,
                     isSyncing = syncingProviderId == provider.id,
-                    syncBlocked = syncingProviderId != null,
+                    isChecking = checkingProviderId == provider.id,
+                    busyBlocked = syncingProviderId != null || checkingProviderId != null,
+                    status = lastProviderStatus?.takeIf { it.providerId == provider.id },
+                    onCheck = { onCheck(provider.id) },
                     onSync = { onSync(provider.id) },
                     onDelete = { onDelete(provider.id) }
                 )
@@ -426,7 +436,10 @@ private fun SavedProvidersSection(
 private fun ProviderAccountCard(
     provider: PlaylistProvider,
     isSyncing: Boolean,
-    syncBlocked: Boolean,
+    isChecking: Boolean,
+    busyBlocked: Boolean,
+    status: ProviderAccountStatus?,
+    onCheck: () -> Unit,
     onSync: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -444,11 +457,24 @@ private fun ProviderAccountCard(
                 "Плейлист: ${provider.linkedPlaylistId ?: "не привязан"} | sync: ${provider.lastSyncedAt.formatProviderTime()}",
                 style = MaterialTheme.typography.bodySmall
             )
+            status?.let {
+                Text(
+                    "Статус: ${if (it.ok) "OK" else "Ошибка"} | ${it.statusText} | ${it.checkedAt.formatProviderTime()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (it.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                )
+                it.detail?.takeIf { detail -> detail.isNotBlank() }?.let { detail ->
+                    Text(detail, style = MaterialTheme.typography.bodySmall)
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onSync, enabled = !syncBlocked || isSyncing) {
+                Button(onClick = onCheck, enabled = !busyBlocked || isChecking) {
+                    Text(if (isChecking) "Проверка..." else "Проверить")
+                }
+                Button(onClick = onSync, enabled = !busyBlocked || isSyncing) {
                     Text(if (isSyncing) "Синхронизация..." else "Синхронизировать")
                 }
-                Button(onClick = onDelete, enabled = !syncBlocked) {
+                Button(onClick = onDelete, enabled = !busyBlocked) {
                     Text("Удалить")
                 }
             }

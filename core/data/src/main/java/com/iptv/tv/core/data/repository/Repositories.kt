@@ -45,6 +45,7 @@ import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.model.PlaylistProvider
+import com.iptv.tv.core.model.ProviderAccountStatus
 import com.iptv.tv.core.model.PlaylistValidationReport
 import com.iptv.tv.core.model.ProviderType
 import com.iptv.tv.core.model.ScannerLearnedQuery
@@ -1309,7 +1310,8 @@ class PlaylistRepositoryImpl @Inject constructor(
 class ProviderAccountRepositoryImpl @Inject constructor(
     private val providerDao: PlaylistProviderDao,
     private val playlistRepository: PlaylistRepository,
-    private val secretCipher: ProviderSecretCipher
+    private val secretCipher: ProviderSecretCipher,
+    private val okHttpClient: OkHttpClient
 ) : ProviderAccountRepository {
     override fun observeProviders(): Flow<List<PlaylistProvider>> {
         return providerDao.observeProviders().map { rows ->
@@ -1325,6 +1327,33 @@ class ProviderAccountRepositoryImpl @Inject constructor(
         }.fold(
             onSuccess = { AppResult.Success(it) },
             onFailure = { throwable -> AppResult.Error("Unable to save provider: ${throwable.toLogSummary(4)}", throwable) }
+        )
+    }
+
+    override suspend fun checkProvider(providerId: Long): AppResult<ProviderAccountStatus> = withContext(Dispatchers.IO) {
+        val provider = runCatching {
+            providerDao.findById(providerId)?.toModel()?.withDecryptedSecrets()
+        }.getOrElse { throwable ->
+            return@withContext AppResult.Error("Unable to decrypt provider secrets: ${throwable.toLogSummary(4)}", throwable)
+        } ?: return@withContext AppResult.Error("Provider not found")
+
+        runCatching {
+            when (provider.type) {
+                ProviderType.XTREAM -> checkXtreamProvider(provider)
+                ProviderType.STALKER -> checkStalkerProvider(provider)
+                ProviderType.M3U -> checkM3uProvider(provider)
+                else -> ProviderAccountStatus(
+                    providerId = provider.id,
+                    type = provider.type,
+                    ok = false,
+                    statusText = "Не поддержано",
+                    detail = "${provider.type} status check is not implemented yet",
+                    checkedAt = System.currentTimeMillis()
+                )
+            }
+        }.fold(
+            onSuccess = { AppResult.Success(it) },
+            onFailure = { throwable -> AppResult.Error("Unable to check provider: ${throwable.toLogSummary(4)}", throwable) }
         )
     }
 
@@ -1414,6 +1443,128 @@ class ProviderAccountRepositoryImpl @Inject constructor(
         val raw = this?.takeIf { it.isNotBlank() } ?: return this
         if (raw.length <= 5) return "скрыто"
         return "${raw.take(2)}...${raw.takeLast(2)}"
+    }
+
+    private fun checkXtreamProvider(provider: PlaylistProvider): ProviderAccountStatus {
+        val url = provider.baseUrl.trim().trimEnd('/').toHttpUrl()
+            .newBuilder()
+            .addPathSegment("player_api.php")
+            .addQueryParameter("username", provider.username.orEmpty())
+            .addQueryParameter("password", provider.password.orEmpty())
+            .build()
+        val body = okHttpClient.newCall(Request.Builder().url(url).build())
+            .execute()
+            .use { response ->
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                response.body?.string().orEmpty()
+            }
+            .trim()
+        if (!body.startsWith("{")) error("Xtream returned non-JSON response")
+        val json = JSONObject(body)
+        val userInfo = json.optJSONObject("user_info") ?: json
+        val authOk = userInfo.optInt("auth", if (userInfo.optBoolean("auth")) 1 else 0) == 1
+        val status = userInfo.optString("status").ifBlank { if (authOk) "Active" else "Unknown" }
+        val expires = userInfo.optString("exp_date").takeIf { it.isNotBlank() && it != "null" }
+        return ProviderAccountStatus(
+            providerId = provider.id,
+            type = provider.type,
+            ok = authOk && !status.equals("Disabled", ignoreCase = true) && !status.equals("Banned", ignoreCase = true),
+            statusText = status,
+            detail = buildString {
+                append("auth=")
+                append(if (authOk) "ok" else "failed")
+                expires?.let { append(", exp=$it") }
+            },
+            checkedAt = System.currentTimeMillis()
+        )
+    }
+
+    private fun checkStalkerProvider(provider: PlaylistProvider): ProviderAccountStatus {
+        val portalUrl = normalizeProviderStalkerPortalUrl(provider.baseUrl)
+        val mac = provider.macAddress.orEmpty().trim().uppercase(Locale.US)
+        if (!PROVIDER_STALKER_MAC_REGEX.matches(mac)) error("Stalker MAC must look like 00:1A:79:00:00:00")
+        val token = requestProviderStalkerJson(
+            portalUrl = portalUrl,
+            macAddress = mac,
+            token = null,
+            type = "stb",
+            action = "handshake"
+        ).optJSONObject("js")?.optString("token").orEmpty()
+        return ProviderAccountStatus(
+            providerId = provider.id,
+            type = provider.type,
+            ok = token.isNotBlank(),
+            statusText = if (token.isNotBlank()) "Handshake OK" else "No token",
+            detail = if (token.isNotBlank()) "portal=$portalUrl" else "Stalker portal did not return token",
+            checkedAt = System.currentTimeMillis()
+        )
+    }
+
+    private fun checkM3uProvider(provider: PlaylistProvider): ProviderAccountStatus {
+        val response = okHttpClient.newCall(Request.Builder().url(provider.baseUrl).head().build())
+            .execute()
+            .use { response ->
+                response.code to (response.header("content-type") ?: "unknown")
+            }
+        return ProviderAccountStatus(
+            providerId = provider.id,
+            type = provider.type,
+            ok = response.first in 200..399,
+            statusText = "HTTP ${response.first}",
+            detail = "content-type=${response.second}",
+            checkedAt = System.currentTimeMillis()
+        )
+    }
+
+    private fun normalizeProviderStalkerPortalUrl(portalUrl: String): String {
+        return portalUrl
+            .trim()
+            .trimEnd('/')
+            .removeSuffix("/c")
+            .let { value ->
+                if (value.endsWith("/stalker_portal", ignoreCase = true)) value else "$value/stalker_portal"
+            }
+    }
+
+    private fun requestProviderStalkerJson(
+        portalUrl: String,
+        macAddress: String,
+        token: String?,
+        type: String,
+        action: String
+    ): JSONObject {
+        val url = portalUrl.toHttpUrl()
+            .newBuilder()
+            .addPathSegment("server")
+            .addPathSegment("load.php")
+            .addQueryParameter("type", type)
+            .addQueryParameter("action", action)
+            .addQueryParameter("JsHttpRequest", "1-xml")
+            .build()
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .header("User-Agent", PROVIDER_STALKER_USER_AGENT)
+            .header("Cookie", "mac=$macAddress; stb_lang=en; timezone=UTC")
+            .header("X-User-Agent", PROVIDER_STALKER_USER_AGENT)
+            .header("Referer", "$portalUrl/c/")
+        if (!token.isNullOrBlank()) {
+            requestBuilder.header("Authorization", "Bearer $token")
+        }
+        val body = okHttpClient.newCall(requestBuilder.build())
+            .execute()
+            .use { response ->
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                response.body?.string().orEmpty()
+            }
+            .trim()
+        if (!body.startsWith("{")) error("Stalker portal returned non-JSON response")
+        return JSONObject(body)
+    }
+
+    private companion object {
+        const val PROVIDER_STALKER_USER_AGENT =
+            "Mozilla/5.0 (QtEmbedded; U; Linux; MAG200; en-US) AppleWebKit/533.3"
+        val PROVIDER_STALKER_MAC_REGEX = Regex("^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
     }
 }
 
