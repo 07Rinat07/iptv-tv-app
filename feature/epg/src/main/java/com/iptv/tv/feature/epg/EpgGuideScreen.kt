@@ -1,5 +1,6 @@
 package com.iptv.tv.feature.epg
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -15,6 +16,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenuItem
@@ -26,6 +28,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -56,6 +59,19 @@ fun EpgGuideScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val gridScrollState = rememberScrollState()
+
+    state.selectedProgram?.let { selected ->
+        EpgProgramDetailDialog(
+            selected = selected,
+            isSchedulingRecording = state.isSchedulingRecording,
+            onDismiss = viewModel::clearSelectedProgram,
+            onOpenPlayer = {
+                viewModel.clearSelectedProgram()
+                onOpenPlayer(selected.row.channel.playlistId, selected.row.channel.id)
+            },
+            onRecord = viewModel::scheduleSelectedProgram
+        )
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -157,6 +173,7 @@ fun EpgGuideScreen(
                     onOpenPlayer = {
                         onOpenPlayer(row.channel.playlistId, row.channel.id)
                     },
+                    onShowProgramDetails = { program -> viewModel.selectProgram(row, program) },
                     onRecordProgram = { program -> viewModel.scheduleRecording(row, program) }
                 )
             }
@@ -176,6 +193,7 @@ fun EpgGuideScreen(
                 onOpenPlayer = {
                     onOpenPlayer(row.channel.playlistId, row.channel.id)
                 },
+                onShowProgramDetails = { program -> viewModel.selectProgram(row, program) },
                 onRecordProgram = { program -> viewModel.scheduleRecording(row, program) }
             )
         }
@@ -218,6 +236,7 @@ private fun EpgGridRow(
     scrollState: androidx.compose.foundation.ScrollState,
     isSchedulingRecording: Boolean,
     onOpenPlayer: () -> Unit,
+    onShowProgramDetails: (EpgProgram) -> Unit,
     onRecordProgram: (EpgProgram) -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
@@ -261,7 +280,7 @@ private fun EpgGridRow(
                             program = program,
                             width = widthForDuration(clippedEnd - clippedStart),
                             isSchedulingRecording = isSchedulingRecording,
-                            onOpenPlayer = onOpenPlayer,
+                            onShowDetails = { onShowProgramDetails(program) },
                             onRecordProgram = { onRecordProgram(program) }
                         )
                         cursorMs = clippedEnd
@@ -279,7 +298,7 @@ private fun ProgramGridCard(
     program: EpgProgram,
     width: androidx.compose.ui.unit.Dp,
     isSchedulingRecording: Boolean,
-    onOpenPlayer: () -> Unit,
+    onShowDetails: () -> Unit,
     onRecordProgram: () -> Unit
 ) {
     Card(
@@ -287,6 +306,7 @@ private fun ProgramGridCard(
             .width(width)
             .heightIn(min = 92.dp)
             .padding(end = 6.dp)
+            .clickable(onClick = onShowDetails)
     ) {
         Column(
             modifier = Modifier.padding(8.dp),
@@ -306,8 +326,8 @@ private fun ProgramGridCard(
             )
             if (width.value >= 150f) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Button(onClick = onOpenPlayer) {
-                        Text("Открыть")
+                    Button(onClick = onShowDetails) {
+                        Text("Детали")
                     }
                     Button(
                         onClick = onRecordProgram,
@@ -387,6 +407,7 @@ private fun EpgChannelCard(
     row: EpgChannelRow,
     isSchedulingRecording: Boolean,
     onOpenPlayer: () -> Unit,
+    onShowProgramDetails: (EpgProgram) -> Unit,
     onRecordProgram: (EpgProgram) -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
@@ -413,6 +434,7 @@ private fun EpgChannelCard(
                 ProgramRow(
                     program = program,
                     isSchedulingRecording = isSchedulingRecording,
+                    onShowDetails = { onShowProgramDetails(program) },
                     onRecordProgram = { onRecordProgram(program) }
                 )
             }
@@ -431,6 +453,7 @@ private fun EpgChannelCard(
 private fun ProgramRow(
     program: EpgProgram,
     isSchedulingRecording: Boolean,
+    onShowDetails: () -> Unit,
     onRecordProgram: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -442,6 +465,11 @@ private fun ProgramRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
+            Button(
+                onClick = onShowDetails
+            ) {
+                Text("Подробнее")
+            }
             Button(
                 onClick = onRecordProgram,
                 enabled = !isSchedulingRecording && program.endEpochMs > System.currentTimeMillis()
@@ -460,6 +488,63 @@ private fun ProgramRow(
             )
         }
     }
+}
+
+@Composable
+private fun EpgProgramDetailDialog(
+    selected: SelectedEpgProgram,
+    isSchedulingRecording: Boolean,
+    onDismiss: () -> Unit,
+    onOpenPlayer: () -> Unit,
+    onRecord: () -> Unit
+) {
+    val program = selected.program
+    val channel = selected.row.channel
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = program.title,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(channel.name, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "${formatWindow(program.startEpochMs, program.endEpochMs)} | ${channel.group ?: "Без группы"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                program.category?.takeIf { it.isNotBlank() }?.let {
+                    Text("Категория: $it", style = MaterialTheme.typography.bodyMedium)
+                }
+                Text(
+                    text = program.description?.takeIf { it.isNotBlank() } ?: "Описание для передачи не найдено.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onOpenPlayer) {
+                Text("Смотреть")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    onClick = onRecord,
+                    enabled = !isSchedulingRecording && program.endEpochMs > System.currentTimeMillis()
+                ) {
+                    Text(if (isSchedulingRecording) "Запись..." else "Записать")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Закрыть")
+                }
+            }
+        }
+    )
 }
 
 private fun formatTime(epochMs: Long): String {

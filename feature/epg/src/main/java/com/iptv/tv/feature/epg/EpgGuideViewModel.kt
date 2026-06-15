@@ -31,6 +31,11 @@ data class EpgChannelRow(
     val programs: List<EpgProgram>
 )
 
+data class SelectedEpgProgram(
+    val row: EpgChannelRow,
+    val program: EpgProgram
+)
+
 data class EpgGuideUiState(
     val title: String = "Телепрограмма",
     val playlists: List<Playlist> = emptyList(),
@@ -40,6 +45,7 @@ data class EpgGuideUiState(
     val rows: List<EpgChannelRow> = emptyList(),
     val isLoading: Boolean = false,
     val isSchedulingRecording: Boolean = false,
+    val selectedProgram: SelectedEpgProgram? = null,
     val status: String = "Выберите плейлист с EPG",
     val error: String? = null,
     val windowStartMs: Long = 0L,
@@ -89,6 +95,19 @@ class EpgGuideViewModel @Inject constructor(
 
     fun refresh() {
         loadGuide()
+    }
+
+    fun selectProgram(row: EpgChannelRow, program: EpgProgram) {
+        _uiState.update { it.copy(selectedProgram = SelectedEpgProgram(row, program)) }
+    }
+
+    fun clearSelectedProgram() {
+        _uiState.update { it.copy(selectedProgram = null) }
+    }
+
+    fun scheduleSelectedProgram() {
+        val selected = _uiState.value.selectedProgram ?: return
+        scheduleRecording(selected.row, selected.program)
     }
 
     fun scheduleRecording(row: EpgChannelRow, program: EpgProgram) {
