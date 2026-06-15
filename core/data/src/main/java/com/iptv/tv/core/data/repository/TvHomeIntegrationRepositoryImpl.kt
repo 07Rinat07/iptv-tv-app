@@ -168,7 +168,7 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
             put(TvContract.PreviewPrograms.COLUMN_TYPE, TvContract.PreviewPrograms.TYPE_CHANNEL)
             put(TvContract.PreviewPrograms.COLUMN_TITLE, channel.name)
             put(TvContract.PreviewPrograms.COLUMN_SHORT_DESCRIPTION, channel.groupName ?: "IPTV канал")
-            put(TvContract.PreviewPrograms.COLUMN_INTENT_URI, launchIntentUri())
+            put(TvContract.PreviewPrograms.COLUMN_INTENT_URI, launchIntentUri("myscaneriptv://player/${channel.playlistId}/${channel.id}"))
             put(TvContract.PreviewPrograms.COLUMN_INTERNAL_PROVIDER_ID, "channel:${channel.id}")
             put(TvContract.PreviewPrograms.COLUMN_INTERNAL_PROVIDER_DATA, channel.streamUrl)
             put(TvContract.PreviewPrograms.COLUMN_LIVE, 1)
@@ -194,7 +194,7 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
             put(TvContract.PreviewPrograms.COLUMN_TYPE, TvContract.PreviewPrograms.TYPE_CLIP)
             put(TvContract.PreviewPrograms.COLUMN_TITLE, recording.programTitle ?: recording.channelName)
             put(TvContract.PreviewPrograms.COLUMN_SHORT_DESCRIPTION, "Запись: ${recording.channelName}")
-            put(TvContract.PreviewPrograms.COLUMN_INTENT_URI, launchIntentUri())
+            put(TvContract.PreviewPrograms.COLUMN_INTENT_URI, launchIntentUri("myscaneriptv://downloads"))
             put(TvContract.PreviewPrograms.COLUMN_INTERNAL_PROVIDER_ID, "recording:${recording.id}")
             put(TvContract.PreviewPrograms.COLUMN_INTERNAL_PROVIDER_DATA, recording.filePath.orEmpty())
             put(TvContract.PreviewPrograms.COLUMN_BROWSABLE, 1)
@@ -249,9 +249,13 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
         }
     }
 
-    private fun launchIntentUri(): String {
-        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            ?: Intent(Intent.ACTION_MAIN).setPackage(context.packageName)
+    private fun launchIntentUri(deepLink: String? = null): String {
+        val intent = if (deepLink != null) {
+            Intent(Intent.ACTION_VIEW, Uri.parse(deepLink)).setPackage(context.packageName)
+        } else {
+            context.packageManager.getLaunchIntentForPackage(context.packageName)
+                ?: Intent(Intent.ACTION_MAIN).setPackage(context.packageName)
+        }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         return intent.toUri(Intent.URI_INTENT_SCHEME)
     }

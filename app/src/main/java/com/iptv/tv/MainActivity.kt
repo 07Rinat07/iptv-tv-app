@@ -1,5 +1,6 @@
 package com.iptv.tv
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -26,6 +27,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,20 +80,29 @@ fun navButtonTag(route: String): String = TAG_NAV_PREFIX + route
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    private val pendingDeepLinkRoute = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingDeepLinkRoute.value = intent.toAppRoute()
         enableEdgeToEdge()
         setContent {
             IptvTheme {
-                AppRoot()
+                AppRoot(pendingDeepLinkRoute)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingDeepLinkRoute.value = intent.toAppRoute()
     }
 }
 
 @Composable
 @androidx.annotation.OptIn(UnstableApi::class)
-private fun AppRoot() {
+private fun AppRoot(pendingDeepLinkRoute: MutableState<String?>) {
     val navController = rememberNavController()
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route ?: Routes.HOME
     val activity = LocalContext.current as? ComponentActivity
@@ -102,6 +113,14 @@ private fun AppRoot() {
     BackHandler {
         if (!navController.navigateUp()) {
             showExitConfirm = true
+        }
+    }
+
+    LaunchedEffect(pendingDeepLinkRoute.value) {
+        val route = pendingDeepLinkRoute.value ?: return@LaunchedEffect
+        pendingDeepLinkRoute.value = null
+        navController.navigate(route) {
+            launchSingleTop = true
         }
     }
 
@@ -483,4 +502,25 @@ object Routes {
     fun editorRoute(playlistId: Long): String = "editor/$playlistId"
     fun playerRoute(playlistId: Long): String = "player/$playlistId"
     fun playerRoute(playlistId: Long, channelId: Long): String = "player/$playlistId/$channelId"
+}
+
+private fun Intent?.toAppRoute(): String? {
+    val uri = this?.data ?: return null
+    if (uri.scheme != "myscaneriptv") return null
+    return when (uri.host) {
+        "player" -> {
+            val playlistId = uri.pathSegments.getOrNull(0)?.toLongOrNull()
+            val channelId = uri.pathSegments.getOrNull(1)?.toLongOrNull()
+            when {
+                playlistId != null && channelId != null -> Routes.playerRoute(playlistId, channelId)
+                playlistId != null -> Routes.playerRoute(playlistId)
+                else -> Routes.PLAYER
+            }
+        }
+        "downloads" -> Routes.DOWNLOADS
+        "epg" -> Routes.EPG
+        "favorites" -> Routes.FAVORITES
+        "history" -> Routes.HISTORY
+        else -> Routes.HOME
+    }
 }
