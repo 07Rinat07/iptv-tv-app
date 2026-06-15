@@ -98,8 +98,18 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
     }
 
     override suspend fun setEnabled(state: TvHomeChannelState): AppResult<Unit> = withContext(Dispatchers.IO) {
-        tvHomeChannelDao.upsert(state.toEntity())
-        AppResult.Success(Unit)
+        runCatching {
+            val stateToPersist = if (state.enabled) {
+                state
+            } else {
+                clearPublishedState(state)
+            }
+            tvHomeChannelDao.upsert(stateToPersist.toEntity())
+            addLog("tv_home_row_enabled", "type=${state.type.name}, enabled=${state.enabled}")
+            AppResult.Success(Unit)
+        }.getOrElse { throwable ->
+            logAndError("tv_home_row_enabled_error", throwable)
+        }
     }
 
     private suspend fun publishPreviewRow(
@@ -256,6 +266,23 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun clearPublishedState(state: TvHomeChannelState): TvHomeChannelState {
+        if (!supportsTvHome()) {
+            return state.copy(providerChannelId = null, lastPublishedAt = null)
+        }
+
+        if (state.type == TvHomeChannelType.WATCH_NEXT) {
+            deleteExistingWatchNext()
+            return state.copy(providerChannelId = null, lastPublishedAt = null)
+        }
+
+        state.providerChannelId?.let { providerChannelId ->
+            deletePreviewPrograms(providerChannelId)
+            context.contentResolver.delete(TvContract.buildChannelUri(providerChannelId), null, null)
+        }
+        return state.copy(providerChannelId = null, lastPublishedAt = null)
     }
 
     private fun launchIntentUri(deepLink: String? = null): String {
