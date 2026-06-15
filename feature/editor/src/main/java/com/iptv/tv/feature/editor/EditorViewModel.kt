@@ -14,6 +14,7 @@ import com.iptv.tv.core.domain.repository.ChannelMetadataRepository
 import com.iptv.tv.core.domain.repository.PlaylistEditorRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.ChannelMetadata
 import com.iptv.tv.core.model.EditorActionResult
 import com.iptv.tv.core.model.Playlist
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -52,6 +53,7 @@ data class EditorUiState(
     val selectedChannelIds: Set<Long> = emptySet(),
     val customPlaylistName: String = "Мой плейлист",
     val editDraft: ChannelEditDraft = ChannelEditDraft(),
+    val selectedMetadata: ChannelMetadata? = null,
     val exportPreview: String? = null,
     val exportFileExtension: String = "m3u",
     val exportedFilePath: String? = null,
@@ -93,6 +95,7 @@ class EditorViewModel @Inject constructor(
                 effectivePlaylistId = playlistId,
                 selectedChannelIds = emptySet(),
                 editDraft = ChannelEditDraft(),
+                selectedMetadata = null,
                 exportPreview = null,
                 exportedFilePath = null,
                 lastError = null,
@@ -113,11 +116,13 @@ class EditorViewModel @Inject constructor(
             state.copy(
                 selectedChannelIds = selected,
                 editDraft = selectedChannel?.toDraft() ?: state.editDraft.takeIf { it.channelId in selected } ?: ChannelEditDraft(),
+                selectedMetadata = state.selectedMetadata.takeIf { it?.channelId == selectedChannel?.id },
                 exportedFilePath = null,
                 lastError = null,
                 lastInfo = null
             )
         }
+        _uiState.value.editDraft.channelId?.let(::loadSelectedMetadata)
     }
 
     fun selectAllChannels() {
@@ -135,6 +140,7 @@ class EditorViewModel @Inject constructor(
             it.copy(
                 selectedChannelIds = emptySet(),
                 editDraft = ChannelEditDraft(),
+                selectedMetadata = null,
                 exportPreview = null,
                 exportedFilePath = null
             )
@@ -433,11 +439,13 @@ class EditorViewModel @Inject constructor(
             state.copy(
                 selectedChannelIds = setOf(channelId),
                 editDraft = channel.toDraft(),
+                selectedMetadata = null,
                 exportedFilePath = null,
                 lastError = null,
                 lastInfo = null
             )
         }
+        loadSelectedMetadata(channelId)
     }
 
     fun updateDraftName(value: String) {
@@ -486,11 +494,37 @@ class EditorViewModel @Inject constructor(
         }
         viewModelScope.launch {
             when (val result = channelMetadataRepository.setManualLogo(channelId, draft.logo)) {
-                is AppResult.Success -> _uiState.update {
-                    it.copy(
-                        lastInfo = "Ручной логотип сохранён",
-                        lastError = null
-                    )
+                is AppResult.Success -> {
+                    loadSelectedMetadata(channelId)
+                    _uiState.update {
+                        it.copy(
+                            lastInfo = "Ручной логотип сохранён",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> _uiState.update { it.copy(lastError = result.message) }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun clearManualLogo() {
+        val channelId = _uiState.value.editDraft.channelId
+        if (channelId == null) {
+            _uiState.update { it.copy(lastError = "Выберите канал для очистки ручного логотипа") }
+            return
+        }
+        viewModelScope.launch {
+            when (val result = channelMetadataRepository.setManualLogo(channelId, null)) {
+                is AppResult.Success -> {
+                    loadSelectedMetadata(channelId)
+                    _uiState.update {
+                        it.copy(
+                            lastInfo = "Ручной логотип очищен, обновлено: ${result.data}",
+                            lastError = null
+                        )
+                    }
                 }
                 is AppResult.Error -> _uiState.update { it.copy(lastError = result.message) }
                 AppResult.Loading -> Unit
@@ -503,12 +537,15 @@ class EditorViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isRefreshingMetadata = true, lastError = null, lastInfo = null) }
             when (val result = channelMetadataRepository.refreshMetadata(playlistId)) {
-                is AppResult.Success -> _uiState.update {
-                    it.copy(
-                        isRefreshingMetadata = false,
-                        lastInfo = "Метаданные обновлены, логотипов применено: ${result.data}",
-                        lastError = null
-                    )
+                is AppResult.Success -> {
+                    _uiState.value.editDraft.channelId?.let(::loadSelectedMetadata)
+                    _uiState.update {
+                        it.copy(
+                            isRefreshingMetadata = false,
+                            lastInfo = "Метаданные обновлены, логотипов применено: ${result.data}",
+                            lastError = null
+                        )
+                    }
                 }
                 is AppResult.Error -> _uiState.update {
                     it.copy(isRefreshingMetadata = false, lastError = result.message)
@@ -587,7 +624,8 @@ class EditorViewModel @Inject constructor(
                     state.copy(
                         channels = channels,
                         selectedChannelIds = selected,
-                        editDraft = draft
+                        editDraft = draft,
+                        selectedMetadata = state.selectedMetadata.takeIf { it?.channelId == draft.channelId }
                     )
                 }
             }
@@ -598,6 +636,28 @@ class EditorViewModel @Inject constructor(
         viewModelScope.launch {
             favoritesRepository.observeFavorites().collect { channels ->
                 _uiState.update { it.copy(favoriteChannelIds = channels.map { channel -> channel.id }.toSet()) }
+            }
+        }
+    }
+
+    private fun loadSelectedMetadata(channelId: Long) {
+        viewModelScope.launch {
+            when (val result = channelMetadataRepository.resolveMetadata(channelId)) {
+                is AppResult.Success -> _uiState.update { state ->
+                    if (state.editDraft.channelId == channelId) {
+                        state.copy(selectedMetadata = result.data, lastError = null)
+                    } else {
+                        state
+                    }
+                }
+                is AppResult.Error -> _uiState.update { state ->
+                    if (state.editDraft.channelId == channelId) {
+                        state.copy(selectedMetadata = null, lastError = result.message)
+                    } else {
+                        state
+                    }
+                }
+                AppResult.Loading -> Unit
             }
         }
     }

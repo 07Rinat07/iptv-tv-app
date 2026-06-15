@@ -30,6 +30,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.ChannelMetadata
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -254,11 +255,20 @@ fun EditorScreen(
                             Text("Сохранить как ручной логотип")
                         }
                         Button(
+                            onClick = viewModel::clearManualLogo,
+                            enabled = state.editDraft.channelId != null && !state.isLoading
+                        ) {
+                            Text("Очистить ручной логотип")
+                        }
+                        Button(
                             onClick = viewModel::refreshCurrentPlaylistMetadata,
                             enabled = !state.isRefreshingMetadata
                         ) {
                             Text(if (state.isRefreshingMetadata) "Подбор..." else "Подобрать логотипы")
                         }
+                    }
+                    state.selectedMetadata?.let { metadata ->
+                        ChannelMetadataSummary(metadata = metadata)
                     }
                     OutlinedTextField(
                         value = state.editDraft.streamUrl,
@@ -415,6 +425,24 @@ fun EditorScreen(
 }
 
 @Composable
+private fun ChannelMetadataSummary(metadata: ChannelMetadata) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text("Метаданные выбранного канала", style = MaterialTheme.typography.titleSmall)
+        Text("Источник: ${metadata.metadataSource.toMetadataSourceLabel()}")
+        Text("Нормализованное имя: ${metadata.normalizedName.orEmpty().ifBlank { "-" }}")
+        Text(
+            "Страна: ${metadata.country ?: "-"} | " +
+                "язык: ${metadata.language ?: "-"} | категория: ${metadata.category ?: "-"}"
+        )
+        Text("Итоговый логотип: ${metadata.resolvedLogoUrl ?: "-"}")
+        Text("Ручной логотип: ${metadata.manualLogoUrl ?: "-"}")
+    }
+}
+
+@Composable
 private fun ChannelTitleWithLogo(channel: Channel, selected: Boolean) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -442,6 +470,18 @@ private fun ChannelTitleWithLogo(channel: Channel, selected: Boolean) {
                 style = MaterialTheme.typography.bodySmall
             )
         }
+    }
+}
+
+private fun String?.toMetadataSourceLabel(): String {
+    return when (this) {
+        "manual" -> "ручной override"
+        "playlist" -> "из плейлиста"
+        "catalog:tvg-id" -> "каталог по tvg-id"
+        "catalog:name" -> "каталог по имени"
+        "catalog:source" -> "каталог по источнику"
+        null, "" -> "-"
+        else -> this
     }
 }
 

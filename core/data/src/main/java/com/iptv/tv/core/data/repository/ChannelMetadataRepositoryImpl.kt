@@ -41,10 +41,14 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
             ?: return@withContext AppResult.Error("Канал не найден: id=$channelId")
         val normalizedLogo = logoUrl?.trim()?.ifBlank { null }
         val existing = channelMetadataDao.findByChannelId(channelId)?.toModel()
-        val metadata = buildMetadata(channel, existing = existing).copy(
+        val baseMetadata = buildMetadata(
+            channel = channel,
+            existing = if (normalizedLogo == null) existing?.copy(manualLogoUrl = null) else existing
+        )
+        val metadata = baseMetadata.copy(
             manualLogoUrl = normalizedLogo,
-            resolvedLogoUrl = normalizedLogo ?: existing?.resolvedLogoUrl ?: channel.logo,
-            metadataSource = if (normalizedLogo != null) "manual" else existing?.metadataSource,
+            resolvedLogoUrl = normalizedLogo ?: baseMetadata.resolvedLogoUrl,
+            metadataSource = if (normalizedLogo != null) "manual" else baseMetadata.metadataSource,
             updatedAt = System.currentTimeMillis()
         )
         channelMetadataDao.upsert(metadata.toEntity())
