@@ -103,7 +103,7 @@ class RecordingRepositoryImpl @Inject constructor(
                 startedAt = null,
                 endedAt = null,
                 scheduledStartAt = now,
-                scheduledEndAt = now + DEFAULT_RECORDING_DURATION_MS,
+                scheduledEndAt = RecordingLimits.defaultScheduledEndAt(now),
                 createdAt = now
             )
         )
@@ -277,6 +277,8 @@ class RecordingRepositoryImpl @Inject constructor(
         val extension = extensionForStreamUrl(streamUrl)
         val file = File(directory, recordingFileName(recording, extension))
         val startedAt = System.currentTimeMillis()
+        val maxBytes = RecordingLimits.maxRecordingBytes(directory.usableSpace)
+        val hardEndAt = RecordingLimits.hardEndAt(startedAt, recording.scheduledEndAt)
         recordingDao.markStarted(
             recordingId = recording.id,
             status = RecordingStatus.RECORDING.name,
@@ -295,16 +297,15 @@ class RecordingRepositoryImpl @Inject constructor(
                     file.outputStream().use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         var written = 0L
-                        val hardEndAt = listOfNotNull(
-                            recording.scheduledEndAt,
-                            startedAt + MAX_RECORDING_DURATION_MS
-                        ).minOrNull() ?: (startedAt + MAX_RECORDING_DURATION_MS)
-
-                        while (System.currentTimeMillis() < hardEndAt && written < MAX_RECORDING_BYTES) {
+                        while (System.currentTimeMillis() < hardEndAt && written < maxBytes) {
                             val read = input.read(buffer)
                             if (read <= 0) break
-                            output.write(buffer, 0, read)
-                            written += read
+                            val remaining = maxBytes - written
+                            if (remaining <= 0L) break
+                            val bytesToWrite = minOf(read.toLong(), remaining).toInt()
+                            output.write(buffer, 0, bytesToWrite)
+                            written += bytesToWrite
+                            if (bytesToWrite < read) break
                         }
                     }
                 }
@@ -314,7 +315,7 @@ class RecordingRepositoryImpl @Inject constructor(
                 SyncLogEntity(
                     playlistId = null,
                     status = "recording_completed",
-                    message = "recordingId=${recording.id}, storage=${storageLocation.name}, file=${file.absolutePath}",
+                    message = "recordingId=${recording.id}, storage=${storageLocation.name}, bytesLimit=$maxBytes, hardEndAt=$hardEndAt, file=${file.absolutePath}",
                     createdAt = System.currentTimeMillis()
                 )
             )
@@ -350,7 +351,8 @@ class RecordingRepositoryImpl @Inject constructor(
             markRecordingFailed(recording, "Recording folder is not writable: ${directory.absolutePath}")
             return null
         }
-        if (directory.usableSpace < MIN_RECORDING_FREE_BYTES) {
+        val maxBytes = RecordingLimits.maxRecordingBytes(directory.usableSpace)
+        if (maxBytes <= 0L) {
             markRecordingFailed(
                 recording,
                 "Not enough free space in recording folder: ${directory.usableSpace} bytes"
@@ -435,10 +437,6 @@ class RecordingRepositoryImpl @Inject constructor(
     }
 
     private companion object {
-        const val DEFAULT_RECORDING_DURATION_MS = 2 * 60 * 60 * 1000L
-        const val MAX_RECORDING_DURATION_MS = 15 * 60 * 1000L
-        const val MAX_RECORDING_BYTES = 256L * 1024L * 1024L
-        const val MIN_RECORDING_FREE_BYTES = 64L * 1024L * 1024L
         const val MAX_CONCURRENT_RECORDINGS = 2
     }
 }
