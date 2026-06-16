@@ -60,6 +60,23 @@ data class InternalPlaybackSession(
     val bufferConfig: BufferConfig
 )
 
+enum class MultiviewMode(val paneCount: Int) {
+    OFF(1),
+    TWO_UP(2),
+    FOUR_UP(4)
+}
+
+internal fun calculateSupportedMultiviewPaneCount(
+    cpuCount: Int,
+    maxMemoryBytes: Long
+): Int {
+    return if (cpuCount >= 6 && maxMemoryBytes >= 512L * 1024L * 1024L) {
+        4
+    } else {
+        2
+    }
+}
+
 enum class PlayerVideoScale {
     FIT,
     FILL,
@@ -104,7 +121,14 @@ data class PlayerUiState(
     val isSavingEpgWizard: Boolean = false,
     val internalSession: InternalPlaybackSession? = null,
     val secondaryInternalSession: InternalPlaybackSession? = null,
+    val tertiaryInternalSession: InternalPlaybackSession? = null,
+    val quaternaryInternalSession: InternalPlaybackSession? = null,
     val multiviewEnabled: Boolean = false,
+    val multiviewMode: MultiviewMode = MultiviewMode.OFF,
+    val multiviewSupportedPaneCount: Int = calculateSupportedMultiviewPaneCount(
+        cpuCount = Runtime.getRuntime().availableProcessors(),
+        maxMemoryBytes = Runtime.getRuntime().maxMemory()
+    ),
     val playerVideoScale: PlayerVideoScale = PlayerVideoScale.FIT,
     val internalPlayerExpanded: Boolean = false,
     val testStreamUrl: String = "",
@@ -115,6 +139,9 @@ data class PlayerUiState(
     val lastError: String? = null,
     val lastInfo: String? = null
 )
+
+private val PlayerUiState.additionalMultiviewSessions: List<InternalPlaybackSession?>
+    get() = listOf(secondaryInternalSession, tertiaryInternalSession, quaternaryInternalSession)
 
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
@@ -152,6 +179,43 @@ class PlayerViewModel @Inject constructor(
         observeFavorites()
     }
 
+    private fun sessionForPane(state: PlayerUiState, paneIndex: Int): InternalPlaybackSession? {
+        return when (paneIndex) {
+            1 -> state.internalSession
+            2 -> state.secondaryInternalSession
+            3 -> state.tertiaryInternalSession
+            4 -> state.quaternaryInternalSession
+            else -> null
+        }
+    }
+
+    private fun stopAdditionalSessionsForMode(
+        state: PlayerUiState,
+        mode: MultiviewMode
+    ): PlayerUiState {
+        return when (mode) {
+            MultiviewMode.OFF -> state.copy(
+                secondaryInternalSession = null,
+                tertiaryInternalSession = null,
+                quaternaryInternalSession = null,
+                multiviewEnabled = false,
+                multiviewMode = MultiviewMode.OFF
+            )
+
+            MultiviewMode.TWO_UP -> state.copy(
+                tertiaryInternalSession = null,
+                quaternaryInternalSession = null,
+                multiviewEnabled = true,
+                multiviewMode = MultiviewMode.TWO_UP
+            )
+
+            MultiviewMode.FOUR_UP -> state.copy(
+                multiviewEnabled = true,
+                multiviewMode = MultiviewMode.FOUR_UP
+            )
+        }
+    }
+
     fun selectPlaylist(playlistId: Long) {
         lastEpgRequestedChannelId = null
         val selectedPlaylist = _uiState.value.playlists.firstOrNull { it.id == playlistId }
@@ -175,11 +239,11 @@ class PlayerViewModel @Inject constructor(
                     "EPG мастер: выберите плейлист"
                 },
                 internalSession = null,
-                secondaryInternalSession = null,
-                multiviewEnabled = false,
                 lastError = null,
                 lastInfo = null
-            )
+            ).let { clearedState ->
+                stopAdditionalSessionsForMode(clearedState, MultiviewMode.OFF)
+            }
         }
         observeChannels(playlistId)
     }
@@ -246,7 +310,9 @@ class PlayerViewModel @Inject constructor(
                 internalSession = null,
                 lastError = null,
                 lastInfo = null
-            )
+            ).let { clearedState ->
+                stopAdditionalSessionsForMode(clearedState, state.multiviewMode)
+            }
         }
         val selectedId = _uiState.value.selectedChannelId
         if (selectedId != null) {
@@ -295,7 +361,9 @@ class PlayerViewModel @Inject constructor(
                 internalSession = null,
                 lastError = null,
                 lastInfo = null
-            )
+            ).let { clearedState ->
+                stopAdditionalSessionsForMode(clearedState, state.multiviewMode)
+            }
         }
         val selectedId = _uiState.value.selectedChannelId
         if (selectedId != null) {
@@ -658,22 +726,34 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun playChannelInSecondPane(channelId: Long) {
+        playChannelInPane(channelId = channelId, paneIndex = 2)
+    }
+
+    fun playChannelInPane(channelId: Long, paneIndex: Int) {
+        if (paneIndex <= 1) {
+            playChannelInternal(channelId)
+            return
+        }
         val channel = _uiState.value.channels.firstOrNull { it.id == channelId }
         if (channel == null) {
-            _uiState.update { it.copy(lastError = "Канал для второго окна не найден", lastInfo = null) }
+            _uiState.update { it.copy(lastError = "Канал для окна $paneIndex не найден", lastInfo = null) }
             return
         }
         val aceDescriptor = detectAceDescriptor(channel.streamUrl)
         if (aceDescriptor != null) {
             _uiState.update {
                 it.copy(
-                    lastError = "Multiview 2-up пока поддерживает прямые http/https потоки. Ace/torrent канал откройте основным плеером.",
+                    lastError = "Multiview пока поддерживает только прямые http/https потоки. Ace/torrent канал откройте основным плеером.",
                     lastInfo = null
                 )
             }
             return
         }
-        startSecondaryInternalPlayback(channel)
+        val requiredMode = if (paneIndex >= 3) MultiviewMode.FOUR_UP else MultiviewMode.TWO_UP
+        if (!ensureMultiviewMode(requiredMode)) {
+            return
+        }
+        startAdditionalInternalPlayback(channel = channel, paneIndex = paneIndex)
     }
 
     fun playSelectedVlc(context: Context) {
@@ -853,25 +933,47 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun toggleMultiview() {
+        if (_uiState.value.multiviewEnabled) {
+            disableMultiview()
+        } else {
+            setMultiviewMode(MultiviewMode.TWO_UP)
+        }
+    }
+
+    fun enableTwoUpMultiview() {
+        setMultiviewMode(MultiviewMode.TWO_UP)
+    }
+
+    fun enableFourUpMultiview() {
+        setMultiviewMode(MultiviewMode.FOUR_UP)
+    }
+
+    fun disableMultiview() {
         _uiState.update { state ->
-            val enabled = !state.multiviewEnabled
-            state.copy(
-                multiviewEnabled = enabled,
-                lastInfo = if (enabled) {
-                    "Multiview 2-up включен"
-                } else {
-                    "Multiview выключен"
-                },
+            stopAdditionalSessionsForMode(state, MultiviewMode.OFF).copy(
+                lastInfo = "Multiview выключен",
                 lastError = null
             )
         }
     }
 
     fun stopSecondPane() {
+        stopPane(2)
+    }
+
+    fun stopPane(paneIndex: Int) {
+        if (paneIndex <= 1) {
+            stopInternalPlayback()
+            return
+        }
         _uiState.update {
-            it.copy(
-                secondaryInternalSession = null,
-                lastInfo = "Второе окно остановлено",
+            when (paneIndex) {
+                2 -> it.copy(secondaryInternalSession = null)
+                3 -> it.copy(tertiaryInternalSession = null)
+                4 -> it.copy(quaternaryInternalSession = null)
+                else -> it
+            }.copy(
+                lastInfo = "Окно $paneIndex остановлено",
                 lastError = null
             )
         }
@@ -904,10 +1006,14 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun onSecondaryPlaybackReady() {
+        onAdditionalPlaybackReady(2)
+    }
+
+    fun onAdditionalPlaybackReady(paneIndex: Int) {
         viewModelScope.launch {
             diagnosticsRepository.addLog(
                 status = "player_multiview_ready",
-                message = "Second pane ready",
+                message = "Pane $paneIndex ready",
                 playlistId = _uiState.value.selectedPlaylistId
             )
         }
@@ -915,18 +1021,26 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun onSecondaryPlaybackError(message: String) {
-        val session = _uiState.value.secondaryInternalSession ?: return
+        onAdditionalPlaybackError(paneIndex = 2, message = message)
+    }
+
+    fun onAdditionalPlaybackError(paneIndex: Int, message: String) {
+        val session = sessionForPane(_uiState.value, paneIndex) ?: return
         viewModelScope.launch {
             diagnosticsRepository.addLog(
                 status = "player_multiview_error",
-                message = "Second pane failed: channelId=${session.channelId}, msg=${message.take(250)}",
+                message = "Pane $paneIndex failed: channelId=${session.channelId}, msg=${message.take(250)}",
                 playlistId = _uiState.value.selectedPlaylistId
             )
         }
         _uiState.update {
-            it.copy(
-                secondaryInternalSession = null,
-                lastError = "Второе окно остановлено: $message",
+            when (paneIndex) {
+                2 -> it.copy(secondaryInternalSession = null)
+                3 -> it.copy(tertiaryInternalSession = null)
+                4 -> it.copy(quaternaryInternalSession = null)
+                else -> it
+            }.copy(
+                lastError = "Окно $paneIndex остановлено: $message",
                 lastInfo = null
             )
         }
@@ -1066,7 +1180,8 @@ class PlayerViewModel @Inject constructor(
         if (playlistId == null) {
             lastEpgRequestedChannelId = null
             _uiState.update {
-                it.copy(
+                stopAdditionalSessionsForMode(
+                    it.copy(
                     channels = emptyList(),
                     availableGroups = emptyList(),
                     selectedGroup = null,
@@ -1081,6 +1196,8 @@ class PlayerViewModel @Inject constructor(
                     channelEpgInfo = null,
                     epgStatus = "EPG: канал не выбран",
                     internalSession = null
+                    ),
+                    MultiviewMode.OFF
                 )
             }
             return
@@ -1138,6 +1255,10 @@ class PlayerViewModel @Inject constructor(
 
                     val shouldStopSession = state.internalSession?.channelId != null &&
                         channelsByGroup.none { it.id == state.internalSession.channelId }
+                    val visibleChannelIds = visibleChannels.map { it.id }.toSet()
+                    val shouldStopPane2 = state.secondaryInternalSession?.channelId?.let { it !in visibleChannelIds } == true
+                    val shouldStopPane3 = state.tertiaryInternalSession?.channelId?.let { it !in visibleChannelIds } == true
+                    val shouldStopPane4 = state.quaternaryInternalSession?.channelId?.let { it !in visibleChannelIds } == true
 
                     state.copy(
                         channels = visibleChannels,
@@ -1153,7 +1274,10 @@ class PlayerViewModel @Inject constructor(
                         channelPlayerOverride = if (selected == state.selectedChannelId) state.channelPlayerOverride else null,
                         channelEpgInfo = if (selected == state.selectedChannelId) state.channelEpgInfo else null,
                         epgStatus = if (selected == state.selectedChannelId) state.epgStatus else "EPG: загрузка...",
-                        internalSession = if (shouldStopSession) null else state.internalSession
+                        internalSession = if (shouldStopSession) null else state.internalSession,
+                        secondaryInternalSession = if (shouldStopPane2) null else state.secondaryInternalSession,
+                        tertiaryInternalSession = if (shouldStopPane3) null else state.tertiaryInternalSession,
+                        quaternaryInternalSession = if (shouldStopPane4) null else state.quaternaryInternalSession
                     )
                 }
 
@@ -1594,14 +1718,44 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private fun startSecondaryInternalPlayback(channel: Channel) {
+    private fun ensureMultiviewMode(mode: MultiviewMode): Boolean {
+        val state = _uiState.value
+        if (mode == MultiviewMode.FOUR_UP && state.multiviewSupportedPaneCount < 4) {
+            _uiState.update {
+                it.copy(
+                    lastError = "4-up пока недоступен на этом устройстве. Доступен режим 2-up.",
+                    lastInfo = null
+                )
+            }
+            return false
+        }
+        setMultiviewMode(mode)
+        return true
+    }
+
+    private fun setMultiviewMode(mode: MultiviewMode) {
+        _uiState.update { state ->
+            val nextState = stopAdditionalSessionsForMode(state, mode)
+            val modeLabel = when (mode) {
+                MultiviewMode.OFF -> "выключен"
+                MultiviewMode.TWO_UP -> "2-up включен"
+                MultiviewMode.FOUR_UP -> "4-up включен"
+            }
+            nextState.copy(
+                lastInfo = "Multiview $modeLabel",
+                lastError = null
+            )
+        }
+    }
+
+    private fun startAdditionalInternalPlayback(channel: Channel, paneIndex: Int) {
         val state = _uiState.value
         val preparedStream = parseKodiStyleStream(channel.streamUrl)
         val lowered = preparedStream.streamUrl.lowercase(Locale.ROOT)
         if (!lowered.startsWith("http://") && !lowered.startsWith("https://")) {
             _uiState.update {
                 it.copy(
-                    lastError = "Второе окно поддерживает только прямые http/https потоки",
+                    lastError = "Окно $paneIndex поддерживает только прямые http/https потоки",
                     lastInfo = null
                 )
             }
@@ -1611,22 +1765,29 @@ class PlayerViewModel @Inject constructor(
             profile = BufferProfile.MINIMAL,
             manual = state.manualBuffer
         )
-        val nextSessionId = (state.secondaryInternalSession?.sessionId ?: 0L) + 1L
+        val nextSessionId = (sessionForPane(state, paneIndex)?.sessionId ?: 0L) + 1L
         _uiState.update {
-            it.copy(
-                secondaryInternalSession = InternalPlaybackSession(
-                    sessionId = nextSessionId,
-                    channelId = channel.id,
-                    channelName = channel.name,
-                    streamUrl = preparedStream.streamUrl,
-                    requestHeaders = preparedStream.headers,
-                    bufferConfig = config
-                ),
+            val nextSession = InternalPlaybackSession(
+                sessionId = nextSessionId,
+                channelId = channel.id,
+                channelName = channel.name,
+                streamUrl = preparedStream.streamUrl,
+                requestHeaders = preparedStream.headers,
+                bufferConfig = config
+            )
+            val updated = when (paneIndex) {
+                2 -> it.copy(secondaryInternalSession = nextSession)
+                3 -> it.copy(tertiaryInternalSession = nextSession)
+                4 -> it.copy(quaternaryInternalSession = nextSession)
+                else -> it
+            }
+            updated.copy(
                 multiviewEnabled = true,
+                multiviewMode = if (paneIndex >= 3) MultiviewMode.FOUR_UP else updated.multiviewMode,
                 lastInfo = if (preparedStream.headers.isEmpty()) {
-                    "Второе окно: ${channel.name}"
+                    "Окно $paneIndex: ${channel.name}"
                 } else {
-                    "Второе окно: ${channel.name} (применены HTTP-заголовки)"
+                    "Окно $paneIndex: ${channel.name} (применены HTTP-заголовки)"
                 },
                 lastError = null
             )
@@ -1634,7 +1795,7 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             diagnosticsRepository.addLog(
                 status = "player_multiview_start",
-                message = "Second pane start: channelId=${channel.id}",
+                message = "Pane $paneIndex start: channelId=${channel.id}",
                 playlistId = channel.playlistId
             )
         }

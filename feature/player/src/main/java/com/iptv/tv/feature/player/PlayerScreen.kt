@@ -180,6 +180,26 @@ fun PlayerScreen(
     var showStreamTools by rememberSaveable { mutableStateOf(false) }
     var showEpgWizard by rememberSaveable { mutableStateOf(false) }
     val selectedChannelName = state.channels.firstOrNull { it.id == state.selectedChannelId }?.name
+    val multiviewLabel = when (state.multiviewMode) {
+        MultiviewMode.OFF -> "выкл"
+        MultiviewMode.TWO_UP -> "2-up"
+        MultiviewMode.FOUR_UP -> "4-up"
+    }
+    val configuredPaneIndices = when (state.multiviewMode) {
+        MultiviewMode.OFF -> emptyList()
+        MultiviewMode.TWO_UP -> listOf(2)
+        MultiviewMode.FOUR_UP -> listOf(2, 3, 4)
+    }
+    val availablePaneTargets = if (state.multiviewSupportedPaneCount >= 4) {
+        listOf(2, 3, 4)
+    } else {
+        listOf(2)
+    }
+    val multiviewSessions = listOf(
+        state.secondaryInternalSession,
+        state.tertiaryInternalSession,
+        state.quaternaryInternalSession
+    )
 
     Box(
         modifier = Modifier.fillMaxSize()
@@ -259,8 +279,8 @@ fun PlayerScreen(
                             Text("Engine message: ${state.engineMessage}")
                             Text("Режим плеера: ${if (state.internalPlayerExpanded) "fullscreen" else "обычный"} | Масштаб: ${state.playerVideoScale}")
                             Text(
-                                "Multiview: ${if (state.multiviewEnabled) "2-up" else "выкл"} | " +
-                                    "второе окно=${state.secondaryInternalSession?.channelName ?: "-"}"
+                                "Multiview: $multiviewLabel | максимум=${state.multiviewSupportedPaneCount}-up | " +
+                                    "окна=${multiviewSessions.mapIndexed { index, session -> "${index + 2}=${session?.channelName ?: "-"}" }.joinToString()}"
                             )
                             Text("Встроенный плеер: двойной клик по видео = fullscreen/обычный режим.")
                             Text("VLC: сначала запускается прямой fullscreen, затем fallback совместимости.")
@@ -322,8 +342,27 @@ fun PlayerScreen(
                             Button(onClick = viewModel::toggleMultiview) {
                                 Text(if (state.multiviewEnabled) "Multiview: выкл" else "Multiview: 2-up")
                             }
-                            Button(onClick = viewModel::stopSecondPane, enabled = state.secondaryInternalSession != null) {
-                                Text("Остановить окно 2")
+                            Button(onClick = viewModel::enableTwoUpMultiview) {
+                                Text("Multiview: 2-up")
+                            }
+                            Button(
+                                onClick = viewModel::enableFourUpMultiview,
+                                enabled = state.multiviewSupportedPaneCount >= 4
+                            ) {
+                                Text("Multiview: 4-up")
+                            }
+                            configuredPaneIndices.forEach { paneIndex ->
+                                Button(
+                                    onClick = { viewModel.stopPane(paneIndex) },
+                                    enabled = when (paneIndex) {
+                                        2 -> state.secondaryInternalSession != null
+                                        3 -> state.tertiaryInternalSession != null
+                                        4 -> state.quaternaryInternalSession != null
+                                        else -> false
+                                    }
+                                ) {
+                                    Text("Остановить окно $paneIndex")
+                                }
                             }
                             Button(onClick = { viewModel.setInternalPlayerExpanded(false) }) {
                                 Text("Обычный экран")
@@ -452,17 +491,18 @@ fun PlayerScreen(
                         }
                     )
                     if (state.multiviewEnabled) {
-                        MultiviewTwoUpPanel(
+                        MultiviewPanel(
+                            multiviewMode = state.multiviewMode,
                             primarySession = session,
-                            secondarySession = state.secondaryInternalSession,
+                            additionalSessions = multiviewSessions,
                             selectedChannelName = selectedChannelName,
                             scale = state.playerVideoScale,
                             onPrimaryReady = viewModel::onInternalPlaybackReady,
                             onPrimaryError = { message -> viewModel.onInternalPlaybackError(message, context) },
-                            onSecondaryReady = viewModel::onSecondaryPlaybackReady,
-                            onSecondaryError = viewModel::onSecondaryPlaybackError,
+                            onPaneReady = viewModel::onAdditionalPlaybackReady,
+                            onPaneError = viewModel::onAdditionalPlaybackError,
                             onTogglePrimaryExpanded = viewModel::toggleInternalPlayerSize,
-                            onStopSecondary = viewModel::stopSecondPane
+                            onStopPane = viewModel::stopPane
                         )
                         if (showQuickChannels) {
                             ChannelQuickPanel(
@@ -698,8 +738,15 @@ fun PlayerScreen(
                                 Button(onClick = { viewModel.playChannelInternal(channel.id) }) {
                                     Text(if (channel.id == state.selectedChannelId) "Играет" else "Выбрать и играть")
                                 }
-                                OutlinedButton(onClick = { viewModel.playChannelInSecondPane(channel.id) }) {
-                                    Text("В окно 2")
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    availablePaneTargets.forEach { paneIndex ->
+                                        OutlinedButton(onClick = { viewModel.playChannelInPane(channel.id, paneIndex) }) {
+                                            Text("В окно $paneIndex")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -732,83 +779,142 @@ fun PlayerScreen(
 
 @Composable
 @UnstableApi
-private fun MultiviewTwoUpPanel(
+@OptIn(ExperimentalLayoutApi::class)
+private fun MultiviewPanel(
+    multiviewMode: MultiviewMode,
     primarySession: InternalPlaybackSession?,
-    secondarySession: InternalPlaybackSession?,
+    additionalSessions: List<InternalPlaybackSession?>,
     selectedChannelName: String?,
     scale: PlayerVideoScale,
     onPrimaryReady: () -> Unit,
     onPrimaryError: (String) -> Unit,
-    onSecondaryReady: () -> Unit,
-    onSecondaryError: (String) -> Unit,
+    onPaneReady: (Int) -> Unit,
+    onPaneError: (Int, String) -> Unit,
     onTogglePrimaryExpanded: () -> Unit,
-    onStopSecondary: () -> Unit
+    onStopPane: (Int) -> Unit
 ) {
+    val paneSessions = buildList {
+        add(1 to primarySession)
+        when (multiviewMode) {
+            MultiviewMode.OFF -> Unit
+            MultiviewMode.TWO_UP -> add(2 to additionalSessions.getOrNull(0))
+            MultiviewMode.FOUR_UP -> {
+                add(2 to additionalSessions.getOrNull(0))
+                add(3 to additionalSessions.getOrNull(1))
+                add(4 to additionalSessions.getOrNull(2))
+            }
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Multiview 2-up", style = MaterialTheme.typography.titleSmall)
-            OutlinedButton(onClick = onStopSecondary, enabled = secondarySession != null) {
-                Text("Остановить окно 2")
+            Text("Multiview ${if (multiviewMode == MultiviewMode.FOUR_UP) "4-up" else "2-up"}", style = MaterialTheme.typography.titleSmall)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                paneSessions
+                    .filter { it.first > 1 }
+                    .forEach { (paneIndex, session) ->
+                        OutlinedButton(onClick = { onStopPane(paneIndex) }, enabled = session != null) {
+                            Text("Окно $paneIndex: стоп")
+                        }
+                    }
             }
         }
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val wide = maxWidth >= 760.dp
-            if (wide) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    MultiviewPane(
-                        title = "Окно 1",
-                        session = primarySession,
-                        selectedChannelName = selectedChannelName,
-                        scale = scale,
-                        onReady = onPrimaryReady,
-                        onError = onPrimaryError,
-                        onToggleExpanded = onTogglePrimaryExpanded,
-                        modifier = Modifier.weight(1f)
-                    )
-                    MultiviewPane(
-                        title = "Окно 2",
-                        session = secondarySession,
-                        selectedChannelName = secondarySession?.channelName,
-                        scale = scale,
-                        onReady = onSecondaryReady,
-                        onError = onSecondaryError,
-                        onToggleExpanded = {},
-                        modifier = Modifier.weight(1f)
-                    )
+            val wideTwoUp = maxWidth >= 760.dp
+            val wideFourUp = maxWidth >= 960.dp
+            when {
+                multiviewMode == MultiviewMode.FOUR_UP && wideFourUp -> {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        paneSessions.chunked(2).forEach { rowSessions ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                rowSessions.forEach { (paneIndex, session) ->
+                                    MultiviewPane(
+                                        title = "Окно $paneIndex",
+                                        session = session,
+                                        selectedChannelName = if (paneIndex == 1) {
+                                            selectedChannelName
+                                        } else {
+                                            session?.channelName
+                                        },
+                                        scale = scale,
+                                        onReady = if (paneIndex == 1) onPrimaryReady else ({ onPaneReady(paneIndex) }),
+                                        onError = if (paneIndex == 1) onPrimaryError else { message -> onPaneError(paneIndex, message) },
+                                        onToggleExpanded = if (paneIndex == 1) onTogglePrimaryExpanded else ({}),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                if (rowSessions.size == 1) {
+                                    SpacerPane(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
                 }
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    MultiviewPane(
-                        title = "Окно 1",
-                        session = primarySession,
-                        selectedChannelName = selectedChannelName,
-                        scale = scale,
-                        onReady = onPrimaryReady,
-                        onError = onPrimaryError,
-                        onToggleExpanded = onTogglePrimaryExpanded,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    MultiviewPane(
-                        title = "Окно 2",
-                        session = secondarySession,
-                        selectedChannelName = secondarySession?.channelName,
-                        scale = scale,
-                        onReady = onSecondaryReady,
-                        onError = onSecondaryError,
-                        onToggleExpanded = {},
-                        modifier = Modifier.fillMaxWidth()
-                    )
+
+                multiviewMode == MultiviewMode.TWO_UP && wideTwoUp -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        paneSessions.forEach { (paneIndex, session) ->
+                            MultiviewPane(
+                                title = "Окно $paneIndex",
+                                session = session,
+                                selectedChannelName = if (paneIndex == 1) {
+                                    selectedChannelName
+                                } else {
+                                    session?.channelName
+                                },
+                                scale = scale,
+                                onReady = if (paneIndex == 1) onPrimaryReady else ({ onPaneReady(paneIndex) }),
+                                onError = if (paneIndex == 1) onPrimaryError else { message -> onPaneError(paneIndex, message) },
+                                onToggleExpanded = if (paneIndex == 1) onTogglePrimaryExpanded else ({}),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+
+                else -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        paneSessions.forEach { (paneIndex, session) ->
+                            MultiviewPane(
+                                title = "Окно $paneIndex",
+                                session = session,
+                                selectedChannelName = if (paneIndex == 1) {
+                                    selectedChannelName
+                                } else {
+                                    session?.channelName
+                                },
+                                scale = scale,
+                                onReady = if (paneIndex == 1) onPrimaryReady else ({ onPaneReady(paneIndex) }),
+                                onError = if (paneIndex == 1) onPrimaryError else { message -> onPaneError(paneIndex, message) },
+                                onToggleExpanded = if (paneIndex == 1) onTogglePrimaryExpanded else ({}),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun SpacerPane(modifier: Modifier = Modifier) {
+    Box(modifier = modifier)
 }
 
 @Composable
