@@ -63,6 +63,10 @@ const val TAG_IMPORTER_TVHEADEND_USERNAME = "importer_tvheadend_username"
 const val TAG_IMPORTER_TVHEADEND_PASSWORD = "importer_tvheadend_password"
 const val TAG_IMPORTER_IMPORT_TVHEADEND = "importer_import_tvheadend"
 const val TAG_IMPORTER_SAVE_TVHEADEND = "importer_save_tvheadend"
+const val TAG_IMPORTER_JELLYFIN_URL = "importer_jellyfin_url"
+const val TAG_IMPORTER_JELLYFIN_API_KEY = "importer_jellyfin_api_key"
+const val TAG_IMPORTER_IMPORT_JELLYFIN = "importer_import_jellyfin"
+const val TAG_IMPORTER_SAVE_JELLYFIN = "importer_save_jellyfin"
 const val TAG_IMPORTER_FILE_PATH = "importer_file_path"
 const val TAG_IMPORTER_IMPORT_FILE = "importer_import_file"
 const val TAG_IMPORTER_RAW_TEXT = "importer_raw_text"
@@ -332,6 +336,47 @@ fun ImporterScreen(
         }
 
         item {
+            Text(text = "Jellyfin", style = MaterialTheme.typography.titleMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = state.jellyfinBaseUrl,
+                    onValueChange = viewModel::updateJellyfinBaseUrl,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TAG_IMPORTER_JELLYFIN_URL),
+                    label = { Text("http://server:8096") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = state.jellyfinApiKey,
+                    onValueChange = viewModel::updateJellyfinApiKey,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TAG_IMPORTER_JELLYFIN_API_KEY),
+                    label = { Text("API key") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = viewModel::importFromJellyfin,
+                        modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_JELLYFIN),
+                        enabled = !state.isLoading
+                    ) {
+                        Text(if (state.isLoading) "Импорт..." else "Импорт Jellyfin")
+                    }
+                    Button(
+                        onClick = viewModel::saveJellyfinProvider,
+                        modifier = Modifier.testTag(TAG_IMPORTER_SAVE_JELLYFIN),
+                        enabled = !state.isLoading
+                    ) {
+                        Text("Сохранить сервер")
+                    }
+                }
+            }
+        }
+
+        item {
             SavedProvidersSection(
                 providers = state.savedProviders,
                 syncingProviderId = state.syncingProviderId,
@@ -513,7 +558,7 @@ private fun SavedProvidersSection(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Сохранённые провайдеры", style = MaterialTheme.typography.titleMedium)
         if (providers.isEmpty()) {
-            Text("Пока нет сохранённых M3U/Xtream/Stalker/HDHomeRun/Tvheadend источников", style = MaterialTheme.typography.bodySmall)
+            Text("Пока нет сохранённых M3U/Xtream/Stalker/HDHomeRun/Tvheadend/Jellyfin источников", style = MaterialTheme.typography.bodySmall)
         } else {
             providers.forEach { provider ->
                 ProviderAccountCard(

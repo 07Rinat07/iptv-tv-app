@@ -357,6 +357,44 @@ class PlaylistRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun importFromJellyfin(
+        baseUrl: String,
+        apiKey: String,
+        name: String
+    ): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
+        val normalizedBaseUrl = baseUrl.trim().trimEnd('/')
+        val normalizedApiKey = apiKey.trim()
+        if (normalizedBaseUrl.isBlank()) return@withContext AppResult.Error("Jellyfin server URL is empty")
+        if (normalizedApiKey.isBlank()) return@withContext AppResult.Error("Jellyfin API key is empty")
+
+        runCatching {
+            val channelsUrl = jellyfinChannelsUrl(normalizedBaseUrl, normalizedApiKey)
+            val body = okHttpClient.newCall(Request.Builder().url(channelsUrl).build())
+                .execute()
+                .use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    response.body?.string().orEmpty()
+                }
+                .trim()
+            if (!body.startsWith("{")) error("Jellyfin returned non-JSON response")
+
+            val channels = JSONObject(body).optJSONArray("Items") ?: JSONArray()
+            val rawPlaylist = buildJellyfinM3u(
+                baseUrl = normalizedBaseUrl,
+                apiKey = normalizedApiKey,
+                channels = channels
+            )
+            importParsedPlaylist(
+                playlistName = name,
+                rawPlaylist = rawPlaylist,
+                sourceType = PlaylistSourceType.JELLYFIN,
+                source = "$normalizedBaseUrl/LiveTv/Channels"
+            )
+        }.getOrElse { throwable ->
+            AppResult.Error("Unable to import Jellyfin: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
+        }
+    }
+
     override suspend fun importFromText(text: String, name: String): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
         importParsedPlaylist(
             playlistName = name,
@@ -940,6 +978,79 @@ class PlaylistRepositoryImpl @Inject constructor(
         return builder.toString()
     }
 
+    private fun buildJellyfinM3u(
+        baseUrl: String,
+        apiKey: String,
+        channels: JSONArray
+    ): String {
+        val builder = StringBuilder("#EXTM3U\n")
+        for (index in 0 until channels.length()) {
+            val item = channels.optJSONObject(index) ?: continue
+            val id = item.optString("Id").trim()
+            val name = item.optString("Name").trim()
+            if (id.isBlank() || name.isBlank()) continue
+
+            val channelNumber = item.optString("ChannelNumber").trim()
+                .ifBlank { item.optString("Number").trim() }
+            val logo = jellyfinLogoUrl(baseUrl, apiKey, item)
+            val streamUrl = jellyfinStreamUrl(baseUrl, apiKey, id)
+
+            builder
+                .append("#EXTINF:-1")
+                .appendM3uAttribute("tvg-id", id)
+                .appendM3uAttribute("tvg-name", name)
+                .appendM3uAttribute("tvg-logo", logo)
+                .appendM3uAttribute("group-title", "Jellyfin")
+                .appendM3uAttribute("channel-number", channelNumber)
+                .append(',')
+                .append(name)
+                .append('\n')
+                .append(streamUrl)
+                .append('\n')
+        }
+        return builder.toString()
+    }
+
+    private fun jellyfinChannelsUrl(baseUrl: String, apiKey: String): String {
+        return baseUrl.toHttpUrl()
+            .newBuilder()
+            .addPathSegment("LiveTv")
+            .addPathSegment("Channels")
+            .addQueryParameter("api_key", apiKey)
+            .build()
+            .toString()
+    }
+
+    private fun jellyfinStreamUrl(baseUrl: String, apiKey: String, channelId: String): String {
+        return baseUrl.toHttpUrl()
+            .newBuilder()
+            .addPathSegment("LiveTv")
+            .addPathSegment("Channels")
+            .addPathSegment(channelId)
+            .addPathSegment("Stream")
+            .addQueryParameter("static", "true")
+            .addQueryParameter("api_key", apiKey)
+            .build()
+            .toString()
+    }
+
+    private fun jellyfinLogoUrl(baseUrl: String, apiKey: String, item: JSONObject): String {
+        val id = item.optString("Id").trim()
+        val primaryTag = item.optJSONObject("ImageTags")?.optString("Primary").orEmpty().trim()
+            .ifBlank { item.optString("PrimaryImageTag").trim() }
+        if (id.isBlank() || primaryTag.isBlank()) return ""
+        return baseUrl.toHttpUrl()
+            .newBuilder()
+            .addPathSegment("Items")
+            .addPathSegment(id)
+            .addPathSegment("Images")
+            .addPathSegment("Primary")
+            .addQueryParameter("tag", primaryTag)
+            .addQueryParameter("api_key", apiKey)
+            .build()
+            .toString()
+    }
+
     private fun normalizeHdHomeRunLineupUrl(baseUrl: String): String {
         val trimmed = baseUrl.trim()
         if (trimmed.isBlank()) return ""
@@ -1474,6 +1585,7 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                 ProviderType.M3U -> checkM3uProvider(provider)
                 ProviderType.HDHOMERUN -> checkHdHomeRunProvider(provider)
                 ProviderType.TVHEADEND -> checkTvheadendProvider(provider)
+                ProviderType.JELLYFIN -> checkJellyfinProvider(provider)
                 else -> ProviderAccountStatus(
                     providerId = provider.id,
                     type = provider.type,
@@ -1519,6 +1631,11 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                 baseUrl = provider.baseUrl,
                 username = provider.username,
                 password = provider.password,
+                name = provider.name
+            )
+            ProviderType.JELLYFIN -> playlistRepository.importFromJellyfin(
+                baseUrl = provider.baseUrl,
+                apiKey = provider.token.orEmpty(),
                 name = provider.name
             )
             else -> return@withContext AppResult.Error("${provider.type} sync is not implemented yet")
@@ -1703,6 +1820,41 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             detail = "channels=$channels, url=$playlistUrl",
             checkedAt = System.currentTimeMillis()
         )
+    }
+
+    private fun checkJellyfinProvider(provider: PlaylistProvider): ProviderAccountStatus {
+        val baseUrl = provider.baseUrl.trim().trimEnd('/')
+        val apiKey = provider.token.orEmpty().trim()
+        if (baseUrl.isBlank()) error("Jellyfin server URL is empty")
+        if (apiKey.isBlank()) error("Jellyfin API key is empty")
+        val channelsUrl = providerJellyfinChannelsUrl(baseUrl, apiKey)
+        val body = okHttpClient.newCall(Request.Builder().url(channelsUrl).build())
+            .execute()
+            .use { response ->
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                response.body?.string().orEmpty()
+            }
+            .trim()
+        if (!body.startsWith("{")) error("Jellyfin returned non-JSON response")
+        val channels = JSONObject(body).optJSONArray("Items") ?: JSONArray()
+        return ProviderAccountStatus(
+            providerId = provider.id,
+            type = provider.type,
+            ok = channels.length() > 0,
+            statusText = "Live TV OK",
+            detail = "channels=${channels.length()}, url=$baseUrl/LiveTv/Channels",
+            checkedAt = System.currentTimeMillis()
+        )
+    }
+
+    private fun providerJellyfinChannelsUrl(baseUrl: String, apiKey: String): String {
+        return baseUrl.toHttpUrl()
+            .newBuilder()
+            .addPathSegment("LiveTv")
+            .addPathSegment("Channels")
+            .addQueryParameter("api_key", apiKey)
+            .build()
+            .toString()
     }
 
     private fun normalizeProviderHdHomeRunLineupUrl(baseUrl: String): String {

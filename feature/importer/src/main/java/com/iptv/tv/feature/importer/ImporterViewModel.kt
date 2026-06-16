@@ -40,6 +40,8 @@ data class ImporterUiState(
     val tvheadendBaseUrl: String = "",
     val tvheadendUsername: String = "",
     val tvheadendPassword: String = "",
+    val jellyfinBaseUrl: String = "",
+    val jellyfinApiKey: String = "",
     val filePathOrUri: String = "",
     val rawText: String = "",
     val isLoading: Boolean = false,
@@ -80,6 +82,8 @@ class ImporterViewModel @Inject constructor(
     fun updateTvheadendBaseUrl(value: String) = _uiState.update { it.copy(tvheadendBaseUrl = value) }
     fun updateTvheadendUsername(value: String) = _uiState.update { it.copy(tvheadendUsername = value) }
     fun updateTvheadendPassword(value: String) = _uiState.update { it.copy(tvheadendPassword = value) }
+    fun updateJellyfinBaseUrl(value: String) = _uiState.update { it.copy(jellyfinBaseUrl = value) }
+    fun updateJellyfinApiKey(value: String) = _uiState.update { it.copy(jellyfinApiKey = value) }
     fun updateFilePath(value: String) = _uiState.update { it.copy(filePathOrUri = value) }
     fun updateRawText(value: String) = _uiState.update { it.copy(rawText = value) }
 
@@ -388,6 +392,77 @@ class ImporterViewModel @Inject constructor(
                 } else {
                     ProviderAuthType.USER_PASSWORD
                 },
+                linkedPlaylistId = null,
+                lastSyncedAt = null,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    fun importFromJellyfin() {
+        if (_uiState.value.isLoading) {
+            logAsync(status = "import_click_ignored", message = "Import already running (jellyfin)")
+            return
+        }
+        val state = _uiState.value
+        val baseUrl = state.jellyfinBaseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL Jellyfin") }
+            logAsync(status = "import_ui_error", message = "Jellyfin URL is blank")
+            return
+        }
+        if (!baseUrl.startsWith("http://", ignoreCase = true) && !baseUrl.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL Jellyfin должен начинаться с http:// или https://") }
+            logAsync(status = "import_ui_error", message = "Jellyfin URL has no http scheme")
+            return
+        }
+        if (state.jellyfinApiKey.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите API key Jellyfin") }
+            logAsync(status = "import_ui_error", message = "Jellyfin API key is blank")
+            return
+        }
+
+        executeImport(importKind = "jellyfin", source = "$baseUrl/LiveTv/Channels") {
+            val insecureAllowed = settingsRepository.observeAllowInsecureUrls().first()
+            if (!isSecureOrLocalUrl(baseUrl) && !insecureAllowed) {
+                return@executeImport AppResult.Error(
+                    "Безопасный режим: разрешены HTTPS URL. Для HTTP включите настройку 'Разрешить HTTP URL'."
+                )
+            }
+            playlistRepository.importFromJellyfin(
+                baseUrl = baseUrl,
+                apiKey = state.jellyfinApiKey.trim(),
+                name = state.playlistName.trim()
+            )
+        }
+    }
+
+    fun saveJellyfinProvider() {
+        val state = _uiState.value
+        val baseUrl = state.jellyfinBaseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL Jellyfin") }
+            return
+        }
+        if (!baseUrl.startsWith("http://", ignoreCase = true) && !baseUrl.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL Jellyfin должен начинаться с http:// или https://") }
+            return
+        }
+        if (state.jellyfinApiKey.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите API key Jellyfin") }
+            return
+        }
+        saveProvider(
+            PlaylistProvider(
+                id = 0,
+                type = ProviderType.JELLYFIN,
+                name = state.playlistName.trim().ifBlank { "Jellyfin" },
+                baseUrl = baseUrl,
+                username = null,
+                password = null,
+                token = state.jellyfinApiKey.trim(),
+                macAddress = null,
+                authType = ProviderAuthType.TOKEN,
                 linkedPlaylistId = null,
                 lastSyncedAt = null,
                 createdAt = System.currentTimeMillis()
