@@ -26,6 +26,7 @@ interface ProviderAccountRepository {
     suspend fun saveProvider(provider: PlaylistProvider): AppResult<Long>
     suspend fun checkProvider(providerId: Long): AppResult<ProviderAccountStatus>
     suspend fun syncProvider(providerId: Long): AppResult<Long>
+    suspend fun syncAllProviders(): AppResult<Int>
     suspend fun deleteProvider(providerId: Long): AppResult<Int>
     suspend fun getProvidersByType(type: ProviderType): AppResult<List<PlaylistProvider>>
 }

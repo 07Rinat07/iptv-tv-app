@@ -266,6 +266,9 @@ interface PlaylistProviderDao {
     @Query("SELECT * FROM playlist_providers ORDER BY createdAt DESC")
     fun observeProviders(): Flow<List<PlaylistProviderEntity>>
 
+    @Query("SELECT * FROM playlist_providers ORDER BY createdAt DESC")
+    suspend fun getProviders(): List<PlaylistProviderEntity>
+
     @Query("SELECT * FROM playlist_providers WHERE id = :providerId LIMIT 1")
     suspend fun findById(providerId: Long): PlaylistProviderEntity?
 

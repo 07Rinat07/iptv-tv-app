@@ -4,6 +4,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.repository.ProviderAccountRepositoryImpl
 import com.iptv.tv.core.data.security.ProviderSecretCipher
 import com.iptv.tv.core.database.dao.PlaylistProviderDao
+import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.PlaylistProviderEntity
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.PlaylistImportReport
@@ -28,6 +29,7 @@ import org.junit.Test
 class ProviderAccountRepositoryImplTest {
     private lateinit var server: MockWebServer
     private lateinit var providerDao: PlaylistProviderDao
+    private lateinit var syncLogDao: SyncLogDao
     private lateinit var playlistRepository: PlaylistRepository
     private lateinit var secretCipher: ProviderSecretCipher
     private lateinit var repository: ProviderAccountRepositoryImpl
@@ -38,16 +40,19 @@ class ProviderAccountRepositoryImplTest {
         server.start()
 
         providerDao = mockk()
+        syncLogDao = mockk()
         playlistRepository = mockk()
         secretCipher = mockk()
 
         every { providerDao.observeProviders() } returns emptyFlow()
+        coEvery { syncLogDao.insert(any()) } returns Unit
         every { secretCipher.encryptOrNull(any()) } answers { firstArg() }
         every { secretCipher.decryptOrNull(any()) } answers { firstArg() }
 
         repository = ProviderAccountRepositoryImpl(
             providerDao = providerDao,
             playlistRepository = playlistRepository,
+            syncLogDao = syncLogDao,
             secretCipher = secretCipher,
             okHttpClient = OkHttpClient()
         )
@@ -122,6 +127,9 @@ class ProviderAccountRepositoryImplTest {
             )
         }
         coVerify(exactly = 1) { providerDao.markSynced(9L, 77L, any()) }
+        coVerify(exactly = 1) {
+            syncLogDao.insert(match { it.status == "provider_sync_item_ok" && it.message.contains("providerId=9") })
+        }
     }
 
     @Test
@@ -135,6 +143,55 @@ class ProviderAccountRepositoryImplTest {
 
         assertTrue(result is AppResult.Error)
         coVerify(exactly = 0) { providerDao.markSynced(any(), any(), any()) }
+        coVerify(exactly = 1) {
+            syncLogDao.insert(match { it.status == "provider_sync_item_error" && it.message.contains("provider_error") })
+        }
+    }
+
+    @Test
+    fun syncAllProviders_returnsSuccessfulCountWhenSomeProvidersFail() = runTest {
+        val okProvider = plexProviderEntity()
+        val failingProvider = plexProviderEntity().copy(id = 10L, name = "Broken Plex")
+        coEvery { providerDao.getProviders() } returns listOf(okProvider, failingProvider)
+        coEvery { providerDao.findById(9L) } returns okProvider
+        coEvery { providerDao.findById(10L) } returns failingProvider
+        coEvery {
+            playlistRepository.importFromPlex(
+                baseUrl = okProvider.baseUrl,
+                token = "plex-token",
+                name = "Plex"
+            )
+        } returns AppResult.Success(
+            PlaylistImportReport(
+                playlistId = 77L,
+                totalParsed = 2,
+                totalImported = 2,
+                removedDuplicates = 0,
+                warnings = emptyList(),
+                autoChecked = 0,
+                available = 0,
+                unstable = 0,
+                unavailable = 0
+            )
+        )
+        coEvery {
+            playlistRepository.importFromPlex(
+                baseUrl = failingProvider.baseUrl,
+                token = "plex-token",
+                name = "Broken Plex"
+            )
+        } returns AppResult.Error("HTTP 401")
+        coEvery { providerDao.markSynced(9L, 77L, any()) } returns 1
+
+        val result = repository.syncAllProviders()
+
+        assertSuccess(result)
+        assertEquals(1, (result as AppResult.Success).data)
+        coVerify(exactly = 1) { providerDao.markSynced(9L, 77L, any()) }
+        coVerify(exactly = 0) { providerDao.markSynced(10L, any(), any()) }
+        coVerify(exactly = 1) {
+            syncLogDao.insert(match { it.status == "provider_sync_item_error" && it.message.contains("reason=auth") })
+        }
     }
 
     private fun plexProviderEntity(): PlaylistProviderEntity {

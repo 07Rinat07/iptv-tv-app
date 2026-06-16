@@ -1782,6 +1782,7 @@ class PlaylistRepositoryImpl @Inject constructor(
 class ProviderAccountRepositoryImpl @Inject constructor(
     private val providerDao: PlaylistProviderDao,
     private val playlistRepository: PlaylistRepository,
+    private val syncLogDao: SyncLogDao,
     private val secretCipher: ProviderSecretCipher,
     private val okHttpClient: OkHttpClient
 ) : ProviderAccountRepository {
@@ -1839,6 +1840,11 @@ class ProviderAccountRepositoryImpl @Inject constructor(
         }.getOrElse { throwable ->
             return@withContext AppResult.Error("Unable to decrypt provider secrets: ${throwable.toLogSummary(4)}", throwable)
         } ?: return@withContext AppResult.Error("Provider not found")
+        addProviderSyncLog(
+            status = "provider_sync_item_start",
+            provider = provider,
+            message = "providerId=${provider.id}, type=${provider.type}, name=${provider.name}"
+        )
         val result = when (provider.type) {
             ProviderType.XTREAM -> playlistRepository.importFromXtream(
                 baseUrl = provider.baseUrl,
@@ -1880,10 +1886,55 @@ class ProviderAccountRepositoryImpl @Inject constructor(
         when (result) {
             is AppResult.Success -> {
                 providerDao.markSynced(providerId, result.data.playlistId, System.currentTimeMillis())
+                addProviderSyncLog(
+                    status = "provider_sync_item_ok",
+                    provider = provider,
+                    message = "providerId=${provider.id}, type=${provider.type}, playlistId=${result.data.playlistId}"
+                )
                 AppResult.Success(result.data.playlistId)
             }
-            is AppResult.Error -> AppResult.Error(result.message, result.cause)
-            AppResult.Loading -> AppResult.Error("Provider sync is still loading")
+            is AppResult.Error -> {
+                val reason = classifyProviderSyncFailure(result.message)
+                addProviderSyncLog(
+                    status = "provider_sync_item_error",
+                    provider = provider,
+                    message = "providerId=${provider.id}, type=${provider.type}, reason=$reason, detail=${result.message.take(250)}"
+                )
+                AppResult.Error(result.message, result.cause)
+            }
+            AppResult.Loading -> {
+                addProviderSyncLog(
+                    status = "provider_sync_item_loading",
+                    provider = provider,
+                    message = "providerId=${provider.id}, type=${provider.type}"
+                )
+                AppResult.Error("Provider sync is still loading")
+            }
+        }
+    }
+
+    override suspend fun syncAllProviders(): AppResult<Int> = withContext(Dispatchers.IO) {
+        val providers = runCatching {
+            providerDao.getProviders().map { it.toModel().withDecryptedSecrets() }
+        }.getOrElse { throwable ->
+            return@withContext AppResult.Error("Unable to load provider accounts: ${throwable.toLogSummary(4)}", throwable)
+        }
+        if (providers.isEmpty()) return@withContext AppResult.Success(0)
+
+        var synced = 0
+        val failures = mutableListOf<String>()
+        providers.forEach { provider ->
+            when (val result = syncProvider(provider.id)) {
+                is AppResult.Success -> synced += 1
+                is AppResult.Error -> failures += "${provider.type}:${provider.name}=${classifyProviderSyncFailure(result.message)}"
+                AppResult.Loading -> failures += "${provider.type}:${provider.name}=loading"
+            }
+        }
+
+        if (synced > 0 || failures.isEmpty()) {
+            AppResult.Success(synced)
+        } else {
+            AppResult.Error("Provider sync failed: ${failures.joinToString("; ").take(500)}")
         }
     }
 
@@ -1939,6 +1990,30 @@ class ProviderAccountRepositoryImpl @Inject constructor(
         val raw = this?.takeIf { it.isNotBlank() } ?: return this
         if (raw.length <= 5) return "скрыто"
         return "${raw.take(2)}...${raw.takeLast(2)}"
+    }
+
+    private suspend fun addProviderSyncLog(status: String, provider: PlaylistProvider, message: String) {
+        syncLogDao.insert(
+            SyncLogEntity(
+                playlistId = provider.linkedPlaylistId,
+                status = status,
+                message = message,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    private fun classifyProviderSyncFailure(message: String): String {
+        val lowered = message.lowercase(Locale.ROOT)
+        return when {
+            "401" in lowered || "403" in lowered || "auth" in lowered ||
+                "token" in lowered || "password" in lowered || "mac" in lowered -> "auth"
+            "timeout" in lowered || "unable to resolve host" in lowered ||
+                "failed to connect" in lowered || "network" in lowered -> "network"
+            "empty" in lowered || "no channels" in lowered || "channels=0" in lowered -> "empty_playlist"
+            "parse" in lowered || "json" in lowered || "xml" in lowered || "m3u" in lowered -> "parser"
+            else -> "provider_error"
+        }
     }
 
     private fun checkXtreamProvider(provider: PlaylistProvider): ProviderAccountStatus {

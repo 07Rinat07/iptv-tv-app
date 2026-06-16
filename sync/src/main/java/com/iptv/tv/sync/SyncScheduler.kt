@@ -8,6 +8,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.iptv.tv.sync.worker.DownloadQueueWorker
 import com.iptv.tv.sync.worker.PlaylistSyncWorker
+import com.iptv.tv.sync.worker.ProviderSyncWorker
 import com.iptv.tv.sync.worker.RecordingQueueWorker
 import com.iptv.tv.sync.worker.TvHomePublishWorker
 import kotlin.math.abs
@@ -40,6 +41,29 @@ object SyncScheduler {
         val allowed = listOf(6, 12, 24)
         if (repeatHours <= 0) return 12
         return allowed.minBy { allowedValue -> abs(allowedValue - repeatHours) }
+    }
+
+    fun scheduleProviderSync(workManager: WorkManager, repeatHours: Int = 12) {
+        val normalizedHours = normalizeSyncHours(repeatHours)
+        val request = PeriodicWorkRequestBuilder<ProviderSyncWorker>(
+            normalizedHours.toLong(),
+            TimeUnit.HOURS
+        )
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .setRequiresBatteryNotLow(true)
+                    .build()
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
+            .setInitialDelay(10, TimeUnit.MINUTES)
+            .build()
+
+        workManager.enqueueUniquePeriodicWork(
+            ProviderSyncWorker.WORK_NAME,
+            ExistingPeriodicWorkPolicy.UPDATE,
+            request
+        )
     }
 
     fun scheduleDownloadQueue(workManager: WorkManager, repeatMinutes: Long = 15L) {
