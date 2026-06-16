@@ -42,6 +42,8 @@ data class ImporterUiState(
     val tvheadendPassword: String = "",
     val jellyfinBaseUrl: String = "",
     val jellyfinApiKey: String = "",
+    val plexBaseUrl: String = "",
+    val plexToken: String = "",
     val filePathOrUri: String = "",
     val rawText: String = "",
     val isLoading: Boolean = false,
@@ -84,6 +86,8 @@ class ImporterViewModel @Inject constructor(
     fun updateTvheadendPassword(value: String) = _uiState.update { it.copy(tvheadendPassword = value) }
     fun updateJellyfinBaseUrl(value: String) = _uiState.update { it.copy(jellyfinBaseUrl = value) }
     fun updateJellyfinApiKey(value: String) = _uiState.update { it.copy(jellyfinApiKey = value) }
+    fun updatePlexBaseUrl(value: String) = _uiState.update { it.copy(plexBaseUrl = value) }
+    fun updatePlexToken(value: String) = _uiState.update { it.copy(plexToken = value) }
     fun updateFilePath(value: String) = _uiState.update { it.copy(filePathOrUri = value) }
     fun updateRawText(value: String) = _uiState.update { it.copy(rawText = value) }
 
@@ -461,6 +465,77 @@ class ImporterViewModel @Inject constructor(
                 username = null,
                 password = null,
                 token = state.jellyfinApiKey.trim(),
+                macAddress = null,
+                authType = ProviderAuthType.TOKEN,
+                linkedPlaylistId = null,
+                lastSyncedAt = null,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    fun importFromPlex() {
+        if (_uiState.value.isLoading) {
+            logAsync(status = "import_click_ignored", message = "Import already running (plex)")
+            return
+        }
+        val state = _uiState.value
+        val baseUrl = state.plexBaseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL Plex") }
+            logAsync(status = "import_ui_error", message = "Plex URL is blank")
+            return
+        }
+        if (!baseUrl.startsWith("http://", ignoreCase = true) && !baseUrl.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL Plex должен начинаться с http:// или https://") }
+            logAsync(status = "import_ui_error", message = "Plex URL has no http scheme")
+            return
+        }
+        if (state.plexToken.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите Plex token") }
+            logAsync(status = "import_ui_error", message = "Plex token is blank")
+            return
+        }
+
+        executeImport(importKind = "plex", source = "$baseUrl/livetv/dvrs") {
+            val insecureAllowed = settingsRepository.observeAllowInsecureUrls().first()
+            if (!isSecureOrLocalUrl(baseUrl) && !insecureAllowed) {
+                return@executeImport AppResult.Error(
+                    "Безопасный режим: разрешены HTTPS URL. Для HTTP включите настройку 'Разрешить HTTP URL'."
+                )
+            }
+            playlistRepository.importFromPlex(
+                baseUrl = baseUrl,
+                token = state.plexToken.trim(),
+                name = state.playlistName.trim()
+            )
+        }
+    }
+
+    fun savePlexProvider() {
+        val state = _uiState.value
+        val baseUrl = state.plexBaseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL Plex") }
+            return
+        }
+        if (!baseUrl.startsWith("http://", ignoreCase = true) && !baseUrl.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL Plex должен начинаться с http:// или https://") }
+            return
+        }
+        if (state.plexToken.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите Plex token") }
+            return
+        }
+        saveProvider(
+            PlaylistProvider(
+                id = 0,
+                type = ProviderType.PLEX,
+                name = state.playlistName.trim().ifBlank { "Plex" },
+                baseUrl = baseUrl,
+                username = null,
+                password = null,
+                token = state.plexToken.trim(),
                 macAddress = null,
                 authType = ProviderAuthType.TOKEN,
                 linkedPlaylistId = null,

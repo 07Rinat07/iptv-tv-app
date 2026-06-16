@@ -395,6 +395,49 @@ class PlaylistRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun importFromPlex(
+        baseUrl: String,
+        token: String,
+        name: String
+    ): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
+        val normalizedBaseUrl = baseUrl.trim().trimEnd('/')
+        val normalizedToken = token.trim()
+        if (normalizedBaseUrl.isBlank()) return@withContext AppResult.Error("Plex server URL is empty")
+        if (normalizedToken.isBlank()) return@withContext AppResult.Error("Plex token is empty")
+
+        runCatching {
+            val dvrs = loadPlexDvrs(normalizedBaseUrl, normalizedToken)
+            if (dvrs.isEmpty()) error("Plex did not return Live TV/DVR devices")
+
+            val channels = dvrs.flatMap { dvr ->
+                val channelsXml = okHttpClient.newCall(
+                    Request.Builder().url(plexDvrChannelsUrl(normalizedBaseUrl, normalizedToken, dvr)).build()
+                )
+                    .execute()
+                    .use { response ->
+                        if (!response.isSuccessful) error("HTTP ${response.code}")
+                        response.body?.string().orEmpty()
+                    }
+                    .trim()
+                if (!channelsXml.startsWith("<")) error("Plex returned non-XML channels response")
+                parsePlexChannels(channelsXml, dvr)
+            }
+            val rawPlaylist = buildPlexM3u(
+                baseUrl = normalizedBaseUrl,
+                token = normalizedToken,
+                channels = channels
+            )
+            importParsedPlaylist(
+                playlistName = name,
+                rawPlaylist = rawPlaylist,
+                sourceType = PlaylistSourceType.PLEX,
+                source = "$normalizedBaseUrl/livetv/dvrs"
+            )
+        }.getOrElse { throwable ->
+            AppResult.Error("Unable to import Plex: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
+        }
+    }
+
     override suspend fun importFromText(text: String, name: String): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
         importParsedPlaylist(
             playlistName = name,
@@ -1011,6 +1054,33 @@ class PlaylistRepositoryImpl @Inject constructor(
         return builder.toString()
     }
 
+    private fun buildPlexM3u(
+        baseUrl: String,
+        token: String,
+        channels: List<PlexChannel>
+    ): String {
+        val builder = StringBuilder("#EXTM3U\n")
+        channels.forEach { channel ->
+            val name = channel.name.ifBlank { channel.id }
+            val streamUrl = plexChannelTuneUrl(baseUrl, token, channel)
+            if (name.isBlank() || streamUrl.isBlank()) return@forEach
+
+            builder
+                .append("#EXTINF:-1")
+                .appendM3uAttribute("tvg-id", channel.identifier.ifBlank { channel.id })
+                .appendM3uAttribute("tvg-name", name)
+                .appendM3uAttribute("tvg-logo", plexAbsoluteUrl(baseUrl, token, channel.logoPath))
+                .appendM3uAttribute("group-title", "Plex")
+                .appendM3uAttribute("channel-number", channel.number)
+                .append(',')
+                .append(name)
+                .append('\n')
+                .append(streamUrl)
+                .append('\n')
+        }
+        return builder.toString()
+    }
+
     private fun jellyfinChannelsUrl(baseUrl: String, apiKey: String): String {
         return baseUrl.toHttpUrl()
             .newBuilder()
@@ -1049,6 +1119,118 @@ class PlaylistRepositoryImpl @Inject constructor(
             .addQueryParameter("api_key", apiKey)
             .build()
             .toString()
+    }
+
+    private fun loadPlexDvrs(baseUrl: String, token: String): List<PlexDvr> {
+        val body = okHttpClient.newCall(Request.Builder().url(plexDvrsUrl(baseUrl, token)).build())
+            .execute()
+            .use { response ->
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                response.body?.string().orEmpty()
+            }
+            .trim()
+        if (!body.startsWith("<")) error("Plex returned non-XML DVR response")
+        return parsePlexDvrs(body)
+    }
+
+    private fun plexDvrsUrl(baseUrl: String, token: String): String {
+        return baseUrl.toHttpUrl()
+            .newBuilder()
+            .addPathSegment("livetv")
+            .addPathSegment("dvrs")
+            .addQueryParameter("X-Plex-Token", token)
+            .build()
+            .toString()
+    }
+
+    private fun plexDvrChannelsUrl(baseUrl: String, token: String, dvr: PlexDvr): String {
+        val keyPath = dvr.key.takeIf { it.startsWith("/") }
+        val path = keyPath?.trimEnd('/')?.plus("/channels")
+            ?: "/livetv/dvrs/${dvr.id}/channels"
+        return plexPathUrl(baseUrl, token, path)
+    }
+
+    private fun plexChannelTuneUrl(baseUrl: String, token: String, channel: PlexChannel): String {
+        val keyPath = channel.key.takeIf { it.startsWith("/") }
+        val path = keyPath?.trimEnd('/')?.plus("/tune")
+            ?: "/livetv/dvrs/${channel.dvr.id}/channels/${channel.id}/tune"
+        return plexPathUrl(baseUrl, token, path)
+    }
+
+    private fun plexPathUrl(baseUrl: String, token: String, path: String): String {
+        return baseUrl.toHttpUrl()
+            .newBuilder()
+            .encodedPath(path)
+            .addQueryParameter("X-Plex-Token", token)
+            .build()
+            .toString()
+    }
+
+    private fun plexAbsoluteUrl(baseUrl: String, token: String, rawPath: String): String {
+        if (rawPath.isBlank()) return ""
+        if (rawPath.startsWith("http://", ignoreCase = true) || rawPath.startsWith("https://", ignoreCase = true)) {
+            return rawPath
+        }
+        return plexPathUrl(baseUrl, token, rawPath)
+    }
+
+    private fun parsePlexDvrs(xml: String): List<PlexDvr> {
+        val result = mutableListOf<PlexDvr>()
+        val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
+            setInput(ByteArrayInputStream(xml.toByteArray(StandardCharsets.UTF_8)), StandardCharsets.UTF_8.name())
+        }
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (event == XmlPullParser.START_TAG && parser.name.equals("Dvr", ignoreCase = true)) {
+                val id = parser.attr("uuid")
+                    .ifBlank { parser.attr("id") }
+                    .ifBlank { parser.attr("key").trim('/') }
+                if (id.isNotBlank()) {
+                    result += PlexDvr(
+                        id = id,
+                        key = parser.attr("key"),
+                        title = parser.attr("title").ifBlank { parser.attr("name") }
+                    )
+                }
+            }
+            event = parser.next()
+        }
+        return result.distinctBy { it.id }
+    }
+
+    private fun parsePlexChannels(xml: String, dvr: PlexDvr): List<PlexChannel> {
+        val result = mutableListOf<PlexChannel>()
+        val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
+            setInput(ByteArrayInputStream(xml.toByteArray(StandardCharsets.UTF_8)), StandardCharsets.UTF_8.name())
+        }
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (event == XmlPullParser.START_TAG && parser.name.equals("Channel", ignoreCase = true)) {
+                val id = parser.attr("id")
+                    .ifBlank { parser.attr("key").substringAfterLast('/') }
+                    .ifBlank { parser.attr("channelIdentifier") }
+                val name = parser.attr("title")
+                    .ifBlank { parser.attr("name") }
+                    .ifBlank { parser.attr("callSign") }
+                if (id.isNotBlank() && name.isNotBlank()) {
+                    result += PlexChannel(
+                        dvr = dvr,
+                        id = id,
+                        key = parser.attr("key"),
+                        identifier = parser.attr("channelIdentifier"),
+                        name = name,
+                        number = parser.attr("channelNumber").ifBlank { parser.attr("number") },
+                        logoPath = parser.attr("thumb").ifBlank { parser.attr("art") }
+                    )
+                }
+            }
+            event = parser.next()
+        }
+        return result
+    }
+
+    private fun XmlPullParser.attr(name: String): String {
+        return getAttributeValue(null, name).orEmpty().trim()
     }
 
     private fun normalizeHdHomeRunLineupUrl(baseUrl: String): String {
@@ -1505,6 +1687,22 @@ class PlaylistRepositoryImpl @Inject constructor(
         val matchedBy: String
     )
 
+    private data class PlexDvr(
+        val id: String,
+        val key: String,
+        val title: String
+    )
+
+    private data class PlexChannel(
+        val dvr: PlexDvr,
+        val id: String,
+        val key: String,
+        val identifier: String,
+        val name: String,
+        val number: String,
+        val logoPath: String
+    )
+
     private companion object {
         const val DB_INSERT_CHUNK = 500
         const val AUTO_HEALTH_CHECK_LIMIT = 200
@@ -1586,6 +1784,7 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                 ProviderType.HDHOMERUN -> checkHdHomeRunProvider(provider)
                 ProviderType.TVHEADEND -> checkTvheadendProvider(provider)
                 ProviderType.JELLYFIN -> checkJellyfinProvider(provider)
+                ProviderType.PLEX -> checkPlexProvider(provider)
                 else -> ProviderAccountStatus(
                     providerId = provider.id,
                     type = provider.type,
@@ -1636,6 +1835,11 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             ProviderType.JELLYFIN -> playlistRepository.importFromJellyfin(
                 baseUrl = provider.baseUrl,
                 apiKey = provider.token.orEmpty(),
+                name = provider.name
+            )
+            ProviderType.PLEX -> playlistRepository.importFromPlex(
+                baseUrl = provider.baseUrl,
+                token = provider.token.orEmpty(),
                 name = provider.name
             )
             else -> return@withContext AppResult.Error("${provider.type} sync is not implemented yet")
@@ -1847,6 +2051,33 @@ class ProviderAccountRepositoryImpl @Inject constructor(
         )
     }
 
+    private fun checkPlexProvider(provider: PlaylistProvider): ProviderAccountStatus {
+        val baseUrl = provider.baseUrl.trim().trimEnd('/')
+        val token = provider.token.orEmpty().trim()
+        if (baseUrl.isBlank()) error("Plex server URL is empty")
+        if (token.isBlank()) error("Plex token is empty")
+        val dvrs = loadProviderPlexDvrs(baseUrl, token)
+        val channelCount = dvrs.sumOf { dvr ->
+            val xml = okHttpClient.newCall(Request.Builder().url(providerPlexDvrChannelsUrl(baseUrl, token, dvr)).build())
+                .execute()
+                .use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    response.body?.string().orEmpty()
+                }
+                .trim()
+            if (!xml.startsWith("<")) error("Plex returned non-XML channels response")
+            parseProviderPlexChannels(xml, dvr).size
+        }
+        return ProviderAccountStatus(
+            providerId = provider.id,
+            type = provider.type,
+            ok = channelCount > 0,
+            statusText = "Live TV OK",
+            detail = "dvrs=${dvrs.size}, channels=$channelCount, url=$baseUrl/livetv/dvrs",
+            checkedAt = System.currentTimeMillis()
+        )
+    }
+
     private fun providerJellyfinChannelsUrl(baseUrl: String, apiKey: String): String {
         return baseUrl.toHttpUrl()
             .newBuilder()
@@ -1855,6 +2086,90 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             .addQueryParameter("api_key", apiKey)
             .build()
             .toString()
+    }
+
+    private fun loadProviderPlexDvrs(baseUrl: String, token: String): List<ProviderPlexDvr> {
+        val body = okHttpClient.newCall(Request.Builder().url(providerPlexDvrsUrl(baseUrl, token)).build())
+            .execute()
+            .use { response ->
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                response.body?.string().orEmpty()
+            }
+            .trim()
+        if (!body.startsWith("<")) error("Plex returned non-XML DVR response")
+        return parseProviderPlexDvrs(body)
+    }
+
+    private fun providerPlexDvrsUrl(baseUrl: String, token: String): String {
+        return baseUrl.toHttpUrl()
+            .newBuilder()
+            .addPathSegment("livetv")
+            .addPathSegment("dvrs")
+            .addQueryParameter("X-Plex-Token", token)
+            .build()
+            .toString()
+    }
+
+    private fun providerPlexDvrChannelsUrl(baseUrl: String, token: String, dvr: ProviderPlexDvr): String {
+        val path = dvr.key.takeIf { it.startsWith("/") }?.trimEnd('/')?.plus("/channels")
+            ?: "/livetv/dvrs/${dvr.id}/channels"
+        return providerPlexPathUrl(baseUrl, token, path)
+    }
+
+    private fun providerPlexPathUrl(baseUrl: String, token: String, path: String): String {
+        return baseUrl.toHttpUrl()
+            .newBuilder()
+            .encodedPath(path)
+            .addQueryParameter("X-Plex-Token", token)
+            .build()
+            .toString()
+    }
+
+    private fun parseProviderPlexDvrs(xml: String): List<ProviderPlexDvr> {
+        val result = mutableListOf<ProviderPlexDvr>()
+        val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
+            setInput(ByteArrayInputStream(xml.toByteArray(StandardCharsets.UTF_8)), StandardCharsets.UTF_8.name())
+        }
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (event == XmlPullParser.START_TAG && parser.name.equals("Dvr", ignoreCase = true)) {
+                val id = parser.providerAttr("uuid")
+                    .ifBlank { parser.providerAttr("id") }
+                    .ifBlank { parser.providerAttr("key").trim('/') }
+                if (id.isNotBlank()) {
+                    result += ProviderPlexDvr(id = id, key = parser.providerAttr("key"))
+                }
+            }
+            event = parser.next()
+        }
+        return result.distinctBy { it.id }
+    }
+
+    private fun parseProviderPlexChannels(xml: String, dvr: ProviderPlexDvr): List<String> {
+        val result = mutableListOf<String>()
+        val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
+            setInput(ByteArrayInputStream(xml.toByteArray(StandardCharsets.UTF_8)), StandardCharsets.UTF_8.name())
+        }
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (event == XmlPullParser.START_TAG && parser.name.equals("Channel", ignoreCase = true)) {
+                val id = parser.providerAttr("id")
+                    .ifBlank { parser.providerAttr("key").substringAfterLast('/') }
+                    .ifBlank { parser.providerAttr("channelIdentifier") }
+                val name = parser.providerAttr("title")
+                    .ifBlank { parser.providerAttr("name") }
+                    .ifBlank { parser.providerAttr("callSign") }
+                if (id.isNotBlank() && name.isNotBlank()) {
+                    result += "${dvr.id}:$id"
+                }
+            }
+            event = parser.next()
+        }
+        return result
+    }
+
+    private fun XmlPullParser.providerAttr(name: String): String {
+        return getAttributeValue(null, name).orEmpty().trim()
     }
 
     private fun normalizeProviderHdHomeRunLineupUrl(baseUrl: String): String {
@@ -1948,6 +2263,11 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             "Mozilla/5.0 (QtEmbedded; U; Linux; MAG200; en-US) AppleWebKit/533.3"
         val PROVIDER_STALKER_MAC_REGEX = Regex("^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
     }
+
+    private data class ProviderPlexDvr(
+        val id: String,
+        val key: String
+    )
 }
 
 @Singleton

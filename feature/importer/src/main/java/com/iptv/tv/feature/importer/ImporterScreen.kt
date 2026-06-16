@@ -67,6 +67,10 @@ const val TAG_IMPORTER_JELLYFIN_URL = "importer_jellyfin_url"
 const val TAG_IMPORTER_JELLYFIN_API_KEY = "importer_jellyfin_api_key"
 const val TAG_IMPORTER_IMPORT_JELLYFIN = "importer_import_jellyfin"
 const val TAG_IMPORTER_SAVE_JELLYFIN = "importer_save_jellyfin"
+const val TAG_IMPORTER_PLEX_URL = "importer_plex_url"
+const val TAG_IMPORTER_PLEX_TOKEN = "importer_plex_token"
+const val TAG_IMPORTER_IMPORT_PLEX = "importer_import_plex"
+const val TAG_IMPORTER_SAVE_PLEX = "importer_save_plex"
 const val TAG_IMPORTER_FILE_PATH = "importer_file_path"
 const val TAG_IMPORTER_IMPORT_FILE = "importer_import_file"
 const val TAG_IMPORTER_RAW_TEXT = "importer_raw_text"
@@ -377,6 +381,47 @@ fun ImporterScreen(
         }
 
         item {
+            Text(text = "Plex", style = MaterialTheme.typography.titleMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = state.plexBaseUrl,
+                    onValueChange = viewModel::updatePlexBaseUrl,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TAG_IMPORTER_PLEX_URL),
+                    label = { Text("http://server:32400") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = state.plexToken,
+                    onValueChange = viewModel::updatePlexToken,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TAG_IMPORTER_PLEX_TOKEN),
+                    label = { Text("X-Plex-Token") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = viewModel::importFromPlex,
+                        modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_PLEX),
+                        enabled = !state.isLoading
+                    ) {
+                        Text(if (state.isLoading) "Импорт..." else "Импорт Plex")
+                    }
+                    Button(
+                        onClick = viewModel::savePlexProvider,
+                        modifier = Modifier.testTag(TAG_IMPORTER_SAVE_PLEX),
+                        enabled = !state.isLoading
+                    ) {
+                        Text("Сохранить сервер")
+                    }
+                }
+            }
+        }
+
+        item {
             SavedProvidersSection(
                 providers = state.savedProviders,
                 syncingProviderId = state.syncingProviderId,
@@ -558,7 +603,7 @@ private fun SavedProvidersSection(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Сохранённые провайдеры", style = MaterialTheme.typography.titleMedium)
         if (providers.isEmpty()) {
-            Text("Пока нет сохранённых M3U/Xtream/Stalker/HDHomeRun/Tvheadend/Jellyfin источников", style = MaterialTheme.typography.bodySmall)
+            Text("Пока нет сохранённых M3U/Xtream/Stalker/HDHomeRun/Tvheadend/Jellyfin/Plex источников", style = MaterialTheme.typography.bodySmall)
         } else {
             providers.forEach { provider ->
                 ProviderAccountCard(
