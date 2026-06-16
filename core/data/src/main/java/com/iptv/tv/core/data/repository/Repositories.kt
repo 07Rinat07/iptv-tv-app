@@ -296,6 +296,32 @@ class PlaylistRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun importFromHdHomeRun(baseUrl: String, name: String): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
+        val lineupUrl = normalizeHdHomeRunLineupUrl(baseUrl)
+        if (lineupUrl.isBlank()) return@withContext AppResult.Error("HDHomeRun URL is empty")
+
+        runCatching {
+            val body = okHttpClient.newCall(Request.Builder().url(lineupUrl).build())
+                .execute()
+                .use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    response.body?.string().orEmpty()
+                }
+                .trim()
+            if (!body.startsWith("[")) error("HDHomeRun lineup.json returned non-JSON array")
+
+            val rawPlaylist = buildHdHomeRunM3u(JSONArray(body))
+            importParsedPlaylist(
+                playlistName = name,
+                rawPlaylist = rawPlaylist,
+                sourceType = PlaylistSourceType.HDHOMERUN,
+                source = lineupUrl
+            )
+        }.getOrElse { throwable ->
+            AppResult.Error("Unable to import HDHomeRun: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
+        }
+    }
+
     override suspend fun importFromText(text: String, name: String): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
         importParsedPlaylist(
             playlistName = name,
@@ -853,6 +879,46 @@ class PlaylistRepositoryImpl @Inject constructor(
         return builder.toString()
     }
 
+    private fun buildHdHomeRunM3u(channels: JSONArray): String {
+        val builder = StringBuilder("#EXTM3U\n")
+        for (index in 0 until channels.length()) {
+            val item = channels.optJSONObject(index) ?: continue
+            val name = item.optString("GuideName").trim()
+                .ifBlank { item.optString("Name").trim() }
+            val streamUrl = item.optString("URL").trim()
+            if (name.isBlank() || streamUrl.isBlank()) continue
+
+            val guideNumber = item.optString("GuideNumber").trim()
+            val guideName = item.optString("GuideName").trim()
+
+            builder
+                .append("#EXTINF:-1")
+                .appendM3uAttribute("tvg-id", guideNumber)
+                .appendM3uAttribute("tvg-name", guideName.ifBlank { name })
+                .appendM3uAttribute("group-title", "HDHomeRun")
+                .append(',')
+                .append(name)
+                .append('\n')
+                .append(streamUrl)
+                .append('\n')
+        }
+        return builder.toString()
+    }
+
+    private fun normalizeHdHomeRunLineupUrl(baseUrl: String): String {
+        val trimmed = baseUrl.trim()
+        if (trimmed.isBlank()) return ""
+        val url = trimmed.toHttpUrl()
+        if (url.encodedPath.endsWith("/lineup.json", ignoreCase = true)) {
+            return url.toString()
+        }
+        return url.newBuilder()
+            .encodedPath(url.encodedPath.trimEnd('/') + "/lineup.json")
+            .query(null)
+            .build()
+            .toString()
+    }
+
     private fun parseXtreamCategoryNames(categories: JSONArray): Map<String, String> {
         val result = linkedMapOf<String, String>()
         for (index in 0 until categories.length()) {
@@ -1344,6 +1410,7 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                 ProviderType.XTREAM -> checkXtreamProvider(provider)
                 ProviderType.STALKER -> checkStalkerProvider(provider)
                 ProviderType.M3U -> checkM3uProvider(provider)
+                ProviderType.HDHOMERUN -> checkHdHomeRunProvider(provider)
                 else -> ProviderAccountStatus(
                     providerId = provider.id,
                     type = provider.type,
@@ -1379,6 +1446,10 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             )
             ProviderType.M3U -> playlistRepository.importFromUrl(
                 url = provider.baseUrl,
+                name = provider.name
+            )
+            ProviderType.HDHOMERUN -> playlistRepository.importFromHdHomeRun(
+                baseUrl = provider.baseUrl,
                 name = provider.name
             )
             else -> return@withContext AppResult.Error("${provider.type} sync is not implemented yet")
@@ -1516,6 +1587,41 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             detail = "content-type=${response.second}",
             checkedAt = System.currentTimeMillis()
         )
+    }
+
+    private fun checkHdHomeRunProvider(provider: PlaylistProvider): ProviderAccountStatus {
+        val lineupUrl = normalizeProviderHdHomeRunLineupUrl(provider.baseUrl)
+        val body = okHttpClient.newCall(Request.Builder().url(lineupUrl).build())
+            .execute()
+            .use { response ->
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                response.body?.string().orEmpty()
+            }
+            .trim()
+        if (!body.startsWith("[")) error("HDHomeRun lineup.json returned non-JSON array")
+        val channels = JSONArray(body)
+        return ProviderAccountStatus(
+            providerId = provider.id,
+            type = provider.type,
+            ok = channels.length() > 0,
+            statusText = "lineup.json OK",
+            detail = "channels=${channels.length()}, url=$lineupUrl",
+            checkedAt = System.currentTimeMillis()
+        )
+    }
+
+    private fun normalizeProviderHdHomeRunLineupUrl(baseUrl: String): String {
+        val trimmed = baseUrl.trim()
+        if (trimmed.isBlank()) error("HDHomeRun URL is empty")
+        val url = trimmed.toHttpUrl()
+        if (url.encodedPath.endsWith("/lineup.json", ignoreCase = true)) {
+            return url.toString()
+        }
+        return url.newBuilder()
+            .encodedPath(url.encodedPath.trimEnd('/') + "/lineup.json")
+            .query(null)
+            .build()
+            .toString()
     }
 
     private fun normalizeProviderStalkerPortalUrl(portalUrl: String): String {

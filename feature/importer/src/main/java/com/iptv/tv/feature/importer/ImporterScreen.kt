@@ -55,6 +55,9 @@ const val TAG_IMPORTER_STALKER_URL = "importer_stalker_url"
 const val TAG_IMPORTER_STALKER_MAC = "importer_stalker_mac"
 const val TAG_IMPORTER_IMPORT_STALKER = "importer_import_stalker"
 const val TAG_IMPORTER_SAVE_STALKER = "importer_save_stalker"
+const val TAG_IMPORTER_HDHOMERUN_URL = "importer_hdhomerun_url"
+const val TAG_IMPORTER_IMPORT_HDHOMERUN = "importer_import_hdhomerun"
+const val TAG_IMPORTER_SAVE_HDHOMERUN = "importer_save_hdhomerun"
 const val TAG_IMPORTER_FILE_PATH = "importer_file_path"
 const val TAG_IMPORTER_IMPORT_FILE = "importer_import_file"
 const val TAG_IMPORTER_RAW_TEXT = "importer_raw_text"
@@ -235,6 +238,37 @@ fun ImporterScreen(
                         enabled = !state.isLoading
                     ) {
                         Text("Сохранить аккаунт")
+                    }
+                }
+            }
+        }
+
+        item {
+            Text(text = "HDHomeRun", style = MaterialTheme.typography.titleMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = state.hdHomeRunBaseUrl,
+                    onValueChange = viewModel::updateHdHomeRunBaseUrl,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TAG_IMPORTER_HDHOMERUN_URL),
+                    label = { Text("http://hdhomerun.local или http://device/lineup.json") },
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = viewModel::importFromHdHomeRun,
+                        modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_HDHOMERUN),
+                        enabled = !state.isLoading
+                    ) {
+                        Text(if (state.isLoading) "Импорт..." else "Импорт HDHomeRun")
+                    }
+                    Button(
+                        onClick = viewModel::saveHdHomeRunProvider,
+                        modifier = Modifier.testTag(TAG_IMPORTER_SAVE_HDHOMERUN),
+                        enabled = !state.isLoading
+                    ) {
+                        Text("Сохранить устройство")
                     }
                 }
             }
@@ -422,7 +456,7 @@ private fun SavedProvidersSection(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Сохранённые провайдеры", style = MaterialTheme.typography.titleMedium)
         if (providers.isEmpty()) {
-            Text("Пока нет сохранённых M3U/Xtream/Stalker источников", style = MaterialTheme.typography.bodySmall)
+            Text("Пока нет сохранённых M3U/Xtream/Stalker/HDHomeRun источников", style = MaterialTheme.typography.bodySmall)
         } else {
             providers.forEach { provider ->
                 ProviderAccountCard(

@@ -25,6 +25,7 @@ interface PlaylistRepository {
         macAddress: String,
         name: String
     ): AppResult<PlaylistImportReport>
+    suspend fun importFromHdHomeRun(baseUrl: String, name: String): AppResult<PlaylistImportReport>
     suspend fun importFromText(text: String, name: String): AppResult<PlaylistImportReport>
     suspend fun importFromFile(pathOrUri: String, name: String): AppResult<PlaylistImportReport>
     suspend fun validatePlaylist(playlistId: Long): AppResult<PlaylistValidationReport>

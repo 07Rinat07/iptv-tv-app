@@ -36,6 +36,7 @@ data class ImporterUiState(
     val xtreamPassword: String = "",
     val stalkerPortalUrl: String = "",
     val stalkerMacAddress: String = "",
+    val hdHomeRunBaseUrl: String = "",
     val filePathOrUri: String = "",
     val rawText: String = "",
     val isLoading: Boolean = false,
@@ -72,6 +73,7 @@ class ImporterViewModel @Inject constructor(
     fun updateXtreamPassword(value: String) = _uiState.update { it.copy(xtreamPassword = value) }
     fun updateStalkerPortalUrl(value: String) = _uiState.update { it.copy(stalkerPortalUrl = value) }
     fun updateStalkerMacAddress(value: String) = _uiState.update { it.copy(stalkerMacAddress = value) }
+    fun updateHdHomeRunBaseUrl(value: String) = _uiState.update { it.copy(hdHomeRunBaseUrl = value) }
     fun updateFilePath(value: String) = _uiState.update { it.copy(filePathOrUri = value) }
     fun updateRawText(value: String) = _uiState.update { it.copy(rawText = value) }
 
@@ -252,6 +254,67 @@ class ImporterViewModel @Inject constructor(
                 token = null,
                 macAddress = state.stalkerMacAddress.trim(),
                 authType = ProviderAuthType.MAC_ADDRESS,
+                linkedPlaylistId = null,
+                lastSyncedAt = null,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    fun importFromHdHomeRun() {
+        if (_uiState.value.isLoading) {
+            logAsync(status = "import_click_ignored", message = "Import already running (hdhomerun)")
+            return
+        }
+        val state = _uiState.value
+        val baseUrl = state.hdHomeRunBaseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL HDHomeRun") }
+            logAsync(status = "import_ui_error", message = "HDHomeRun URL is blank")
+            return
+        }
+        if (!baseUrl.startsWith("http://", ignoreCase = true) && !baseUrl.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL HDHomeRun должен начинаться с http:// или https://") }
+            logAsync(status = "import_ui_error", message = "HDHomeRun URL has no http scheme")
+            return
+        }
+
+        executeImport(importKind = "hdhomerun", source = baseUrl) {
+            val insecureAllowed = settingsRepository.observeAllowInsecureUrls().first()
+            if (!isSecureOrLocalUrl(baseUrl) && !insecureAllowed) {
+                return@executeImport AppResult.Error(
+                    "Безопасный режим: разрешены HTTPS URL. Для HTTP включите настройку 'Разрешить HTTP URL'."
+                )
+            }
+            playlistRepository.importFromHdHomeRun(
+                baseUrl = baseUrl,
+                name = state.playlistName.trim()
+            )
+        }
+    }
+
+    fun saveHdHomeRunProvider() {
+        val state = _uiState.value
+        val baseUrl = state.hdHomeRunBaseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL HDHomeRun") }
+            return
+        }
+        if (!baseUrl.startsWith("http://", ignoreCase = true) && !baseUrl.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL HDHomeRun должен начинаться с http:// или https://") }
+            return
+        }
+        saveProvider(
+            PlaylistProvider(
+                id = 0,
+                type = ProviderType.HDHOMERUN,
+                name = state.playlistName.trim().ifBlank { "HDHomeRun" },
+                baseUrl = baseUrl,
+                username = null,
+                password = null,
+                token = null,
+                macAddress = null,
+                authType = ProviderAuthType.NONE,
                 linkedPlaylistId = null,
                 lastSyncedAt = null,
                 createdAt = System.currentTimeMillis()
