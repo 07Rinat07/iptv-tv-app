@@ -42,6 +42,9 @@ dependencies {
     testImplementation(libs.junit4)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.org.json)
+    testImplementation(libs.kxml2)
 }
 
 kapt {
