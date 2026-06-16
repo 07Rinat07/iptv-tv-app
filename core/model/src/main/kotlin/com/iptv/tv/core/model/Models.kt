@@ -200,7 +200,8 @@ enum class RecordingRepeatMode {
 
 enum class RecordingStorageLocation {
     INTERNAL,
-    APP_EXTERNAL
+    APP_EXTERNAL,
+    CUSTOM_EXTERNAL
 }
 
 data class RecordingStorageInfo(
@@ -209,7 +210,8 @@ data class RecordingStorageInfo(
     val exists: Boolean,
     val writable: Boolean,
     val freeBytes: Long,
-    val usingFallback: Boolean
+    val usingFallback: Boolean,
+    val configured: Boolean = true
 )
 
 enum class ProviderAuthType {

@@ -190,6 +190,7 @@ class SettingsViewModelParentalTest {
         override fun observeMaxParallelDownloads(): Flow<Int> = MutableStateFlow(1)
         override fun observeRecordingStorageLocation(): Flow<RecordingStorageLocation> =
             MutableStateFlow(RecordingStorageLocation.INTERNAL)
+        override fun observeRecordingStorageCustomTreeUri(): Flow<String?> = MutableStateFlow(null)
         override fun observeScannerAiEnabled(): Flow<Boolean> = MutableStateFlow(true)
         override fun observeScannerProxySettings(): Flow<ScannerProxySettings> = MutableStateFlow(
             ScannerProxySettings(enabled = false)
@@ -208,6 +209,7 @@ class SettingsViewModelParentalTest {
         override suspend fun setDownloadsWifiOnly(enabled: Boolean) = Unit
         override suspend fun setMaxParallelDownloads(value: Int) = Unit
         override suspend fun setRecordingStorageLocation(location: RecordingStorageLocation) = Unit
+        override suspend fun setRecordingStorageCustomTreeUri(uri: String?) = Unit
         override suspend fun getRecordingStorageInfo(location: RecordingStorageLocation): RecordingStorageInfo {
             return RecordingStorageInfo(
                 location = location,

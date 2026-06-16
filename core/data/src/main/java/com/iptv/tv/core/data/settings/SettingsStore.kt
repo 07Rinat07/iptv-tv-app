@@ -23,6 +23,7 @@ object SettingsKeys {
     val downloadsWifiOnly: Preferences.Key<Boolean> = booleanPreferencesKey("downloads_wifi_only")
     val maxParallelDownloads: Preferences.Key<Int> = intPreferencesKey("downloads_max_parallel")
     val recordingStorageLocation: Preferences.Key<String> = stringPreferencesKey("recording_storage_location")
+    val recordingStorageCustomTreeUri: Preferences.Key<String> = stringPreferencesKey("recording_storage_custom_tree_uri")
     val scannerAiEnabled: Preferences.Key<Boolean> = booleanPreferencesKey("scanner_ai_enabled")
     val scannerProxyEnabled: Preferences.Key<Boolean> = booleanPreferencesKey("scanner_proxy_enabled")
     val scannerProxyHost: Preferences.Key<String> = stringPreferencesKey("scanner_proxy_host")

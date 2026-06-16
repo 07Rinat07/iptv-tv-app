@@ -36,6 +36,7 @@ data class SettingsUiState(
     val maxParallelDownloads: String = "1",
     val recordingStorageLocation: RecordingStorageLocation = RecordingStorageLocation.INTERNAL,
     val recordingStorageInfo: RecordingStorageInfo? = null,
+    val recordingCustomTreeUri: String? = null,
     val scannerAiEnabled: Boolean = true,
     val scannerProxyEnabled: Boolean = false,
     val scannerProxyHost: String = "",
@@ -184,6 +185,23 @@ class SettingsViewModel @Inject constructor(
                     recordingStorageLocation = location,
                     recordingStorageInfo = info,
                     lastInfo = "Папка записей: ${location.toUiLabel()}",
+                    lastError = null
+                )
+            }
+        }
+    }
+
+    fun setRecordingStorageCustomTree(uri: String) {
+        viewModelScope.launch {
+            settingsRepository.setRecordingStorageCustomTreeUri(uri)
+            settingsRepository.setRecordingStorageLocation(RecordingStorageLocation.CUSTOM_EXTERNAL)
+            val info = settingsRepository.getRecordingStorageInfo(RecordingStorageLocation.CUSTOM_EXTERNAL)
+            _uiState.update {
+                it.copy(
+                    recordingStorageLocation = RecordingStorageLocation.CUSTOM_EXTERNAL,
+                    recordingStorageInfo = info,
+                    recordingCustomTreeUri = uri,
+                    lastInfo = "Папка записей: внешняя папка через system picker",
                     lastError = null
                 )
             }
@@ -527,6 +545,11 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsRepository.observeRecordingStorageCustomTreeUri().collect { treeUri ->
+                _uiState.update { it.copy(recordingCustomTreeUri = treeUri) }
+            }
+        }
+        viewModelScope.launch {
             settingsRepository.observeScannerAiEnabled().collect { enabled ->
                 _uiState.update { it.copy(scannerAiEnabled = enabled) }
             }
@@ -608,5 +631,6 @@ private fun RecordingStorageLocation.toUiLabel(): String {
     return when (this) {
         RecordingStorageLocation.INTERNAL -> "Внутренняя папка приложения"
         RecordingStorageLocation.APP_EXTERNAL -> "Внешняя папка приложения"
+        RecordingStorageLocation.CUSTOM_EXTERNAL -> "Внешняя папка через system picker"
     }
 }

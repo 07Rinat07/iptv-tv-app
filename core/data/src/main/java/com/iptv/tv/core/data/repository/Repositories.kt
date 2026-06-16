@@ -3,6 +3,7 @@ package com.iptv.tv.core.data.repository
 import android.content.Context
 import android.net.Uri
 import androidx.datastore.preferences.core.edit
+import androidx.documentfile.provider.DocumentFile
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.common.toLogSummary
 import com.iptv.tv.core.data.mapper.toEntity
@@ -2514,6 +2515,12 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
+    override fun observeRecordingStorageCustomTreeUri(): Flow<String?> {
+        return context.settingsDataStore.data.map { prefs ->
+            prefs[SettingsKeys.recordingStorageCustomTreeUri]?.trim()?.ifBlank { null }
+        }
+    }
+
     override fun observeScannerAiEnabled(): Flow<Boolean> {
         return context.settingsDataStore.data.map { prefs ->
             prefs[SettingsKeys.scannerAiEnabled] ?: true
@@ -2630,18 +2637,63 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun setRecordingStorageCustomTreeUri(uri: String?) {
+        context.settingsDataStore.edit { prefs ->
+            val normalized = uri?.trim().orEmpty()
+            if (normalized.isBlank()) {
+                prefs.remove(SettingsKeys.recordingStorageCustomTreeUri)
+            } else {
+                prefs[SettingsKeys.recordingStorageCustomTreeUri] = normalized
+            }
+        }
+    }
+
     override suspend fun getRecordingStorageInfo(location: RecordingStorageLocation): RecordingStorageInfo {
         return withContext(Dispatchers.IO) {
-            val directory = recordingStorageDirectory(location)
-            RecordingStorageInfo(
-                location = location,
-                path = directory.absolutePath,
-                exists = directory.exists(),
-                writable = directory.isDirectory && directory.canWrite(),
-                freeBytes = directory.usableSpace,
-                usingFallback = location == RecordingStorageLocation.APP_EXTERNAL &&
-                    context.getExternalFilesDir(null) == null
-            )
+            when (location) {
+                RecordingStorageLocation.CUSTOM_EXTERNAL -> {
+                    val rawUri = context.settingsDataStore.data.map { prefs ->
+                        prefs[SettingsKeys.recordingStorageCustomTreeUri]?.trim()?.ifBlank { null }
+                    }.first()
+                    if (rawUri == null) {
+                        RecordingStorageInfo(
+                            location = location,
+                            path = "SAF папка не выбрана",
+                            exists = false,
+                            writable = false,
+                            freeBytes = -1L,
+                            usingFallback = false,
+                            configured = false
+                        )
+                    } else {
+                        val root = DocumentFile.fromTreeUri(context, Uri.parse(rawUri))
+                        val label = root?.name?.takeIf { it.isNotBlank() } ?: "SAF папка"
+                        RecordingStorageInfo(
+                            location = location,
+                            path = "$label\n$rawUri",
+                            exists = root?.exists() == true,
+                            writable = root?.canWrite() == true,
+                            freeBytes = -1L,
+                            usingFallback = false,
+                            configured = true
+                        )
+                    }
+                }
+
+                else -> {
+                    val directory = recordingStorageDirectory(location)
+                    RecordingStorageInfo(
+                        location = location,
+                        path = directory.absolutePath,
+                        exists = directory.exists(),
+                        writable = directory.isDirectory && directory.canWrite(),
+                        freeBytes = directory.usableSpace,
+                        usingFallback = location == RecordingStorageLocation.APP_EXTERNAL &&
+                            context.getExternalFilesDir(null) == null,
+                        configured = true
+                    )
+                }
+            }
         }
     }
 
@@ -2766,6 +2818,7 @@ class SettingsRepositoryImpl @Inject constructor(
                 context.getExternalFilesDir(null)?.let { File(it, "recordings") }
                     ?: File(context.filesDir, "recordings")
             }
+            RecordingStorageLocation.CUSTOM_EXTERNAL -> File(context.filesDir, "recordings")
         }
     }
 

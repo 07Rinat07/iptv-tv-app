@@ -1,5 +1,8 @@
 package com.iptv.tv.feature.settings
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -19,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -39,6 +43,21 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    val openTreeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+            viewModel.setRecordingStorageCustomTree(it.toString())
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -479,8 +498,37 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
                 }
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SelectionButton(
+                        selected = state.recordingStorageLocation == RecordingStorageLocation.CUSTOM_EXTERNAL,
+                        label = "Custom папка",
+                        onClick = {
+                            if (state.recordingCustomTreeUri.isNullOrBlank()) {
+                                openTreeLauncher.launch(null)
+                            } else {
+                                viewModel.setRecordingStorageLocation(RecordingStorageLocation.CUSTOM_EXTERNAL)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    OutlinedButton(
+                        onClick = { openTreeLauncher.launch(null) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    ) {
+                        Text(
+                            if (state.recordingCustomTreeUri.isNullOrBlank()) {
+                                "Выбрать папку"
+                            } else {
+                                "Сменить папку"
+                            }
+                        )
+                    }
+                }
                 Text(
-                    text = "Новые записи сохраняются в выбранную app-specific папку; старые записи остаются на месте.",
+                    text = "Новые записи сохраняются в выбранную папку; старые записи остаются на месте.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 state.recordingStorageInfo?.let { info ->
@@ -496,6 +544,13 @@ fun SettingsScreen(
                     if (info.usingFallback) {
                         Text(
                             text = "Внешняя папка недоступна, используется внутренняя папка приложения.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    if (state.recordingStorageLocation == RecordingStorageLocation.CUSTOM_EXTERNAL && !info.configured) {
+                        Text(
+                            text = "Для кастомной папки сначала выберите каталог через системный picker.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
@@ -675,11 +730,13 @@ private fun RecordingStorageLocation.toRecordingStorageLabel(): String {
     return when (this) {
         RecordingStorageLocation.INTERNAL -> "внутренняя папка приложения"
         RecordingStorageLocation.APP_EXTERNAL -> "внешняя папка приложения"
+        RecordingStorageLocation.CUSTOM_EXTERNAL -> "внешняя папка через system picker"
     }
 }
 
 private fun com.iptv.tv.core.model.RecordingStorageInfo.toRecordingStorageStatusLabel(): String {
     return when {
+        !configured -> "папка не выбрана"
         !exists -> "папка ещё не создана"
         writable -> "доступна для записи"
         else -> "нет доступа на запись"
@@ -687,6 +744,7 @@ private fun com.iptv.tv.core.model.RecordingStorageInfo.toRecordingStorageStatus
 }
 
 private fun Long.toStorageSizeLabel(): String {
+    if (this < 0L) return "неизвестно"
     val gib = this / (1024.0 * 1024.0 * 1024.0)
     if (gib >= 1.0) return String.format(Locale.getDefault(), "%.1f GB", gib)
     val mib = this / (1024.0 * 1024.0)

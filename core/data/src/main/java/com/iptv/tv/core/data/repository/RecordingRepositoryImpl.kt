@@ -1,6 +1,8 @@
 package com.iptv.tv.core.data.repository
 
 import android.content.Context
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.mapper.toEntity
 import com.iptv.tv.core.data.mapper.toModel
@@ -18,6 +20,7 @@ import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.RecordingTask
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -26,6 +29,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -272,17 +276,16 @@ class RecordingRepositoryImpl @Inject constructor(
             return false
         }
 
-        val storageLocation = settingsRepository.observeRecordingStorageLocation().first()
-        val directory = prepareRecordingDirectory(recording, storageLocation) ?: return false
         val extension = extensionForStreamUrl(streamUrl)
-        val file = File(directory, recordingFileName(recording, extension))
+        val storageLocation = settingsRepository.observeRecordingStorageLocation().first()
+        val target = prepareRecordingTarget(recording, storageLocation, extension) ?: return false
         val startedAt = System.currentTimeMillis()
-        val maxBytes = RecordingLimits.maxRecordingBytes(directory.usableSpace)
+        val maxBytes = target.maxBytes
         val hardEndAt = RecordingLimits.hardEndAt(startedAt, recording.scheduledEndAt)
         recordingDao.markStarted(
             recordingId = recording.id,
             status = RecordingStatus.RECORDING.name,
-            filePath = file.absolutePath,
+            filePath = target.storedPath,
             startedAt = startedAt
         )
 
@@ -290,32 +293,26 @@ class RecordingRepositoryImpl @Inject constructor(
         prepared.second.forEach { (key, value) -> requestBuilder.header(key, value) }
 
         try {
-            okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
-                if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-                val body = response.body ?: throw IOException("Empty stream body")
-                body.byteStream().use { input ->
-                    file.outputStream().use { output ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        var written = 0L
-                        while (System.currentTimeMillis() < hardEndAt && written < maxBytes) {
-                            val read = input.read(buffer)
-                            if (read <= 0) break
-                            val remaining = maxBytes - written
-                            if (remaining <= 0L) break
-                            val bytesToWrite = minOf(read.toLong(), remaining).toInt()
-                            output.write(buffer, 0, bytesToWrite)
-                            written += bytesToWrite
-                            if (bytesToWrite < read) break
-                        }
-                    }
-                }
+            if (streamUrl.isHlsPlaylistUrl()) {
+                writeHlsMergedStream(
+                    playlistUrl = streamUrl,
+                    headers = prepared.second,
+                    target = target,
+                    hardEndAt = hardEndAt
+                )
+            } else {
+                writeDirectStream(
+                    request = requestBuilder.build(),
+                    target = target,
+                    hardEndAt = hardEndAt
+                )
             }
             recordingDao.markFinished(recording.id, RecordingStatus.COMPLETED.name, System.currentTimeMillis())
             syncLogDao.insert(
                 SyncLogEntity(
                     playlistId = null,
                     status = "recording_completed",
-                    message = "recordingId=${recording.id}, storage=${storageLocation.name}, bytesLimit=$maxBytes, hardEndAt=$hardEndAt, file=${file.absolutePath}",
+                    message = "recordingId=${recording.id}, storage=${storageLocation.name}, bytesLimit=$maxBytes, hardEndAt=$hardEndAt, file=${target.debugPath}",
                     createdAt = System.currentTimeMillis()
                 )
             )
@@ -324,6 +321,143 @@ class RecordingRepositoryImpl @Inject constructor(
             markRecordingFailed(recording, throwable.message ?: throwable.javaClass.simpleName)
             return false
         }
+    }
+
+    private suspend fun writeDirectStream(
+        request: Request,
+        target: RecordingTarget,
+        hardEndAt: Long
+    ) {
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+            val body = response.body ?: throw IOException("Empty stream body")
+            target.openOutputStream().use { output ->
+                body.byteStream().use { input ->
+                    copyInputStream(
+                        initialWritten = 0L,
+                        maxBytes = target.maxBytes,
+                        hardEndAt = hardEndAt,
+                        input = input,
+                        output = output
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun writeHlsMergedStream(
+        playlistUrl: String,
+        headers: Map<String, String>,
+        target: RecordingTarget,
+        hardEndAt: Long
+    ) {
+        var currentPlaylistUrl = playlistUrl
+        val seenSegments = linkedSetOf<String>()
+        var written = 0L
+
+        target.openOutputStream().use { output ->
+            while (System.currentTimeMillis() < hardEndAt && written < target.maxBytes) {
+                when (val manifest = fetchHlsManifest(currentPlaylistUrl, headers)) {
+                    is HlsPlaylistParser.Manifest.Master -> {
+                        currentPlaylistUrl = HlsPlaylistParser.selectPreferredVariant(manifest)
+                            ?: throw IOException("Empty HLS master playlist")
+                    }
+
+                    is HlsPlaylistParser.Manifest.Media -> {
+                        if (manifest.encrypted) {
+                            throw IOException("Encrypted HLS playlists are not supported yet")
+                        }
+                        val newSegments = manifest.segments.filterNot(seenSegments::contains)
+                        if (newSegments.isEmpty()) {
+                            if (manifest.endList) break
+                            delay(manifest.pollDelayMs())
+                            continue
+                        }
+
+                        newSegments.forEach { segmentUrl ->
+                            if (System.currentTimeMillis() >= hardEndAt || written >= target.maxBytes) return@forEach
+                            val appended = appendHttpResource(
+                                url = segmentUrl,
+                                headers = headers,
+                                output = output,
+                                initialWritten = written,
+                                maxBytes = target.maxBytes,
+                                hardEndAt = hardEndAt
+                            )
+                            written += appended
+                            seenSegments += segmentUrl
+                        }
+
+                        if (manifest.endList && seenSegments.containsAll(manifest.segments)) {
+                            break
+                        }
+                        if (!manifest.endList) {
+                            delay(manifest.pollDelayMs())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun fetchHlsManifest(
+        url: String,
+        headers: Map<String, String>
+    ): HlsPlaylistParser.Manifest {
+        val requestBuilder = Request.Builder().url(url).get()
+        headers.forEach { (key, value) -> requestBuilder.header(key, value) }
+        okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+            val body = response.body?.string() ?: throw IOException("Empty HLS playlist body")
+            return HlsPlaylistParser.parse(url = url, content = body)
+        }
+    }
+
+    private fun appendHttpResource(
+        url: String,
+        headers: Map<String, String>,
+        output: OutputStream,
+        initialWritten: Long,
+        maxBytes: Long,
+        hardEndAt: Long
+    ): Long {
+        val requestBuilder = Request.Builder().url(url).get()
+        headers.forEach { (key, value) -> requestBuilder.header(key, value) }
+        okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+            val body = response.body ?: throw IOException("Empty HLS segment body")
+            body.byteStream().use { input ->
+                return copyInputStream(
+                    initialWritten = initialWritten,
+                    maxBytes = maxBytes,
+                    hardEndAt = hardEndAt,
+                    input = input,
+                    output = output
+                )
+            }
+        }
+    }
+
+    private fun copyInputStream(
+        initialWritten: Long,
+        maxBytes: Long,
+        hardEndAt: Long,
+        input: java.io.InputStream,
+        output: OutputStream
+    ): Long {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var appended = 0L
+        while (System.currentTimeMillis() < hardEndAt && initialWritten + appended < maxBytes) {
+            val read = input.read(buffer)
+            if (read <= 0) break
+            val remaining = maxBytes - initialWritten - appended
+            if (remaining <= 0L) break
+            val bytesToWrite = minOf(read.toLong(), remaining).toInt()
+            output.write(buffer, 0, bytesToWrite)
+            appended += bytesToWrite
+            if (bytesToWrite < read) break
+        }
+        return appended
     }
 
     private suspend fun markRecordingFailed(recording: RecordingEntity, reason: String) {
@@ -338,10 +472,23 @@ class RecordingRepositoryImpl @Inject constructor(
         )
     }
 
-    private suspend fun prepareRecordingDirectory(
+    private suspend fun prepareRecordingTarget(
         recording: RecordingEntity,
-        location: RecordingStorageLocation
-    ): File? {
+        location: RecordingStorageLocation,
+        extension: String
+    ): RecordingTarget? {
+        return when (location) {
+            RecordingStorageLocation.CUSTOM_EXTERNAL -> prepareCustomRecordingTarget(recording, extension)
+            RecordingStorageLocation.INTERNAL,
+            RecordingStorageLocation.APP_EXTERNAL -> prepareFileRecordingTarget(recording, location, extension)
+        }
+    }
+
+    private suspend fun prepareFileRecordingTarget(
+        recording: RecordingEntity,
+        location: RecordingStorageLocation,
+        extension: String
+    ): RecordingTarget? {
         val directory = recordingDirectory(location)
         if (!directory.exists() && !directory.mkdirs()) {
             markRecordingFailed(recording, "Cannot create recording folder: ${directory.absolutePath}")
@@ -359,12 +506,57 @@ class RecordingRepositoryImpl @Inject constructor(
             )
             return null
         }
-        return directory
+        val file = File(directory, recordingFileName(recording, extension))
+        return RecordingTarget(
+            storedPath = file.absolutePath,
+            debugPath = file.absolutePath,
+            maxBytes = maxBytes,
+            openOutputStream = { file.outputStream() }
+        )
+    }
+
+    private suspend fun prepareCustomRecordingTarget(
+        recording: RecordingEntity,
+        extension: String
+    ): RecordingTarget? {
+        val treeUri = settingsRepository.observeRecordingStorageCustomTreeUri().first()
+        if (treeUri.isNullOrBlank()) {
+            markRecordingFailed(recording, "Custom recording folder is not configured")
+            return null
+        }
+        val root = DocumentFile.fromTreeUri(context, Uri.parse(treeUri))
+        if (root == null || !root.exists()) {
+            markRecordingFailed(recording, "Custom recording folder is unavailable")
+            return null
+        }
+        if (!root.canWrite()) {
+            markRecordingFailed(recording, "Custom recording folder is not writable")
+            return null
+        }
+        val fileName = recordingFileName(recording, extension)
+        val document = root.createFile(mimeTypeForRecordingExtension(extension), fileName)
+        if (document == null) {
+            markRecordingFailed(recording, "Unable to create recording file in custom folder")
+            return null
+        }
+        return RecordingTarget(
+            storedPath = document.uri.toString(),
+            debugPath = document.uri.toString(),
+            maxBytes = RecordingLimits.ABSOLUTE_MAX_RECORDING_BYTES,
+            openOutputStream = {
+                context.contentResolver.openOutputStream(document.uri, "w")
+                    ?: throw IOException("Cannot open output stream for ${document.uri}")
+            }
+        )
     }
 
     private fun deleteRecordingFile(filePath: String?) {
         val normalizedPath = filePath?.trim().orEmpty()
         if (normalizedPath.isBlank()) return
+        if (normalizedPath.startsWith("content://", ignoreCase = true)) {
+            deleteContentRecordingFile(normalizedPath)
+            return
+        }
         val file = File(normalizedPath)
         val target = runCatching { file.canonicalFile }.getOrNull() ?: return
         val allowedRoots = recordingDirectories().mapNotNull { root ->
@@ -372,6 +564,14 @@ class RecordingRepositoryImpl @Inject constructor(
         }
         if (allowedRoots.none { root -> target.path.startsWith(root.path) }) return
         if (target.exists()) target.delete()
+    }
+
+    private fun deleteContentRecordingFile(filePath: String) {
+        val uri = runCatching { Uri.parse(filePath) }.getOrNull() ?: return
+        val document = DocumentFile.fromSingleUri(context, uri)
+        if (document?.exists() == true) {
+            document.delete()
+        }
     }
 
     private fun recordingDirectory(location: RecordingStorageLocation): File {
@@ -385,6 +585,7 @@ class RecordingRepositoryImpl @Inject constructor(
                     File(external, "recordings")
                 }
             }
+            RecordingStorageLocation.CUSTOM_EXTERNAL -> File(context.filesDir, "recordings")
         }
     }
 
@@ -416,6 +617,18 @@ class RecordingRepositoryImpl @Inject constructor(
         }
     }
 
+    private fun mimeTypeForRecordingExtension(extension: String): String {
+        return when (extension.lowercase(Locale.ROOT)) {
+            "mp4", "m4v" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "ts", "m2ts" -> "video/mp2t"
+            "webm" -> "video/webm"
+            "mp3" -> "audio/mpeg"
+            "aac" -> "audio/aac"
+            else -> "video/*"
+        }
+    }
+
     private fun parseKodiStyleStream(raw: String): Pair<String, Map<String, String>> {
         val parts = raw.split("|", limit = 2)
         val url = parts.first().trim()
@@ -439,4 +652,19 @@ class RecordingRepositoryImpl @Inject constructor(
     private companion object {
         const val MAX_CONCURRENT_RECORDINGS = 2
     }
+}
+
+private data class RecordingTarget(
+    val storedPath: String,
+    val debugPath: String,
+    val maxBytes: Long,
+    val openOutputStream: () -> OutputStream
+)
+
+private fun String.isHlsPlaylistUrl(): Boolean {
+    return substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+}
+
+private fun HlsPlaylistParser.Manifest.Media.pollDelayMs(): Long {
+    return (targetDurationSeconds ?: 5L).coerceIn(1L, 15L) * 1000L
 }

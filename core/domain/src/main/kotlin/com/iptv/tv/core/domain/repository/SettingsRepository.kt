@@ -22,6 +22,7 @@ interface SettingsRepository {
     fun observeDownloadsWifiOnly(): Flow<Boolean>
     fun observeMaxParallelDownloads(): Flow<Int>
     fun observeRecordingStorageLocation(): Flow<RecordingStorageLocation>
+    fun observeRecordingStorageCustomTreeUri(): Flow<String?>
     fun observeScannerAiEnabled(): Flow<Boolean>
     fun observeScannerProxySettings(): Flow<ScannerProxySettings>
     fun observeScannerLearnedQueries(): Flow<List<ScannerLearnedQuery>>
@@ -37,6 +38,7 @@ interface SettingsRepository {
     suspend fun setDownloadsWifiOnly(enabled: Boolean)
     suspend fun setMaxParallelDownloads(value: Int)
     suspend fun setRecordingStorageLocation(location: RecordingStorageLocation)
+    suspend fun setRecordingStorageCustomTreeUri(uri: String?)
     suspend fun getRecordingStorageInfo(location: RecordingStorageLocation): RecordingStorageInfo
     suspend fun setScannerAiEnabled(enabled: Boolean)
     suspend fun setScannerProxySettings(settings: ScannerProxySettings)

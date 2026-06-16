@@ -2,6 +2,7 @@ package com.iptv.tv.feature.downloads
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.documentfile.provider.DocumentFile
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.DownloadStatus
@@ -230,6 +232,7 @@ fun DownloadsScreen(
         } else {
             items(state.recordings, key = { it.id }) { recording ->
                 RecordingCard(
+                    context = context,
                     recording = recording,
                     canCancel = viewModel.canCancelRecording(recording.status),
                     canDelete = viewModel.canDeleteRecording(recording.status),
@@ -265,6 +268,7 @@ fun DownloadsScreen(
 
 @Composable
 private fun RecordingCard(
+    context: Context,
     recording: RecordingTask,
     canCancel: Boolean,
     canDelete: Boolean,
@@ -275,7 +279,7 @@ private fun RecordingCard(
     val recordingPath = recording.filePath
     val canOpen = recording.status == RecordingStatus.COMPLETED &&
         !recordingPath.isNullOrBlank() &&
-        File(recordingPath).exists()
+        recordingPath.recordingExists(context)
     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -291,8 +295,8 @@ private fun RecordingCard(
             Text("Финиш: ${recording.scheduledEndAt?.let(::formatEpoch) ?: "-"}")
             Text("Фактически: ${recording.toActualRecordingWindowLabel()}")
             Text("Длительность: ${recording.toActualRecordingDurationLabel()}")
-            Text("Файл: ${recording.filePath ?: "ещё не создан"}")
-            Text("Размер: ${recording.filePath.toRecordingFileSizeLabel()}")
+            Text("Файл: ${recording.filePath.toRecordingPathLabel(context) ?: "ещё не создан"}")
+            Text("Размер: ${recording.filePath.toRecordingFileSizeLabel(context)}")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onOpen, enabled = canOpen) {
                     Text("Открыть запись")
@@ -314,14 +318,18 @@ private fun openRecordingFile(context: Context, recording: RecordingTask) {
         Toast.makeText(context, "Файл записи ещё не готов", Toast.LENGTH_SHORT).show()
         return
     }
-    val file = File(path)
-    if (!file.exists()) {
-        Toast.makeText(context, "Файл записи не найден", Toast.LENGTH_SHORT).show()
-        return
+    val uri = if (path.startsWith("content://", ignoreCase = true)) {
+        Uri.parse(path)
+    } else {
+        val file = File(path)
+        if (!file.exists()) {
+            Toast.makeText(context, "Файл записи не найден", Toast.LENGTH_SHORT).show()
+            return
+        }
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     }
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(uri, mimeTypeForRecording(file))
+        setDataAndType(uri, mimeTypeForRecordingPath(context, path))
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     runCatching {
@@ -331,8 +339,16 @@ private fun openRecordingFile(context: Context, recording: RecordingTask) {
     }
 }
 
-private fun mimeTypeForRecording(file: File): String {
-    return when (file.extension.lowercase(Locale.US)) {
+private fun mimeTypeForRecordingPath(context: Context, path: String): String {
+    val extension = if (path.startsWith("content://", ignoreCase = true)) {
+        DocumentFile.fromSingleUri(context, Uri.parse(path))
+            ?.name
+            ?.substringAfterLast('.', "")
+            .orEmpty()
+    } else {
+        File(path).extension
+    }
+    return when (extension.lowercase(Locale.US)) {
         "mp4", "m4v" -> "video/mp4"
         "mkv" -> "video/x-matroska"
         "ts", "m2ts" -> "video/mp2t"
@@ -343,16 +359,45 @@ private fun mimeTypeForRecording(file: File): String {
     }
 }
 
-private fun String?.toRecordingFileSizeLabel(): String {
-    val file = this?.takeIf { it.isNotBlank() }?.let(::File) ?: return "-"
-    if (!file.exists() || !file.isFile) return "-"
-    val bytes = file.length()
+private fun String?.toRecordingFileSizeLabel(context: Context): String {
+    val bytes = when {
+        this.isNullOrBlank() -> return "-"
+        startsWith("content://", ignoreCase = true) -> {
+            DocumentFile.fromSingleUri(context, Uri.parse(this))
+                ?.takeIf { it.exists() }
+                ?.length()
+                ?.takeIf { it >= 0L }
+                ?: return "-"
+        }
+
+        else -> {
+            val file = File(this)
+            if (!file.exists() || !file.isFile) return "-"
+            file.length()
+        }
+    }
     val gib = bytes / (1024.0 * 1024.0 * 1024.0)
     if (gib >= 1.0) return String.format(Locale.getDefault(), "%.1f GB", gib)
     val mib = bytes / (1024.0 * 1024.0)
     if (mib >= 1.0) return String.format(Locale.getDefault(), "%.1f MB", mib)
     val kib = bytes / 1024.0
     return String.format(Locale.getDefault(), "%.0f KB", kib)
+}
+
+private fun String?.toRecordingPathLabel(context: Context): String? {
+    val value = this?.takeIf { it.isNotBlank() } ?: return null
+    if (!value.startsWith("content://", ignoreCase = true)) return value
+    val document = DocumentFile.fromSingleUri(context, Uri.parse(value))
+    val name = document?.name?.takeIf { it.isNotBlank() } ?: "content:// запись"
+    return "$name ($value)"
+}
+
+private fun String.recordingExists(context: Context): Boolean {
+    return if (startsWith("content://", ignoreCase = true)) {
+        DocumentFile.fromSingleUri(context, Uri.parse(this))?.exists() == true
+    } else {
+        File(this).exists()
+    }
 }
 
 private fun RecordingTask.toActualRecordingWindowLabel(): String {
