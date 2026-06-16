@@ -294,8 +294,21 @@ data class ProviderAccountStatus(
     val ok: Boolean,
     val statusText: String,
     val detail: String?,
-    val checkedAt: Long
+    val checkedAt: Long,
+    val diagnosticKind: ProviderDiagnosticKind = if (ok) ProviderDiagnosticKind.OK else ProviderDiagnosticKind.PROVIDER_ERROR,
+    val hint: String? = null,
+    val testedUrl: String? = null
 )
+
+enum class ProviderDiagnosticKind {
+    OK,
+    AUTH,
+    NETWORK,
+    PARSER,
+    EMPTY_PLAYLIST,
+    UNSUPPORTED,
+    PROVIDER_ERROR
+}
 
 data class ParentalControlProfile(
     val id: Long,

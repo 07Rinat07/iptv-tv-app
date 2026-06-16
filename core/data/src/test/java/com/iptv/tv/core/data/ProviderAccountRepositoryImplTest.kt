@@ -9,6 +9,7 @@ import com.iptv.tv.core.database.entity.PlaylistProviderEntity
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.ProviderAuthType
+import com.iptv.tv.core.model.ProviderDiagnosticKind
 import com.iptv.tv.core.model.ProviderType
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -85,10 +86,41 @@ class ProviderAccountRepositoryImplTest {
         assertTrue(status.ok)
         assertEquals(ProviderType.PLEX, status.type)
         assertEquals("Live TV OK", status.statusText)
+        assertEquals(ProviderDiagnosticKind.OK, status.diagnosticKind)
         assertTrue(status.detail.orEmpty().contains("dvrs=1"))
         assertTrue(status.detail.orEmpty().contains("channels=2"))
         assertEquals("/livetv/dvrs?X-Plex-Token=plex-token", server.takeRequest().path)
         assertEquals("/livetv/dvrs/dvr-1/channels?X-Plex-Token=plex-token", server.takeRequest().path)
+    }
+
+    @Test
+    fun checkProvider_forM3uReturnsAuthDiagnosticFor401() = runTest {
+        coEvery { providerDao.findById(9L) } returns m3uProviderEntity()
+        server.enqueue(MockResponse().setResponseCode(401))
+
+        val result = repository.checkProvider(9L)
+
+        assertSuccess(result)
+        val status = (result as AppResult.Success).data
+        assertTrue(!status.ok)
+        assertEquals(ProviderDiagnosticKind.AUTH, status.diagnosticKind)
+        assertEquals("HTTP 401", status.statusText)
+        assertTrue(status.hint.orEmpty().contains("логин") || status.hint.orEmpty().contains("token"))
+    }
+
+    @Test
+    fun checkProvider_forTvheadendReturnsParserDiagnosticForHtmlResponse() = runTest {
+        coEvery { providerDao.findById(9L) } returns tvheadendProviderEntity()
+        server.enqueue(MockResponse().setBody("<html>login</html>"))
+
+        val result = repository.checkProvider(9L)
+
+        assertSuccess(result)
+        val status = (result as AppResult.Success).data
+        assertTrue(!status.ok)
+        assertEquals(ProviderDiagnosticKind.PARSER, status.diagnosticKind)
+        assertEquals("Ошибка формата ответа", status.statusText)
+        assertTrue(status.detail.orEmpty().contains("non-M3U"))
     }
 
     @Test
@@ -205,6 +237,40 @@ class ProviderAccountRepositoryImplTest {
             token = "plex-token",
             macAddress = null,
             authType = ProviderAuthType.TOKEN.name,
+            linkedPlaylistId = null,
+            lastSyncedAt = null,
+            createdAt = 1L
+        )
+    }
+
+    private fun m3uProviderEntity(): PlaylistProviderEntity {
+        return PlaylistProviderEntity(
+            id = 9L,
+            type = ProviderType.M3U.name,
+            name = "M3U",
+            baseUrl = server.url("/playlist.m3u").toString(),
+            username = null,
+            password = null,
+            token = null,
+            macAddress = null,
+            authType = ProviderAuthType.NONE.name,
+            linkedPlaylistId = null,
+            lastSyncedAt = null,
+            createdAt = 1L
+        )
+    }
+
+    private fun tvheadendProviderEntity(): PlaylistProviderEntity {
+        return PlaylistProviderEntity(
+            id = 9L,
+            type = ProviderType.TVHEADEND.name,
+            name = "Tvheadend",
+            baseUrl = server.url("/").toString().trimEnd('/'),
+            username = "demo",
+            password = "demo",
+            token = null,
+            macAddress = null,
+            authType = ProviderAuthType.USER_PASSWORD.name,
             linkedPlaylistId = null,
             lastSyncedAt = null,
             createdAt = 1L

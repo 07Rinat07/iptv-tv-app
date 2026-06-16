@@ -47,6 +47,7 @@ import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.ProviderAccountStatus
+import com.iptv.tv.core.model.ProviderDiagnosticKind
 import com.iptv.tv.core.model.PlaylistValidationReport
 import com.iptv.tv.core.model.ProviderType
 import com.iptv.tv.core.model.RecordingStorageInfo
@@ -1826,12 +1827,23 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                     ok = false,
                     statusText = "Не поддержано",
                     detail = "${provider.type} status check is not implemented yet",
-                    checkedAt = System.currentTimeMillis()
+                    checkedAt = System.currentTimeMillis(),
+                    diagnosticKind = ProviderDiagnosticKind.UNSUPPORTED,
+                    hint = "Для этого типа провайдера проверка статуса пока не реализована.",
+                    testedUrl = provider.baseUrl
                 )
             }
         }.fold(
             onSuccess = { AppResult.Success(it) },
-            onFailure = { throwable -> AppResult.Error("Unable to check provider: ${throwable.toLogSummary(4)}", throwable) }
+            onFailure = {
+                AppResult.Success(
+                    buildProviderFailureStatus(
+                        provider = provider,
+                        testedUrl = provider.baseUrl,
+                        message = it.toLogSummary(4)
+                    )
+                )
+            }
         )
     }
 
@@ -2017,6 +2029,80 @@ class ProviderAccountRepositoryImpl @Inject constructor(
         }
     }
 
+    private fun buildProviderFailureStatus(
+        provider: PlaylistProvider,
+        testedUrl: String,
+        message: String
+    ): ProviderAccountStatus {
+        val diagnosticKind = classifyProviderDiagnosticKind(message)
+        val statusText = when (diagnosticKind) {
+            ProviderDiagnosticKind.AUTH -> "Ошибка авторизации"
+            ProviderDiagnosticKind.NETWORK -> "Ошибка сети"
+            ProviderDiagnosticKind.PARSER -> "Ошибка формата ответа"
+            ProviderDiagnosticKind.EMPTY_PLAYLIST -> "Пустой ответ"
+            ProviderDiagnosticKind.UNSUPPORTED -> "Не поддержано"
+            ProviderDiagnosticKind.OK -> "OK"
+            ProviderDiagnosticKind.PROVIDER_ERROR -> "Ошибка провайдера"
+        }
+        return ProviderAccountStatus(
+            providerId = provider.id,
+            type = provider.type,
+            ok = false,
+            statusText = statusText,
+            detail = message.take(260),
+            checkedAt = System.currentTimeMillis(),
+            diagnosticKind = diagnosticKind,
+            hint = providerDiagnosticHint(diagnosticKind, provider.type),
+            testedUrl = testedUrl
+        )
+    }
+
+    private fun classifyProviderDiagnosticKind(message: String): ProviderDiagnosticKind {
+        return when (classifyProviderSyncFailure(message)) {
+            "auth" -> ProviderDiagnosticKind.AUTH
+            "network" -> ProviderDiagnosticKind.NETWORK
+            "parser" -> ProviderDiagnosticKind.PARSER
+            "empty_playlist" -> ProviderDiagnosticKind.EMPTY_PLAYLIST
+            else -> ProviderDiagnosticKind.PROVIDER_ERROR
+        }
+    }
+
+    private fun providerDiagnosticHint(
+        kind: ProviderDiagnosticKind,
+        providerType: ProviderType
+    ): String {
+        return when (kind) {
+            ProviderDiagnosticKind.OK -> "Провайдер ответил корректно."
+            ProviderDiagnosticKind.AUTH -> "Проверьте логин, пароль, token или MAC для ${providerType.name}."
+            ProviderDiagnosticKind.NETWORK -> "Проверьте URL сервера, DNS, интернет и доступность endpoint."
+            ProviderDiagnosticKind.PARSER -> "Сервер ответил в неожиданном формате. Проверьте тип провайдера и endpoint."
+            ProviderDiagnosticKind.EMPTY_PLAYLIST -> "Сервер доступен, но не вернул каналов. Проверьте права аккаунта и пакет каналов."
+            ProviderDiagnosticKind.UNSUPPORTED -> "Для этого типа провайдера проверка пока не реализована."
+            ProviderDiagnosticKind.PROVIDER_ERROR -> "Проверьте параметры провайдера и повторите попытку."
+        }
+    }
+
+    private fun createProviderStatus(
+        provider: PlaylistProvider,
+        ok: Boolean,
+        statusText: String,
+        detail: String?,
+        testedUrl: String,
+        diagnosticKind: ProviderDiagnosticKind = if (ok) ProviderDiagnosticKind.OK else ProviderDiagnosticKind.PROVIDER_ERROR
+    ): ProviderAccountStatus {
+        return ProviderAccountStatus(
+            providerId = provider.id,
+            type = provider.type,
+            ok = ok,
+            statusText = statusText,
+            detail = detail,
+            checkedAt = System.currentTimeMillis(),
+            diagnosticKind = diagnosticKind,
+            hint = providerDiagnosticHint(diagnosticKind, provider.type),
+            testedUrl = testedUrl
+        )
+    }
+
     private fun checkXtreamProvider(provider: PlaylistProvider): ProviderAccountStatus {
         val url = provider.baseUrl.trim().trimEnd('/').toHttpUrl()
             .newBuilder()
@@ -2037,9 +2123,8 @@ class ProviderAccountRepositoryImpl @Inject constructor(
         val authOk = userInfo.optInt("auth", if (userInfo.optBoolean("auth")) 1 else 0) == 1
         val status = userInfo.optString("status").ifBlank { if (authOk) "Active" else "Unknown" }
         val expires = userInfo.optString("exp_date").takeIf { it.isNotBlank() && it != "null" }
-        return ProviderAccountStatus(
-            providerId = provider.id,
-            type = provider.type,
+        return createProviderStatus(
+            provider = provider,
             ok = authOk && !status.equals("Disabled", ignoreCase = true) && !status.equals("Banned", ignoreCase = true),
             statusText = status,
             detail = buildString {
@@ -2047,7 +2132,8 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                 append(if (authOk) "ok" else "failed")
                 expires?.let { append(", exp=$it") }
             },
-            checkedAt = System.currentTimeMillis()
+            testedUrl = url.toString(),
+            diagnosticKind = if (authOk) ProviderDiagnosticKind.OK else ProviderDiagnosticKind.AUTH
         )
     }
 
@@ -2062,13 +2148,13 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             type = "stb",
             action = "handshake"
         ).optJSONObject("js")?.optString("token").orEmpty()
-        return ProviderAccountStatus(
-            providerId = provider.id,
-            type = provider.type,
+        return createProviderStatus(
+            provider = provider,
             ok = token.isNotBlank(),
             statusText = if (token.isNotBlank()) "Handshake OK" else "No token",
             detail = if (token.isNotBlank()) "portal=$portalUrl" else "Stalker portal did not return token",
-            checkedAt = System.currentTimeMillis()
+            testedUrl = portalUrl,
+            diagnosticKind = if (token.isNotBlank()) ProviderDiagnosticKind.OK else ProviderDiagnosticKind.AUTH
         )
     }
 
@@ -2078,13 +2164,19 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             .use { response ->
                 response.code to (response.header("content-type") ?: "unknown")
             }
-        return ProviderAccountStatus(
-            providerId = provider.id,
-            type = provider.type,
+        val code = response.first
+        val diagnosticKind = when {
+            code in 200..399 -> ProviderDiagnosticKind.OK
+            code == 401 || code == 403 -> ProviderDiagnosticKind.AUTH
+            else -> ProviderDiagnosticKind.PROVIDER_ERROR
+        }
+        return createProviderStatus(
+            provider = provider,
             ok = response.first in 200..399,
             statusText = "HTTP ${response.first}",
             detail = "content-type=${response.second}",
-            checkedAt = System.currentTimeMillis()
+            testedUrl = provider.baseUrl,
+            diagnosticKind = diagnosticKind
         )
     }
 
@@ -2095,17 +2187,17 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             .use { response ->
                 if (!response.isSuccessful) error("HTTP ${response.code}")
                 response.body?.string().orEmpty()
-            }
+        }
             .trim()
         if (!body.startsWith("[")) error("HDHomeRun lineup.json returned non-JSON array")
         val channels = JSONArray(body)
-        return ProviderAccountStatus(
-            providerId = provider.id,
-            type = provider.type,
+        return createProviderStatus(
+            provider = provider,
             ok = channels.length() > 0,
             statusText = "lineup.json OK",
             detail = "channels=${channels.length()}, url=$lineupUrl",
-            checkedAt = System.currentTimeMillis()
+            testedUrl = lineupUrl,
+            diagnosticKind = if (channels.length() > 0) ProviderDiagnosticKind.OK else ProviderDiagnosticKind.EMPTY_PLAYLIST
         )
     }
 
@@ -2125,13 +2217,13 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             .trim()
         if (!body.startsWith("#EXTM3U")) error("Tvheadend returned non-M3U response")
         val channels = body.lineSequence().count { it.startsWith("#EXTINF", ignoreCase = true) }
-        return ProviderAccountStatus(
-            providerId = provider.id,
-            type = provider.type,
+        return createProviderStatus(
+            provider = provider,
             ok = channels > 0,
             statusText = "M3U OK",
             detail = "channels=$channels, url=$playlistUrl",
-            checkedAt = System.currentTimeMillis()
+            testedUrl = playlistUrl,
+            diagnosticKind = if (channels > 0) ProviderDiagnosticKind.OK else ProviderDiagnosticKind.EMPTY_PLAYLIST
         )
     }
 
@@ -2146,17 +2238,17 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             .use { response ->
                 if (!response.isSuccessful) error("HTTP ${response.code}")
                 response.body?.string().orEmpty()
-            }
+        }
             .trim()
         if (!body.startsWith("{")) error("Jellyfin returned non-JSON response")
         val channels = JSONObject(body).optJSONArray("Items") ?: JSONArray()
-        return ProviderAccountStatus(
-            providerId = provider.id,
-            type = provider.type,
+        return createProviderStatus(
+            provider = provider,
             ok = channels.length() > 0,
             statusText = "Live TV OK",
             detail = "channels=${channels.length()}, url=$baseUrl/LiveTv/Channels",
-            checkedAt = System.currentTimeMillis()
+            testedUrl = channelsUrl,
+            diagnosticKind = if (channels.length() > 0) ProviderDiagnosticKind.OK else ProviderDiagnosticKind.EMPTY_PLAYLIST
         )
     }
 
@@ -2177,13 +2269,13 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             if (!xml.startsWith("<")) error("Plex returned non-XML channels response")
             parseProviderPlexChannels(xml, dvr).size
         }
-        return ProviderAccountStatus(
-            providerId = provider.id,
-            type = provider.type,
+        return createProviderStatus(
+            provider = provider,
             ok = channelCount > 0,
             statusText = "Live TV OK",
             detail = "dvrs=${dvrs.size}, channels=$channelCount, url=$baseUrl/livetv/dvrs",
-            checkedAt = System.currentTimeMillis()
+            testedUrl = "$baseUrl/livetv/dvrs",
+            diagnosticKind = if (channelCount > 0) ProviderDiagnosticKind.OK else ProviderDiagnosticKind.EMPTY_PLAYLIST
         )
     }
 

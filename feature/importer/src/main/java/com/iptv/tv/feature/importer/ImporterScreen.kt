@@ -35,8 +35,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.PlaylistContentSummary
-import com.iptv.tv.core.model.ProviderAccountStatus
 import com.iptv.tv.core.model.PlaylistProvider
+import com.iptv.tv.core.model.ProviderAccountStatus
+import com.iptv.tv.core.model.ProviderAuthType
+import com.iptv.tv.core.model.ProviderDiagnosticKind
 import com.iptv.tv.core.model.ProviderType
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -605,7 +607,9 @@ private fun SavedProvidersSection(
         if (providers.isEmpty()) {
             Text("Пока нет сохранённых M3U/Xtream/Stalker/HDHomeRun/Tvheadend/Jellyfin/Plex источников", style = MaterialTheme.typography.bodySmall)
         } else {
-            providers.forEach { provider ->
+            providers
+                .sortedWith(compareByDescending<PlaylistProvider> { it.lastSyncedAt ?: 0L }.thenByDescending { it.createdAt })
+                .forEach { provider ->
                 ProviderAccountCard(
                     provider = provider,
                     isSyncing = syncingProviderId == provider.id,
@@ -642,6 +646,7 @@ private fun ProviderAccountCard(
             provider.macAddress?.takeIf { it.isNotBlank() }?.let {
                 Text("MAC: $it", style = MaterialTheme.typography.bodySmall)
             }
+            Text("Авторизация: ${provider.authType.displayName()}", style = MaterialTheme.typography.bodySmall)
             Text(
                 "Плейлист: ${provider.linkedPlaylistId ?: "не привязан"} | sync: ${provider.lastSyncedAt.formatProviderTime()}",
                 style = MaterialTheme.typography.bodySmall
@@ -652,8 +657,19 @@ private fun ProviderAccountCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = if (it.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                 )
+                Text(
+                    "Диагностика: ${it.diagnosticKind.displayName()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (it.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                )
                 it.detail?.takeIf { detail -> detail.isNotBlank() }?.let { detail ->
                     Text(detail, style = MaterialTheme.typography.bodySmall)
+                }
+                it.hint?.takeIf { hint -> hint.isNotBlank() }?.let { hint ->
+                    Text("Подсказка: $hint", style = MaterialTheme.typography.bodySmall)
+                }
+                it.testedUrl?.takeIf { url -> url.isNotBlank() }?.let { url ->
+                    Text("Endpoint: $url", style = MaterialTheme.typography.bodySmall)
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -680,6 +696,27 @@ private fun ProviderType.displayName(): String {
         ProviderType.PLEX -> "Plex"
         ProviderType.TVHEADEND -> "Tvheadend"
         ProviderType.HDHOMERUN -> "HdHomeRun"
+    }
+}
+
+private fun ProviderDiagnosticKind.displayName(): String {
+    return when (this) {
+        ProviderDiagnosticKind.OK -> "ok"
+        ProviderDiagnosticKind.AUTH -> "auth"
+        ProviderDiagnosticKind.NETWORK -> "network"
+        ProviderDiagnosticKind.PARSER -> "parser"
+        ProviderDiagnosticKind.EMPTY_PLAYLIST -> "empty playlist"
+        ProviderDiagnosticKind.UNSUPPORTED -> "unsupported"
+        ProviderDiagnosticKind.PROVIDER_ERROR -> "provider error"
+    }
+}
+
+private fun ProviderAuthType.displayName(): String {
+    return when (this) {
+        ProviderAuthType.NONE -> "без авторизации"
+        ProviderAuthType.USER_PASSWORD -> "логин / пароль"
+        ProviderAuthType.TOKEN -> "token / API key"
+        ProviderAuthType.MAC_ADDRESS -> "MAC адрес"
     }
 }
 

@@ -583,12 +583,12 @@ class ImporterViewModel @Inject constructor(
                         it.copy(
                             checkingProviderId = null,
                             lastProviderStatus = result.data,
-                            providerMessage = "Проверка провайдера: ${result.data.statusText}"
+                            providerMessage = "Проверка провайдера: ${result.data.statusText} (${result.data.diagnosticKind.name.lowercase()})"
                         )
                     }
                     safeLog(
                         status = "provider_check_ok",
-                        message = "providerId=$providerId, ok=${result.data.ok}, status=${result.data.statusText}"
+                        message = "providerId=$providerId, ok=${result.data.ok}, status=${result.data.statusText}, diagnostic=${result.data.diagnosticKind}"
                     )
                 }
                 is AppResult.Error -> {
