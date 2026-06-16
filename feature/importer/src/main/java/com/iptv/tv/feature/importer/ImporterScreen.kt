@@ -426,6 +426,7 @@ fun ImporterScreen(
         item {
             SavedProvidersSection(
                 providers = state.savedProviders,
+                providerSyncHistory = state.providerSyncHistory,
                 syncingProviderId = state.syncingProviderId,
                 checkingProviderId = state.checkingProviderId,
                 lastProviderStatus = state.lastProviderStatus,
@@ -595,6 +596,7 @@ fun ImporterScreen(
 @Composable
 private fun SavedProvidersSection(
     providers: List<PlaylistProvider>,
+    providerSyncHistory: Map<Long, List<ProviderSyncHistoryItem>>,
     syncingProviderId: Long?,
     checkingProviderId: Long?,
     lastProviderStatus: ProviderAccountStatus?,
@@ -616,6 +618,7 @@ private fun SavedProvidersSection(
                     isChecking = checkingProviderId == provider.id,
                     busyBlocked = syncingProviderId != null || checkingProviderId != null,
                     status = lastProviderStatus?.takeIf { it.providerId == provider.id },
+                    history = providerSyncHistory[provider.id].orEmpty(),
                     onCheck = { onCheck(provider.id) },
                     onSync = { onSync(provider.id) },
                     onDelete = { onDelete(provider.id) }
@@ -632,6 +635,7 @@ private fun ProviderAccountCard(
     isChecking: Boolean,
     busyBlocked: Boolean,
     status: ProviderAccountStatus?,
+    history: List<ProviderSyncHistoryItem>,
     onCheck: () -> Unit,
     onSync: () -> Unit,
     onDelete: () -> Unit
@@ -670,6 +674,16 @@ private fun ProviderAccountCard(
                 }
                 it.testedUrl?.takeIf { url -> url.isNotBlank() }?.let { url ->
                     Text("Endpoint: $url", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            if (history.isNotEmpty()) {
+                Text("История sync", style = MaterialTheme.typography.titleSmall)
+                history.forEach { item ->
+                    Text(
+                        "${item.createdAt.formatProviderTime()} | ${item.summary}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (item.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                    )
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -723,6 +737,10 @@ private fun ProviderAuthType.displayName(): String {
 private fun Long?.formatProviderTime(): String {
     val value = this ?: return "никогда"
     return SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(value))
+}
+
+private fun Long.formatProviderTime(): String {
+    return SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(this))
 }
 
 @Composable

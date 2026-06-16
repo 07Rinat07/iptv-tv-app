@@ -14,6 +14,7 @@ import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistValidationReport
 import com.iptv.tv.core.model.ProviderAuthType
 import com.iptv.tv.core.model.ProviderType
+import com.iptv.tv.core.model.SyncLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
@@ -25,6 +26,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import javax.inject.Inject
+
+data class ProviderSyncHistoryItem(
+    val status: String,
+    val summary: String,
+    val createdAt: Long,
+    val isError: Boolean
+)
 
 data class ImporterUiState(
     val title: String = "Импорт",
@@ -50,6 +58,7 @@ data class ImporterUiState(
     val lastError: String? = null,
     val providerMessage: String? = null,
     val savedProviders: List<PlaylistProvider> = emptyList(),
+    val providerSyncHistory: Map<Long, List<ProviderSyncHistoryItem>> = emptyMap(),
     val syncingProviderId: Long? = null,
     val checkingProviderId: Long? = null,
     val lastProviderStatus: ProviderAccountStatus? = null,
@@ -70,6 +79,7 @@ class ImporterViewModel @Inject constructor(
 
     init {
         observeProviders()
+        observeProviderSyncHistory()
         applyScannerPrefill()
     }
 
@@ -775,6 +785,14 @@ class ImporterViewModel @Inject constructor(
         }
     }
 
+    private fun observeProviderSyncHistory() {
+        viewModelScope.launch {
+            diagnosticsRepository.observeLogs(limit = 240).collect { logs ->
+                _uiState.update { it.copy(providerSyncHistory = extractProviderSyncHistory(logs)) }
+            }
+        }
+    }
+
     private fun saveProvider(provider: PlaylistProvider) {
         viewModelScope.launch {
             _uiState.update { it.copy(lastError = null, providerMessage = null) }
@@ -857,3 +875,61 @@ class ImporterViewModel @Inject constructor(
         const val IMPORT_WATCHDOG_MS = 10_000L
     }
 }
+
+internal fun extractProviderSyncHistory(
+    logs: List<SyncLog>,
+    perProviderLimit: Int = 4
+): Map<Long, List<ProviderSyncHistoryItem>> {
+    return logs
+        .asSequence()
+        .filter { it.status.startsWith("provider_sync_item_") }
+        .mapNotNull { log ->
+            val providerId = PROVIDER_ID_REGEX.find(log.message)?.groupValues?.getOrNull(1)?.toLongOrNull()
+                ?: return@mapNotNull null
+            providerId to ProviderSyncHistoryItem(
+                status = log.status,
+                summary = providerSyncSummary(log),
+                createdAt = log.createdAt,
+                isError = log.status.endsWith("_error")
+            )
+        }
+        .groupBy(
+            keySelector = { it.first },
+            valueTransform = { it.second }
+        )
+        .mapValues { (_, items) ->
+            items
+                .sortedByDescending { it.createdAt }
+                .take(perProviderLimit)
+        }
+}
+
+internal fun providerSyncSummary(log: SyncLog): String {
+    return when (log.status) {
+        "provider_sync_item_start" -> "Старт синхронизации"
+        "provider_sync_item_ok" -> {
+            val playlistId = PLAYLIST_ID_REGEX.find(log.message)?.groupValues?.getOrNull(1)
+            if (playlistId != null) {
+                "Синхронизация OK, playlistId=$playlistId"
+            } else {
+                "Синхронизация OK"
+            }
+        }
+        "provider_sync_item_loading" -> "Синхронизация в процессе"
+        "provider_sync_item_error" -> {
+            val reason = REASON_REGEX.find(log.message)?.groupValues?.getOrNull(1)
+            val detail = DETAIL_REGEX.find(log.message)?.groupValues?.getOrNull(1)
+            buildString {
+                append("Ошибка")
+                reason?.let { append(": $it") }
+                detail?.takeIf { it.isNotBlank() }?.let { append(" | $it") }
+            }
+        }
+        else -> log.status
+    }
+}
+
+private val PROVIDER_ID_REGEX = Regex("""providerId=(\d+)""")
+private val PLAYLIST_ID_REGEX = Regex("""playlistId=(\d+)""")
+private val REASON_REGEX = Regex("""reason=([^,]+)""")
+private val DETAIL_REGEX = Regex("""detail=(.+)$""")
