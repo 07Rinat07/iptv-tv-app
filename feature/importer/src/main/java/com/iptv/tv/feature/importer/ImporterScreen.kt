@@ -58,6 +58,11 @@ const val TAG_IMPORTER_SAVE_STALKER = "importer_save_stalker"
 const val TAG_IMPORTER_HDHOMERUN_URL = "importer_hdhomerun_url"
 const val TAG_IMPORTER_IMPORT_HDHOMERUN = "importer_import_hdhomerun"
 const val TAG_IMPORTER_SAVE_HDHOMERUN = "importer_save_hdhomerun"
+const val TAG_IMPORTER_TVHEADEND_URL = "importer_tvheadend_url"
+const val TAG_IMPORTER_TVHEADEND_USERNAME = "importer_tvheadend_username"
+const val TAG_IMPORTER_TVHEADEND_PASSWORD = "importer_tvheadend_password"
+const val TAG_IMPORTER_IMPORT_TVHEADEND = "importer_import_tvheadend"
+const val TAG_IMPORTER_SAVE_TVHEADEND = "importer_save_tvheadend"
 const val TAG_IMPORTER_FILE_PATH = "importer_file_path"
 const val TAG_IMPORTER_IMPORT_FILE = "importer_import_file"
 const val TAG_IMPORTER_RAW_TEXT = "importer_raw_text"
@@ -275,6 +280,58 @@ fun ImporterScreen(
         }
 
         item {
+            Text(text = "Tvheadend", style = MaterialTheme.typography.titleMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = state.tvheadendBaseUrl,
+                    onValueChange = viewModel::updateTvheadendBaseUrl,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TAG_IMPORTER_TVHEADEND_URL),
+                    label = { Text("http://server:9981 или прямой playlist/channels.m3u") },
+                    singleLine = true
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = state.tvheadendUsername,
+                        onValueChange = viewModel::updateTvheadendUsername,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag(TAG_IMPORTER_TVHEADEND_USERNAME),
+                        label = { Text("Логин") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = state.tvheadendPassword,
+                        onValueChange = viewModel::updateTvheadendPassword,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag(TAG_IMPORTER_TVHEADEND_PASSWORD),
+                        label = { Text("Пароль") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = viewModel::importFromTvheadend,
+                        modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_TVHEADEND),
+                        enabled = !state.isLoading
+                    ) {
+                        Text(if (state.isLoading) "Импорт..." else "Импорт Tvheadend")
+                    }
+                    Button(
+                        onClick = viewModel::saveTvheadendProvider,
+                        modifier = Modifier.testTag(TAG_IMPORTER_SAVE_TVHEADEND),
+                        enabled = !state.isLoading
+                    ) {
+                        Text("Сохранить сервер")
+                    }
+                }
+            }
+        }
+
+        item {
             SavedProvidersSection(
                 providers = state.savedProviders,
                 syncingProviderId = state.syncingProviderId,
@@ -456,7 +513,7 @@ private fun SavedProvidersSection(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Сохранённые провайдеры", style = MaterialTheme.typography.titleMedium)
         if (providers.isEmpty()) {
-            Text("Пока нет сохранённых M3U/Xtream/Stalker/HDHomeRun источников", style = MaterialTheme.typography.bodySmall)
+            Text("Пока нет сохранённых M3U/Xtream/Stalker/HDHomeRun/Tvheadend источников", style = MaterialTheme.typography.bodySmall)
         } else {
             providers.forEach { provider ->
                 ProviderAccountCard(

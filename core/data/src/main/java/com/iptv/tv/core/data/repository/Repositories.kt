@@ -68,6 +68,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
@@ -319,6 +320,40 @@ class PlaylistRepositoryImpl @Inject constructor(
             )
         }.getOrElse { throwable ->
             AppResult.Error("Unable to import HDHomeRun: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
+        }
+    }
+
+    override suspend fun importFromTvheadend(
+        baseUrl: String,
+        username: String?,
+        password: String?,
+        name: String
+    ): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
+        val playlistUrl = normalizeTvheadendPlaylistUrl(baseUrl)
+        if (playlistUrl.isBlank()) return@withContext AppResult.Error("Tvheadend URL is empty")
+
+        runCatching {
+            val request = Request.Builder()
+                .url(playlistUrl)
+                .applyBasicAuth(username, password)
+                .build()
+            val body = okHttpClient.newCall(request)
+                .execute()
+                .use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    response.body?.string().orEmpty()
+                }
+                .trim()
+            if (!body.startsWith("#EXTM3U")) error("Tvheadend returned non-M3U response")
+
+            importParsedPlaylist(
+                playlistName = name,
+                rawPlaylist = body,
+                sourceType = PlaylistSourceType.TVHEADEND,
+                source = playlistUrl
+            )
+        }.getOrElse { throwable ->
+            AppResult.Error("Unable to import Tvheadend: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
         }
     }
 
@@ -919,6 +954,33 @@ class PlaylistRepositoryImpl @Inject constructor(
             .toString()
     }
 
+    private fun normalizeTvheadendPlaylistUrl(baseUrl: String): String {
+        val trimmed = baseUrl.trim()
+        if (trimmed.isBlank()) return ""
+        val url = trimmed.toHttpUrl()
+        val path = url.encodedPath.trimEnd('/')
+        if (
+            path.endsWith(".m3u", ignoreCase = true) ||
+            path.endsWith(".m3u8", ignoreCase = true) ||
+            path.contains("/playlist", ignoreCase = true)
+        ) {
+            return url.toString()
+        }
+        return url.newBuilder()
+            .encodedPath(path + "/playlist/channels.m3u")
+            .build()
+            .toString()
+    }
+
+    private fun Request.Builder.applyBasicAuth(username: String?, password: String?): Request.Builder {
+        val normalizedUsername = username?.trim().orEmpty()
+        val normalizedPassword = password?.trim().orEmpty()
+        if (normalizedUsername.isNotBlank() || normalizedPassword.isNotBlank()) {
+            header("Authorization", Credentials.basic(normalizedUsername, normalizedPassword))
+        }
+        return this
+    }
+
     private fun parseXtreamCategoryNames(categories: JSONArray): Map<String, String> {
         val result = linkedMapOf<String, String>()
         for (index in 0 until categories.length()) {
@@ -1411,6 +1473,7 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                 ProviderType.STALKER -> checkStalkerProvider(provider)
                 ProviderType.M3U -> checkM3uProvider(provider)
                 ProviderType.HDHOMERUN -> checkHdHomeRunProvider(provider)
+                ProviderType.TVHEADEND -> checkTvheadendProvider(provider)
                 else -> ProviderAccountStatus(
                     providerId = provider.id,
                     type = provider.type,
@@ -1450,6 +1513,12 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             )
             ProviderType.HDHOMERUN -> playlistRepository.importFromHdHomeRun(
                 baseUrl = provider.baseUrl,
+                name = provider.name
+            )
+            ProviderType.TVHEADEND -> playlistRepository.importFromTvheadend(
+                baseUrl = provider.baseUrl,
+                username = provider.username,
+                password = provider.password,
                 name = provider.name
             )
             else -> return@withContext AppResult.Error("${provider.type} sync is not implemented yet")
@@ -1610,6 +1679,32 @@ class ProviderAccountRepositoryImpl @Inject constructor(
         )
     }
 
+    private fun checkTvheadendProvider(provider: PlaylistProvider): ProviderAccountStatus {
+        val playlistUrl = normalizeProviderTvheadendPlaylistUrl(provider.baseUrl)
+        val body = okHttpClient.newCall(
+            Request.Builder()
+                .url(playlistUrl)
+                .applyProviderBasicAuth(provider.username, provider.password)
+                .build()
+        )
+            .execute()
+            .use { response ->
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                response.body?.string().orEmpty()
+            }
+            .trim()
+        if (!body.startsWith("#EXTM3U")) error("Tvheadend returned non-M3U response")
+        val channels = body.lineSequence().count { it.startsWith("#EXTINF", ignoreCase = true) }
+        return ProviderAccountStatus(
+            providerId = provider.id,
+            type = provider.type,
+            ok = channels > 0,
+            statusText = "M3U OK",
+            detail = "channels=$channels, url=$playlistUrl",
+            checkedAt = System.currentTimeMillis()
+        )
+    }
+
     private fun normalizeProviderHdHomeRunLineupUrl(baseUrl: String): String {
         val trimmed = baseUrl.trim()
         if (trimmed.isBlank()) error("HDHomeRun URL is empty")
@@ -1622,6 +1717,33 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             .query(null)
             .build()
             .toString()
+    }
+
+    private fun normalizeProviderTvheadendPlaylistUrl(baseUrl: String): String {
+        val trimmed = baseUrl.trim()
+        if (trimmed.isBlank()) error("Tvheadend URL is empty")
+        val url = trimmed.toHttpUrl()
+        val path = url.encodedPath.trimEnd('/')
+        if (
+            path.endsWith(".m3u", ignoreCase = true) ||
+            path.endsWith(".m3u8", ignoreCase = true) ||
+            path.contains("/playlist", ignoreCase = true)
+        ) {
+            return url.toString()
+        }
+        return url.newBuilder()
+            .encodedPath(path + "/playlist/channels.m3u")
+            .build()
+            .toString()
+    }
+
+    private fun Request.Builder.applyProviderBasicAuth(username: String?, password: String?): Request.Builder {
+        val normalizedUsername = username?.trim().orEmpty()
+        val normalizedPassword = password?.trim().orEmpty()
+        if (normalizedUsername.isNotBlank() || normalizedPassword.isNotBlank()) {
+            header("Authorization", Credentials.basic(normalizedUsername, normalizedPassword))
+        }
+        return this
     }
 
     private fun normalizeProviderStalkerPortalUrl(portalUrl: String): String {

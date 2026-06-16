@@ -37,6 +37,9 @@ data class ImporterUiState(
     val stalkerPortalUrl: String = "",
     val stalkerMacAddress: String = "",
     val hdHomeRunBaseUrl: String = "",
+    val tvheadendBaseUrl: String = "",
+    val tvheadendUsername: String = "",
+    val tvheadendPassword: String = "",
     val filePathOrUri: String = "",
     val rawText: String = "",
     val isLoading: Boolean = false,
@@ -74,6 +77,9 @@ class ImporterViewModel @Inject constructor(
     fun updateStalkerPortalUrl(value: String) = _uiState.update { it.copy(stalkerPortalUrl = value) }
     fun updateStalkerMacAddress(value: String) = _uiState.update { it.copy(stalkerMacAddress = value) }
     fun updateHdHomeRunBaseUrl(value: String) = _uiState.update { it.copy(hdHomeRunBaseUrl = value) }
+    fun updateTvheadendBaseUrl(value: String) = _uiState.update { it.copy(tvheadendBaseUrl = value) }
+    fun updateTvheadendUsername(value: String) = _uiState.update { it.copy(tvheadendUsername = value) }
+    fun updateTvheadendPassword(value: String) = _uiState.update { it.copy(tvheadendPassword = value) }
     fun updateFilePath(value: String) = _uiState.update { it.copy(filePathOrUri = value) }
     fun updateRawText(value: String) = _uiState.update { it.copy(rawText = value) }
 
@@ -315,6 +321,73 @@ class ImporterViewModel @Inject constructor(
                 token = null,
                 macAddress = null,
                 authType = ProviderAuthType.NONE,
+                linkedPlaylistId = null,
+                lastSyncedAt = null,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    fun importFromTvheadend() {
+        if (_uiState.value.isLoading) {
+            logAsync(status = "import_click_ignored", message = "Import already running (tvheadend)")
+            return
+        }
+        val state = _uiState.value
+        val baseUrl = state.tvheadendBaseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL Tvheadend") }
+            logAsync(status = "import_ui_error", message = "Tvheadend URL is blank")
+            return
+        }
+        if (!baseUrl.startsWith("http://", ignoreCase = true) && !baseUrl.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL Tvheadend должен начинаться с http:// или https://") }
+            logAsync(status = "import_ui_error", message = "Tvheadend URL has no http scheme")
+            return
+        }
+
+        executeImport(importKind = "tvheadend", source = baseUrl) {
+            val insecureAllowed = settingsRepository.observeAllowInsecureUrls().first()
+            if (!isSecureOrLocalUrl(baseUrl) && !insecureAllowed) {
+                return@executeImport AppResult.Error(
+                    "Безопасный режим: разрешены HTTPS URL. Для HTTP включите настройку 'Разрешить HTTP URL'."
+                )
+            }
+            playlistRepository.importFromTvheadend(
+                baseUrl = baseUrl,
+                username = state.tvheadendUsername.trim().ifBlank { null },
+                password = state.tvheadendPassword.trim().ifBlank { null },
+                name = state.playlistName.trim()
+            )
+        }
+    }
+
+    fun saveTvheadendProvider() {
+        val state = _uiState.value
+        val baseUrl = state.tvheadendBaseUrl.trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите URL Tvheadend") }
+            return
+        }
+        if (!baseUrl.startsWith("http://", ignoreCase = true) && !baseUrl.startsWith("https://", ignoreCase = true)) {
+            _uiState.update { it.copy(lastError = "URL Tvheadend должен начинаться с http:// или https://") }
+            return
+        }
+        saveProvider(
+            PlaylistProvider(
+                id = 0,
+                type = ProviderType.TVHEADEND,
+                name = state.playlistName.trim().ifBlank { "Tvheadend" },
+                baseUrl = baseUrl,
+                username = state.tvheadendUsername.trim().ifBlank { null },
+                password = state.tvheadendPassword.trim().ifBlank { null },
+                token = null,
+                macAddress = null,
+                authType = if (state.tvheadendUsername.isBlank() && state.tvheadendPassword.isBlank()) {
+                    ProviderAuthType.NONE
+                } else {
+                    ProviderAuthType.USER_PASSWORD
+                },
                 linkedPlaylistId = null,
                 lastSyncedAt = null,
                 createdAt = System.currentTimeMillis()
