@@ -260,6 +260,8 @@ class PlayerViewModelMultiviewTest {
         override fun observeTorEnabled(): Flow<Boolean> = MutableStateFlow(false)
         override fun observeLegalAccepted(): Flow<Boolean> = MutableStateFlow(true)
         override fun observeAllowInsecureUrls(): Flow<Boolean> = MutableStateFlow(false)
+        override fun observeProviderAutoSyncEnabled(): Flow<Boolean> = MutableStateFlow(true)
+        override fun observeProviderAutoSyncIntervalHours(): Flow<Int> = MutableStateFlow(12)
         override fun observeDownloadsWifiOnly(): Flow<Boolean> = MutableStateFlow(true)
         override fun observeMaxParallelDownloads(): Flow<Int> = MutableStateFlow(1)
         override fun observeRecordingStorageLocation(): Flow<RecordingStorageLocation> =
@@ -286,6 +288,8 @@ class PlayerViewModelMultiviewTest {
         override suspend fun setTorEnabled(enabled: Boolean) = Unit
         override suspend fun setLegalAccepted(accepted: Boolean) = Unit
         override suspend fun setAllowInsecureUrls(allowed: Boolean) = Unit
+        override suspend fun setProviderAutoSyncEnabled(enabled: Boolean) = Unit
+        override suspend fun setProviderAutoSyncIntervalHours(hours: Int) = Unit
         override suspend fun setDownloadsWifiOnly(enabled: Boolean) = Unit
         override suspend fun setMaxParallelDownloads(value: Int) = Unit
         override suspend fun setRecordingStorageLocation(location: RecordingStorageLocation) = Unit

@@ -364,6 +364,52 @@ fun SettingsScreen(
 
         item {
             SettingsSectionCard(
+                title = "Provider Accounts",
+                subtitle = "Фоновая автосинхронизация сохранённых провайдеров"
+            ) {
+                Text(
+                    "Статус: ${if (state.providerAutoSyncEnabled) "Включена" else "Выключена"} | " +
+                        "интервал: ${state.providerAutoSyncIntervalHours} ч"
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SelectionButton(
+                        selected = state.providerAutoSyncEnabled,
+                        label = "Авто-sync Вкл",
+                        onClick = { viewModel.setProviderAutoSyncEnabled(true) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = !state.providerAutoSyncEnabled,
+                        label = "Авто-sync Выкл",
+                        onClick = { viewModel.setProviderAutoSyncEnabled(false) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                }
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(6, 12, 24).forEach { hours ->
+                        SelectionButton(
+                            selected = state.providerAutoSyncIntervalHours == hours,
+                            label = "$hours ч",
+                            onClick = { viewModel.setProviderAutoSyncIntervalHours(hours) },
+                            modifier = Modifier.fillMaxWidth(0.31f)
+                        )
+                    }
+                }
+                Text(
+                    text = "Когда автосинхронизация включена, WorkManager сам подтягивает обновления M3U, Xtream, Stalker и других сохранённых провайдеров.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+
+        item {
+            SettingsSectionCard(
                 title = "Родительский контроль",
                 subtitle = "PIN и скрытие adult-групп/каналов по ключевым словам"
             ) {

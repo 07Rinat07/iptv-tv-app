@@ -2588,6 +2588,18 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
+    override fun observeProviderAutoSyncEnabled(): Flow<Boolean> {
+        return context.settingsDataStore.data.map { prefs ->
+            prefs[SettingsKeys.providerAutoSyncEnabled] ?: true
+        }
+    }
+
+    override fun observeProviderAutoSyncIntervalHours(): Flow<Int> {
+        return context.settingsDataStore.data.map { prefs ->
+            normalizeProviderAutoSyncInterval(prefs[SettingsKeys.providerAutoSyncIntervalHours] ?: DEFAULT_PROVIDER_AUTO_SYNC_HOURS)
+        }
+    }
+
     override fun observeDownloadsWifiOnly(): Flow<Boolean> {
         return context.settingsDataStore.data.map { prefs ->
             prefs[SettingsKeys.downloadsWifiOnly] ?: true
@@ -2708,6 +2720,18 @@ class SettingsRepositoryImpl @Inject constructor(
     override suspend fun setAllowInsecureUrls(allowed: Boolean) {
         context.settingsDataStore.edit { prefs ->
             prefs[SettingsKeys.allowInsecureUrls] = allowed
+        }
+    }
+
+    override suspend fun setProviderAutoSyncEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[SettingsKeys.providerAutoSyncEnabled] = enabled
+        }
+    }
+
+    override suspend fun setProviderAutoSyncIntervalHours(hours: Int) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[SettingsKeys.providerAutoSyncIntervalHours] = normalizeProviderAutoSyncInterval(hours)
         }
     }
 
@@ -2942,6 +2966,12 @@ class SettingsRepositoryImpl @Inject constructor(
             .take(MAX_SCANNER_LEARN_QUERY_LENGTH)
     }
 
+    private fun normalizeProviderAutoSyncInterval(hours: Int): Int {
+        val allowed = listOf(6, 12, 24)
+        if (hours <= 0) return DEFAULT_PROVIDER_AUTO_SYNC_HOURS
+        return allowed.minBy { candidate -> kotlin.math.abs(candidate - hours) }
+    }
+
     private fun encodeScannerLearnedQueries(items: List<ScannerLearnedQuery>): String {
         if (items.isEmpty()) return ""
         return items.joinToString(separator = SCANNER_LEARN_ENTRY_SEPARATOR) { item ->
@@ -3026,6 +3056,7 @@ class SettingsRepositoryImpl @Inject constructor(
         const val DEFAULT_MANUAL_REBUFFER_MS = 2_000
         const val DEFAULT_MANUAL_MAX_MS = 50_000
         const val DEFAULT_ENGINE_ENDPOINT = "http://127.0.0.1:6878"
+        const val DEFAULT_PROVIDER_AUTO_SYNC_HOURS = 12
         const val SCANNER_LEARN_ENTRY_SEPARATOR = "||"
         const val SCANNER_LEARN_FIELD_SEPARATOR = "\t"
         const val MAX_SCANNER_LEARN_ITEMS = 80

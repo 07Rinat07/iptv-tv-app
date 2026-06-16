@@ -32,6 +32,8 @@ data class SettingsUiState(
     val torEnabled: Boolean = false,
     val legalAccepted: Boolean = false,
     val allowInsecureUrls: Boolean = false,
+    val providerAutoSyncEnabled: Boolean = true,
+    val providerAutoSyncIntervalHours: Int = 12,
     val downloadsWifiOnly: Boolean = true,
     val maxParallelDownloads: String = "1",
     val recordingStorageLocation: RecordingStorageLocation = RecordingStorageLocation.INTERNAL,
@@ -142,6 +144,34 @@ class SettingsViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     lastInfo = if (enabled) "Разрешены HTTP URL (insecure)" else "Разрешены только HTTPS URL",
+                    lastError = null
+                )
+            }
+        }
+    }
+
+    fun setProviderAutoSyncEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setProviderAutoSyncEnabled(enabled)
+            _uiState.update {
+                it.copy(
+                    lastInfo = if (enabled) {
+                        "Автосинхронизация провайдеров включена"
+                    } else {
+                        "Автосинхронизация провайдеров выключена"
+                    },
+                    lastError = null
+                )
+            }
+        }
+    }
+
+    fun setProviderAutoSyncIntervalHours(hours: Int) {
+        viewModelScope.launch {
+            settingsRepository.setProviderAutoSyncIntervalHours(hours)
+            _uiState.update {
+                it.copy(
+                    lastInfo = "Интервал автосинхронизации провайдеров: ${normalizeProviderAutoSyncHours(hours)} ч",
                     lastError = null
                 )
             }
@@ -383,6 +413,8 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.setEngineEndpoint(DEFAULT_ENGINE_ENDPOINT)
             settingsRepository.setTorEnabled(false)
             settingsRepository.setAllowInsecureUrls(false)
+            settingsRepository.setProviderAutoSyncEnabled(true)
+            settingsRepository.setProviderAutoSyncIntervalHours(DEFAULT_PROVIDER_AUTO_SYNC_HOURS)
             settingsRepository.setDownloadsWifiOnly(true)
             settingsRepository.setMaxParallelDownloads(1)
             settingsRepository.setRecordingStorageLocation(RecordingStorageLocation.INTERNAL)
@@ -529,6 +561,16 @@ class SettingsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsRepository.observeProviderAutoSyncEnabled().collect { enabled ->
+                _uiState.update { it.copy(providerAutoSyncEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.observeProviderAutoSyncIntervalHours().collect { hours ->
+                _uiState.update { it.copy(providerAutoSyncIntervalHours = normalizeProviderAutoSyncHours(hours)) }
+            }
+        }
+        viewModelScope.launch {
             settingsRepository.observeDownloadsWifiOnly().collect { enabled ->
                 _uiState.update { it.copy(downloadsWifiOnly = enabled) }
             }
@@ -603,6 +645,7 @@ class SettingsViewModel @Inject constructor(
         const val DEFAULT_MANUAL_START_MS = 12_000
         const val DEFAULT_MANUAL_REBUFFER_MS = 2_000
         const val DEFAULT_MANUAL_MAX_MS = 50_000
+        const val DEFAULT_PROVIDER_AUTO_SYNC_HOURS = 12
         val DEFAULT_PARENTAL_KEYWORDS = listOf(
             "adult",
             "xxx",
@@ -615,6 +658,12 @@ class SettingsViewModel @Inject constructor(
             "взрослые",
             "эротика"
         )
+
+        fun normalizeProviderAutoSyncHours(hours: Int): Int {
+            val allowed = listOf(6, 12, 24)
+            if (hours <= 0) return DEFAULT_PROVIDER_AUTO_SYNC_HOURS
+            return allowed.minBy { candidate -> kotlin.math.abs(candidate - hours) }
+        }
     }
 }
 

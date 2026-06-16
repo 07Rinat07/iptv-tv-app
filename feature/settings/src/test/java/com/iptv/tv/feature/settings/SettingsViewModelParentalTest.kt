@@ -164,11 +164,62 @@ class SettingsViewModelParentalTest {
         assertEquals("98765432", viewModel.uiState.value.parentalNewPin)
     }
 
+    @Test
+    fun providerAutoSync_updatesEnabledAndInterval() = runTest(dispatcher) {
+        val settingsRepository = FakeSettingsRepository(
+            parental = ParentalControlSettings(
+                enabled = false,
+                pinConfigured = false,
+                hideAdultChannels = true,
+                blockedKeywords = listOf("adult")
+            )
+        )
+        val viewModel = SettingsViewModel(settingsRepository, FakeTvHomeIntegrationRepository())
+        advanceUntilIdle()
+
+        viewModel.setProviderAutoSyncEnabled(false)
+        viewModel.setProviderAutoSyncIntervalHours(25)
+        advanceUntilIdle()
+
+        assertFalse(settingsRepository.providerAutoSyncEnabledFlow.value)
+        assertEquals(24, settingsRepository.providerAutoSyncIntervalHoursFlow.value)
+        assertFalse(viewModel.uiState.value.providerAutoSyncEnabled)
+        assertEquals(24, viewModel.uiState.value.providerAutoSyncIntervalHours)
+    }
+
+    @Test
+    fun applyRecommendedSettings_resetsProviderAutoSyncDefaults() = runTest(dispatcher) {
+        val settingsRepository = FakeSettingsRepository(
+            parental = ParentalControlSettings(
+                enabled = true,
+                pinConfigured = true,
+                hideAdultChannels = false,
+                blockedKeywords = listOf("adult", "xxx")
+            )
+        )
+        val viewModel = SettingsViewModel(settingsRepository, FakeTvHomeIntegrationRepository())
+        advanceUntilIdle()
+
+        viewModel.setProviderAutoSyncEnabled(false)
+        viewModel.setProviderAutoSyncIntervalHours(6)
+        advanceUntilIdle()
+
+        viewModel.applyRecommendedSettings()
+        advanceUntilIdle()
+
+        assertTrue(settingsRepository.providerAutoSyncEnabledFlow.value)
+        assertEquals(12, settingsRepository.providerAutoSyncIntervalHoursFlow.value)
+        assertTrue(viewModel.uiState.value.providerAutoSyncEnabled)
+        assertEquals(12, viewModel.uiState.value.providerAutoSyncIntervalHours)
+    }
+
     private class FakeSettingsRepository(
         parental: ParentalControlSettings,
         private val expectedPin: String = ""
     ) : SettingsRepository {
         private val parentalFlow = MutableStateFlow(parental)
+        val providerAutoSyncEnabledFlow = MutableStateFlow(true)
+        val providerAutoSyncIntervalHoursFlow = MutableStateFlow(12)
         var setParentalControlCalls = 0
         var verifyParentalPinCalls = 0
         var lastParentalEnabled: Boolean? = null
@@ -186,6 +237,8 @@ class SettingsViewModelParentalTest {
         override fun observeTorEnabled(): Flow<Boolean> = MutableStateFlow(false)
         override fun observeLegalAccepted(): Flow<Boolean> = MutableStateFlow(false)
         override fun observeAllowInsecureUrls(): Flow<Boolean> = MutableStateFlow(false)
+        override fun observeProviderAutoSyncEnabled(): Flow<Boolean> = providerAutoSyncEnabledFlow
+        override fun observeProviderAutoSyncIntervalHours(): Flow<Int> = providerAutoSyncIntervalHoursFlow
         override fun observeDownloadsWifiOnly(): Flow<Boolean> = MutableStateFlow(true)
         override fun observeMaxParallelDownloads(): Flow<Int> = MutableStateFlow(1)
         override fun observeRecordingStorageLocation(): Flow<RecordingStorageLocation> =
@@ -206,6 +259,17 @@ class SettingsViewModelParentalTest {
         override suspend fun setTorEnabled(enabled: Boolean) = Unit
         override suspend fun setLegalAccepted(accepted: Boolean) = Unit
         override suspend fun setAllowInsecureUrls(allowed: Boolean) = Unit
+        override suspend fun setProviderAutoSyncEnabled(enabled: Boolean) {
+            providerAutoSyncEnabledFlow.value = enabled
+        }
+        override suspend fun setProviderAutoSyncIntervalHours(hours: Int) {
+            providerAutoSyncIntervalHoursFlow.value = when {
+                hours <= 0 -> 12
+                hours < 9 -> 6
+                hours < 18 -> 12
+                else -> 24
+            }
+        }
         override suspend fun setDownloadsWifiOnly(enabled: Boolean) = Unit
         override suspend fun setMaxParallelDownloads(value: Int) = Unit
         override suspend fun setRecordingStorageLocation(location: RecordingStorageLocation) = Unit

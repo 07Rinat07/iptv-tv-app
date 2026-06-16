@@ -9,6 +9,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,6 +26,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -82,7 +88,10 @@ const val TAG_IMPORTER_PRIMARY = "importer_primary"
 const val TAG_IMPORTER_LIST = "importer_list"
 const val TAG_IMPORTER_REPORT = "importer_report"
 
+private const val PROVIDER_FILTER_ALL = "ALL"
+
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun ImporterScreen(
     onPrimaryAction: (() -> Unit)? = null,
     primaryLabel: String = "К плейлистам",
@@ -426,10 +435,12 @@ fun ImporterScreen(
         item {
             SavedProvidersSection(
                 providers = state.savedProviders,
+                providerAutoSyncEnabled = state.providerAutoSyncEnabled,
+                providerAutoSyncIntervalHours = state.providerAutoSyncIntervalHours,
+                providerStatuses = state.providerStatuses,
                 providerSyncHistory = state.providerSyncHistory,
                 syncingProviderId = state.syncingProviderId,
                 checkingProviderId = state.checkingProviderId,
-                lastProviderStatus = state.lastProviderStatus,
                 onCheck = viewModel::checkProvider,
                 onSync = viewModel::syncProvider,
                 onDelete = viewModel::deleteProvider
@@ -594,34 +605,107 @@ fun ImporterScreen(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun SavedProvidersSection(
     providers: List<PlaylistProvider>,
+    providerAutoSyncEnabled: Boolean,
+    providerAutoSyncIntervalHours: Int,
+    providerStatuses: Map<Long, ProviderAccountStatus>,
     providerSyncHistory: Map<Long, List<ProviderSyncHistoryItem>>,
     syncingProviderId: Long?,
     checkingProviderId: Long?,
-    lastProviderStatus: ProviderAccountStatus?,
     onCheck: (Long) -> Unit,
     onSync: (Long) -> Unit,
     onDelete: (Long) -> Unit
 ) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var selectedTypeFilter by rememberSaveable { mutableStateOf(PROVIDER_FILTER_ALL) }
+    var issueOnly by rememberSaveable { mutableStateOf(false) }
+    var expandedProviderIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
+
+    val providerCards = remember(providers, providerStatuses, providerSyncHistory) {
+        providers.map { provider ->
+            SavedProviderCardModel(
+                provider = provider,
+                status = providerStatuses[provider.id],
+                history = providerSyncHistory[provider.id].orEmpty()
+            )
+        }
+    }
+    val availableTypes = remember(providers) { providers.map { it.type }.distinct() }
+    val filterState = SavedProvidersFilterState(
+        query = query,
+        selectedType = selectedTypeFilter.takeUnless { it == PROVIDER_FILTER_ALL }?.let(ProviderType::valueOf),
+        issueOnly = issueOnly
+    )
+    val filteredProviders = remember(providerCards, filterState) {
+        filterSavedProviders(providerCards, filterState)
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Сохранённые провайдеры", style = MaterialTheme.typography.titleMedium)
         if (providers.isEmpty()) {
             Text("Пока нет сохранённых M3U/Xtream/Stalker/HDHomeRun/Tvheadend/Jellyfin/Plex источников", style = MaterialTheme.typography.bodySmall)
         } else {
-            providers
-                .sortedWith(compareByDescending<PlaylistProvider> { it.lastSyncedAt ?: 0L }.thenByDescending { it.createdAt })
-                .forEach { provider ->
+            Text(
+                "Авто-sync: ${if (providerAutoSyncEnabled) "включён" else "выключен"}" +
+                    if (providerAutoSyncEnabled) " | каждые $providerAutoSyncIntervalHours ч" else "",
+                style = MaterialTheme.typography.bodySmall
+            )
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Поиск провайдера") },
+                singleLine = true
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val allSelected = selectedTypeFilter == PROVIDER_FILTER_ALL
+                if (allSelected) {
+                    Button(onClick = { selectedTypeFilter = PROVIDER_FILTER_ALL }) { Text("Все") }
+                } else {
+                    androidx.compose.material3.OutlinedButton(onClick = { selectedTypeFilter = PROVIDER_FILTER_ALL }) { Text("Все") }
+                }
+                availableTypes.forEach { type ->
+                    val selected = selectedTypeFilter == type.name
+                    if (selected) {
+                        Button(onClick = { selectedTypeFilter = type.name }) { Text(type.displayName()) }
+                    } else {
+                        androidx.compose.material3.OutlinedButton(onClick = { selectedTypeFilter = type.name }) { Text(type.displayName()) }
+                    }
+                }
+                if (issueOnly) {
+                    Button(onClick = { issueOnly = false }) { Text("Только с проблемами") }
+                } else {
+                    androidx.compose.material3.OutlinedButton(onClick = { issueOnly = true }) { Text("Только с проблемами") }
+                }
+            }
+            Text(
+                "Показано: ${filteredProviders.size} из ${providers.size}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            filteredProviders.forEach { card ->
                 ProviderAccountCard(
-                    provider = provider,
-                    isSyncing = syncingProviderId == provider.id,
-                    isChecking = checkingProviderId == provider.id,
+                    provider = card.provider,
+                    isSyncing = syncingProviderId == card.provider.id,
+                    isChecking = checkingProviderId == card.provider.id,
                     busyBlocked = syncingProviderId != null || checkingProviderId != null,
-                    status = lastProviderStatus?.takeIf { it.providerId == provider.id },
-                    history = providerSyncHistory[provider.id].orEmpty(),
-                    onCheck = { onCheck(provider.id) },
-                    onSync = { onSync(provider.id) },
-                    onDelete = { onDelete(provider.id) }
+                    status = card.status,
+                    history = card.history,
+                    expanded = card.provider.id in expandedProviderIds,
+                    onToggleExpanded = {
+                        expandedProviderIds = if (card.provider.id in expandedProviderIds) {
+                            expandedProviderIds - card.provider.id
+                        } else {
+                            expandedProviderIds + card.provider.id
+                        }
+                    },
+                    onCheck = { onCheck(card.provider.id) },
+                    onSync = { onSync(card.provider.id) },
+                    onDelete = { onDelete(card.provider.id) }
                 )
             }
         }
@@ -636,6 +720,8 @@ private fun ProviderAccountCard(
     busyBlocked: Boolean,
     status: ProviderAccountStatus?,
     history: List<ProviderSyncHistoryItem>,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
     onCheck: () -> Unit,
     onSync: () -> Unit,
     onDelete: () -> Unit
@@ -655,6 +741,9 @@ private fun ProviderAccountCard(
                 "Плейлист: ${provider.linkedPlaylistId ?: "не привязан"} | sync: ${provider.lastSyncedAt.formatProviderTime()}",
                 style = MaterialTheme.typography.bodySmall
             )
+            androidx.compose.material3.OutlinedButton(onClick = onToggleExpanded) {
+                Text(if (expanded) "Свернуть детали" else "Показать детали")
+            }
             status?.let {
                 Text(
                     "Статус: ${if (it.ok) "OK" else "Ошибка"} | ${it.statusText} | ${it.checkedAt.formatProviderTime()}",
@@ -666,19 +755,21 @@ private fun ProviderAccountCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = if (it.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                 )
-                it.detail?.takeIf { detail -> detail.isNotBlank() }?.let { detail ->
-                    Text(detail, style = MaterialTheme.typography.bodySmall)
-                }
-                it.hint?.takeIf { hint -> hint.isNotBlank() }?.let { hint ->
-                    Text("Подсказка: $hint", style = MaterialTheme.typography.bodySmall)
-                }
-                it.testedUrl?.takeIf { url -> url.isNotBlank() }?.let { url ->
-                    Text("Endpoint: $url", style = MaterialTheme.typography.bodySmall)
+                if (expanded) {
+                    it.detail?.takeIf { detail -> detail.isNotBlank() }?.let { detail ->
+                        Text(detail, style = MaterialTheme.typography.bodySmall)
+                    }
+                    it.hint?.takeIf { hint -> hint.isNotBlank() }?.let { hint ->
+                        Text("Подсказка: $hint", style = MaterialTheme.typography.bodySmall)
+                    }
+                    it.testedUrl?.takeIf { url -> url.isNotBlank() }?.let { url ->
+                        Text("Endpoint: $url", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
             if (history.isNotEmpty()) {
                 Text("История sync", style = MaterialTheme.typography.titleSmall)
-                history.forEach { item ->
+                history.take(if (expanded) history.size else 1).forEach { item ->
                     Text(
                         "${item.createdAt.formatProviderTime()} | ${item.summary}",
                         style = MaterialTheme.typography.bodySmall,
@@ -732,6 +823,52 @@ private fun ProviderAuthType.displayName(): String {
         ProviderAuthType.TOKEN -> "token / API key"
         ProviderAuthType.MAC_ADDRESS -> "MAC адрес"
     }
+}
+
+internal data class SavedProvidersFilterState(
+    val query: String = "",
+    val selectedType: ProviderType? = null,
+    val issueOnly: Boolean = false
+)
+
+internal data class SavedProviderCardModel(
+    val provider: PlaylistProvider,
+    val status: ProviderAccountStatus?,
+    val history: List<ProviderSyncHistoryItem>
+)
+
+internal fun filterSavedProviders(
+    providers: List<SavedProviderCardModel>,
+    filterState: SavedProvidersFilterState
+): List<SavedProviderCardModel> {
+    val query = filterState.query.trim().lowercase()
+    return providers
+        .asSequence()
+        .filter { item ->
+            filterState.selectedType == null || item.provider.type == filterState.selectedType
+        }
+        .filter { item ->
+            if (!filterState.issueOnly) {
+                true
+            } else {
+                item.status?.ok == false || item.history.firstOrNull()?.isError == true
+            }
+        }
+        .filter { item ->
+            if (query.isBlank()) {
+                true
+            } else {
+                listOfNotNull(
+                    item.provider.name,
+                    item.provider.baseUrl,
+                    item.provider.username,
+                    item.provider.macAddress,
+                    item.provider.type.displayName()
+                ).any { value -> value.lowercase().contains(query) }
+            }
+        }
+        .sortedWith(compareByDescending<SavedProviderCardModel> { it.provider.lastSyncedAt ?: 0L }.thenByDescending { it.provider.createdAt })
+        .toList()
 }
 
 private fun Long?.formatProviderTime(): String {

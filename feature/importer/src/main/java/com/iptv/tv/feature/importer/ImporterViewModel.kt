@@ -58,6 +58,9 @@ data class ImporterUiState(
     val lastError: String? = null,
     val providerMessage: String? = null,
     val savedProviders: List<PlaylistProvider> = emptyList(),
+    val providerAutoSyncEnabled: Boolean = true,
+    val providerAutoSyncIntervalHours: Int = 12,
+    val providerStatuses: Map<Long, ProviderAccountStatus> = emptyMap(),
     val providerSyncHistory: Map<Long, List<ProviderSyncHistoryItem>> = emptyMap(),
     val syncingProviderId: Long? = null,
     val checkingProviderId: Long? = null,
@@ -80,6 +83,7 @@ class ImporterViewModel @Inject constructor(
     init {
         observeProviders()
         observeProviderSyncHistory()
+        observeProviderAutoSyncSettings()
         applyScannerPrefill()
     }
 
@@ -593,6 +597,7 @@ class ImporterViewModel @Inject constructor(
                         it.copy(
                             checkingProviderId = null,
                             lastProviderStatus = result.data,
+                            providerStatuses = it.providerStatuses + (providerId to result.data),
                             providerMessage = "Проверка провайдера: ${result.data.statusText} (${result.data.diagnosticKind.name.lowercase()})"
                         )
                     }
@@ -616,7 +621,14 @@ class ImporterViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = providerAccountRepository.deleteProvider(providerId)) {
                 is AppResult.Success -> {
-                    _uiState.update { it.copy(providerMessage = "Провайдер удалён", lastError = null) }
+                    _uiState.update {
+                        it.copy(
+                            providerMessage = "Провайдер удалён",
+                            lastError = null,
+                            providerStatuses = it.providerStatuses - providerId,
+                            providerSyncHistory = it.providerSyncHistory - providerId
+                        )
+                    }
                     safeLog(status = "provider_delete_ok", message = "providerId=$providerId, deleted=${result.data}")
                 }
                 is AppResult.Error -> {
@@ -780,7 +792,14 @@ class ImporterViewModel @Inject constructor(
     private fun observeProviders() {
         viewModelScope.launch {
             providerAccountRepository.observeProviders().collect { providers ->
-                _uiState.update { it.copy(savedProviders = providers) }
+                val providerIds = providers.map { provider -> provider.id }.toSet()
+                _uiState.update {
+                    it.copy(
+                        savedProviders = providers,
+                        providerStatuses = it.providerStatuses.filterKeys { id -> id in providerIds },
+                        providerSyncHistory = it.providerSyncHistory.filterKeys { id -> id in providerIds }
+                    )
+                }
             }
         }
     }
@@ -789,6 +808,19 @@ class ImporterViewModel @Inject constructor(
         viewModelScope.launch {
             diagnosticsRepository.observeLogs(limit = 240).collect { logs ->
                 _uiState.update { it.copy(providerSyncHistory = extractProviderSyncHistory(logs)) }
+            }
+        }
+    }
+
+    private fun observeProviderAutoSyncSettings() {
+        viewModelScope.launch {
+            settingsRepository.observeProviderAutoSyncEnabled().collect { enabled ->
+                _uiState.update { it.copy(providerAutoSyncEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.observeProviderAutoSyncIntervalHours().collect { hours ->
+                _uiState.update { it.copy(providerAutoSyncIntervalHours = hours) }
             }
         }
     }

@@ -19,6 +19,8 @@ interface SettingsRepository {
     fun observeTorEnabled(): Flow<Boolean>
     fun observeLegalAccepted(): Flow<Boolean>
     fun observeAllowInsecureUrls(): Flow<Boolean>
+    fun observeProviderAutoSyncEnabled(): Flow<Boolean>
+    fun observeProviderAutoSyncIntervalHours(): Flow<Int>
     fun observeDownloadsWifiOnly(): Flow<Boolean>
     fun observeMaxParallelDownloads(): Flow<Int>
     fun observeRecordingStorageLocation(): Flow<RecordingStorageLocation>
@@ -35,6 +37,8 @@ interface SettingsRepository {
     suspend fun setTorEnabled(enabled: Boolean)
     suspend fun setLegalAccepted(accepted: Boolean)
     suspend fun setAllowInsecureUrls(allowed: Boolean)
+    suspend fun setProviderAutoSyncEnabled(enabled: Boolean)
+    suspend fun setProviderAutoSyncIntervalHours(hours: Int)
     suspend fun setDownloadsWifiOnly(enabled: Boolean)
     suspend fun setMaxParallelDownloads(value: Int)
     suspend fun setRecordingStorageLocation(location: RecordingStorageLocation)

@@ -66,6 +66,10 @@ object SyncScheduler {
         )
     }
 
+    fun cancelProviderSync(workManager: WorkManager) {
+        workManager.cancelUniqueWork(ProviderSyncWorker.WORK_NAME)
+    }
+
     fun scheduleDownloadQueue(workManager: WorkManager, repeatMinutes: Long = 15L) {
         val request = PeriodicWorkRequestBuilder<DownloadQueueWorker>(
             repeatMinutes.coerceIn(15L, 60L),
