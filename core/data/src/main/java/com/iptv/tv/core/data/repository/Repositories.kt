@@ -726,7 +726,6 @@ class PlaylistRepositoryImpl @Inject constructor(
             )
         }
 
-        val normalizedQuery = query?.trim()?.lowercase(Locale.ROOT).orEmpty()
         val result = channelDao.getChannels(playlistId)
             .asSequence()
             .filter { !it.isHidden }
@@ -736,18 +735,13 @@ class PlaylistRepositoryImpl @Inject constructor(
                     tvgId = channel.tvgId,
                     data = epgData
                 )
-                val programs = match.programs
-                    .asSequence()
-                    .filter { it.endEpochMs > startEpochMs && it.startEpochMs < endEpochMs }
-                    .filter { program ->
-                        normalizedQuery.isBlank() ||
-                            program.title.lowercase(Locale.ROOT).contains(normalizedQuery) ||
-                            program.description?.lowercase(Locale.ROOT)?.contains(normalizedQuery) == true ||
-                            program.category?.lowercase(Locale.ROOT)?.contains(normalizedQuery) == true ||
-                            channel.name.lowercase(Locale.ROOT).contains(normalizedQuery)
-                    }
-                    .sortedBy { it.startEpochMs }
-                    .toList()
+                val programs = EpgProgramWindowIndex.selectWindow(
+                    programs = match.programs,
+                    startEpochMs = startEpochMs,
+                    endEpochMs = endEpochMs,
+                    query = query,
+                    channelName = channel.name
+                )
                 if (programs.isEmpty()) null else channel.id to programs
             }
             .toMap()
@@ -1471,10 +1465,25 @@ class PlaylistRepositoryImpl @Inject constructor(
 
         val normalizedDisplayNames = channelDisplayNames
             .mapValues { (_, names) -> names.toSet() }
+        val channelIdByLowercase = normalizedPrograms.keys
+            .associateByFirst { it.trim().lowercase(Locale.ROOT) }
+        val channelIdByTextKey = normalizedPrograms.keys
+            .associateByFirst { normalizeTextKey(it) }
+        val channelIdByDisplayNameKey = normalizedDisplayNames
+            .entries
+            .asSequence()
+            .flatMap { (channelId, names) ->
+                names.asSequence().map { displayName -> normalizeTextKey(displayName) to channelId }
+            }
+            .filter { (key, _) -> key.isNotBlank() }
+            .associateFirst()
 
         return XmlTvData(
             channelDisplayNames = normalizedDisplayNames,
-            programsByChannel = normalizedPrograms
+            programsByChannel = normalizedPrograms,
+            channelIdByLowercase = channelIdByLowercase,
+            channelIdByTextKey = channelIdByTextKey,
+            channelIdByDisplayNameKey = channelIdByDisplayNameKey
         )
     }
 
@@ -1518,34 +1527,55 @@ class PlaylistRepositoryImpl @Inject constructor(
             ?.lowercase(Locale.ROOT)
             ?.takeIf { it.isNotEmpty() }
         if (normalizedTvgId != null) {
-            val exact = data.programsByChannel.entries.firstOrNull { entry ->
-                entry.key.trim().lowercase(Locale.ROOT) == normalizedTvgId
-            }
-            if (exact != null) {
-                return EpgMatch(programs = exact.value, matchedBy = "tvg-id")
+            val channelId = data.channelIdByLowercase[normalizedTvgId]
+            if (channelId != null) {
+                return EpgMatch(programs = data.programsByChannel[channelId].orEmpty(), matchedBy = "tvg-id")
             }
         }
 
         val normalizedName = normalizeTextKey(channelName)
         if (normalizedName.isNotBlank()) {
-            val byDisplayName = data.channelDisplayNames.entries.firstOrNull { (_, names) ->
-                names.any { normalizeTextKey(it) == normalizedName }
-            }
-            if (byDisplayName != null) {
-                val programs = data.programsByChannel[byDisplayName.key].orEmpty()
+            val displayNameChannelId = data.channelIdByDisplayNameKey[normalizedName]
+            if (displayNameChannelId != null) {
+                val programs = data.programsByChannel[displayNameChannelId].orEmpty()
                 return EpgMatch(programs = programs, matchedBy = "display-name")
             }
 
-            val byContains = data.programsByChannel.entries.firstOrNull { (channelId, _) ->
-                normalizeTextKey(channelId).contains(normalizedName) ||
-                    normalizedName.contains(normalizeTextKey(channelId))
+            val exactChannelId = data.channelIdByTextKey[normalizedName]
+            if (exactChannelId != null) {
+                return EpgMatch(programs = data.programsByChannel[exactChannelId].orEmpty(), matchedBy = "channel-id")
+            }
+
+            val byContains = data.channelIdByTextKey.entries.firstOrNull { (channelKey, _) ->
+                channelKey.contains(normalizedName) || normalizedName.contains(channelKey)
             }
             if (byContains != null) {
-                return EpgMatch(programs = byContains.value, matchedBy = "channel-id")
+                return EpgMatch(programs = data.programsByChannel[byContains.value].orEmpty(), matchedBy = "channel-id")
             }
         }
 
         return EpgMatch(programs = emptyList(), matchedBy = "not-matched")
+    }
+
+    private fun <T> Iterable<T>.associateByFirst(keySelector: (T) -> String): Map<String, T> {
+        val result = linkedMapOf<String, T>()
+        forEach { value ->
+            val key = keySelector(value)
+            if (key.isNotBlank() && key !in result) {
+                result[key] = value
+            }
+        }
+        return result
+    }
+
+    private fun Sequence<Pair<String, String>>.associateFirst(): Map<String, String> {
+        val result = linkedMapOf<String, String>()
+        forEach { (key, value) ->
+            if (key.isNotBlank() && key !in result) {
+                result[key] = value
+            }
+        }
+        return result
     }
 
     private fun normalizeTextKey(raw: String): String {
@@ -1679,7 +1709,10 @@ class PlaylistRepositoryImpl @Inject constructor(
 
     private data class XmlTvData(
         val channelDisplayNames: Map<String, Set<String>>,
-        val programsByChannel: Map<String, List<EpgProgram>>
+        val programsByChannel: Map<String, List<EpgProgram>>,
+        val channelIdByLowercase: Map<String, String>,
+        val channelIdByTextKey: Map<String, String>,
+        val channelIdByDisplayNameKey: Map<String, String>
     )
 
     private data class EpgMatch(
