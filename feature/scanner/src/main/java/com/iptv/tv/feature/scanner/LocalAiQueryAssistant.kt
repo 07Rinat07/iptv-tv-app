@@ -1,5 +1,7 @@
 package com.iptv.tv.feature.scanner
 
+import com.iptv.tv.core.model.ScannerLearnedQuery
+
 internal class LocalAiQueryAssistant {
 
     fun inferIntentKeywords(query: String, manualKeywords: List<String>): List<String> {
@@ -100,6 +102,112 @@ internal class LocalAiQueryAssistant {
             .take(MAX_VARIANTS)
     }
 
+    fun buildLearnedVariants(
+        baseQuery: String,
+        presetId: String?,
+        intentKeywords: List<String>,
+        learnedQueries: List<ScannerLearnedQuery>,
+        limit: Int = MAX_LEARNED_VARIANTS
+    ): List<String> {
+        val normalizedBase = normalizeQuery(baseQuery)
+        val normalizedBaseLower = normalizedBase.lowercase()
+        val baseTokensAll = extractQueryTokens(normalizedBase)
+        val baseTokensInformative = baseTokensAll.filterNot { it in nonInformativeQueryTokens }.toSet()
+        val intentSetInformative = intentKeywords
+            .map { it.trim().lowercase() }
+            .filter { it.length >= 2 }
+            .filterNot { it in nonInformativeQueryTokens }
+            .toSet()
+        val normalizedPreset = presetId?.trim()?.ifBlank { null }
+
+        return learnedQueries
+            .asSequence()
+            .flatMap { entry ->
+                val normalizedCandidate = normalizeQuery(entry.query)
+                if (normalizedCandidate.isBlank()) return@flatMap emptySequence()
+                if (normalizedCandidate.lowercase() == normalizedBaseLower) return@flatMap emptySequence()
+
+                val candidateTokensAll = extractQueryTokens(normalizedCandidate)
+                val candidateTokensInformative = candidateTokensAll.filterNot { it in nonInformativeQueryTokens }.toSet()
+                val overlapAll = candidateTokensAll.intersect(baseTokensAll).size
+                val overlapInformative = candidateTokensInformative.intersect(baseTokensInformative).size
+                val intentOverlap = candidateTokensInformative.intersect(intentSetInformative).size
+                val hasBaseInformative = baseTokensInformative.isNotEmpty()
+                val presetMatches = normalizedPreset != null && entry.presetId == normalizedPreset
+                val presetFallbackAllowed = presetMatches && entry.hits >= MIN_PRESET_FALLBACK_HITS
+
+                if (hasBaseInformative && overlapInformative == 0 && intentOverlap == 0 && !presetFallbackAllowed) {
+                    return@flatMap emptySequence()
+                }
+
+                val presetBoost = if (presetMatches) 4 else 0
+                val recencyBoost = (entry.lastSuccessAt / DAY_MS).coerceAtLeast(0L).toInt() % 3
+                val overlapScore = if (hasBaseInformative) overlapInformative * 6 else overlapAll * 3
+                val baseScore = (entry.hits * 3) + overlapScore + (intentOverlap * 4) + presetBoost + recencyBoost
+                if (baseScore <= 0) return@flatMap emptySequence()
+
+                learnedVariantCandidates(
+                    normalizedBase = normalizedBase,
+                    normalizedCandidate = normalizedCandidate,
+                    candidateTokensInformative = candidateTokensInformative,
+                    intentSetInformative = intentSetInformative,
+                    baseScore = baseScore,
+                    hits = entry.hits,
+                    lastSuccessAt = entry.lastSuccessAt
+                ).asSequence()
+            }
+            .sortedWith(
+                compareByDescending<LearnedQueryCandidate> { it.score }
+                    .thenByDescending { it.hits }
+                    .thenByDescending { it.lastSuccessAt }
+            )
+            .map { it.query }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .take(limit.coerceAtLeast(0))
+            .toList()
+    }
+
+    private fun learnedVariantCandidates(
+        normalizedBase: String,
+        normalizedCandidate: String,
+        candidateTokensInformative: Set<String>,
+        intentSetInformative: Set<String>,
+        baseScore: Int,
+        hits: Int,
+        lastSuccessAt: Long
+    ): List<LearnedQueryCandidate> {
+        val variants = mutableListOf<LearnedQueryCandidate>()
+        fun add(raw: String, scoreBoost: Int) {
+            val query = normalizeVariantQuery(raw)
+            if (query.isNotBlank()) {
+                variants += LearnedQueryCandidate(
+                    query = query,
+                    score = baseScore + scoreBoost,
+                    hits = hits,
+                    lastSuccessAt = lastSuccessAt
+                )
+            }
+        }
+
+        add(normalizedCandidate, 4)
+
+        val intentHint = intentSetInformative.take(2).joinToString(" ")
+        if (intentHint.isNotBlank()) {
+            add("$normalizedCandidate $intentHint iptv m3u8", 2)
+        }
+
+        val learnedHint = candidateTokensInformative
+            .filterNot { normalizedBase.contains(it, ignoreCase = true) }
+            .take(2)
+            .joinToString(" ")
+        if (learnedHint.isNotBlank()) {
+            add("$normalizedBase $learnedHint iptv m3u", 1)
+        }
+
+        return variants
+    }
+
     private fun normalizeVariantQuery(raw: String): String {
         val compact = raw.replace(Regex("\\s+"), " ").trim()
         if (compact.isBlank()) return compact
@@ -131,6 +239,14 @@ internal class LocalAiQueryAssistant {
 
     private fun containsAny(text: String, markers: Set<String>): Boolean {
         return markers.any { marker -> text.contains(marker) }
+    }
+
+    private fun extractQueryTokens(raw: String): Set<String> {
+        return raw.lowercase()
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .map { it.trim() }
+            .filter { it.length >= 2 }
+            .toSet()
     }
 
     private fun transliterateCyrillicToLatin(text: String): String {
@@ -196,6 +312,9 @@ internal class LocalAiQueryAssistant {
     private companion object {
         const val MAX_VARIANTS = 18
         const val MAX_KEYWORDS = 20
+        const val MAX_LEARNED_VARIANTS = 4
+        const val MIN_PRESET_FALLBACK_HITS = 3
+        const val DAY_MS = 86_400_000L
 
         val russianMarkers = setOf("рус", "росс", "russian", "russia", "снг")
         val turkeyMarkers = setOf(
@@ -217,6 +336,13 @@ internal class LocalAiQueryAssistant {
         val musicMarkers = setOf("music", "radio", "audio", "hits", "songs", "музыка", "радио")
         val freeMarkers = setOf("free", "public", "open", "бесплат", "открыт", "gratis")
         val listMarkers = setOf("list", "lists", "playlist", "channels", "tv list", "channel list", "список", "списки", "каналы", "voxlist")
+        val nonInformativeQueryTokens = setOf(
+            "iptv", "playlist", "playlists", "m3u", "m3u8",
+            "tv", "tvs", "live", "stream", "streams", "vod",
+            "channel", "channels", "list", "lists",
+            "канал", "каналы", "список", "списки", "плейлист", "тв",
+            "github", "gitlab", "bitbucket", "raw"
+        )
 
         val intentKeywords = mapOf(
             Intent.RUSSIAN to listOf("russian", "russia", "ru", "рус", "россия", "каналы", "список"),
@@ -355,4 +481,11 @@ internal class LocalAiQueryAssistant {
             if (containsAny(lowered, listMarkers)) add(Intent.LISTS)
         }
     }
+
+    private data class LearnedQueryCandidate(
+        val query: String,
+        val score: Int,
+        val hits: Int,
+        val lastSuccessAt: Long
+    )
 }

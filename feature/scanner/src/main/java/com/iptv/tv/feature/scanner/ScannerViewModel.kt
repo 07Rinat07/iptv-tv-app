@@ -2631,66 +2631,13 @@ class ScannerViewModel @Inject constructor(
         presetId: String?,
         intentKeywords: List<String>
     ): List<String> {
-        val normalizedBase = buildNormalizedQuery(baseQuery).lowercase()
-        val baseTokensAll = extractQueryTokens(normalizedBase)
-        val baseTokensInformative = baseTokensAll.filterNot { it in NON_INFORMATIVE_QUERY_TOKENS }.toSet()
-        val intentSetInformative = intentKeywords
-            .map { it.trim().lowercase() }
-            .filter { it.length >= 2 }
-            .filterNot { it in NON_INFORMATIVE_QUERY_TOKENS }
-            .toSet()
-        val normalizedPreset = presetId?.trim()?.ifBlank { null }
-
-        return learnedQueryTemplates
-            .asSequence()
-            .mapNotNull { entry ->
-                val normalizedCandidate = buildNormalizedQuery(entry.query)
-                if (normalizedCandidate.isBlank()) return@mapNotNull null
-                if (normalizedCandidate.lowercase() == normalizedBase) return@mapNotNull null
-
-                val candidateTokensAll = extractQueryTokens(normalizedCandidate)
-                val candidateTokensInformative =
-                    candidateTokensAll.filterNot { it in NON_INFORMATIVE_QUERY_TOKENS }.toSet()
-                val overlapAll = candidateTokensAll.intersect(baseTokensAll).size
-                val overlapInformative = candidateTokensInformative.intersect(baseTokensInformative).size
-                val intentOverlap = candidateTokensInformative.intersect(intentSetInformative).size
-
-                val hasBaseInformative = baseTokensInformative.isNotEmpty()
-                if (hasBaseInformative) {
-                    val semanticallyRelated = overlapInformative > 0 || intentOverlap > 0
-                    val allowPresetFallback =
-                        normalizedPreset != null && entry.presetId == normalizedPreset && entry.hits >= 3
-                    if (!semanticallyRelated && !allowPresetFallback) return@mapNotNull null
-                }
-
-                val presetBoost = if (normalizedPreset != null && entry.presetId == normalizedPreset) 4 else 0
-                val recencyBoost = (entry.lastSuccessAt / 86_400_000L).coerceAtLeast(0L).toInt() % 3
-                val overlapScore = if (hasBaseInformative) {
-                    overlapInformative * 6
-                } else {
-                    overlapAll * 3
-                }
-                val score = (entry.hits * 3) + overlapScore + (intentOverlap * 4) + presetBoost + recencyBoost
-                if (score <= 0) return@mapNotNull null
-                LearnedQueryCandidate(query = normalizedCandidate, score = score, hits = entry.hits, lastSuccessAt = entry.lastSuccessAt)
-            }
-            .sortedWith(
-                compareByDescending<LearnedQueryCandidate> { it.score }
-                    .thenByDescending { it.hits }
-                    .thenByDescending { it.lastSuccessAt }
-            )
-            .map { it.query }
-            .distinctBy { it.lowercase() }
-            .take(MAX_LEARNED_QUERY_VARIANTS)
-            .toList()
-    }
-
-    private fun extractQueryTokens(raw: String): Set<String> {
-        return raw.lowercase()
-            .split(Regex("[^\\p{L}\\p{N}]+"))
-            .map { it.trim() }
-            .filter { it.length >= 2 }
-            .toSet()
+        return localAiAssistant.buildLearnedVariants(
+            baseQuery = baseQuery,
+            presetId = presetId,
+            intentKeywords = intentKeywords,
+            learnedQueries = learnedQueryTemplates,
+            limit = MAX_LEARNED_QUERY_VARIANTS
+        )
     }
 
     private fun broadFallbackQuery(query: String): String {
@@ -2768,13 +2715,6 @@ class ScannerViewModel @Inject constructor(
     private data class CandidateWithEpoch(
         val candidate: PlaylistCandidate,
         val updatedEpochMs: Long?
-    )
-
-    private data class LearnedQueryCandidate(
-        val query: String,
-        val score: Int,
-        val hits: Int,
-        val lastSuccessAt: Long
     )
 
     private data class ProviderHealthRuntime(
@@ -2874,13 +2814,6 @@ class ScannerViewModel @Inject constructor(
         const val PROXY_HTTPS_PORT = "https.proxyPort"
         const val PROXY_SCANNER_USER = "myscaner.proxy.user"
         const val PROXY_SCANNER_PASS = "myscaner.proxy.pass"
-        val NON_INFORMATIVE_QUERY_TOKENS = setOf(
-            "iptv", "playlist", "playlists", "m3u", "m3u8",
-            "tv", "tvs", "live", "stream", "streams", "vod",
-            "channel", "channels", "list", "lists",
-            "канал", "каналы", "список", "списки", "плейлист", "тв",
-            "github", "gitlab", "bitbucket", "raw"
-        )
         val LOW_QUALITY_PATH_REGEX = Regex(
             "(^|/)(test|tests|sample|samples|fixture|fixtures|e2e|demo|mock)(/|\\.|$)",
             setOf(RegexOption.IGNORE_CASE)

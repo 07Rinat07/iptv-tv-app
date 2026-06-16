@@ -1,5 +1,7 @@
 package com.iptv.tv.feature.scanner
 
+import com.iptv.tv.core.model.ScannerLearnedQuery
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -39,5 +41,62 @@ class LocalAiQueryAssistantTest {
         assertTrue(keywords.any { it.equals("m3u", ignoreCase = true) })
         assertTrue(keywords.any { it.equals("m3u8", ignoreCase = true) })
     }
-}
 
+    @Test
+    fun `learned variants reuse successful matching queries`() {
+        val variants = assistant.buildLearnedVariants(
+            baseQuery = "sport channels",
+            presetId = "public",
+            intentKeywords = listOf("sport", "football", "hockey", "m3u8"),
+            learnedQueries = listOf(
+                ScannerLearnedQuery(
+                    query = "football hockey playlist",
+                    hits = 5,
+                    lastSuccessAt = 86_400_000L,
+                    presetId = "public"
+                )
+            )
+        )
+
+        assertTrue(variants.any { it.contains("football", ignoreCase = true) })
+        assertTrue(variants.any { it.contains("sport", ignoreCase = true) && it.contains("m3u8", ignoreCase = true) })
+    }
+
+    @Test
+    fun `learned variants ignore unrelated low confidence queries`() {
+        val variants = assistant.buildLearnedVariants(
+            baseQuery = "kids cartoons",
+            presetId = "public",
+            intentKeywords = listOf("kids", "cartoon"),
+            learnedQueries = listOf(
+                ScannerLearnedQuery(
+                    query = "adult movies playlist",
+                    hits = 1,
+                    lastSuccessAt = 86_400_000L,
+                    presetId = "other"
+                )
+            )
+        )
+
+        assertFalse(variants.any { it.contains("adult", ignoreCase = true) })
+    }
+
+    @Test
+    fun `learned variants allow high confidence preset fallback`() {
+        val variants = assistant.buildLearnedVariants(
+            baseQuery = "regional channels",
+            presetId = "public",
+            intentKeywords = emptyList(),
+            learnedQueries = listOf(
+                ScannerLearnedQuery(
+                    query = "community tv playlist",
+                    hits = 3,
+                    lastSuccessAt = 86_400_000L,
+                    presetId = "public"
+                )
+            )
+        )
+
+        assertTrue(variants.any { it.contains("community", ignoreCase = true) })
+    }
+}
