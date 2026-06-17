@@ -31,11 +31,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,6 +63,7 @@ fun EpgGuideScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val gridScrollState = rememberScrollState()
+    var isProgramListExpanded by rememberSaveable { mutableStateOf(false) }
 
     state.selectedProgram?.let { selected ->
         EpgProgramDetailDialog(
@@ -181,33 +184,73 @@ fun EpgGuideScreen(
             }
             if (state.totalRowCount > state.rows.size) {
                 item {
-                    Button(
-                        onClick = viewModel::showMoreRows,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Показать ещё каналы EPG (${state.rows.size} из ${state.totalRowCount})")
-                    }
+                    EpgRowsPrefetchItem(
+                        loadedRowCount = state.rows.size,
+                        totalRowCount = state.totalRowCount,
+                        onLoadMore = viewModel::showMoreRows
+                    )
                 }
             }
             item {
-                Text(
-                    text = "Ниже тот же EPG списком: удобно читать описания передач.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = if (isProgramListExpanded) {
+                                "Список передач открыт: удобно читать описания и быстро просматривать эфир."
+                            } else {
+                                "Список передач скрыт, чтобы не перегружать экран на больших EPG."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Button(onClick = { isProgramListExpanded = !isProgramListExpanded }) {
+                            Text(if (isProgramListExpanded) "Скрыть список передач" else "Показать список передач")
+                        }
+                    }
+                }
             }
         }
 
-        items(state.rows, key = { it.channel.id }) { row ->
-            EpgChannelCard(
-                row = row,
-                isSchedulingRecording = state.isSchedulingRecording,
-                onOpenPlayer = {
-                    onOpenPlayer(row.channel.playlistId, row.channel.id)
-                },
-                onShowProgramDetails = { program -> viewModel.selectProgram(row, program) },
-                onRecordProgram = { program -> viewModel.scheduleRecording(row, program) }
+        if (isProgramListExpanded) {
+            items(state.rows, key = { it.channel.id }) { row ->
+                EpgChannelCard(
+                    row = row,
+                    isSchedulingRecording = state.isSchedulingRecording,
+                    onOpenPlayer = {
+                        onOpenPlayer(row.channel.playlistId, row.channel.id)
+                    },
+                    onShowProgramDetails = { program -> viewModel.selectProgram(row, program) },
+                    onRecordProgram = { program -> viewModel.scheduleRecording(row, program) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpgRowsPrefetchItem(
+    loadedRowCount: Int,
+    totalRowCount: Int,
+    onLoadMore: () -> Unit
+) {
+    LaunchedEffect(loadedRowCount, totalRowCount) {
+        if (loadedRowCount < totalRowCount) {
+            onLoadMore()
+        }
+    }
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "Подгружаем ещё каналы EPG: $loadedRowCount из $totalRowCount",
+                style = MaterialTheme.typography.bodyMedium
             )
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
     }
 }

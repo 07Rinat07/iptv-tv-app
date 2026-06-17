@@ -110,7 +110,10 @@ class EpgGuideViewModel @Inject constructor(
 
     fun showMoreRows() {
         _uiState.update { state ->
-            val nextLimit = (state.visibleRowLimit + EPG_VISIBLE_ROWS_STEP).coerceAtMost(loadedRows.size)
+            val nextLimit = nextEpgVisibleRowLimit(
+                currentVisibleRows = state.visibleRowLimit,
+                totalRows = loadedRows.size
+            )
             state.copy(
                 visibleRowLimit = nextLimit,
                 rows = loadedRows.take(nextLimit),
@@ -294,12 +297,19 @@ class EpgGuideViewModel @Inject constructor(
         }
     }
 
-    private fun buildEpgStatus(totalRows: Int, visibleRows: Int): String {
-        return if (totalRows <= visibleRows) {
-            "Найдено каналов с EPG: $totalRows"
-        } else {
-            "Показано каналов с EPG: $visibleRows из $totalRows"
-        }
-    }
+}
 
+internal fun nextEpgVisibleRowLimit(
+    currentVisibleRows: Int,
+    totalRows: Int
+): Int {
+    return (currentVisibleRows + EPG_VISIBLE_ROWS_STEP).coerceAtMost(totalRows)
+}
+
+internal fun buildEpgStatus(totalRows: Int, visibleRows: Int): String {
+    return if (totalRows <= visibleRows) {
+        "Найдено каналов с EPG: $totalRows"
+    } else {
+        "Показано каналов с EPG: $visibleRows из $totalRows"
+    }
 }
