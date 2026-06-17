@@ -5,6 +5,7 @@ import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.domain.repository.TvHomeIntegrationRepository
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.ManualBufferSettings
+import com.iptv.tv.core.model.ParentalControlProfile
 import com.iptv.tv.core.model.ParentalControlSettings
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.RecordingStorageInfo
@@ -213,15 +214,93 @@ class SettingsViewModelParentalTest {
         assertEquals(12, viewModel.uiState.value.providerAutoSyncIntervalHours)
     }
 
+    @Test
+    fun saveParentalProfile_persistsProtectedProfileAndClearsDraftName() = runTest(dispatcher) {
+        val settingsRepository = FakeSettingsRepository(
+            parental = ParentalControlSettings(
+                enabled = true,
+                pinConfigured = true,
+                hideAdultChannels = true,
+                blockedKeywords = listOf("adult", "xxx")
+            )
+        )
+        val viewModel = SettingsViewModel(settingsRepository, FakeTvHomeIntegrationRepository())
+        advanceUntilIdle()
+
+        viewModel.updateParentalProfileName("Kids")
+        viewModel.updateParentalKeywords("adult, xxx, cartoon")
+        viewModel.setParentalProfileLockedSettings(true)
+        viewModel.saveParentalProfile()
+        advanceUntilIdle()
+
+        assertEquals(1, settingsRepository.saveParentalProfileCalls)
+        assertEquals("Kids", settingsRepository.lastSavedProfileName)
+        assertEquals(listOf("adult", "xxx", "cartoon"), settingsRepository.lastSavedProfileKeywords)
+        assertTrue(settingsRepository.lastSavedProfileLockedSettings!!)
+        assertEquals("", viewModel.uiState.value.parentalProfileName)
+    }
+
+    @Test
+    fun lockedParentalProfile_requiresUnlockBeforeChangingSettings() = runTest(dispatcher) {
+        val settingsRepository = FakeSettingsRepository(
+            parental = ParentalControlSettings(
+                enabled = true,
+                pinConfigured = true,
+                hideAdultChannels = true,
+                blockedKeywords = listOf("adult")
+            ),
+            expectedPin = "1234",
+            profiles = listOf(
+                ParentalControlProfile(
+                    id = 10,
+                    name = "Kids",
+                    pinHash = "hash",
+                    blockedKeywords = listOf("adult"),
+                    lockedSettings = true,
+                    enabled = true,
+                    createdAt = 1L
+                )
+            )
+        )
+        val viewModel = SettingsViewModel(settingsRepository, FakeTvHomeIntegrationRepository())
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.parentalSettingsLocked)
+
+        viewModel.setProviderAutoSyncEnabled(false)
+        advanceUntilIdle()
+
+        assertTrue(settingsRepository.providerAutoSyncEnabledFlow.value)
+        assertEquals(
+            "Настройки защищены активным PIN-профилем. Сначала разблокируйте их.",
+            viewModel.uiState.value.lastError
+        )
+
+        viewModel.updateParentalUnlockPin("1234")
+        viewModel.unlockParentalSettings()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.parentalSettingsLocked)
+        viewModel.setProviderAutoSyncEnabled(false)
+        advanceUntilIdle()
+        assertFalse(settingsRepository.providerAutoSyncEnabledFlow.value)
+    }
+
     private class FakeSettingsRepository(
         parental: ParentalControlSettings,
-        private val expectedPin: String = ""
+        private val expectedPin: String = "",
+        profiles: List<ParentalControlProfile> = emptyList()
     ) : SettingsRepository {
         private val parentalFlow = MutableStateFlow(parental)
+        private val parentalProfilesFlow = MutableStateFlow(profiles)
         val providerAutoSyncEnabledFlow = MutableStateFlow(true)
         val providerAutoSyncIntervalHoursFlow = MutableStateFlow(12)
         var setParentalControlCalls = 0
         var verifyParentalPinCalls = 0
+        var saveParentalProfileCalls = 0
+        var lastSavedProfileName: String? = null
+        var lastSavedProfileKeywords: List<String> = emptyList()
+        var lastSavedProfileLockedSettings: Boolean? = null
         var lastParentalEnabled: Boolean? = null
         var lastParentalPin: String? = null
         var lastParentalHideAdultChannels: Boolean? = null
@@ -250,6 +329,7 @@ class SettingsViewModelParentalTest {
         )
         override fun observeScannerLearnedQueries(): Flow<List<ScannerLearnedQuery>> = emptyFlow()
         override fun observeParentalControlSettings(): Flow<ParentalControlSettings> = parentalFlow
+        override fun observeParentalControlProfiles(): Flow<List<ParentalControlProfile>> = parentalProfilesFlow
 
         override suspend fun setDefaultPlayer(playerType: PlayerType) = Unit
         override suspend fun setBufferProfile(profile: BufferProfile) = Unit
@@ -311,6 +391,54 @@ class SettingsViewModelParentalTest {
         override suspend fun verifyParentalPin(pin: String): Boolean {
             verifyParentalPinCalls += 1
             return pin == expectedPin
+        }
+
+        override suspend fun saveParentalControlProfile(
+            name: String,
+            pin: String?,
+            blockedKeywords: List<String>,
+            lockedSettings: Boolean
+        ): AppResult<ParentalControlProfile> {
+            saveParentalProfileCalls += 1
+            lastSavedProfileName = name
+            lastSavedProfileKeywords = blockedKeywords
+            lastSavedProfileLockedSettings = lockedSettings
+            val profile = ParentalControlProfile(
+                id = parentalProfilesFlow.value.size.toLong() + 1,
+                name = name,
+                pinHash = pin ?: "stored-hash",
+                blockedKeywords = blockedKeywords,
+                lockedSettings = lockedSettings,
+                enabled = false,
+                createdAt = 1L
+            )
+            parentalProfilesFlow.value = listOf(profile) + parentalProfilesFlow.value
+            return AppResult.Success(profile)
+        }
+
+        override suspend fun activateParentalControlProfile(profileId: Long): AppResult<Unit> {
+            parentalProfilesFlow.value = parentalProfilesFlow.value.map { profile ->
+                profile.copy(enabled = profile.id == profileId)
+            }
+            return AppResult.Success(Unit)
+        }
+
+        override suspend fun clearActiveParentalControlProfile(): AppResult<Unit> {
+            parentalProfilesFlow.value = parentalProfilesFlow.value.map { it.copy(enabled = false) }
+            return AppResult.Success(Unit)
+        }
+
+        override suspend fun deleteParentalControlProfile(profileId: Long): AppResult<Unit> {
+            parentalProfilesFlow.value = parentalProfilesFlow.value.filterNot { it.id == profileId }
+            return AppResult.Success(Unit)
+        }
+
+        override suspend fun exportParentalControlProfiles(): AppResult<String> {
+            return AppResult.Success("""{"profiles":[]}""")
+        }
+
+        override suspend fun importParentalControlProfiles(payload: String, replaceExisting: Boolean): AppResult<Int> {
+            return AppResult.Success(0)
         }
     }
 

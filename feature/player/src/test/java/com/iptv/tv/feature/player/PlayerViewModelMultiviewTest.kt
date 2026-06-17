@@ -15,6 +15,7 @@ import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.EngineStatus
 import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.ManualBufferSettings
+import com.iptv.tv.core.model.ParentalControlProfile
 import com.iptv.tv.core.model.ParentalControlSettings
 import com.iptv.tv.core.model.PlaybackHistoryItem
 import com.iptv.tv.core.model.PlayerType
@@ -279,6 +280,7 @@ class PlayerViewModelMultiviewTest {
                 blockedKeywords = emptyList()
             )
         )
+        override fun observeParentalControlProfiles(): Flow<List<ParentalControlProfile>> = emptyFlow()
 
         override suspend fun setDefaultPlayer(playerType: PlayerType) = Unit
         override suspend fun setBufferProfile(profile: BufferProfile) = Unit
@@ -310,6 +312,18 @@ class PlayerViewModelMultiviewTest {
         override suspend fun clearScannerLearning() = Unit
         override suspend fun setParentalControl(enabled: Boolean, pin: String?, hideAdultChannels: Boolean, blockedKeywords: List<String>) = Unit
         override suspend fun verifyParentalPin(pin: String): Boolean = true
+        override suspend fun saveParentalControlProfile(
+            name: String,
+            pin: String?,
+            blockedKeywords: List<String>,
+            lockedSettings: Boolean
+        ): AppResult<ParentalControlProfile> = AppResult.Error("unsupported")
+        override suspend fun activateParentalControlProfile(profileId: Long): AppResult<Unit> = AppResult.Success(Unit)
+        override suspend fun clearActiveParentalControlProfile(): AppResult<Unit> = AppResult.Success(Unit)
+        override suspend fun deleteParentalControlProfile(profileId: Long): AppResult<Unit> = AppResult.Success(Unit)
+        override suspend fun exportParentalControlProfiles(): AppResult<String> = AppResult.Success("""{"profiles":[]}""")
+        override suspend fun importParentalControlProfiles(payload: String, replaceExisting: Boolean): AppResult<Int> =
+            AppResult.Success(0)
     }
 
     private class FakeEngineRepository : EngineRepository {

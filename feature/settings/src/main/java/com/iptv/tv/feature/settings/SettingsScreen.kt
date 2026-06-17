@@ -411,8 +411,41 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Родительский контроль",
-                subtitle = "PIN и скрытие adult-групп/каналов по ключевым словам"
+                subtitle = "PIN, защищённые профили и экспорт/импорт настроек блокировки"
             ) {
+                val activeProfile = state.parentalProfiles.firstOrNull { it.enabled }
+                if (activeProfile != null) {
+                    Text(
+                        "Активный профиль: ${activeProfile.name} | " +
+                            if (activeProfile.lockedSettings) "настройки защищены PIN" else "без блокировки настроек"
+                    )
+                }
+                if (state.parentalSettingsLocked) {
+                    OutlinedTextField(
+                        value = state.parentalUnlockPin,
+                        onValueChange = viewModel::updateParentalUnlockPin,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("PIN для разблокировки") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(onClick = viewModel::unlockParentalSettings) {
+                            Text("Разблокировать")
+                        }
+                    }
+                    Text(
+                        text = "Пока профиль активен, изменения настроек и профилей требуют разблокировки.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else if (activeProfile?.lockedSettings == true) {
+                    OutlinedButton(onClick = viewModel::lockParentalSettings) {
+                        Text("Снова заблокировать настройки")
+                    }
+                }
                 Text(
                     "Статус: ${if (state.parentalEnabled) "Включен" else "Выключен"} | " +
                         "PIN: ${if (state.parentalPinConfigured) "задан" else "не задан"}"
@@ -485,8 +518,127 @@ fun SettingsScreen(
                     label = { Text("Ключевые слова через запятую") },
                     minLines = 2
                 )
-                Button(onClick = viewModel::saveParentalControl, enabled = !state.isSaving) {
+                Button(
+                    onClick = viewModel::saveParentalControl,
+                    enabled = !state.isSaving && !state.parentalSettingsLocked
+                ) {
                     Text(if (state.isSaving) "Сохранение..." else "Сохранить родительский контроль")
+                }
+
+                Text("Профили защиты")
+                OutlinedTextField(
+                    value = state.parentalProfileName,
+                    onValueChange = viewModel::updateParentalProfileName,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Имя профиля") },
+                    singleLine = true
+                )
+                Text(
+                    "При сохранении профиль забирает текущий PIN и список ключевых слов. Потом его можно быстро активировать на другом устройстве через JSON.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SelectionButton(
+                        selected = state.parentalProfileLockedSettings,
+                        label = "Блокировать настройки",
+                        onClick = { viewModel.setParentalProfileLockedSettings(true) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = !state.parentalProfileLockedSettings,
+                        label = "Без блокировки",
+                        onClick = { viewModel.setParentalProfileLockedSettings(false) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                }
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = viewModel::saveParentalProfile,
+                        enabled = !state.parentalSettingsLocked
+                    ) {
+                        Text("Сохранить профиль")
+                    }
+                    OutlinedButton(
+                        onClick = viewModel::clearActiveParentalProfile,
+                        enabled = activeProfile != null && !state.parentalSettingsLocked
+                    ) {
+                        Text("Отключить активный")
+                    }
+                }
+
+                if (state.parentalProfiles.isEmpty()) {
+                    Text("Пока нет сохранённых профилей.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        state.parentalProfiles.forEach { profile ->
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "${profile.name} | ${if (profile.enabled) "активен" else "сохранён"} | " +
+                                            if (profile.lockedSettings) "с блокировкой" else "без блокировки"
+                                    )
+                                    Text(
+                                        "Ключевых слов: ${profile.blockedKeywords.size}",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    FlowRow(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = { viewModel.activateParentalProfile(profile.id) },
+                                            enabled = !profile.enabled && !state.parentalSettingsLocked
+                                        ) {
+                                            Text("Активировать")
+                                        }
+                                        OutlinedButton(
+                                            onClick = { viewModel.deleteParentalProfile(profile.id) },
+                                            enabled = !state.parentalSettingsLocked
+                                        ) {
+                                            Text("Удалить")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text("Экспорт / импорт JSON")
+                OutlinedTextField(
+                    value = state.parentalProfilesJson,
+                    onValueChange = viewModel::updateParentalProfilesJson,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("JSON профилей") },
+                    minLines = 6
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = viewModel::exportParentalProfiles,
+                        enabled = !state.parentalSettingsLocked
+                    ) {
+                        Text("Подготовить экспорт")
+                    }
+                    Button(
+                        onClick = { viewModel.importParentalProfiles(replaceExisting = false) },
+                        enabled = !state.parentalSettingsLocked
+                    ) {
+                        Text("Импортировать")
+                    }
                 }
             }
         }

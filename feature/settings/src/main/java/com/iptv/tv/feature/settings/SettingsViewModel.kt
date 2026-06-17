@@ -6,6 +6,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.domain.repository.TvHomeIntegrationRepository
 import com.iptv.tv.core.model.BufferProfile
+import com.iptv.tv.core.model.ParentalControlProfile
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.RecordingStorageInfo
 import com.iptv.tv.core.model.RecordingStorageLocation
@@ -51,6 +52,13 @@ data class SettingsUiState(
     val parentalKeywordsText: String = "adult, xxx, 18+, porn, porno, erotic, sex, для взрослых, взрослые, эротика",
     val parentalCurrentPin: String = "",
     val parentalNewPin: String = "",
+    val parentalUnlockPin: String = "",
+    val parentalProfiles: List<ParentalControlProfile> = emptyList(),
+    val parentalProfileName: String = "",
+    val parentalProfileLockedSettings: Boolean = true,
+    val parentalProfilesJson: String = "",
+    val parentalSettingsLocked: Boolean = false,
+    val parentalSettingsUnlocked: Boolean = false,
     val tvHomeStates: List<TvHomeChannelState> = emptyList(),
     val isSaving: Boolean = false,
     val isPublishingTvHome: Boolean = false,
@@ -68,10 +76,12 @@ class SettingsViewModel @Inject constructor(
 
     init {
         observeSettings()
+        observeParentalProfiles()
         observeTvHomeStates()
     }
 
     fun setDefaultPlayer(playerType: PlayerType) {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setDefaultPlayer(playerType)
             _uiState.update { it.copy(lastInfo = "Плеер по умолчанию: $playerType", lastError = null) }
@@ -79,6 +89,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setBufferProfile(profile: BufferProfile) {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setBufferProfile(profile)
             _uiState.update { it.copy(lastInfo = "Профиль буфера: $profile", lastError = null) }
@@ -102,6 +113,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun saveEngineEndpoint() {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             val endpoint = _uiState.value.engineEndpoint.trim()
             if (endpoint.isBlank()) {
@@ -114,6 +126,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun resetEngineEndpoint() {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setEngineEndpoint(DEFAULT_ENGINE_ENDPOINT)
             _uiState.update {
@@ -127,6 +140,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setTorEnabled(enabled: Boolean) {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setTorEnabled(enabled)
             _uiState.update {
@@ -139,6 +153,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setAllowInsecureUrls(enabled: Boolean) {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setAllowInsecureUrls(enabled)
             _uiState.update {
@@ -151,6 +166,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setProviderAutoSyncEnabled(enabled: Boolean) {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setProviderAutoSyncEnabled(enabled)
             _uiState.update {
@@ -167,6 +183,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setProviderAutoSyncIntervalHours(hours: Int) {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setProviderAutoSyncIntervalHours(hours)
             _uiState.update {
@@ -179,6 +196,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setDownloadsWifiOnly(enabled: Boolean) {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setDownloadsWifiOnly(enabled)
             _uiState.update {
@@ -195,6 +213,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun saveMaxParallelDownloads() {
+        if (!ensureSettingsUnlocked()) return
         val value = _uiState.value.maxParallelDownloads.toIntOrNull()
         if (value == null) {
             _uiState.update { it.copy(lastError = "Введите число для параллельных загрузок") }
@@ -207,6 +226,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setRecordingStorageLocation(location: RecordingStorageLocation) {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setRecordingStorageLocation(location)
             val info = settingsRepository.getRecordingStorageInfo(location)
@@ -222,6 +242,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setRecordingStorageCustomTree(uri: String) {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setRecordingStorageCustomTreeUri(uri)
             settingsRepository.setRecordingStorageLocation(RecordingStorageLocation.CUSTOM_EXTERNAL)
@@ -247,6 +268,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setScannerAiEnabled(enabled: Boolean) {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setScannerAiEnabled(enabled)
             _uiState.update {
@@ -300,6 +322,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun saveScannerProxySettings() {
+        if (!ensureSettingsUnlocked()) return
         val state = _uiState.value
         val enabled = state.scannerProxyEnabled
         val host = state.scannerProxyHost.trim()
@@ -336,11 +359,9 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun saveParentalControl() {
+        if (!ensureSettingsUnlocked()) return
         val state = _uiState.value
-        val keywords = state.parentalKeywordsText
-            .split(',', '\n', ';')
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
+        val keywords = parseParentalKeywords(state.parentalKeywordsText)
         val newPin = state.parentalNewPin.trim().ifBlank { null }
 
         if (state.parentalEnabled && !state.parentalPinConfigured && newPin == null) {
@@ -378,6 +399,9 @@ class SettingsViewModel @Inject constructor(
                 hideAdultChannels = state.parentalHideAdultChannels,
                 blockedKeywords = keywords
             )
+            if (!state.parentalEnabled) {
+                settingsRepository.clearActiveParentalControlProfile()
+            }
             _uiState.update {
                 it.copy(
                     isSaving = false,
@@ -395,6 +419,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun acceptLegal() {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setLegalAccepted(true)
             _uiState.update { it.copy(lastInfo = "Правила использования подтверждены", lastError = null) }
@@ -402,6 +427,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun applyRecommendedSettings() {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             settingsRepository.setDefaultPlayer(PlayerType.INTERNAL)
             settingsRepository.setBufferProfile(BufferProfile.STANDARD)
@@ -445,6 +471,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun saveManualBuffer() {
+        if (!ensureSettingsUnlocked()) return
         val state = _uiState.value
         val start = state.manualStartMs.toIntOrNull()
         val rebuffer = state.manualRebufferMs.toIntOrNull()
@@ -463,6 +490,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun publishTvHomeNow() {
+        if (!ensureSettingsUnlocked()) return
         viewModelScope.launch {
             _uiState.update { it.copy(isPublishingTvHome = true, lastError = null, lastInfo = null) }
             val results = listOf(
@@ -492,6 +520,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setTvHomeRowEnabled(type: TvHomeChannelType, enabled: Boolean) {
+        if (!ensureSettingsUnlocked()) return
         val currentState = _uiState.value.tvHomeStates.firstOrNull { it.type == type }
             ?: TvHomeChannelState(
                 type = type,
@@ -506,6 +535,211 @@ class SettingsViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             lastInfo = "${type.toUiLabel()}: ${if (enabled) "включено" else "выключено"}",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(lastError = result.message, lastInfo = null) }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun updateParentalUnlockPin(value: String) {
+        _uiState.update { it.copy(parentalUnlockPin = value.filter { ch -> ch.isDigit() }.take(8), lastError = null) }
+    }
+
+    fun updateParentalProfileName(value: String) {
+        _uiState.update { it.copy(parentalProfileName = value.take(64), lastError = null) }
+    }
+
+    fun setParentalProfileLockedSettings(locked: Boolean) {
+        _uiState.update { it.copy(parentalProfileLockedSettings = locked, lastError = null) }
+    }
+
+    fun updateParentalProfilesJson(value: String) {
+        _uiState.update { it.copy(parentalProfilesJson = value, lastError = null) }
+    }
+
+    fun unlockParentalSettings() {
+        val pin = _uiState.value.parentalUnlockPin
+        if (pin.length < 4) {
+            _uiState.update { it.copy(lastError = "Введите PIN из 4+ цифр для разблокировки") }
+            return
+        }
+        viewModelScope.launch {
+            val verified = settingsRepository.verifyParentalPin(pin)
+            if (!verified) {
+                _uiState.update { it.copy(lastError = "PIN разблокировки неверный", lastInfo = null) }
+                return@launch
+            }
+            _uiState.update {
+                it.copy(
+                    parentalUnlockPin = "",
+                    parentalSettingsUnlocked = true,
+                    parentalSettingsLocked = false,
+                    lastInfo = "Настройки разблокированы до закрытия экрана",
+                    lastError = null
+                )
+            }
+        }
+    }
+
+    fun lockParentalSettings() {
+        _uiState.update {
+            it.copy(
+                parentalSettingsUnlocked = false,
+                parentalSettingsLocked = activeParentalProfile(it)?.lockedSettings == true,
+                parentalUnlockPin = "",
+                lastInfo = "Защита настроек включена",
+                lastError = null
+            )
+        }
+    }
+
+    fun saveParentalProfile() {
+        if (!ensureSettingsUnlocked()) return
+        val state = _uiState.value
+        val name = state.parentalProfileName.trim()
+        val keywords = parseParentalKeywords(state.parentalKeywordsText)
+        val pin = state.parentalNewPin.trim().ifBlank { null }
+        if (name.isBlank()) {
+            _uiState.update { it.copy(lastError = "Укажите имя профиля") }
+            return
+        }
+        if (!state.parentalPinConfigured && pin == null) {
+            _uiState.update { it.copy(lastError = "Для профиля сначала задайте PIN") }
+            return
+        }
+        viewModelScope.launch {
+            when (val result = settingsRepository.saveParentalControlProfile(
+                name = name,
+                pin = pin,
+                blockedKeywords = keywords,
+                lockedSettings = state.parentalProfileLockedSettings
+            )) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            parentalProfileName = "",
+                            lastInfo = "Профиль \"${result.data.name}\" сохранён",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(lastError = result.message, lastInfo = null) }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun activateParentalProfile(profileId: Long) {
+        if (!ensureSettingsUnlocked()) return
+        viewModelScope.launch {
+            when (val result = settingsRepository.activateParentalControlProfile(profileId)) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        val profile = it.parentalProfiles.firstOrNull { item -> item.id == profileId }
+                        val locked = profile?.lockedSettings == true
+                        it.copy(
+                            parentalSettingsUnlocked = false,
+                            parentalSettingsLocked = locked,
+                            parentalUnlockPin = "",
+                            lastInfo = profile?.let { item -> "Активирован профиль \"${item.name}\"" },
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(lastError = result.message, lastInfo = null) }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun clearActiveParentalProfile() {
+        if (!ensureSettingsUnlocked()) return
+        viewModelScope.launch {
+            when (val result = settingsRepository.clearActiveParentalControlProfile()) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            parentalSettingsUnlocked = false,
+                            parentalSettingsLocked = false,
+                            lastInfo = "Активный PIN-профиль отключён",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(lastError = result.message, lastInfo = null) }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun deleteParentalProfile(profileId: Long) {
+        if (!ensureSettingsUnlocked()) return
+        viewModelScope.launch {
+            when (val result = settingsRepository.deleteParentalControlProfile(profileId)) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            parentalSettingsUnlocked = false,
+                            parentalSettingsLocked = activeParentalProfile(it)?.lockedSettings == true,
+                            lastInfo = "Профиль удалён",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(lastError = result.message, lastInfo = null) }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun exportParentalProfiles() {
+        if (!ensureSettingsUnlocked()) return
+        viewModelScope.launch {
+            when (val result = settingsRepository.exportParentalControlProfiles()) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            parentalProfilesJson = result.data,
+                            lastInfo = "JSON профилей подготовлен для экспорта",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(lastError = result.message, lastInfo = null) }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun importParentalProfiles(replaceExisting: Boolean = false) {
+        if (!ensureSettingsUnlocked()) return
+        viewModelScope.launch {
+            when (val result = settingsRepository.importParentalControlProfiles(
+                payload = _uiState.value.parentalProfilesJson,
+                replaceExisting = replaceExisting
+            )) {
+                is AppResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            parentalSettingsUnlocked = false,
+                            parentalSettingsLocked = activeParentalProfile(it)?.lockedSettings == true && !it.parentalSettingsUnlocked,
+                            lastInfo = "Импортировано профилей: ${result.data}",
                             lastError = null
                         )
                     }
@@ -623,6 +857,21 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    private fun observeParentalProfiles() {
+        viewModelScope.launch {
+            settingsRepository.observeParentalControlProfiles().collect { profiles ->
+                _uiState.update { current ->
+                    val activeProfile = profiles.firstOrNull { it.enabled }
+                    val locked = activeProfile?.lockedSettings == true && !current.parentalSettingsUnlocked
+                    current.copy(
+                        parentalProfiles = profiles,
+                        parentalSettingsLocked = locked
+                    )
+                }
+            }
+        }
+    }
+
     private fun observeTvHomeStates() {
         viewModelScope.launch {
             tvHomeIntegrationRepository.observeChannelStates().collect { storedStates ->
@@ -638,6 +887,29 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(tvHomeStates = states) }
             }
         }
+    }
+
+    private fun ensureSettingsUnlocked(): Boolean {
+        if (!_uiState.value.parentalSettingsLocked) return true
+        _uiState.update {
+            it.copy(
+                lastError = "Настройки защищены активным PIN-профилем. Сначала разблокируйте их.",
+                lastInfo = null
+            )
+        }
+        return false
+    }
+
+    private fun parseParentalKeywords(raw: String): List<String> {
+        return raw
+            .split(',', '\n', ';')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+    }
+
+    private fun activeParentalProfile(state: SettingsUiState): ParentalControlProfile? {
+        return state.parentalProfiles.firstOrNull { it.enabled }
     }
 
     private companion object {

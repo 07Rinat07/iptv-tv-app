@@ -1,7 +1,9 @@
 package com.iptv.tv.core.domain.repository
 
+import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.ManualBufferSettings
+import com.iptv.tv.core.model.ParentalControlProfile
 import com.iptv.tv.core.model.ParentalControlSettings
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.RecordingStorageInfo
@@ -29,6 +31,7 @@ interface SettingsRepository {
     fun observeScannerProxySettings(): Flow<ScannerProxySettings>
     fun observeScannerLearnedQueries(): Flow<List<ScannerLearnedQuery>>
     fun observeParentalControlSettings(): Flow<ParentalControlSettings>
+    fun observeParentalControlProfiles(): Flow<List<ParentalControlProfile>>
     suspend fun setDefaultPlayer(playerType: PlayerType)
     suspend fun setBufferProfile(profile: BufferProfile)
     suspend fun setManualBuffer(startMs: Int, rebufferMs: Int, maxMs: Int)
@@ -55,4 +58,15 @@ interface SettingsRepository {
         blockedKeywords: List<String>
     )
     suspend fun verifyParentalPin(pin: String): Boolean
+    suspend fun saveParentalControlProfile(
+        name: String,
+        pin: String?,
+        blockedKeywords: List<String>,
+        lockedSettings: Boolean
+    ): AppResult<ParentalControlProfile>
+    suspend fun activateParentalControlProfile(profileId: Long): AppResult<Unit>
+    suspend fun clearActiveParentalControlProfile(): AppResult<Unit>
+    suspend fun deleteParentalControlProfile(profileId: Long): AppResult<Unit>
+    suspend fun exportParentalControlProfiles(): AppResult<String>
+    suspend fun importParentalControlProfiles(payload: String, replaceExisting: Boolean = false): AppResult<Int>
 }

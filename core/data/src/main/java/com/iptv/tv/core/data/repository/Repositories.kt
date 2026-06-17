@@ -14,6 +14,7 @@ import com.iptv.tv.core.data.settings.settingsDataStore
 import com.iptv.tv.core.database.dao.ChannelDao
 import com.iptv.tv.core.database.dao.FavoriteDao
 import com.iptv.tv.core.database.dao.HistoryDao
+import com.iptv.tv.core.database.dao.ParentalProfileDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.dao.PlaylistProviderDao
 import com.iptv.tv.core.database.dao.SyncLogDao
@@ -39,6 +40,7 @@ import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.EngineStatus
 import com.iptv.tv.core.model.ManualBufferSettings
+import com.iptv.tv.core.model.ParentalControlProfile
 import com.iptv.tv.core.model.ParentalControlSettings
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.Playlist
@@ -2532,7 +2534,8 @@ class DiagnosticsRepositoryImpl @Inject constructor(
 
 @Singleton
 class SettingsRepositoryImpl @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val parentalProfileDao: ParentalProfileDao
 ) : SettingsRepository {
     override fun observeDefaultPlayer(): Flow<PlayerType> {
         return context.settingsDataStore.data.map { prefs ->
@@ -2661,6 +2664,10 @@ class SettingsRepositoryImpl @Inject constructor(
                 )
             )
         }
+    }
+
+    override fun observeParentalControlProfiles(): Flow<List<ParentalControlProfile>> {
+        return parentalProfileDao.observeProfiles().map { rows -> rows.map { it.toModel() } }
     }
 
     override suspend fun setDefaultPlayer(playerType: PlayerType) {
@@ -2907,10 +2914,11 @@ class SettingsRepositoryImpl @Inject constructor(
         hideAdultChannels: Boolean,
         blockedKeywords: List<String>
     ) {
+        val normalizedKeywords = normalizeBlockedKeywords(blockedKeywords).ifEmpty { DEFAULT_PARENTAL_KEYWORDS }
         context.settingsDataStore.edit { prefs ->
             prefs[SettingsKeys.parentalEnabled] = enabled
             prefs[SettingsKeys.parentalHideAdultChannels] = hideAdultChannels
-            prefs[SettingsKeys.parentalBlockedKeywords] = encodeKeywordList(blockedKeywords)
+            prefs[SettingsKeys.parentalBlockedKeywords] = encodeKeywordList(normalizedKeywords)
             val normalizedPin = pin?.trim().orEmpty()
             if (normalizedPin.isNotBlank()) {
                 prefs[SettingsKeys.parentalPinHash] = hashPin(normalizedPin)
@@ -2925,6 +2933,193 @@ class SettingsRepositoryImpl @Inject constructor(
             prefs[SettingsKeys.parentalPinHash].orEmpty()
         }.first()
         return storedHash.isNotBlank() && storedHash == hashPin(normalized)
+    }
+
+    override suspend fun saveParentalControlProfile(
+        name: String,
+        pin: String?,
+        blockedKeywords: List<String>,
+        lockedSettings: Boolean
+    ): AppResult<ParentalControlProfile> = withContext(Dispatchers.IO) {
+        val normalizedName = name.trim()
+        if (normalizedName.isBlank()) {
+            return@withContext AppResult.Error("Укажите имя профиля")
+        }
+
+        val normalizedKeywords = normalizeBlockedKeywords(blockedKeywords)
+        if (normalizedKeywords.isEmpty()) {
+            return@withContext AppResult.Error("Добавьте ключевые слова для профиля")
+        }
+
+        val storedHash = context.settingsDataStore.data.map { prefs ->
+            prefs[SettingsKeys.parentalPinHash].orEmpty()
+        }.first()
+        val normalizedPin = pin?.trim().orEmpty()
+        val effectiveHash = when {
+            normalizedPin.isNotBlank() -> hashPin(normalizedPin)
+            storedHash.isNotBlank() -> storedHash
+            else -> return@withContext AppResult.Error("Сначала задайте PIN для родительского контроля")
+        }
+
+        val createdAt = System.currentTimeMillis()
+        val entity = com.iptv.tv.core.database.entity.ParentalProfileEntity(
+            name = normalizedName,
+            pinHash = effectiveHash,
+            blockedKeywordsCsv = normalizedKeywords.joinToString(","),
+            lockedSettings = lockedSettings,
+            enabled = false,
+            createdAt = createdAt
+        )
+        val profileId = parentalProfileDao.upsert(entity)
+        AppResult.Success(
+            entity.copy(id = profileId).toModel()
+        )
+    }
+
+    override suspend fun activateParentalControlProfile(profileId: Long): AppResult<Unit> = withContext(Dispatchers.IO) {
+        val profile = parentalProfileDao.observeProfiles()
+            .first()
+            .firstOrNull { it.id == profileId }
+            ?.toModel()
+            ?: return@withContext AppResult.Error("Профиль не найден")
+
+        val currentSettings = observeParentalControlSettings().first()
+        parentalProfileDao.disableAll()
+        parentalProfileDao.setEnabled(profileId, enabled = true)
+        setParentalControlWithHash(
+            enabled = true,
+            pinHash = profile.pinHash,
+            hideAdultChannels = currentSettings.hideAdultChannels,
+            blockedKeywords = profile.blockedKeywords
+        )
+        AppResult.Success(Unit)
+    }
+
+    override suspend fun clearActiveParentalControlProfile(): AppResult<Unit> = withContext(Dispatchers.IO) {
+        val currentSettings = observeParentalControlSettings().first()
+        val storedHash = context.settingsDataStore.data.map { prefs ->
+            prefs[SettingsKeys.parentalPinHash].orEmpty()
+        }.first()
+        parentalProfileDao.disableAll()
+        if (storedHash.isNotBlank()) {
+            setParentalControlWithHash(
+                enabled = false,
+                pinHash = storedHash,
+                hideAdultChannels = currentSettings.hideAdultChannels,
+                blockedKeywords = currentSettings.blockedKeywords
+            )
+        }
+        AppResult.Success(Unit)
+    }
+
+    override suspend fun deleteParentalControlProfile(profileId: Long): AppResult<Unit> = withContext(Dispatchers.IO) {
+        val active = parentalProfileDao.findActiveProfile()
+        parentalProfileDao.deleteById(profileId)
+        if (active?.id == profileId) {
+            clearActiveParentalControlProfile()
+        }
+        AppResult.Success(Unit)
+    }
+
+    override suspend fun exportParentalControlProfiles(): AppResult<String> = withContext(Dispatchers.IO) {
+        val profiles = parentalProfileDao.observeProfiles().first().map { it.toModel() }
+        val json = JSONObject().apply {
+            put("version", 1)
+            put(
+                "profiles",
+                JSONArray().apply {
+                    profiles.forEach { profile ->
+                        put(
+                            JSONObject().apply {
+                                put("name", profile.name)
+                                put("pinHash", profile.pinHash)
+                                put("blockedKeywords", JSONArray(profile.blockedKeywords))
+                                put("lockedSettings", profile.lockedSettings)
+                                put("enabled", profile.enabled)
+                                put("createdAt", profile.createdAt)
+                            }
+                        )
+                    }
+                }
+            )
+        }
+        AppResult.Success(json.toString(2))
+    }
+
+    override suspend fun importParentalControlProfiles(
+        payload: String,
+        replaceExisting: Boolean
+    ): AppResult<Int> = withContext(Dispatchers.IO) {
+        val normalizedPayload = payload.trim()
+        if (normalizedPayload.isBlank()) {
+            return@withContext AppResult.Error("Вставьте JSON с профилями")
+        }
+
+        val root = runCatching { JSONObject(normalizedPayload) }
+            .getOrElse { return@withContext AppResult.Error("Невалидный JSON профилей: ${it.message}", it) }
+        val profiles = root.optJSONArray("profiles")
+            ?: return@withContext AppResult.Error("JSON не содержит массива profiles")
+
+        if (replaceExisting) {
+            parentalProfileDao.observeProfiles().first().forEach { profile ->
+                parentalProfileDao.deleteById(profile.id)
+            }
+        }
+
+        var imported = 0
+        var activeProfileId: Long? = null
+        for (index in 0 until profiles.length()) {
+            val item = profiles.optJSONObject(index) ?: continue
+            val name = item.optString("name").trim()
+            val pinHash = item.optString("pinHash").trim()
+            if (name.isBlank() || pinHash.isBlank()) continue
+            val blockedKeywords = buildList {
+                val rawKeywords = item.optJSONArray("blockedKeywords")
+                for (keywordIndex in 0 until (rawKeywords?.length() ?: 0)) {
+                    rawKeywords?.optString(keywordIndex)
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let(::add)
+                }
+            }.ifEmpty { DEFAULT_PARENTAL_KEYWORDS }
+            val createdAt = item.optLong("createdAt").takeIf { it > 0 } ?: System.currentTimeMillis()
+            val enabled = item.optBoolean("enabled", false)
+            val id = parentalProfileDao.upsert(
+                com.iptv.tv.core.database.entity.ParentalProfileEntity(
+                    name = name,
+                    pinHash = pinHash,
+                    blockedKeywordsCsv = normalizeBlockedKeywords(blockedKeywords).joinToString(","),
+                    lockedSettings = item.optBoolean("lockedSettings", true),
+                    enabled = false,
+                    createdAt = createdAt
+                )
+            )
+            if (enabled) activeProfileId = id
+            imported += 1
+        }
+
+        if (imported == 0) {
+            return@withContext AppResult.Error("В JSON нет ни одного корректного профиля")
+        }
+
+        parentalProfileDao.disableAll()
+        activeProfileId?.let { profileId ->
+            parentalProfileDao.setEnabled(profileId, enabled = true)
+            val profile = parentalProfileDao.observeProfiles().first()
+                .firstOrNull { it.id == profileId }
+                ?.toModel()
+            if (profile != null) {
+                val currentSettings = observeParentalControlSettings().first()
+                setParentalControlWithHash(
+                    enabled = true,
+                    pinHash = profile.pinHash,
+                    hideAdultChannels = currentSettings.hideAdultChannels,
+                    blockedKeywords = profile.blockedKeywords
+                )
+            }
+        }
+
+        AppResult.Success(imported)
     }
 
     private fun recordingStorageDirectory(location: RecordingStorageLocation): File {
@@ -2956,6 +3151,29 @@ class SettingsRepositoryImpl @Inject constructor(
         return data.entries
             .sortedBy { it.key }
             .joinToString(";") { "${it.key}=${it.value.name}" }
+    }
+
+    private suspend fun setParentalControlWithHash(
+        enabled: Boolean,
+        pinHash: String,
+        hideAdultChannels: Boolean,
+        blockedKeywords: List<String>
+    ) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[SettingsKeys.parentalEnabled] = enabled
+            prefs[SettingsKeys.parentalHideAdultChannels] = hideAdultChannels
+            prefs[SettingsKeys.parentalBlockedKeywords] = encodeKeywordList(normalizeBlockedKeywords(blockedKeywords))
+            prefs[SettingsKeys.parentalPinHash] = pinHash
+        }
+    }
+
+    private fun normalizeBlockedKeywords(blockedKeywords: List<String>): List<String> {
+        return blockedKeywords
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .toList()
     }
 
     private fun normalizeLearningQuery(raw: String): String {

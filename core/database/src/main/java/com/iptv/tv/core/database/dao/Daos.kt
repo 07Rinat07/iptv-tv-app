@@ -296,6 +296,9 @@ interface ParentalProfileDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: ParentalProfileEntity): Long
 
+    @Query("UPDATE parental_profiles SET enabled = 0")
+    suspend fun disableAll(): Int
+
     @Query("UPDATE parental_profiles SET enabled = :enabled WHERE id = :profileId")
     suspend fun setEnabled(profileId: Long, enabled: Boolean): Int
 

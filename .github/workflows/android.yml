@@ -18,6 +18,8 @@ jobs:
     env:
       ANDROID_HOME: ${{ github.workspace }}/.android-sdk
       ANDROID_SDK_ROOT: ${{ github.workspace }}/.android-sdk
+      ANDROID_API_LEVEL: "35"
+      ANDROID_BUILD_TOOLS: "35.0.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -37,15 +39,27 @@ jobs:
           packages: ''
 
       - name: Prepare Android SDK directory
-        run: mkdir -p "$ANDROID_SDK_ROOT"
+        run: |
+          mkdir -p "$ANDROID_SDK_ROOT"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
       - name: Verify Java toolchain
         run: |
-          echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
           echo "$JAVA_HOME/bin" >> "$GITHUB_PATH"
           java -version
           javac -version
           "$JAVA_HOME/bin/jlink" --version
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API_LEVEL}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}"
 
       - name: Verify Android SDK
         run: |
@@ -54,6 +68,13 @@ jobs:
           test -d "$ANDROID_SDK_ROOT"
           command -v sdkmanager
           sdkmanager --list_installed
+          test -d "$ANDROID_SDK_ROOT/platforms/android-${ANDROID_API_LEVEL}"
+          test -d "$ANDROID_SDK_ROOT/build-tools/${ANDROID_BUILD_TOOLS}"
+
+      - name: Write local.properties
+        run: |
+          printf "sdk.dir=%s\n" "$ANDROID_SDK_ROOT" > local.properties
+          cat local.properties
 
       - name: Ensure Gradle executable
         run: chmod +x ./gradlew
