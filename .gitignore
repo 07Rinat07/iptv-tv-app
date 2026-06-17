@@ -9,5 +9,6 @@
 .externalNativeBuild/
 .cxx/
 /.tools/
+/.android-sdk/
 __pycache__/
 *.pyc
