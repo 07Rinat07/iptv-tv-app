@@ -16,10 +16,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       ANDROID_HOME: ${{ github.workspace }}/.android-sdk
       ANDROID_SDK_ROOT: ${{ github.workspace }}/.android-sdk
       ANDROID_API_LEVEL: "35"
       ANDROID_BUILD_TOOLS: "35.0.0"
+      GRADLE_OPTS: -Dorg.gradle.workers.max=2
+      TZ: UTC
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -79,8 +84,63 @@ jobs:
       - name: Ensure Gradle executable
         run: chmod +x ./gradlew
 
-      - name: Build, unit tests, lint
-        run: ./gradlew --no-daemon --stacktrace lintDebug testDebugUnitTest assembleDebug assembleRelease
+      - name: Lint debug
+        run: ./gradlew --no-daemon --stacktrace lintDebug
+
+      - name: Unit tests parser
+        run: ./gradlew --no-daemon --stacktrace :core:parser:test
+
+      - name: Unit tests sync
+        run: ./gradlew --no-daemon --stacktrace :sync:testDebugUnitTest
+
+      - name: Unit tests core data
+        run: ./gradlew --no-daemon --stacktrace :core:data:testDebugUnitTest
+
+      - name: Unit tests core engine
+        run: ./gradlew --no-daemon --stacktrace :core:engine:testDebugUnitTest
+
+      - name: Unit tests core network
+        run: ./gradlew --no-daemon --stacktrace :core:network:testDebugUnitTest
+
+      - name: Unit tests core player
+        run: ./gradlew --no-daemon --stacktrace :core:player:testDebugUnitTest
+
+      - name: Unit tests feature epg
+        run: ./gradlew --no-daemon --stacktrace :feature:epg:testDebugUnitTest
+
+      - name: Unit tests feature importer
+        run: ./gradlew --no-daemon --stacktrace :feature:importer:testDebugUnitTest
+
+      - name: Unit tests feature player
+        run: ./gradlew --no-daemon --stacktrace :feature:player:testDebugUnitTest
+
+      - name: Unit tests feature scanner
+        run: ./gradlew --no-daemon --stacktrace :feature:scanner:testDebugUnitTest
+
+      - name: Unit tests feature settings
+        run: ./gradlew --no-daemon --stacktrace :feature:settings:testDebugUnitTest
+
+      - name: Print failed unit test reports
+        if: failure()
+        run: |
+          found=0
+          while IFS= read -r -d '' report; do
+            if grep -Eq 'failures="[1-9]|errors="[1-9]"' "$report"; then
+              found=1
+              echo "::group::$report"
+              sed -n '1,220p' "$report"
+              echo "::endgroup::"
+            fi
+          done < <(find . -path '*/build/test-results/testDebugUnitTest/*.xml' -print0)
+          if [ "$found" -eq 0 ]; then
+            echo "No failed JUnit XML report was produced. The Gradle test JVM may have crashed before writing results."
+          fi
+
+      - name: Assemble debug
+        run: ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Assemble release
+        run: ./gradlew --no-daemon --stacktrace assembleRelease
 
       - name: Upload unit/lint reports
         if: always()

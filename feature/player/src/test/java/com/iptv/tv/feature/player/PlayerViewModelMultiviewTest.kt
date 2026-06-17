@@ -118,26 +118,38 @@ class PlayerViewModelMultiviewTest {
     }
 
     @Test
-    fun enableFourUpMultiview_respectsRuntimeCapability() = runTest(dispatcher) {
+    fun enableFourUpMultiview_enablesFourPanesWhenDeviceSupportsIt() = runTest(dispatcher) {
         val channels = listOf(
             testChannel(id = 10L, name = "News HD", streamUrl = "https://example.com/live/news.m3u8"),
             testChannel(id = 11L, name = "Sports HD", streamUrl = "https://example.com/live/sports.m3u8")
         )
-        val viewModel = createViewModel(channels = channels)
+        val viewModel = createViewModel(channels = channels, supportedPaneCount = 4)
         advanceUntilIdle()
 
         viewModel.enableFourUpMultiview()
         advanceUntilIdle()
 
         val state = viewModel.uiState.value
-        if (state.multiviewSupportedPaneCount >= 4) {
-            assertEquals(MultiviewMode.FOUR_UP, state.multiviewMode)
-            assertTrue(state.multiviewEnabled)
-            assertNull(state.lastError)
-        } else {
-            assertEquals(MultiviewMode.OFF, state.multiviewMode)
-            assertTrue(state.lastError?.contains("4-up") == true)
-        }
+        assertEquals(MultiviewMode.FOUR_UP, state.multiviewMode)
+        assertTrue(state.multiviewEnabled)
+        assertNull(state.lastError)
+    }
+
+    @Test
+    fun enableFourUpMultiview_rejectsFourPanesWhenDeviceDoesNotSupportIt() = runTest(dispatcher) {
+        val channels = listOf(
+            testChannel(id = 10L, name = "News HD", streamUrl = "https://example.com/live/news.m3u8"),
+            testChannel(id = 11L, name = "Sports HD", streamUrl = "https://example.com/live/sports.m3u8")
+        )
+        val viewModel = createViewModel(channels = channels, supportedPaneCount = 2)
+        advanceUntilIdle()
+
+        viewModel.enableFourUpMultiview()
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals(MultiviewMode.OFF, state.multiviewMode)
+        assertTrue(state.lastError?.contains("4-up") == true)
     }
 
     @Test
@@ -160,7 +172,10 @@ class PlayerViewModelMultiviewTest {
         assertEquals("Окно 2 остановлено", state.lastInfo)
     }
 
-    private fun createViewModel(channels: List<Channel>): PlayerViewModel {
+    private fun createViewModel(
+        channels: List<Channel>,
+        supportedPaneCount: Int = 4
+    ): PlayerViewModel {
         val playlist = Playlist(
             id = 1L,
             name = "Demo",
@@ -179,7 +194,9 @@ class PlayerViewModelMultiviewTest {
             favoritesRepository = FakeFavoritesRepository(),
             diagnosticsRepository = FakeDiagnosticsRepository(),
             historyRepository = FakeHistoryRepository(),
-            savedStateHandle = SavedStateHandle()
+            savedStateHandle = SavedStateHandle(
+                mapOf(PLAYER_MULTIVIEW_SUPPORTED_PANES_ARG to supportedPaneCount)
+            )
         )
     }
 

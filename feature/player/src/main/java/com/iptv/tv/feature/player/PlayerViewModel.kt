@@ -50,6 +50,7 @@ import java.io.File
 
 const val PLAYER_PLAYLIST_ID_ARG = "playlistId"
 const val PLAYER_CHANNEL_ID_ARG = "channelId"
+internal const val PLAYER_MULTIVIEW_SUPPORTED_PANES_ARG = "multiviewSupportedPaneCount"
 
 data class InternalPlaybackSession(
     val sessionId: Long,
@@ -153,7 +154,16 @@ class PlayerViewModel @Inject constructor(
     private val historyRepository: HistoryRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
-    private val _uiState = MutableStateFlow(PlayerUiState())
+    private val supportedMultiviewPaneCount: Int =
+        savedStateHandle.get<Int>(PLAYER_MULTIVIEW_SUPPORTED_PANES_ARG)
+            ?: calculateSupportedMultiviewPaneCount(
+                cpuCount = Runtime.getRuntime().availableProcessors(),
+                maxMemoryBytes = Runtime.getRuntime().maxMemory()
+            )
+
+    private val _uiState = MutableStateFlow(
+        PlayerUiState(multiviewSupportedPaneCount = supportedMultiviewPaneCount)
+    )
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
     private val requestedPlaylistId: Long? = savedStateHandle.get<Long>(PLAYER_PLAYLIST_ID_ARG)
@@ -945,7 +955,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun enableFourUpMultiview() {
-        setMultiviewMode(MultiviewMode.FOUR_UP)
+        ensureMultiviewMode(MultiviewMode.FOUR_UP)
     }
 
     fun disableMultiview() {
