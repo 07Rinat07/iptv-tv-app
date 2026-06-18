@@ -11,6 +11,7 @@ import com.iptv.tv.core.model.RecordingRepeatMode
 import com.iptv.tv.core.model.RecordingSchedule
 import com.iptv.tv.core.model.RecordingStatus
 import com.iptv.tv.core.model.RecordingTask
+import com.iptv.tv.core.model.TimeshiftBufferPlan
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +29,8 @@ data class DownloadsUiState(
     val recordingTitleInput: String = "",
     val recordingDelayMinutesInput: String = "0",
     val recordingDurationMinutesInput: String = "120",
+    val timeshiftMinutesInput: String = "60",
+    val lastTimeshiftPlan: TimeshiftBufferPlan? = null,
     val tasks: List<DownloadTask> = emptyList(),
     val recordings: List<RecordingTask> = emptyList(),
     val schedules: List<RecordingSchedule> = emptyList(),
@@ -85,6 +88,10 @@ class DownloadsViewModel @Inject constructor(
 
     fun updateRecordingDurationMinutes(value: String) {
         _uiState.update { it.copy(recordingDurationMinutesInput = value.filter { ch -> ch.isDigit() }, lastError = null) }
+    }
+
+    fun updateTimeshiftMinutes(value: String) {
+        _uiState.update { it.copy(timeshiftMinutesInput = value.filter { ch -> ch.isDigit() }, lastError = null) }
     }
 
     fun enqueue() {
@@ -208,6 +215,39 @@ class DownloadsViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             lastInfo = "Расписание записи создано, recordingId=${result.data}",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> _uiState.update { it.copy(lastError = result.message) }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun planTimeshiftBuffer() {
+        val channelId = _uiState.value.recordingChannelIdInput.toLongOrNull()
+        val requestedMinutes = _uiState.value.timeshiftMinutesInput.toIntOrNull()
+        if (channelId == null || channelId <= 0) {
+            _uiState.update { it.copy(lastError = "Введите Channel ID для timeshift") }
+            return
+        }
+        if (requestedMinutes == null || requestedMinutes <= 0) {
+            _uiState.update { it.copy(lastError = "Введите длительность timeshift в минутах") }
+            return
+        }
+        viewModelScope.launch {
+            when (val result = recordingRepository.planTimeshiftBuffer(channelId, requestedMinutes)) {
+                is AppResult.Success -> {
+                    val plan = result.data
+                    _uiState.update {
+                        it.copy(
+                            lastTimeshiftPlan = plan,
+                            lastInfo = if (plan.supported) {
+                                "Timeshift можно включать: до ${plan.maxDurationMinutes} мин"
+                            } else {
+                                "Timeshift недоступен: ${plan.reason}"
+                            },
                             lastError = null
                         )
                     }

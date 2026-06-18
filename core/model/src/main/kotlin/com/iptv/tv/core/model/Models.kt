@@ -224,6 +224,20 @@ data class RecordingStorageInfo(
     val configured: Boolean = true
 )
 
+data class TimeshiftBufferPlan(
+    val channelId: Long,
+    val channelName: String,
+    val requestedDurationMinutes: Int,
+    val maxDurationMinutes: Int,
+    val estimatedBytes: Long,
+    val availableBytes: Long,
+    val storagePath: String,
+    val storageLocation: RecordingStorageLocation,
+    val sourceType: DownloadSourceType,
+    val supported: Boolean,
+    val reason: String?
+)
+
 enum class ProviderAuthType {
     NONE,
     USER_PASSWORD,

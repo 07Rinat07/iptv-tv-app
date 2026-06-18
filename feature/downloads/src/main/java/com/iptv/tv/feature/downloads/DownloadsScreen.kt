@@ -34,6 +34,7 @@ import com.iptv.tv.core.model.RecordingRepeatMode
 import com.iptv.tv.core.model.RecordingSchedule
 import com.iptv.tv.core.model.RecordingStatus
 import com.iptv.tv.core.model.RecordingTask
+import com.iptv.tv.core.model.TimeshiftBufferPlan
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -141,6 +142,22 @@ fun DownloadsScreen(
                         ) {
                             Text(if (state.isProcessingRecordings) "Запись..." else "Обработать")
                         }
+                    }
+                    Text("Timeshift buffer", style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = state.timeshiftMinutesInput,
+                            onValueChange = viewModel::updateTimeshiftMinutes,
+                            modifier = Modifier.weight(1f),
+                            label = { Text("Буфер, мин") },
+                            singleLine = true
+                        )
+                        Button(onClick = viewModel::planTimeshiftBuffer) {
+                            Text("Проверить")
+                        }
+                    }
+                    state.lastTimeshiftPlan?.let { plan ->
+                        TimeshiftPlanSummary(plan)
                     }
                 }
             }
@@ -276,6 +293,28 @@ fun DownloadsScreen(
 }
 
 @Composable
+private fun TimeshiftPlanSummary(plan: TimeshiftBufferPlan) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = if (plan.supported) "Готово к timeshift" else "Timeshift заблокирован",
+            color = if (plan.supported) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Text("Канал: ${plan.channelName} (id=${plan.channelId})")
+        Text("Источник: ${plan.sourceType.toDownloadSourceTypeLabel()}")
+        Text("Запрошено: ${plan.requestedDurationMinutes} мин | доступно: ${plan.maxDurationMinutes} мин")
+        Text("Оценка буфера: ${plan.estimatedBytes.toStorageSizeLabel()}")
+        Text("Доступно под запись: ${plan.availableBytes.toStorageSizeLabel()}")
+        Text("Папка: ${plan.storageLocation.name} | ${plan.storagePath}")
+        plan.reason?.let { Text("Причина: $it", color = MaterialTheme.colorScheme.error) }
+    }
+}
+
+@Composable
 private fun RecordingCard(
     context: Context,
     recording: RecordingTask,
@@ -390,6 +429,16 @@ private fun String?.toRecordingFileSizeLabel(context: Context): String {
     val mib = bytes / (1024.0 * 1024.0)
     if (mib >= 1.0) return String.format(Locale.getDefault(), "%.1f MB", mib)
     val kib = bytes / 1024.0
+    return String.format(Locale.getDefault(), "%.0f KB", kib)
+}
+
+private fun Long.toStorageSizeLabel(): String {
+    if (this < 0L) return "неизвестно"
+    val gib = this / (1024.0 * 1024.0 * 1024.0)
+    if (gib >= 1.0) return String.format(Locale.getDefault(), "%.1f GB", gib)
+    val mib = this / (1024.0 * 1024.0)
+    if (mib >= 1.0) return String.format(Locale.getDefault(), "%.1f MB", mib)
+    val kib = this / 1024.0
     return String.format(Locale.getDefault(), "%.0f KB", kib)
 }
 

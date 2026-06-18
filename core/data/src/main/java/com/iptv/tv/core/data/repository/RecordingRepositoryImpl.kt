@@ -18,6 +18,7 @@ import com.iptv.tv.core.model.RecordingSchedule
 import com.iptv.tv.core.model.RecordingStatus
 import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.RecordingTask
+import com.iptv.tv.core.model.TimeshiftBufferPlan
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -237,6 +238,33 @@ class RecordingRepositoryImpl @Inject constructor(
             }
         }
         AppResult.Success(processed)
+    }
+
+    override suspend fun planTimeshiftBuffer(
+        channelId: Long,
+        requestedMinutes: Int
+    ): AppResult<TimeshiftBufferPlan> = withContext(Dispatchers.IO) {
+        val channel = channelDao.findById(channelId)
+            ?: return@withContext AppResult.Error("Канал не найден: id=$channelId")
+        val location = settingsRepository.observeRecordingStorageLocation().first()
+        val storageInfo = settingsRepository.getRecordingStorageInfo(location)
+        val plan = TimeshiftBufferPlanner.plan(
+            channelId = channel.id,
+            channelName = channel.name,
+            rawStreamUrl = channel.streamUrl,
+            storageInfo = storageInfo,
+            requestedMinutes = requestedMinutes
+        )
+        syncLogDao.insert(
+            SyncLogEntity(
+                playlistId = channel.playlistId,
+                status = if (plan.supported) "timeshift_plan_ready" else "timeshift_plan_blocked",
+                message = "channelId=${channel.id}, minutes=${plan.requestedDurationMinutes}, " +
+                    "maxMinutes=${plan.maxDurationMinutes}, source=${plan.sourceType}, reason=${plan.reason}",
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        AppResult.Success(plan)
     }
 
     private suspend fun ensureScheduledRecording(schedule: RecordingSchedule, now: Long): Int {

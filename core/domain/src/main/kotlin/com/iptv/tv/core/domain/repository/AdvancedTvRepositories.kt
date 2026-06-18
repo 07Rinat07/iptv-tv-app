@@ -9,6 +9,7 @@ import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.ProviderType
 import com.iptv.tv.core.model.RecordingSchedule
 import com.iptv.tv.core.model.RecordingTask
+import com.iptv.tv.core.model.TimeshiftBufferPlan
 import com.iptv.tv.core.model.TvHomeChannelState
 import kotlinx.coroutines.flow.Flow
 
@@ -42,6 +43,7 @@ interface RecordingRepository {
     suspend fun setScheduleEnabled(scheduleId: Long, enabled: Boolean): AppResult<Int>
     suspend fun deleteSchedule(scheduleId: Long): AppResult<Int>
     suspend fun processDueRecordings(maxConcurrent: Int = 1): AppResult<Int>
+    suspend fun planTimeshiftBuffer(channelId: Long, requestedMinutes: Int = 60): AppResult<TimeshiftBufferPlan>
 }
 
 interface ParentalControlRepository {
