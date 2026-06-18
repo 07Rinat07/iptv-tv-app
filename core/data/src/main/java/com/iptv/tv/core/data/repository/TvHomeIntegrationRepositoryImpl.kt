@@ -61,7 +61,10 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
     )
 
     override suspend fun publishWatchNext(): AppResult<Int> = withContext(Dispatchers.IO) {
-        if (!supportsTvHome()) return@withContext unsupportedResult()
+        if (!supportsTvHome()) {
+            addLog("tv_home_unsupported", "type=${TvHomeChannelType.WATCH_NEXT.name}, requires Android 8.0+")
+            return@withContext unsupportedResult()
+        }
         val state = tvHomeChannelDao.findByType(TvHomeChannelType.WATCH_NEXT.name)?.toModel()
             ?: TvHomeChannelState(
                 type = TvHomeChannelType.WATCH_NEXT,
@@ -69,12 +72,18 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
                 enabled = true,
                 lastPublishedAt = null
             )
-        if (!state.enabled) return@withContext AppResult.Success(0)
+        if (!state.enabled) {
+            addLog("tv_home_row_skipped", "type=${TvHomeChannelType.WATCH_NEXT.name}, reason=disabled")
+            return@withContext AppResult.Success(0)
+        }
 
         runCatching {
             deleteExistingWatchNext()
             val channel = recentChannels(limit = 1).firstOrNull()
-                ?: return@withContext AppResult.Success(0)
+                ?: run {
+                    addLog("tv_home_row_empty", "type=${TvHomeChannelType.WATCH_NEXT.name}, reason=no_recent_channels")
+                    return@withContext AppResult.Success(0)
+                }
             val values = previewValuesForChannel(channel)
             values.put(TvContract.WatchNextPrograms.COLUMN_WATCH_NEXT_TYPE, TvContract.WatchNextPrograms.WATCH_NEXT_TYPE_CONTINUE)
             values.put(TvContract.WatchNextPrograms.COLUMN_LAST_ENGAGEMENT_TIME_UTC_MILLIS, System.currentTimeMillis())
@@ -119,12 +128,28 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
         channels: List<ChannelEntity> = emptyList(),
         recordings: List<RecordingEntity> = emptyList()
     ): AppResult<Int> = withContext(Dispatchers.IO) {
-        if (!supportsTvHome()) return@withContext unsupportedResult()
+        if (!supportsTvHome()) {
+            addLog("tv_home_unsupported", "type=${type.name}, requires Android 8.0+")
+            return@withContext unsupportedResult()
+        }
         val state = tvHomeChannelDao.findByType(type.name)?.toModel()
             ?: TvHomeChannelState(type = type, providerChannelId = null, enabled = true, lastPublishedAt = null)
-        if (!state.enabled) return@withContext AppResult.Success(0)
+        if (!state.enabled) {
+            addLog("tv_home_row_skipped", "type=${type.name}, reason=disabled")
+            return@withContext AppResult.Success(0)
+        }
 
         runCatching {
+            val itemCount = channels.size + recordings.size
+            if (itemCount == 0) {
+                state.providerChannelId?.let { providerChannelId ->
+                    deletePreviewPrograms(providerChannelId)
+                    tvHomeChannelDao.markPublished(type.name, providerChannelId, System.currentTimeMillis())
+                }
+                addLog("tv_home_row_empty", "type=${type.name}, providerChannelId=${state.providerChannelId}, reason=no_items")
+                return@withContext AppResult.Success(0)
+            }
+
             val providerChannelId = ensureProviderChannel(type, displayName, state.providerChannelId)
             deletePreviewPrograms(providerChannelId)
 

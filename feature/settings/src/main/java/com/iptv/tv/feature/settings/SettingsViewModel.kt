@@ -505,11 +505,12 @@ class SettingsViewModel @Inject constructor(
             val published = results.sumOf { (_, result) ->
                 (result as? AppResult.Success<Int>)?.data ?: 0
             }
+            val summary = formatTvHomePublishSummary(results)
             _uiState.update {
                 it.copy(
                     isPublishingTvHome = false,
                     lastInfo = if (errors.isEmpty()) {
-                        "Android TV Home обновлён: $published карточек"
+                        "Android TV Home обновлён: $published карточек ($summary)"
                     } else {
                         null
                     },
@@ -945,6 +946,17 @@ private fun TvHomeChannelType.toUiLabel(): String {
         TvHomeChannelType.FAVORITES -> "Избранные каналы"
         TvHomeChannelType.WATCH_NEXT -> "Watch Next"
         TvHomeChannelType.RECORDINGS -> "Записи эфира"
+    }
+}
+
+internal fun formatTvHomePublishSummary(results: List<Pair<String, AppResult<Int>>>): String {
+    return results.joinToString(", ") { (label, result) ->
+        val value = when (result) {
+            is AppResult.Success -> result.data.toString()
+            is AppResult.Error -> "ошибка"
+            AppResult.Loading -> "..."
+        }
+        "$label=$value"
     }
 }
 
