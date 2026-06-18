@@ -8,6 +8,7 @@ import com.iptv.tv.core.database.entity.DownloadEntity
 import com.iptv.tv.core.database.entity.SyncLogEntity
 import com.iptv.tv.core.domain.repository.DownloadRepository
 import com.iptv.tv.core.model.DownloadStatus
+import com.iptv.tv.core.model.DownloadSourceType
 import com.iptv.tv.core.model.DownloadTask
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -30,6 +31,7 @@ class DownloadRepositoryImpl @Inject constructor(
         if (normalized.isBlank()) {
             return@withContext AppResult.Error("Источник загрузки пуст")
         }
+        val sourceType = DownloadSourceClassifier.classify(normalized)
 
         val entity = DownloadEntity(
             source = normalized,
@@ -42,7 +44,7 @@ class DownloadRepositoryImpl @Inject constructor(
             SyncLogEntity(
                 playlistId = null,
                 status = "download_enqueued",
-                message = "Task enqueued id=$id",
+                message = "Task enqueued id=$id, sourceType=${sourceType.name}, externalEngine=${DownloadSourceClassifier.requiresExternalEngine(sourceType)}",
                 createdAt = System.currentTimeMillis()
             )
         )
@@ -90,13 +92,16 @@ class DownloadRepositoryImpl @Inject constructor(
         val running = downloadDao.findByStatus(DownloadStatus.RUNNING.name).toMutableList()
         val availableSlots = (safeConcurrent - running.size).coerceAtLeast(0)
 
+        val startedTypes = mutableListOf<DownloadSourceType>()
         repeat(availableSlots) {
             val nextQueued = downloadDao.findFirstByStatus(DownloadStatus.QUEUED.name) ?: return@repeat
+            val sourceType = DownloadSourceClassifier.classify(nextQueued.source)
             downloadDao.updateState(
                 downloadId = nextQueued.id,
                 status = DownloadStatus.RUNNING.name,
                 progress = nextQueued.progress.coerceAtLeast(1)
             )
+            startedTypes += sourceType
             running += nextQueued.copy(
                 status = DownloadStatus.RUNNING.name,
                 progress = nextQueued.progress.coerceAtLeast(1)
@@ -104,13 +109,16 @@ class DownloadRepositoryImpl @Inject constructor(
         }
 
         var processed = 0
+        val processedTypes = mutableMapOf<DownloadSourceType, Int>()
         running.forEach { task ->
             val fresh = downloadDao.findById(task.id) ?: return@forEach
             if (fresh.status != DownloadStatus.RUNNING.name) return@forEach
 
-            val nextProgress = (fresh.progress + progressStepFor(fresh.source)).coerceAtMost(100)
+            val sourceType = DownloadSourceClassifier.classify(fresh.source)
+            val nextProgress = (fresh.progress + progressStepFor(fresh.source, sourceType)).coerceAtMost(100)
             val nextStatus = if (nextProgress >= 100) DownloadStatus.COMPLETED else DownloadStatus.RUNNING
             downloadDao.updateState(fresh.id, nextStatus.name, nextProgress)
+            processedTypes[sourceType] = (processedTypes[sourceType] ?: 0) + 1
             processed += 1
         }
 
@@ -119,7 +127,7 @@ class DownloadRepositoryImpl @Inject constructor(
                 SyncLogEntity(
                     playlistId = null,
                     status = "download_tick",
-                    message = "Download queue processed tasks=$processed",
+                    message = "Download queue processed tasks=$processed, started=${startedTypes.toTypeSummary()}, processedTypes=${processedTypes.toTypeSummary()}",
                     createdAt = System.currentTimeMillis()
                 )
             )
@@ -127,14 +135,37 @@ class DownloadRepositoryImpl @Inject constructor(
         AppResult.Success(processed)
     }
 
-    private fun progressStepFor(source: String): Int {
+    private fun progressStepFor(source: String, sourceType: DownloadSourceType): Int {
         val stableBucket = source.hashCode() and Int.MAX_VALUE
-        val base = PROGRESS_STEP_BASE + (stableBucket % 6)
+        val typeBase = when (sourceType) {
+            DownloadSourceType.MAGNET,
+            DownloadSourceType.ACESTREAM,
+            DownloadSourceType.TORRENT_FILE -> TORRENT_PROGRESS_STEP_BASE
+            DownloadSourceType.HLS_PLAYLIST -> HLS_PROGRESS_STEP_BASE
+            DownloadSourceType.HTTP_STREAM,
+            DownloadSourceType.LOCAL_FILE,
+            DownloadSourceType.CUSTOM -> PROGRESS_STEP_BASE
+        }
+        val base = typeBase + (stableBucket % 6)
         return base.coerceIn(6, 18)
+    }
+
+    private fun List<DownloadSourceType>.toTypeSummary(): String {
+        if (isEmpty()) return "none"
+        return groupingBy { it }.eachCount()
+            .entries
+            .joinToString("|") { "${it.key.name}:${it.value}" }
+    }
+
+    private fun Map<DownloadSourceType, Int>.toTypeSummary(): String {
+        if (isEmpty()) return "none"
+        return entries.joinToString("|") { "${it.key.name}:${it.value}" }
     }
 
     private companion object {
         const val MAX_CONCURRENT_DOWNLOADS = 5
         const val PROGRESS_STEP_BASE = 8
+        const val HLS_PROGRESS_STEP_BASE = 7
+        const val TORRENT_PROGRESS_STEP_BASE = 6
     }
 }

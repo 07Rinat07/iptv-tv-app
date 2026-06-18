@@ -27,7 +27,9 @@ import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import com.iptv.tv.core.model.DownloadSourceType
 import com.iptv.tv.core.model.DownloadStatus
+import com.iptv.tv.core.model.DownloadTask
 import com.iptv.tv.core.model.RecordingRepeatMode
 import com.iptv.tv.core.model.RecordingSchedule
 import com.iptv.tv.core.model.RecordingStatus
@@ -160,6 +162,12 @@ fun DownloadsScreen(
                 Text("Очередь загрузок пуста")
             }
         } else {
+            item {
+                Text(
+                    text = state.tasks.toDownloadSourceSummaryLabel(),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             items(state.tasks, key = { it.id }) { task ->
                 Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                     Column(
@@ -167,6 +175,7 @@ fun DownloadsScreen(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text("Задача #${task.id} | ${task.status.toDownloadStatusLabel()}")
+                        Text("Тип: ${task.sourceType.toDownloadSourceTypeLabel()}")
                         Text("Progress: ${task.progress}%")
                         Text("Source: ${task.source}")
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -487,6 +496,28 @@ private fun DownloadStatus.toDownloadStatusLabel(): String {
         DownloadStatus.FAILED -> "ошибка"
         DownloadStatus.CANCELED -> "отменено"
     }
+}
+
+private fun DownloadSourceType.toDownloadSourceTypeLabel(): String {
+    return when (this) {
+        DownloadSourceType.HTTP_STREAM -> "HTTP/HTTPS stream"
+        DownloadSourceType.HLS_PLAYLIST -> "HLS playlist (.m3u8)"
+        DownloadSourceType.TORRENT_FILE -> "Torrent file"
+        DownloadSourceType.MAGNET -> "Magnet link"
+        DownloadSourceType.ACESTREAM -> "Ace Stream"
+        DownloadSourceType.LOCAL_FILE -> "Локальный файл"
+        DownloadSourceType.CUSTOM -> "Пользовательский источник"
+    }
+}
+
+private fun List<DownloadTask>.toDownloadSourceSummaryLabel(): String {
+    if (isEmpty()) return "Нет задач"
+    return groupBy { it.sourceType }
+        .entries
+        .sortedBy { it.key.name }
+        .joinToString(" | ") { (type, tasks) ->
+            "${type.toDownloadSourceTypeLabel()}: ${tasks.size}"
+        }
 }
 
 private fun RecordingStatus.toRecordingStatusLabel(): String {

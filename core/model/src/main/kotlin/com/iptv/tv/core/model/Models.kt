@@ -183,6 +183,16 @@ enum class DownloadStatus {
     CANCELED
 }
 
+enum class DownloadSourceType {
+    HTTP_STREAM,
+    HLS_PLAYLIST,
+    TORRENT_FILE,
+    MAGNET,
+    ACESTREAM,
+    LOCAL_FILE,
+    CUSTOM
+}
+
 enum class RecordingStatus {
     SCHEDULED,
     RECORDING,
@@ -243,7 +253,8 @@ data class DownloadTask(
     val source: String,
     val progress: Int,
     val status: DownloadStatus,
-    val createdAt: Long
+    val createdAt: Long,
+    val sourceType: DownloadSourceType = DownloadSourceType.CUSTOM
 )
 
 data class RecordingTask(

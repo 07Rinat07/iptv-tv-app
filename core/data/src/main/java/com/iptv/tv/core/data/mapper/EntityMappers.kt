@@ -11,6 +11,7 @@ import com.iptv.tv.core.database.entity.RecordingEntity
 import com.iptv.tv.core.database.entity.RecordingScheduleEntity
 import com.iptv.tv.core.database.entity.SyncLogEntity
 import com.iptv.tv.core.database.entity.TvHomeChannelEntity
+import com.iptv.tv.core.data.repository.DownloadSourceClassifier
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.ChannelMetadata
@@ -100,7 +101,8 @@ fun DownloadEntity.toModel(): DownloadTask {
         source = source,
         progress = progress,
         status = runCatching { DownloadStatus.valueOf(status) }.getOrDefault(DownloadStatus.QUEUED),
-        createdAt = createdAt
+        createdAt = createdAt,
+        sourceType = DownloadSourceClassifier.classify(source)
     )
 }
 
