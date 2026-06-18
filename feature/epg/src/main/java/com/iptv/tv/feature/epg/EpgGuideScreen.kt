@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -39,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,6 +55,9 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
+import kotlinx.coroutines.flow.distinctUntilChanged
+
+private const val EPG_GRID_PREFETCH_THRESHOLD_ITEMS = 8
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -62,8 +67,27 @@ fun EpgGuideScreen(
     viewModel: EpgGuideViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    val listState = rememberLazyListState()
     val gridScrollState = rememberScrollState()
     var isProgramListExpanded by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(listState, state.rows.size, state.totalRowCount, state.isLoading) {
+        snapshotFlow {
+            val layoutInfo = listState.layoutInfo
+            val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            shouldPrefetchEpgRows(
+                lastVisibleItemIndex = lastVisibleIndex,
+                totalLazyItems = layoutInfo.totalItemsCount,
+                visibleRows = state.rows.size,
+                totalRows = state.totalRowCount,
+                isLoading = state.isLoading
+            )
+        }
+            .distinctUntilChanged()
+            .collect { shouldLoad ->
+                if (shouldLoad) viewModel.showMoreRows()
+            }
+    }
 
     state.selectedProgram?.let { selected ->
         EpgProgramDetailDialog(
@@ -79,6 +103,7 @@ fun EpgGuideScreen(
     }
 
     LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
             .padding(20.dp),
@@ -236,23 +261,39 @@ private fun EpgRowsPrefetchItem(
     totalRowCount: Int,
     onLoadMore: () -> Unit
 ) {
-    LaunchedEffect(loadedRowCount, totalRowCount) {
-        if (loadedRowCount < totalRowCount) {
-            onLoadMore()
-        }
-    }
     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
         Column(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "Подгружаем ещё каналы EPG: $loadedRowCount из $totalRowCount",
+                text = "Показано каналов EPG: $loadedRowCount из $totalRowCount",
                 style = MaterialTheme.typography.bodyMedium
             )
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            Text(
+                text = "Следующая пачка загрузится при прокрутке ниже. Можно подгрузить вручную.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = onLoadMore) {
+                Text("Показать ещё")
+            }
         }
     }
+}
+
+internal fun shouldPrefetchEpgRows(
+    lastVisibleItemIndex: Int,
+    totalLazyItems: Int,
+    visibleRows: Int,
+    totalRows: Int,
+    isLoading: Boolean,
+    thresholdItems: Int = EPG_GRID_PREFETCH_THRESHOLD_ITEMS
+): Boolean {
+    if (isLoading || visibleRows >= totalRows || totalRows <= 0) return false
+    if (lastVisibleItemIndex < 0 || totalLazyItems <= 0) return false
+    val prefetchStartIndex = (totalLazyItems - thresholdItems).coerceAtLeast(0)
+    return lastVisibleItemIndex >= prefetchStartIndex
 }
 
 @Composable
