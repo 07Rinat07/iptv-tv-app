@@ -67,6 +67,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Semaphore
@@ -145,7 +146,14 @@ class PlaylistRepositoryImpl @Inject constructor(
     }
 
     override fun observeChannels(playlistId: Long): Flow<List<Channel>> {
-        return channelDao.observeChannels(playlistId).map { rows -> rows.map { it.toModel() } }
+        return channelDao.observeChannels(playlistId)
+            .combine(observeParentalChannelGate()) { rows, parentalGate ->
+                rows
+                    .asSequence()
+                    .filterNot { it.isBlockedByParental(parentalGate) }
+                    .map { it.toModel() }
+                    .toList()
+            }
     }
 
     override suspend fun importFromUrl(url: String, name: String): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
@@ -604,6 +612,9 @@ class PlaylistRepositoryImpl @Inject constructor(
         if (channelId <= 0) return@withContext AppResult.Error("Invalid channel id")
         val channel = channelDao.findById(channelId)
             ?: return@withContext AppResult.Error("Channel not found: id=$channelId")
+        if (channel.isBlockedByParental(currentParentalChannelGate())) {
+            return@withContext AppResult.Error("Channel is blocked by parental control")
+        }
         AppResult.Success(channel.toModel())
     }
 
@@ -611,7 +622,12 @@ class PlaylistRepositoryImpl @Inject constructor(
         if (playlistId <= 0) return@withContext AppResult.Error("Invalid playlist id")
         val playlist = playlistDao.findById(playlistId)
             ?: return@withContext AppResult.Error("Playlist not found: id=$playlistId")
-        val channels = channelDao.getChannels(playlistId).map { it.toModel() }
+        val parentalGate = currentParentalChannelGate()
+        val channels = channelDao.getChannels(playlistId)
+            .asSequence()
+            .filterNot { it.isBlockedByParental(parentalGate) }
+            .map { it.toModel() }
+            .toList()
         val healthCounts = channels.groupingBy { it.health }.eachCount()
         val groups = channels
             .asSequence()
@@ -666,6 +682,9 @@ class PlaylistRepositoryImpl @Inject constructor(
         if (channelId <= 0) return@withContext AppResult.Error("Invalid channel id")
         val channelEntity = channelDao.findById(channelId)
             ?: return@withContext AppResult.Error("Channel not found: id=$channelId")
+        if (channelEntity.isBlockedByParental(currentParentalChannelGate())) {
+            return@withContext AppResult.Error("Channel is blocked by parental control")
+        }
         val playlist = playlistDao.findById(channelEntity.playlistId)
             ?: return@withContext AppResult.Error("Playlist not found: id=${channelEntity.playlistId}")
 
@@ -730,9 +749,11 @@ class PlaylistRepositoryImpl @Inject constructor(
             )
         }
 
+        val parentalGate = currentParentalChannelGate()
         val result = channelDao.getChannels(playlistId)
             .asSequence()
             .filter { !it.isHidden }
+            .filterNot { it.isBlockedByParental(parentalGate) }
             .mapNotNull { channel ->
                 val match = matchChannelToEpg(
                     channelName = channel.name,
@@ -751,6 +772,29 @@ class PlaylistRepositoryImpl @Inject constructor(
             .toMap()
 
         AppResult.Success(result)
+    }
+
+    private fun observeParentalChannelGate(): Flow<ParentalChannelGate> {
+        return context.settingsDataStore.data.map { prefs ->
+            ParentalChannelGate(
+                enabled = prefs[SettingsKeys.parentalEnabled] ?: false,
+                hideAdultChannels = prefs[SettingsKeys.parentalHideAdultChannels] ?: true,
+                blockedKeywords = ParentalChannelFilter.decodeKeywords(prefs[SettingsKeys.parentalBlockedKeywords])
+            )
+        }
+    }
+
+    private suspend fun currentParentalChannelGate(): ParentalChannelGate {
+        return observeParentalChannelGate().first()
+    }
+
+    private fun ChannelEntity.isBlockedByParental(gate: ParentalChannelGate): Boolean {
+        return ParentalChannelFilter.isBlocked(
+            name = name,
+            groupName = groupName,
+            tvgId = tvgId,
+            gate = gate
+        )
     }
 
     private suspend fun importParsedPlaylist(
