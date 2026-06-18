@@ -271,6 +271,33 @@ fun EditorScreen(
                         ChannelMetadataSummary(metadata = metadata)
                     }
                     OutlinedTextField(
+                        value = state.manualCountryInput,
+                        onValueChange = viewModel::updateManualCountry,
+                        label = { Text("Страна metadata") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = state.manualLanguageInput,
+                        onValueChange = viewModel::updateManualLanguage,
+                        label = { Text("Язык metadata") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = state.manualCategoryInput,
+                        onValueChange = viewModel::updateManualCategory,
+                        label = { Text("Категория metadata") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Button(
+                        onClick = viewModel::saveManualMetadata,
+                        enabled = state.editDraft.channelId != null && !state.isLoading
+                    ) {
+                        Text("Сохранить метаданные")
+                    }
+                    OutlinedTextField(
                         value = state.editDraft.streamUrl,
                         onValueChange = viewModel::updateDraftStreamUrl,
                         label = { Text("Stream URL") },
@@ -452,6 +479,10 @@ private fun ChannelMetadataSummary(metadata: ChannelMetadata) {
         )
         Text("Итоговый логотип: ${metadata.resolvedLogoUrl ?: "-"}")
         Text("Ручной логотип: ${metadata.manualLogoUrl ?: "-"}")
+        Text(
+            "Ручные поля: страна=${metadata.manualCountry ?: "-"} | " +
+                "язык=${metadata.manualLanguage ?: "-"} | категория=${metadata.manualCategory ?: "-"}"
+        )
     }
 }
 
@@ -489,6 +520,7 @@ private fun ChannelTitleWithLogo(channel: Channel, selected: Boolean) {
 private fun String?.toMetadataSourceLabel(): String {
     return when (this) {
         "manual" -> "ручной override"
+        "manual_metadata" -> "ручные метаданные"
         "playlist" -> "из плейлиста"
         "catalog:tvg-id" -> "каталог по tvg-id"
         "catalog:name" -> "каталог по имени"

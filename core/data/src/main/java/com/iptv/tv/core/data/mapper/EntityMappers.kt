@@ -272,7 +272,10 @@ fun ChannelMetadataEntity.toModel(): ChannelMetadata {
         resolvedLogoUrl = resolvedLogoUrl,
         manualLogoUrl = manualLogoUrl,
         metadataSource = metadataSource,
-        updatedAt = updatedAt
+        updatedAt = updatedAt,
+        manualCountry = manualCountry,
+        manualLanguage = manualLanguage,
+        manualCategory = manualCategory
     )
 }
 
@@ -285,6 +288,9 @@ fun ChannelMetadata.toEntity(): ChannelMetadataEntity {
         category = category,
         resolvedLogoUrl = resolvedLogoUrl,
         manualLogoUrl = manualLogoUrl,
+        manualCountry = manualCountry,
+        manualLanguage = manualLanguage,
+        manualCategory = manualCategory,
         metadataSource = metadataSource,
         updatedAt = updatedAt
     )

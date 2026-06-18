@@ -222,6 +222,9 @@ data class ChannelMetadataEntity(
     val category: String?,
     val resolvedLogoUrl: String?,
     val manualLogoUrl: String?,
+    val manualCountry: String?,
+    val manualLanguage: String?,
+    val manualCategory: String?,
     val metadataSource: String?,
     val updatedAt: Long
 )

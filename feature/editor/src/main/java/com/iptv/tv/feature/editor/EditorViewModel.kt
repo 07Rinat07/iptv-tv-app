@@ -54,6 +54,9 @@ data class EditorUiState(
     val customPlaylistName: String = "Мой плейлист",
     val editDraft: ChannelEditDraft = ChannelEditDraft(),
     val selectedMetadata: ChannelMetadata? = null,
+    val manualCountryInput: String = "",
+    val manualLanguageInput: String = "",
+    val manualCategoryInput: String = "",
     val externalLogoPackJson: String = "",
     val exportPreview: String? = null,
     val exportFileExtension: String = "m3u",
@@ -97,6 +100,9 @@ class EditorViewModel @Inject constructor(
                 selectedChannelIds = emptySet(),
                 editDraft = ChannelEditDraft(),
                 selectedMetadata = null,
+                manualCountryInput = "",
+                manualLanguageInput = "",
+                manualCategoryInput = "",
                 exportPreview = null,
                 exportedFilePath = null,
                 lastError = null,
@@ -118,6 +124,9 @@ class EditorViewModel @Inject constructor(
                 selectedChannelIds = selected,
                 editDraft = selectedChannel?.toDraft() ?: state.editDraft.takeIf { it.channelId in selected } ?: ChannelEditDraft(),
                 selectedMetadata = state.selectedMetadata.takeIf { it?.channelId == selectedChannel?.id },
+                manualCountryInput = state.manualCountryInput.takeIf { state.selectedMetadata?.channelId == selectedChannel?.id }.orEmpty(),
+                manualLanguageInput = state.manualLanguageInput.takeIf { state.selectedMetadata?.channelId == selectedChannel?.id }.orEmpty(),
+                manualCategoryInput = state.manualCategoryInput.takeIf { state.selectedMetadata?.channelId == selectedChannel?.id }.orEmpty(),
                 exportedFilePath = null,
                 lastError = null,
                 lastInfo = null
@@ -142,6 +151,9 @@ class EditorViewModel @Inject constructor(
                 selectedChannelIds = emptySet(),
                 editDraft = ChannelEditDraft(),
                 selectedMetadata = null,
+                manualCountryInput = "",
+                manualLanguageInput = "",
+                manualCategoryInput = "",
                 exportPreview = null,
                 exportedFilePath = null
             )
@@ -441,6 +453,9 @@ class EditorViewModel @Inject constructor(
                 selectedChannelIds = setOf(channelId),
                 editDraft = channel.toDraft(),
                 selectedMetadata = null,
+                manualCountryInput = "",
+                manualLanguageInput = "",
+                manualCategoryInput = "",
                 exportedFilePath = null,
                 lastError = null,
                 lastInfo = null
@@ -463,6 +478,18 @@ class EditorViewModel @Inject constructor(
 
     fun updateExternalLogoPackJson(value: String) {
         _uiState.update { it.copy(externalLogoPackJson = value, lastError = null) }
+    }
+
+    fun updateManualCountry(value: String) {
+        _uiState.update { it.copy(manualCountryInput = value, lastError = null) }
+    }
+
+    fun updateManualLanguage(value: String) {
+        _uiState.update { it.copy(manualLanguageInput = value, lastError = null) }
+    }
+
+    fun updateManualCategory(value: String) {
+        _uiState.update { it.copy(manualCategoryInput = value, lastError = null) }
     }
 
     fun updateDraftStreamUrl(value: String) {
@@ -527,6 +554,37 @@ class EditorViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             lastInfo = "Ручной логотип очищен, обновлено: ${result.data}",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> _uiState.update { it.copy(lastError = result.message) }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun saveManualMetadata() {
+        val state = _uiState.value
+        val channelId = state.editDraft.channelId
+        if (channelId == null) {
+            _uiState.update { it.copy(lastError = "Выберите канал для ручных метаданных") }
+            return
+        }
+        viewModelScope.launch {
+            when (
+                val result = channelMetadataRepository.setManualMetadata(
+                    channelId = channelId,
+                    country = state.manualCountryInput,
+                    language = state.manualLanguageInput,
+                    category = state.manualCategoryInput
+                )
+            ) {
+                is AppResult.Success -> {
+                    loadSelectedMetadata(channelId)
+                    _uiState.update {
+                        it.copy(
+                            lastInfo = "Ручные метаданные сохранены",
                             lastError = null
                         )
                     }
@@ -615,7 +673,11 @@ class EditorViewModel @Inject constructor(
                             effectivePlaylistId = null,
                             channels = emptyList(),
                             selectedChannelIds = emptySet(),
-                            editDraft = ChannelEditDraft()
+                            editDraft = ChannelEditDraft(),
+                            selectedMetadata = null,
+                            manualCountryInput = "",
+                            manualLanguageInput = "",
+                            manualCategoryInput = ""
                         )
                     } else {
                         state.copy(
@@ -679,7 +741,13 @@ class EditorViewModel @Inject constructor(
             when (val result = channelMetadataRepository.resolveMetadata(channelId)) {
                 is AppResult.Success -> _uiState.update { state ->
                     if (state.editDraft.channelId == channelId) {
-                        state.copy(selectedMetadata = result.data, lastError = null)
+                        state.copy(
+                            selectedMetadata = result.data,
+                            manualCountryInput = result.data?.manualCountry ?: result.data?.country.orEmpty(),
+                            manualLanguageInput = result.data?.manualLanguage ?: result.data?.language.orEmpty(),
+                            manualCategoryInput = result.data?.manualCategory ?: result.data?.category.orEmpty(),
+                            lastError = null
+                        )
                     } else {
                         state
                     }
@@ -717,6 +785,10 @@ class EditorViewModel @Inject constructor(
                 effectivePlaylistId = result.effectivePlaylistId,
                 selectedChannelIds = emptySet(),
                 editDraft = ChannelEditDraft(),
+                selectedMetadata = null,
+                manualCountryInput = "",
+                manualLanguageInput = "",
+                manualCategoryInput = "",
                 exportedFilePath = null,
                 lastInfo = "${result.message}: ${result.affectedCount}$copySuffix",
                 lastError = null

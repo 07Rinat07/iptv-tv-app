@@ -373,7 +373,10 @@ data class ChannelMetadata(
     val resolvedLogoUrl: String?,
     val manualLogoUrl: String?,
     val metadataSource: String?,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val manualCountry: String? = null,
+    val manualLanguage: String? = null,
+    val manualCategory: String? = null
 )
 
 data class TvHomeChannelState(

@@ -63,6 +63,30 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         AppResult.Success(updated)
     }
 
+    override suspend fun setManualMetadata(
+        channelId: Long,
+        country: String?,
+        language: String?,
+        category: String?
+    ): AppResult<Int> = withContext(Dispatchers.IO) {
+        val channel = channelDao.findById(channelId)
+            ?: return@withContext AppResult.Error("Канал не найден: id=$channelId")
+        val existing = channelMetadataDao.findByChannelId(channelId)?.toModel()
+        val metadataWithOverrides = existing.copyOrNew(channel).copy(
+            manualCountry = normalizeOverride(country),
+            manualLanguage = normalizeOverride(language),
+            manualCategory = normalizeOverride(category)
+        )
+        val metadata = buildMetadata(channel = channel, existing = metadataWithOverrides)
+            .copy(updatedAt = System.currentTimeMillis())
+        channelMetadataDao.upsert(metadata.toEntity())
+        addLog(
+            status = "metadata_manual_fields",
+            message = "channelId=${channel.id}, country=${metadata.manualCountry}, language=${metadata.manualLanguage}, category=${metadata.manualCategory}"
+        )
+        AppResult.Success(1)
+    }
+
     override suspend fun refreshMetadata(playlistId: Long): AppResult<Int> = withContext(Dispatchers.IO) {
         refreshMetadataInternal(
             playlistId = playlistId,
@@ -140,22 +164,49 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
             playlistSource = playlistSource
         )
         val resolvedLogo = existing?.manualLogoUrl ?: channel.logo ?: catalogMatch?.url
+        val hasManualFields = existing.hasManualFields()
         return ChannelMetadata(
             channelId = channel.id,
             normalizedName = normalizeName(channel.name),
-            country = existing?.country ?: catalogMatch?.entry?.country ?: inferred.country,
-            language = existing?.language ?: catalogMatch?.entry?.language ?: inferred.language,
-            category = existing?.category ?: catalogMatch?.entry?.category ?: inferred.category,
+            country = existing?.manualCountry ?: catalogMatch?.entry?.country ?: inferred.country,
+            language = existing?.manualLanguage ?: catalogMatch?.entry?.language ?: inferred.language,
+            category = existing?.manualCategory ?: catalogMatch?.entry?.category ?: inferred.category,
             resolvedLogoUrl = resolvedLogo,
             manualLogoUrl = existing?.manualLogoUrl,
             metadataSource = when {
+                hasManualFields -> "manual_metadata"
                 existing?.manualLogoUrl != null -> "manual"
                 !channel.logo.isNullOrBlank() -> "playlist"
                 catalogMatch != null -> catalogMatch.source
                 else -> existing?.metadataSource
             },
+            updatedAt = System.currentTimeMillis(),
+            manualCountry = existing?.manualCountry,
+            manualLanguage = existing?.manualLanguage,
+            manualCategory = existing?.manualCategory
+        )
+    }
+
+    private fun ChannelMetadata?.copyOrNew(channel: ChannelEntity): ChannelMetadata {
+        return this ?: ChannelMetadata(
+            channelId = channel.id,
+            normalizedName = normalizeName(channel.name),
+            country = null,
+            language = null,
+            category = null,
+            resolvedLogoUrl = channel.logo,
+            manualLogoUrl = null,
+            metadataSource = null,
             updatedAt = System.currentTimeMillis()
         )
+    }
+
+    private fun ChannelMetadata?.hasManualFields(): Boolean {
+        return this?.manualCountry != null || this?.manualLanguage != null || this?.manualCategory != null
+    }
+
+    private fun normalizeOverride(value: String?): String? {
+        return value?.trim()?.ifBlank { null }
     }
 
     private fun inferMetadata(channel: ChannelEntity, playlistSource: String?): InferredMetadata {

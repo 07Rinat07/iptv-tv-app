@@ -58,6 +58,12 @@ interface ParentalControlRepository {
 interface ChannelMetadataRepository {
     suspend fun resolveMetadata(channelId: Long): AppResult<ChannelMetadata?>
     suspend fun setManualLogo(channelId: Long, logoUrl: String?): AppResult<Int>
+    suspend fun setManualMetadata(
+        channelId: Long,
+        country: String?,
+        language: String?,
+        category: String?
+    ): AppResult<Int>
     suspend fun refreshMetadata(playlistId: Long): AppResult<Int>
     suspend fun refreshMetadataWithLogoPack(playlistId: Long, logoPackJson: String): AppResult<Int>
 }
