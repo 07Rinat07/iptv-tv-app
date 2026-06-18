@@ -194,14 +194,67 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
         if (existingProviderChannelId != null) {
             val uri = TvContract.buildChannelUri(existingProviderChannelId)
             val updated = context.contentResolver.update(uri, values, null, null)
-            if (updated > 0) return existingProviderChannelId
+            if (
+                TvHomeProviderChannelRecovery.decide(
+                    existingProviderChannelId = existingProviderChannelId,
+                    existingUpdateRows = updated,
+                    discoveredProviderChannelId = null,
+                    discoveredUpdateRows = null
+                ) == TvHomeProviderChannelAction.KEEP_EXISTING
+            ) {
+                return existingProviderChannelId
+            }
+            addLog(
+                status = "tv_home_channel_missing",
+                message = "type=${type.name}, staleProviderChannelId=$existingProviderChannelId"
+            )
+        }
+
+        val discoveredProviderChannelId = findProviderChannelId(type)
+        if (discoveredProviderChannelId != null && discoveredProviderChannelId != existingProviderChannelId) {
+            val uri = TvContract.buildChannelUri(discoveredProviderChannelId)
+            val updated = context.contentResolver.update(uri, values, null, null)
+            if (
+                TvHomeProviderChannelRecovery.decide(
+                    existingProviderChannelId = existingProviderChannelId,
+                    existingUpdateRows = 0,
+                    discoveredProviderChannelId = discoveredProviderChannelId,
+                    discoveredUpdateRows = updated
+                ) == TvHomeProviderChannelAction.REUSE_DISCOVERED
+            ) {
+                TvContract.requestChannelBrowsable(context, discoveredProviderChannelId)
+                addLog(
+                    status = "tv_home_channel_recovered",
+                    message = "type=${type.name}, providerChannelId=$discoveredProviderChannelId"
+                )
+                return discoveredProviderChannelId
+            }
         }
 
         val uri = context.contentResolver.insert(TvContract.Channels.CONTENT_URI, values)
             ?: error("TvProvider did not create channel for ${type.name}")
         val channelId = ContentUris.parseId(uri)
         TvContract.requestChannelBrowsable(context, channelId)
+        addLog("tv_home_channel_created", "type=${type.name}, providerChannelId=$channelId")
         return channelId
+    }
+
+    @TargetApi(26)
+    private fun findProviderChannelId(type: TvHomeChannelType): Long? {
+        val expectedProviderId = providerIdFor(type)
+        context.contentResolver.query(
+            TvContract.Channels.CONTENT_URI,
+            arrayOf(BaseColumns._ID, TvContract.Channels.COLUMN_INTERNAL_PROVIDER_ID),
+            "${TvContract.Channels.COLUMN_INTERNAL_PROVIDER_ID} = ?",
+            arrayOf(expectedProviderId),
+            null
+        )?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(BaseColumns._ID)
+            if (cursor.moveToFirst()) {
+                return cursor.getLong(idColumn)
+            }
+        }
+        return null
     }
 
     @TargetApi(26)
