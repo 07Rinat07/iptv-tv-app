@@ -102,6 +102,26 @@ class PlayerViewModelMultiviewTest {
     }
 
     @Test
+    fun playChannelInPane_startsThirdPaneAndEnablesFourUp() = runTest(dispatcher) {
+        val channels = listOf(
+            testChannel(id = 10L, name = "News HD", streamUrl = "https://example.com/live/news.m3u8"),
+            testChannel(id = 11L, name = "Sports HD", streamUrl = "https://example.com/live/sports.m3u8")
+        )
+        val viewModel = createViewModel(channels = channels, supportedPaneCount = 4)
+        advanceUntilIdle()
+
+        viewModel.playChannelInPane(channelId = 11L, paneIndex = 3)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.multiviewEnabled)
+        assertEquals(MultiviewMode.FOUR_UP, state.multiviewMode)
+        assertNotNull(state.tertiaryInternalSession)
+        assertEquals("Sports HD", state.tertiaryInternalSession?.channelName)
+        assertNull(state.lastError)
+    }
+
+    @Test
     fun playChannelInPane_rejectsAceDescriptorForAdditionalPane() = runTest(dispatcher) {
         val channels = listOf(
             testChannel(id = 10L, name = "Torrent Channel", streamUrl = "acestream://abcdef1234567890")

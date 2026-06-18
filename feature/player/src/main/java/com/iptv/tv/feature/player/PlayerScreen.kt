@@ -179,6 +179,7 @@ fun PlayerScreen(
     var showActions by rememberSaveable { mutableStateOf(false) }
     var showStreamTools by rememberSaveable { mutableStateOf(false) }
     var showEpgWizard by rememberSaveable { mutableStateOf(false) }
+    var selectedMultiviewTargetPane by rememberSaveable { mutableStateOf(2) }
     val selectedChannelName = state.channels.firstOrNull { it.id == state.selectedChannelId }?.name
     val multiviewLabel = when (state.multiviewMode) {
         MultiviewMode.OFF -> "выкл"
@@ -200,6 +201,19 @@ fun PlayerScreen(
         state.tertiaryInternalSession,
         state.quaternaryInternalSession
     )
+    val multiviewTargetChannelId = when (selectedMultiviewTargetPane) {
+        2 -> state.secondaryInternalSession?.channelId
+        3 -> state.tertiaryInternalSession?.channelId
+        4 -> state.quaternaryInternalSession?.channelId
+        else -> null
+    }
+
+    LaunchedEffect(configuredPaneIndices, availablePaneTargets) {
+        val validTargets = configuredPaneIndices.ifEmpty { availablePaneTargets }
+        if (validTargets.isNotEmpty() && selectedMultiviewTargetPane !in validTargets) {
+            selectedMultiviewTargetPane = validTargets.first()
+        }
+    }
 
     Box(
         modifier = Modifier.fillMaxSize()
@@ -496,11 +510,14 @@ fun PlayerScreen(
                             primarySession = session,
                             additionalSessions = multiviewSessions,
                             selectedChannelName = selectedChannelName,
+                            targetPaneIndex = selectedMultiviewTargetPane,
+                            targetPaneIndices = configuredPaneIndices,
                             scale = state.playerVideoScale,
                             onPrimaryReady = viewModel::onInternalPlaybackReady,
                             onPrimaryError = { message -> viewModel.onInternalPlaybackError(message, context) },
                             onPaneReady = viewModel::onAdditionalPlaybackReady,
                             onPaneError = viewModel::onAdditionalPlaybackError,
+                            onTargetPaneSelected = { paneIndex -> selectedMultiviewTargetPane = paneIndex },
                             onTogglePrimaryExpanded = viewModel::toggleInternalPlayerSize,
                             onStopPane = viewModel::stopPane
                         )
@@ -510,8 +527,12 @@ fun PlayerScreen(
                                     .fillMaxWidth()
                                     .padding(top = 10.dp),
                                 channels = filteredChannels,
-                                selectedChannelId = state.selectedChannelId,
-                                onSelect = viewModel::playChannelInternal
+                                selectedChannelId = multiviewTargetChannelId,
+                                title = "Быстрый выбор для окна $selectedMultiviewTargetPane",
+                                hint = "OK: отправить канал в окно $selectedMultiviewTargetPane. Переключите окно кнопками выше.",
+                                onSelect = { channelId ->
+                                    viewModel.playChannelInPane(channelId, selectedMultiviewTargetPane)
+                                }
                             )
                         }
                     } else {
@@ -785,11 +806,14 @@ private fun MultiviewPanel(
     primarySession: InternalPlaybackSession?,
     additionalSessions: List<InternalPlaybackSession?>,
     selectedChannelName: String?,
+    targetPaneIndex: Int,
+    targetPaneIndices: List<Int>,
     scale: PlayerVideoScale,
     onPrimaryReady: () -> Unit,
     onPrimaryError: (String) -> Unit,
     onPaneReady: (Int) -> Unit,
     onPaneError: (Int, String) -> Unit,
+    onTargetPaneSelected: (Int) -> Unit,
     onTogglePrimaryExpanded: () -> Unit,
     onStopPane: (Int) -> Unit
 ) {
@@ -823,6 +847,31 @@ private fun MultiviewPanel(
                             Text("Окно $paneIndex: стоп")
                         }
                     }
+            }
+        }
+        if (targetPaneIndices.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "Быстрый выбор канала: целевое окно $targetPaneIndex",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    targetPaneIndices.forEach { paneIndex ->
+                        if (paneIndex == targetPaneIndex) {
+                            Button(onClick = { onTargetPaneSelected(paneIndex) }) {
+                                Text("Окно $paneIndex")
+                            }
+                        } else {
+                            OutlinedButton(onClick = { onTargetPaneSelected(paneIndex) }) {
+                                Text("Окно $paneIndex")
+                            }
+                        }
+                    }
+                }
             }
         }
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -1041,6 +1090,8 @@ private fun ChannelQuickPanel(
     modifier: Modifier = Modifier,
     channels: List<Channel>,
     selectedChannelId: Long?,
+    title: String = "Список каналов",
+    hint: String = "Прокрутка + OK: выбрать и сразу играть.",
     onSelect: (Long) -> Unit
 ) {
     val limited = channels.take(CHANNEL_QUICK_PANEL_LIMIT)
@@ -1093,9 +1144,9 @@ private fun ChannelQuickPanel(
                 .focusGroup(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Список каналов", style = MaterialTheme.typography.titleSmall)
+            Text(title, style = MaterialTheme.typography.titleSmall)
             Text(
-                "Прокрутка + OK: выбрать и сразу играть. Показано: ${limited.size}${if (channels.size > limited.size) " из ${channels.size}" else ""}",
+                "$hint Показано: ${limited.size}${if (channels.size > limited.size) " из ${channels.size}" else ""}",
                 style = MaterialTheme.typography.bodySmall
             )
             Text(
