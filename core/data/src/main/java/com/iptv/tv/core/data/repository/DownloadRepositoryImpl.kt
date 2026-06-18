@@ -7,6 +7,7 @@ import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.DownloadEntity
 import com.iptv.tv.core.database.entity.SyncLogEntity
 import com.iptv.tv.core.domain.repository.DownloadRepository
+import com.iptv.tv.core.domain.repository.EngineRepository
 import com.iptv.tv.core.model.DownloadStatus
 import com.iptv.tv.core.model.DownloadSourceType
 import com.iptv.tv.core.model.DownloadTask
@@ -20,7 +21,8 @@ import javax.inject.Singleton
 @Singleton
 class DownloadRepositoryImpl @Inject constructor(
     private val downloadDao: DownloadDao,
-    private val syncLogDao: SyncLogDao
+    private val syncLogDao: SyncLogDao,
+    private val engineRepository: EngineRepository
 ) : DownloadRepository {
     override fun observeDownloads(limit: Int): Flow<List<DownloadTask>> {
         return downloadDao.observeDownloads(limit).map { rows -> rows.map { it.toModel() } }
@@ -96,15 +98,49 @@ class DownloadRepositoryImpl @Inject constructor(
         repeat(availableSlots) {
             val nextQueued = downloadDao.findFirstByStatus(DownloadStatus.QUEUED.name) ?: return@repeat
             val sourceType = DownloadSourceClassifier.classify(nextQueued.source)
+            val startProgress = if (DownloadSourceClassifier.requiresExternalEngine(sourceType)) {
+                when (val resolveResult = engineRepository.resolveTorrentStream(nextQueued.source)) {
+                    is AppResult.Success -> {
+                        syncLogDao.insert(
+                            SyncLogEntity(
+                                playlistId = null,
+                                status = "download_engine_resolved",
+                                message = "downloadId=${nextQueued.id}, sourceType=${sourceType.name}, resolved=${resolveResult.data.take(LOG_VALUE_LIMIT)}",
+                                createdAt = System.currentTimeMillis()
+                            )
+                        )
+                        nextQueued.progress.coerceAtLeast(ENGINE_RESOLVED_PROGRESS)
+                    }
+                    is AppResult.Error -> {
+                        downloadDao.updateState(
+                            downloadId = nextQueued.id,
+                            status = DownloadStatus.FAILED.name,
+                            progress = nextQueued.progress
+                        )
+                        syncLogDao.insert(
+                            SyncLogEntity(
+                                playlistId = null,
+                                status = "download_engine_error",
+                                message = "downloadId=${nextQueued.id}, sourceType=${sourceType.name}, reason=${resolveResult.message.take(LOG_VALUE_LIMIT)}",
+                                createdAt = System.currentTimeMillis()
+                            )
+                        )
+                        return@repeat
+                    }
+                    AppResult.Loading -> return@repeat
+                }
+            } else {
+                nextQueued.progress.coerceAtLeast(1)
+            }
             downloadDao.updateState(
                 downloadId = nextQueued.id,
                 status = DownloadStatus.RUNNING.name,
-                progress = nextQueued.progress.coerceAtLeast(1)
+                progress = startProgress
             )
             startedTypes += sourceType
             running += nextQueued.copy(
                 status = DownloadStatus.RUNNING.name,
-                progress = nextQueued.progress.coerceAtLeast(1)
+                progress = startProgress
             )
         }
 
@@ -167,5 +203,7 @@ class DownloadRepositoryImpl @Inject constructor(
         const val PROGRESS_STEP_BASE = 8
         const val HLS_PROGRESS_STEP_BASE = 7
         const val TORRENT_PROGRESS_STEP_BASE = 6
+        const val ENGINE_RESOLVED_PROGRESS = 10
+        const val LOG_VALUE_LIMIT = 160
     }
 }
