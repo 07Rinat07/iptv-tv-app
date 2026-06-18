@@ -296,6 +296,10 @@ fun PlayerScreen(
                                 "Multiview: $multiviewLabel | максимум=${state.multiviewSupportedPaneCount}-up | " +
                                     "окна=${multiviewSessions.mapIndexed { index, session -> "${index + 2}=${session?.channelName ?: "-"}" }.joinToString()}"
                             )
+                            Text("Multiview capability: ${state.multiviewCapabilitySummary}")
+                            if (state.multiviewCapabilityWarnings.isNotEmpty()) {
+                                Text("Multiview ограничения: ${state.multiviewCapabilityWarnings.joinToString("; ")}")
+                            }
                             Text("Встроенный плеер: двойной клик по видео = fullscreen/обычный режим.")
                             Text("VLC: сначала запускается прямой fullscreen, затем fallback совместимости.")
                             val aceDescriptorLabel = state.selectedAceDescriptor?.let { descriptor ->
@@ -365,6 +369,11 @@ fun PlayerScreen(
                             ) {
                                 Text("Multiview: 4-up")
                             }
+                            Text(
+                                state.multiviewCapabilitySummary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                             configuredPaneIndices.forEach { paneIndex ->
                                 Button(
                                     onClick = { viewModel.stopPane(paneIndex) },

@@ -67,15 +67,62 @@ enum class MultiviewMode(val paneCount: Int) {
     FOUR_UP(4)
 }
 
+private const val MULTIVIEW_FOUR_UP_MIN_CPU = 6
+private const val MULTIVIEW_FOUR_UP_MIN_HEAP_BYTES = 512L * 1024L * 1024L
+
+private fun defaultMultiviewDeviceCapability(): MultiviewDeviceCapability {
+    return evaluateMultiviewDeviceCapability(
+        cpuCount = Runtime.getRuntime().availableProcessors(),
+        maxMemoryBytes = Runtime.getRuntime().maxMemory()
+    )
+}
+
 internal fun calculateSupportedMultiviewPaneCount(
     cpuCount: Int,
     maxMemoryBytes: Long
 ): Int {
-    return if (cpuCount >= 6 && maxMemoryBytes >= 512L * 1024L * 1024L) {
-        4
-    } else {
-        2
+    return evaluateMultiviewDeviceCapability(
+        cpuCount = cpuCount,
+        maxMemoryBytes = maxMemoryBytes
+    ).supportedPaneCount
+}
+
+internal data class MultiviewDeviceCapability(
+    val supportedPaneCount: Int,
+    val cpuCount: Int,
+    val maxMemoryBytes: Long,
+    val warnings: List<String>
+) {
+    val summary: String
+        get() {
+            val memoryMb = (maxMemoryBytes / (1024L * 1024L)).coerceAtLeast(0L)
+            val verdict = if (supportedPaneCount >= 4) {
+                "4-up разрешён"
+            } else {
+                "4-up отключён, доступен 2-up"
+            }
+            return "$verdict | CPU=$cpuCount | heap=${memoryMb}MB"
+        }
+}
+
+internal fun evaluateMultiviewDeviceCapability(
+    cpuCount: Int,
+    maxMemoryBytes: Long
+): MultiviewDeviceCapability {
+    val warnings = buildList {
+        if (cpuCount < MULTIVIEW_FOUR_UP_MIN_CPU) {
+            add("CPU ядер меньше $MULTIVIEW_FOUR_UP_MIN_CPU")
+        }
+        if (maxMemoryBytes < MULTIVIEW_FOUR_UP_MIN_HEAP_BYTES) {
+            add("heap меньше ${MULTIVIEW_FOUR_UP_MIN_HEAP_BYTES / (1024L * 1024L)}MB")
+        }
     }
+    return MultiviewDeviceCapability(
+        supportedPaneCount = if (warnings.isEmpty()) 4 else 2,
+        cpuCount = cpuCount,
+        maxMemoryBytes = maxMemoryBytes,
+        warnings = warnings
+    )
 }
 
 enum class PlayerVideoScale {
@@ -126,10 +173,9 @@ data class PlayerUiState(
     val quaternaryInternalSession: InternalPlaybackSession? = null,
     val multiviewEnabled: Boolean = false,
     val multiviewMode: MultiviewMode = MultiviewMode.OFF,
-    val multiviewSupportedPaneCount: Int = calculateSupportedMultiviewPaneCount(
-        cpuCount = Runtime.getRuntime().availableProcessors(),
-        maxMemoryBytes = Runtime.getRuntime().maxMemory()
-    ),
+    val multiviewSupportedPaneCount: Int = defaultMultiviewDeviceCapability().supportedPaneCount,
+    val multiviewCapabilitySummary: String = defaultMultiviewDeviceCapability().summary,
+    val multiviewCapabilityWarnings: List<String> = defaultMultiviewDeviceCapability().warnings,
     val playerVideoScale: PlayerVideoScale = PlayerVideoScale.FIT,
     val internalPlayerExpanded: Boolean = false,
     val testStreamUrl: String = "",
@@ -154,15 +200,22 @@ class PlayerViewModel @Inject constructor(
     private val historyRepository: HistoryRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
-    private val supportedMultiviewPaneCount: Int =
-        savedStateHandle.get<Int>(PLAYER_MULTIVIEW_SUPPORTED_PANES_ARG)
-            ?: calculateSupportedMultiviewPaneCount(
+    private val multiviewDeviceCapability: MultiviewDeviceCapability =
+        savedStateHandle.get<Int>(PLAYER_MULTIVIEW_SUPPORTED_PANES_ARG)?.let { supportedPaneCount ->
+            MultiviewDeviceCapability(
+                supportedPaneCount = supportedPaneCount.coerceAtLeast(2),
                 cpuCount = Runtime.getRuntime().availableProcessors(),
-                maxMemoryBytes = Runtime.getRuntime().maxMemory()
+                maxMemoryBytes = Runtime.getRuntime().maxMemory(),
+                warnings = if (supportedPaneCount >= 4) emptyList() else listOf("override: 4-up отключён")
             )
+        } ?: defaultMultiviewDeviceCapability()
 
     private val _uiState = MutableStateFlow(
-        PlayerUiState(multiviewSupportedPaneCount = supportedMultiviewPaneCount)
+        PlayerUiState(
+            multiviewSupportedPaneCount = multiviewDeviceCapability.supportedPaneCount,
+            multiviewCapabilitySummary = multiviewDeviceCapability.summary,
+            multiviewCapabilityWarnings = multiviewDeviceCapability.warnings
+        )
     )
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
@@ -1733,7 +1786,15 @@ class PlayerViewModel @Inject constructor(
         if (mode == MultiviewMode.FOUR_UP && state.multiviewSupportedPaneCount < 4) {
             _uiState.update {
                 it.copy(
-                    lastError = "4-up пока недоступен на этом устройстве. Доступен режим 2-up.",
+                    lastError = buildString {
+                        append("4-up пока недоступен на этом устройстве. Доступен режим 2-up.")
+                        val reason = state.multiviewCapabilityWarnings.joinToString("; ")
+                        if (reason.isNotBlank()) {
+                            append(" Причина: ")
+                            append(reason)
+                            append(".")
+                        }
+                    },
                     lastInfo = null
                 )
             }

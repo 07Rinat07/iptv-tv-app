@@ -83,6 +83,19 @@ class PlayerViewModelMultiviewTest {
     }
 
     @Test
+    fun evaluateMultiviewDeviceCapability_explainsFourUpLimit() {
+        val capability = evaluateMultiviewDeviceCapability(
+            cpuCount = 4,
+            maxMemoryBytes = 256L * 1024L * 1024L
+        )
+
+        assertEquals(2, capability.supportedPaneCount)
+        assertTrue(capability.summary.contains("4-up отключён"))
+        assertTrue(capability.warnings.any { it.contains("CPU") })
+        assertTrue(capability.warnings.any { it.contains("heap") })
+    }
+
+    @Test
     fun playChannelInPane_startsSecondPaneAndEnablesTwoUp() = runTest(dispatcher) {
         val channels = listOf(
             testChannel(id = 10L, name = "News HD", streamUrl = "https://example.com/live/news.m3u8")
@@ -170,6 +183,7 @@ class PlayerViewModelMultiviewTest {
         val state = viewModel.uiState.value
         assertEquals(MultiviewMode.OFF, state.multiviewMode)
         assertTrue(state.lastError?.contains("4-up") == true)
+        assertTrue(state.lastError?.contains("Причина") == true)
     }
 
     @Test
