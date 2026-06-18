@@ -3,6 +3,7 @@ package com.iptv.tv.core.data.repository
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.json.JSONArray
+import org.json.JSONObject
 import java.net.URI
 import java.text.Normalizer
 import java.util.Locale
@@ -33,6 +34,11 @@ class LogoCatalogResolver private constructor(
     constructor() : this(assetReader = null, baseEntries = DEFAULT_ENTRIES)
 
     internal constructor(baseEntries: List<LogoCatalogEntry>) : this(assetReader = null, baseEntries = baseEntries)
+
+    internal constructor(baseEntries: List<LogoCatalogEntry>, packJson: String) : this(
+        assetReader = { packJson },
+        baseEntries = baseEntries
+    )
 
     fun resolve(
         name: String,
@@ -99,41 +105,66 @@ class LogoCatalogResolver private constructor(
 
         private fun parseEntries(rawJson: String?): List<LogoCatalogEntry> {
             if (rawJson.isNullOrBlank()) return emptyList()
-            val root = runCatching { JSONArray(rawJson) }.getOrNull() ?: return emptyList()
+            val root = parseLogoArray(rawJson) ?: return emptyList()
             return buildList {
                 for (index in 0 until root.length()) {
                     val item = root.optJSONObject(index) ?: continue
-                    val logoUrl = item.optString("logo").trim()
+                    val logoUrl = item.firstString("logo", "logoUrl", "url", "icon", "image")
                     if (logoUrl.isBlank()) continue
                     add(
                         LogoCatalogEntry(
                             logoUrl = logoUrl,
-                            tvgIds = item.optStringSet("tvgIds") { it.normalizeTvgId() },
-                            names = item.optStringSet("names") { normalizeName(it) },
-                            sourceHosts = item.optStringSet("sourceHosts") {
+                            tvgIds = item.optStringSet("tvgIds", "tvgId", "tvg-id", "channelId", "id") {
+                                it.normalizeTvgId()
+                            },
+                            names = item.optStringSet("names", "name", "title", "channel") { normalizeName(it) },
+                            sourceHosts = item.optStringSet("sourceHosts", "sourceHost", "domains", "domain", "host") {
                                 it.trim().lowercase(Locale.ROOT)
                             },
-                            country = item.optString("country").trim().ifBlank { null },
-                            language = item.optString("language").trim().ifBlank { null },
-                            category = item.optString("category").trim().ifBlank { null }
+                            country = item.firstString("country", "countryCode").ifBlank { null },
+                            language = item.firstString("language", "lang").ifBlank { null },
+                            category = item.firstString("category", "group", "genre").ifBlank { null }
                         )
                     )
                 }
             }
         }
 
-        private fun org.json.JSONObject.optStringSet(
-            key: String,
+        private fun parseLogoArray(rawJson: String): JSONArray? {
+            runCatching { JSONArray(rawJson) }.getOrNull()?.let { return it }
+            val root = runCatching { JSONObject(rawJson) }.getOrNull() ?: return null
+            return root.optJSONArray("logos")
+                ?: root.optJSONArray("channels")
+                ?: root.optJSONArray("items")
+                ?: JSONArray().put(root)
+        }
+
+        private fun JSONObject.optStringSet(
+            vararg keys: String,
             transform: (String) -> String
         ): Set<String> {
-            val array = optJSONArray(key) ?: return emptySet()
             return buildSet {
-                for (index in 0 until array.length()) {
-                    transform(array.optString(index))
-                        .takeIf { it.isNotBlank() }
-                        ?.let(::add)
+                keys.forEach { key ->
+                    val array = optJSONArray(key)
+                    if (array != null) {
+                        for (index in 0 until array.length()) {
+                            transform(array.optString(index))
+                                .takeIf { it.isNotBlank() }
+                                ?.let(::add)
+                        }
+                    } else {
+                        transform(optString(key))
+                            .takeIf { it.isNotBlank() }
+                            ?.let(::add)
+                    }
                 }
             }
+        }
+
+        private fun JSONObject.firstString(vararg keys: String): String {
+            return keys.firstNotNullOfOrNull { key ->
+                optString(key).trim().takeIf { it.isNotBlank() }
+            }.orEmpty()
         }
 
         private fun String.normalizeTvgId(): String {

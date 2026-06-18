@@ -74,6 +74,63 @@ class LogoCatalogResolverTest {
     }
 
     @Test
+    fun resolve_supportsExternalLogoPackAliases() {
+        val resolver = LogoCatalogResolver(
+            baseEntries = emptyList(),
+            packJson = """
+                {
+                  "logos": [
+                    {
+                      "tvgId": "external.news",
+                      "name": "External News",
+                      "logoUrl": "https://cdn.example.com/news.png",
+                      "domain": "provider.example",
+                      "countryCode": "US",
+                      "lang": "en",
+                      "group": "News"
+                    }
+                  ]
+                }
+            """.trimIndent()
+        )
+
+        val result = resolver.resolve(
+            name = "External News HD",
+            tvgId = "external.news",
+            playlistSource = "https://provider.example/list.m3u"
+        )
+
+        assertEquals("https://cdn.example.com/news.png", result?.url)
+        assertEquals("logo-pack:tvg-id", result?.source)
+        assertEquals("US", result?.entry?.country)
+        assertEquals("en", result?.entry?.language)
+        assertEquals("News", result?.entry?.category)
+    }
+
+    @Test
+    fun resolve_supportsSingleObjectExternalLogoPack() {
+        val resolver = LogoCatalogResolver(
+            baseEntries = emptyList(),
+            packJson = """
+                {
+                  "title": "Provider One",
+                  "url": "https://cdn.example.com/provider-one.svg",
+                  "domains": ["provider-one.example"]
+                }
+            """.trimIndent()
+        )
+
+        val result = resolver.resolve(
+            name = "Provider One",
+            tvgId = null,
+            playlistSource = "https://provider-one.example/channels.m3u"
+        )
+
+        assertEquals("https://cdn.example.com/provider-one.svg", result?.url)
+        assertEquals("logo-pack:name", result?.source)
+    }
+
+    @Test
     fun resolve_returnsNullWhenNoCatalogEntryMatches() {
         val resolver = LogoCatalogResolver(emptyList())
 
