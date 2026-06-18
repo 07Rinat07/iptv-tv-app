@@ -25,6 +25,8 @@ class ImporterProviderSyncHistoryTest {
         assertEquals(2, history.size)
         assertEquals(4, history.getValue(7L).size)
         assertEquals("Синхронизация OK, playlistId=99", history.getValue(7L).first().summary)
+        assertEquals("PLEX", history.getValue(7L).first().providerType)
+        assertEquals(99L, history.getValue(7L).first().playlistId)
         assertEquals("Синхронизация OK, playlistId=12", history.getValue(8L).first().summary)
     }
 
@@ -42,5 +44,26 @@ class ImporterProviderSyncHistoryTest {
 
         assertTrue(summary.contains("Ошибка: parser"))
         assertTrue(summary.contains("Unexpected HTML response"))
+    }
+
+    @Test
+    fun extractProviderSyncHistory_extractsDiagnosticFields() {
+        val history = extractProviderSyncHistory(
+            logs = listOf(
+                SyncLog(
+                    id = 1L,
+                    playlistId = null,
+                    status = "provider_sync_item_error",
+                    message = "providerId=7, type=XTREAM, reason=auth, detail=Invalid credentials",
+                    createdAt = 100L
+                )
+            )
+        )
+
+        val item = history.getValue(7L).single()
+        assertEquals("XTREAM", item.providerType)
+        assertEquals("auth", item.reason)
+        assertEquals("Invalid credentials", item.detail)
+        assertTrue(item.isError)
     }
 }

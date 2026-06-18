@@ -31,7 +31,11 @@ data class ProviderSyncHistoryItem(
     val status: String,
     val summary: String,
     val createdAt: Long,
-    val isError: Boolean
+    val isError: Boolean,
+    val providerType: String? = null,
+    val playlistId: Long? = null,
+    val reason: String? = null,
+    val detail: String? = null
 )
 
 data class ImporterUiState(
@@ -922,7 +926,11 @@ internal fun extractProviderSyncHistory(
                 status = log.status,
                 summary = providerSyncSummary(log),
                 createdAt = log.createdAt,
-                isError = log.status.endsWith("_error")
+                isError = log.status.endsWith("_error"),
+                providerType = TYPE_REGEX.find(log.message)?.groupValues?.getOrNull(1),
+                playlistId = PLAYLIST_ID_REGEX.find(log.message)?.groupValues?.getOrNull(1)?.toLongOrNull(),
+                reason = REASON_REGEX.find(log.message)?.groupValues?.getOrNull(1),
+                detail = DETAIL_REGEX.find(log.message)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
             )
         }
         .groupBy(
@@ -962,6 +970,7 @@ internal fun providerSyncSummary(log: SyncLog): String {
 }
 
 private val PROVIDER_ID_REGEX = Regex("""providerId=(\d+)""")
+private val TYPE_REGEX = Regex("""type=([^,\s]+)""")
 private val PLAYLIST_ID_REGEX = Regex("""playlistId=(\d+)""")
 private val REASON_REGEX = Regex("""reason=([^,]+)""")
 private val DETAIL_REGEX = Regex("""detail=(.+)$""")

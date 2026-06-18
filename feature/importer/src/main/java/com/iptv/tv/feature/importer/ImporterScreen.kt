@@ -775,6 +775,15 @@ private fun ProviderAccountCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = if (item.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                     )
+                    if (expanded) {
+                        item.toProviderSyncDetailLine()?.let { detailLine ->
+                            Text(
+                                detailLine,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (item.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -869,6 +878,16 @@ internal fun filterSavedProviders(
         }
         .sortedWith(compareByDescending<SavedProviderCardModel> { it.provider.lastSyncedAt ?: 0L }.thenByDescending { it.provider.createdAt })
         .toList()
+}
+
+private fun ProviderSyncHistoryItem.toProviderSyncDetailLine(): String? {
+    val parts = buildList {
+        providerType?.let { add("type=$it") }
+        playlistId?.let { add("playlistId=$it") }
+        reason?.let { add("reason=$it") }
+        detail?.takeIf { it.isNotBlank() }?.let { add("detail=${it.take(120)}") }
+    }
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" | ")
 }
 
 private fun Long?.formatProviderTime(): String {
