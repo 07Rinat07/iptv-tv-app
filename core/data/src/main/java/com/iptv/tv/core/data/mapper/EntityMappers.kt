@@ -7,6 +7,7 @@ import com.iptv.tv.core.database.entity.HistoryEntity
 import com.iptv.tv.core.database.entity.ParentalProfileEntity
 import com.iptv.tv.core.database.entity.PlaylistEntity
 import com.iptv.tv.core.database.entity.PlaylistProviderEntity
+import com.iptv.tv.core.database.entity.ProviderSyncHistoryEntity
 import com.iptv.tv.core.database.entity.RecordingEntity
 import com.iptv.tv.core.database.entity.RecordingScheduleEntity
 import com.iptv.tv.core.database.entity.SyncLogEntity
@@ -24,6 +25,8 @@ import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.model.ProviderAuthType
 import com.iptv.tv.core.model.ProviderType
+import com.iptv.tv.core.model.ProviderDiagnosticKind
+import com.iptv.tv.core.model.ProviderSyncHistory
 import com.iptv.tv.core.model.RecordingRepeatMode
 import com.iptv.tv.core.model.RecordingSchedule
 import com.iptv.tv.core.model.RecordingStatus
@@ -198,6 +201,36 @@ fun PlaylistProvider.toEntity(): PlaylistProviderEntity {
         authType = authType.name,
         linkedPlaylistId = linkedPlaylistId,
         lastSyncedAt = lastSyncedAt,
+        createdAt = createdAt
+    )
+}
+
+fun ProviderSyncHistoryEntity.toModel(): ProviderSyncHistory {
+    return ProviderSyncHistory(
+        id = id,
+        providerId = providerId,
+        providerName = providerName,
+        providerType = runCatching { ProviderType.valueOf(providerType) }.getOrDefault(ProviderType.M3U),
+        status = status,
+        playlistId = playlistId,
+        reason = reason?.let { raw ->
+            runCatching { ProviderDiagnosticKind.valueOf(raw) }.getOrDefault(ProviderDiagnosticKind.PROVIDER_ERROR)
+        },
+        detail = detail,
+        createdAt = createdAt
+    )
+}
+
+fun ProviderSyncHistory.toEntity(): ProviderSyncHistoryEntity {
+    return ProviderSyncHistoryEntity(
+        id = id,
+        providerId = providerId,
+        providerName = providerName,
+        providerType = providerType.name,
+        status = status,
+        playlistId = playlistId,
+        reason = reason?.name,
+        detail = detail,
         createdAt = createdAt
     )
 }

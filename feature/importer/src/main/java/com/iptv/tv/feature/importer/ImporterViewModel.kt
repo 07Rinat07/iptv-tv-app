@@ -13,6 +13,8 @@ import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistValidationReport
 import com.iptv.tv.core.model.ProviderAuthType
+import com.iptv.tv.core.model.ProviderDiagnosticKind
+import com.iptv.tv.core.model.ProviderSyncHistory
 import com.iptv.tv.core.model.ProviderType
 import com.iptv.tv.core.model.SyncLog
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -810,8 +812,8 @@ class ImporterViewModel @Inject constructor(
 
     private fun observeProviderSyncHistory() {
         viewModelScope.launch {
-            diagnosticsRepository.observeLogs(limit = 240).collect { logs ->
-                _uiState.update { it.copy(providerSyncHistory = extractProviderSyncHistory(logs)) }
+            providerAccountRepository.observeSyncHistory(limit = 240).collect { history ->
+                _uiState.update { it.copy(providerSyncHistory = extractPersistedProviderSyncHistory(history)) }
             }
         }
     }
@@ -912,6 +914,35 @@ class ImporterViewModel @Inject constructor(
     }
 }
 
+internal fun extractPersistedProviderSyncHistory(
+    history: List<ProviderSyncHistory>,
+    perProviderLimit: Int = 4
+): Map<Long, List<ProviderSyncHistoryItem>> {
+    return history
+        .asSequence()
+        .map { item ->
+            item.providerId to ProviderSyncHistoryItem(
+                status = item.status,
+                summary = providerSyncSummary(item),
+                createdAt = item.createdAt,
+                isError = item.status.endsWith("_error"),
+                providerType = item.providerType.name,
+                playlistId = item.playlistId,
+                reason = item.reason?.toHistoryReason(),
+                detail = item.detail?.takeIf { it.isNotBlank() }
+            )
+        }
+        .groupBy(
+            keySelector = { it.first },
+            valueTransform = { it.second }
+        )
+        .mapValues { (_, items) ->
+            items
+                .sortedByDescending { it.createdAt }
+                .take(perProviderLimit)
+        }
+}
+
 internal fun extractProviderSyncHistory(
     logs: List<SyncLog>,
     perProviderLimit: Int = 4
@@ -944,6 +975,28 @@ internal fun extractProviderSyncHistory(
         }
 }
 
+internal fun providerSyncSummary(item: ProviderSyncHistory): String {
+    return when (item.status) {
+        "provider_sync_item_start" -> "Старт синхронизации"
+        "provider_sync_item_ok" -> {
+            if (item.playlistId != null) {
+                "Синхронизация OK, playlistId=${item.playlistId}"
+            } else {
+                "Синхронизация OK"
+            }
+        }
+        "provider_sync_item_loading" -> "Синхронизация в процессе"
+        "provider_sync_item_error" -> {
+            buildString {
+                append("Ошибка")
+                item.reason?.toHistoryReason()?.let { append(": $it") }
+                item.detail?.takeIf { it.isNotBlank() }?.let { append(" | $it") }
+            }
+        }
+        else -> item.status
+    }
+}
+
 internal fun providerSyncSummary(log: SyncLog): String {
     return when (log.status) {
         "provider_sync_item_start" -> "Старт синхронизации"
@@ -974,3 +1027,15 @@ private val TYPE_REGEX = Regex("""type=([^,\s]+)""")
 private val PLAYLIST_ID_REGEX = Regex("""playlistId=(\d+)""")
 private val REASON_REGEX = Regex("""reason=([^,]+)""")
 private val DETAIL_REGEX = Regex("""detail=(.+)$""")
+
+private fun ProviderDiagnosticKind.toHistoryReason(): String {
+    return when (this) {
+        ProviderDiagnosticKind.OK -> "ok"
+        ProviderDiagnosticKind.AUTH -> "auth"
+        ProviderDiagnosticKind.NETWORK -> "network"
+        ProviderDiagnosticKind.PARSER -> "parser"
+        ProviderDiagnosticKind.EMPTY_PLAYLIST -> "empty_playlist"
+        ProviderDiagnosticKind.UNSUPPORTED -> "unsupported"
+        ProviderDiagnosticKind.PROVIDER_ERROR -> "provider_error"
+    }
+}

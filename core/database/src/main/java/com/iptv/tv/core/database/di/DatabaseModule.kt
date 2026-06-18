@@ -11,6 +11,7 @@ import com.iptv.tv.core.database.dao.HistoryDao
 import com.iptv.tv.core.database.dao.ParentalProfileDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.dao.PlaylistProviderDao
+import com.iptv.tv.core.database.dao.ProviderSyncHistoryDao
 import com.iptv.tv.core.database.dao.RecordingDao
 import com.iptv.tv.core.database.dao.RecordingScheduleDao
 import com.iptv.tv.core.database.dao.SyncLogDao
@@ -59,6 +60,9 @@ object DatabaseModule {
 
     @Provides
     fun providePlaylistProviderDao(database: IptvDatabase): PlaylistProviderDao = database.playlistProviderDao()
+
+    @Provides
+    fun provideProviderSyncHistoryDao(database: IptvDatabase): ProviderSyncHistoryDao = database.providerSyncHistoryDao()
 
     @Provides
     fun provideParentalProfileDao(database: IptvDatabase): ParentalProfileDao = database.parentalProfileDao()

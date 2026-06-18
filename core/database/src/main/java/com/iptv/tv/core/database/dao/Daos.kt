@@ -13,6 +13,7 @@ import com.iptv.tv.core.database.entity.FavoriteEntity
 import com.iptv.tv.core.database.entity.HistoryEntity
 import com.iptv.tv.core.database.entity.ParentalProfileEntity
 import com.iptv.tv.core.database.entity.PlaylistProviderEntity
+import com.iptv.tv.core.database.entity.ProviderSyncHistoryEntity
 import com.iptv.tv.core.database.entity.RecordingEntity
 import com.iptv.tv.core.database.entity.RecordingScheduleEntity
 import com.iptv.tv.core.database.entity.SyncLogEntity
@@ -283,6 +284,28 @@ interface PlaylistProviderDao {
 
     @Query("DELETE FROM playlist_providers WHERE id = :providerId")
     suspend fun deleteById(providerId: Long): Int
+}
+
+@Dao
+interface ProviderSyncHistoryDao {
+    @Query("SELECT * FROM provider_sync_history ORDER BY createdAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<ProviderSyncHistoryEntity>>
+
+    @Query("SELECT * FROM provider_sync_history WHERE providerId = :providerId ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun findByProvider(providerId: Long, limit: Int): List<ProviderSyncHistoryEntity>
+
+    @Insert
+    suspend fun insert(item: ProviderSyncHistoryEntity): Long
+
+    @Query(
+        """
+        DELETE FROM provider_sync_history
+        WHERE id NOT IN (
+            SELECT id FROM provider_sync_history ORDER BY createdAt DESC LIMIT :limit
+        )
+        """
+    )
+    suspend fun trimToLatest(limit: Int): Int
 }
 
 @Dao

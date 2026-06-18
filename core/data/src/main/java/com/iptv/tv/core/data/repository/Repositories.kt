@@ -17,6 +17,7 @@ import com.iptv.tv.core.database.dao.HistoryDao
 import com.iptv.tv.core.database.dao.ParentalProfileDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.dao.PlaylistProviderDao
+import com.iptv.tv.core.database.dao.ProviderSyncHistoryDao
 import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.FavoriteEntity
@@ -50,6 +51,7 @@ import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.ProviderAccountStatus
 import com.iptv.tv.core.model.ProviderDiagnosticKind
+import com.iptv.tv.core.model.ProviderSyncHistory
 import com.iptv.tv.core.model.PlaylistValidationReport
 import com.iptv.tv.core.model.ProviderType
 import com.iptv.tv.core.model.RecordingStorageInfo
@@ -1793,6 +1795,7 @@ class PlaylistRepositoryImpl @Inject constructor(
 @Singleton
 class ProviderAccountRepositoryImpl @Inject constructor(
     private val providerDao: PlaylistProviderDao,
+    private val providerSyncHistoryDao: ProviderSyncHistoryDao,
     private val playlistRepository: PlaylistRepository,
     private val syncLogDao: SyncLogDao,
     private val secretCipher: ProviderSecretCipher,
@@ -1801,6 +1804,12 @@ class ProviderAccountRepositoryImpl @Inject constructor(
     override fun observeProviders(): Flow<List<PlaylistProvider>> {
         return providerDao.observeProviders().map { rows ->
             rows.map { it.toModel().toProviderDisplayModel() }
+        }
+    }
+
+    override fun observeSyncHistory(limit: Int): Flow<List<ProviderSyncHistory>> {
+        return providerSyncHistoryDao.observeRecent(limit.coerceIn(1, PROVIDER_SYNC_HISTORY_LIMIT)).map { rows ->
+            rows.map { it.toModel() }
         }
     }
 
@@ -1868,6 +1877,13 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             provider = provider,
             message = "providerId=${provider.id}, type=${provider.type}, name=${provider.name}"
         )
+        addProviderSyncHistory(
+            provider = provider,
+            status = "provider_sync_item_start",
+            playlistId = null,
+            reason = null,
+            detail = "Старт синхронизации"
+        )
         val result = when (provider.type) {
             ProviderType.XTREAM -> playlistRepository.importFromXtream(
                 baseUrl = provider.baseUrl,
@@ -1904,7 +1920,16 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                 token = provider.token.orEmpty(),
                 name = provider.name
             )
-            else -> return@withContext AppResult.Error("${provider.type} sync is not implemented yet")
+            else -> {
+                addProviderSyncHistory(
+                    provider = provider,
+                    status = "provider_sync_item_error",
+                    playlistId = provider.linkedPlaylistId,
+                    reason = ProviderDiagnosticKind.UNSUPPORTED,
+                    detail = "${provider.type} sync is not implemented yet"
+                )
+                return@withContext AppResult.Error("${provider.type} sync is not implemented yet")
+            }
         }
         when (result) {
             is AppResult.Success -> {
@@ -1914,14 +1939,29 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                     provider = provider,
                     message = "providerId=${provider.id}, type=${provider.type}, playlistId=${result.data.playlistId}"
                 )
+                addProviderSyncHistory(
+                    provider = provider,
+                    status = "provider_sync_item_ok",
+                    playlistId = result.data.playlistId,
+                    reason = ProviderDiagnosticKind.OK,
+                    detail = "Imported=${result.data.totalImported}, parsed=${result.data.totalParsed}"
+                )
                 AppResult.Success(result.data.playlistId)
             }
             is AppResult.Error -> {
                 val reason = classifyProviderSyncFailure(result.message)
+                val diagnosticKind = classifyProviderDiagnosticKind(result.message)
                 addProviderSyncLog(
                     status = "provider_sync_item_error",
                     provider = provider,
                     message = "providerId=${provider.id}, type=${provider.type}, reason=$reason, detail=${result.message.take(250)}"
+                )
+                addProviderSyncHistory(
+                    provider = provider,
+                    status = "provider_sync_item_error",
+                    playlistId = provider.linkedPlaylistId,
+                    reason = diagnosticKind,
+                    detail = result.message.take(500)
                 )
                 AppResult.Error(result.message, result.cause)
             }
@@ -1930,6 +1970,13 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                     status = "provider_sync_item_loading",
                     provider = provider,
                     message = "providerId=${provider.id}, type=${provider.type}"
+                )
+                addProviderSyncHistory(
+                    provider = provider,
+                    status = "provider_sync_item_loading",
+                    playlistId = provider.linkedPlaylistId,
+                    reason = null,
+                    detail = "Provider sync is still loading"
                 )
                 AppResult.Error("Provider sync is still loading")
             }
@@ -2024,6 +2071,29 @@ class ProviderAccountRepositoryImpl @Inject constructor(
                 createdAt = System.currentTimeMillis()
             )
         )
+    }
+
+    private suspend fun addProviderSyncHistory(
+        provider: PlaylistProvider,
+        status: String,
+        playlistId: Long?,
+        reason: ProviderDiagnosticKind?,
+        detail: String?
+    ) {
+        providerSyncHistoryDao.insert(
+            ProviderSyncHistory(
+                id = 0,
+                providerId = provider.id,
+                providerName = provider.name,
+                providerType = provider.type,
+                status = status,
+                playlistId = playlistId,
+                reason = reason,
+                detail = detail?.take(500),
+                createdAt = System.currentTimeMillis()
+            ).toEntity()
+        )
+        providerSyncHistoryDao.trimToLatest(PROVIDER_SYNC_HISTORY_LIMIT)
     }
 
     private fun classifyProviderSyncFailure(message: String): String {
@@ -2470,6 +2540,7 @@ class ProviderAccountRepositoryImpl @Inject constructor(
     }
 
     private companion object {
+        const val PROVIDER_SYNC_HISTORY_LIMIT = 500
         const val PROVIDER_STALKER_USER_AGENT =
             "Mozilla/5.0 (QtEmbedded; U; Linux; MAG200; en-US) AppleWebKit/533.3"
         val PROVIDER_STALKER_MAC_REGEX = Regex("^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")

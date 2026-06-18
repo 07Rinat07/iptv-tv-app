@@ -325,6 +325,18 @@ data class ProviderAccountStatus(
     val testedUrl: String? = null
 )
 
+data class ProviderSyncHistory(
+    val id: Long,
+    val providerId: Long,
+    val providerName: String,
+    val providerType: ProviderType,
+    val status: String,
+    val playlistId: Long?,
+    val reason: ProviderDiagnosticKind?,
+    val detail: String?,
+    val createdAt: Long
+)
+
 enum class ProviderDiagnosticKind {
     OK,
     AUTH,

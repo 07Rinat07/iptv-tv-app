@@ -170,6 +170,27 @@ data class PlaylistProviderEntity(
 )
 
 @Entity(
+    tableName = "provider_sync_history",
+    indices = [
+        Index(value = ["providerId", "createdAt"]),
+        Index(value = ["providerType"]),
+        Index(value = ["status"]),
+        Index(value = ["reason"])
+    ]
+)
+data class ProviderSyncHistoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val providerId: Long,
+    val providerName: String,
+    val providerType: String,
+    val status: String,
+    val playlistId: Long?,
+    val reason: String?,
+    val detail: String?,
+    val createdAt: Long
+)
+
+@Entity(
     tableName = "parental_profiles",
     indices = [
         Index(value = ["enabled"])

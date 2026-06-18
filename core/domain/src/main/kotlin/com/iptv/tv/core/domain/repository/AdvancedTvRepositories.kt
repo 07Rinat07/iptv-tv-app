@@ -10,6 +10,7 @@ import com.iptv.tv.core.model.ProviderType
 import com.iptv.tv.core.model.RecordingSchedule
 import com.iptv.tv.core.model.RecordingTask
 import com.iptv.tv.core.model.TimeshiftBufferPlan
+import com.iptv.tv.core.model.ProviderSyncHistory
 import com.iptv.tv.core.model.TvHomeChannelState
 import kotlinx.coroutines.flow.Flow
 
@@ -24,6 +25,7 @@ interface EpgGuideRepository {
 
 interface ProviderAccountRepository {
     fun observeProviders(): Flow<List<PlaylistProvider>>
+    fun observeSyncHistory(limit: Int = 240): Flow<List<ProviderSyncHistory>>
     suspend fun saveProvider(provider: PlaylistProvider): AppResult<Long>
     suspend fun checkProvider(providerId: Long): AppResult<ProviderAccountStatus>
     suspend fun syncProvider(providerId: Long): AppResult<Long>

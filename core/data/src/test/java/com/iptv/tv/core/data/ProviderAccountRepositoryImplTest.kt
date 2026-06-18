@@ -4,6 +4,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.repository.ProviderAccountRepositoryImpl
 import com.iptv.tv.core.data.security.ProviderSecretCipher
 import com.iptv.tv.core.database.dao.PlaylistProviderDao
+import com.iptv.tv.core.database.dao.ProviderSyncHistoryDao
 import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.PlaylistProviderEntity
 import com.iptv.tv.core.domain.repository.PlaylistRepository
@@ -30,6 +31,7 @@ import org.junit.Test
 class ProviderAccountRepositoryImplTest {
     private lateinit var server: MockWebServer
     private lateinit var providerDao: PlaylistProviderDao
+    private lateinit var providerSyncHistoryDao: ProviderSyncHistoryDao
     private lateinit var syncLogDao: SyncLogDao
     private lateinit var playlistRepository: PlaylistRepository
     private lateinit var secretCipher: ProviderSecretCipher
@@ -41,17 +43,22 @@ class ProviderAccountRepositoryImplTest {
         server.start()
 
         providerDao = mockk()
+        providerSyncHistoryDao = mockk()
         syncLogDao = mockk()
         playlistRepository = mockk()
         secretCipher = mockk()
 
         every { providerDao.observeProviders() } returns emptyFlow()
+        every { providerSyncHistoryDao.observeRecent(any()) } returns emptyFlow()
+        coEvery { providerSyncHistoryDao.insert(any()) } returns 1L
+        coEvery { providerSyncHistoryDao.trimToLatest(any()) } returns 0
         coEvery { syncLogDao.insert(any()) } returns Unit
         every { secretCipher.encryptOrNull(any()) } answers { firstArg() }
         every { secretCipher.decryptOrNull(any()) } answers { firstArg() }
 
         repository = ProviderAccountRepositoryImpl(
             providerDao = providerDao,
+            providerSyncHistoryDao = providerSyncHistoryDao,
             playlistRepository = playlistRepository,
             syncLogDao = syncLogDao,
             secretCipher = secretCipher,
