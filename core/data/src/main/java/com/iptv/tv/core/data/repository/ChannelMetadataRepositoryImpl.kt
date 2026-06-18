@@ -1,6 +1,5 @@
 package com.iptv.tv.core.data.repository
 
-import android.net.Uri
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.mapper.toEntity
 import com.iptv.tv.core.data.mapper.toModel
@@ -24,7 +23,8 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
     private val channelMetadataDao: ChannelMetadataDao,
     private val channelDao: ChannelDao,
     private val playlistDao: PlaylistDao,
-    private val syncLogDao: SyncLogDao
+    private val syncLogDao: SyncLogDao,
+    private val logoCatalogResolver: LogoCatalogResolver = LogoCatalogResolver()
 ) : ChannelMetadataRepository {
     override suspend fun resolveMetadata(channelId: Long): AppResult<ChannelMetadata?> = withContext(Dispatchers.IO) {
         val existing = channelMetadataDao.findByChannelId(channelId)
@@ -98,44 +98,28 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         playlistSource: String? = null
     ): ChannelMetadata {
         val inferred = inferMetadata(channel, playlistSource)
-        val catalogLogo = resolveLogo(channel, playlistSource)
-        val resolvedLogo = existing?.manualLogoUrl ?: channel.logo ?: catalogLogo
+        val catalogMatch = logoCatalogResolver.resolve(
+            name = channel.name,
+            tvgId = channel.tvgId,
+            playlistSource = playlistSource
+        )
+        val resolvedLogo = existing?.manualLogoUrl ?: channel.logo ?: catalogMatch?.url
         return ChannelMetadata(
             channelId = channel.id,
             normalizedName = normalizeName(channel.name),
-            country = existing?.country ?: inferred.country,
-            language = existing?.language ?: inferred.language,
-            category = existing?.category ?: inferred.category,
+            country = existing?.country ?: catalogMatch?.entry?.country ?: inferred.country,
+            language = existing?.language ?: catalogMatch?.entry?.language ?: inferred.language,
+            category = existing?.category ?: catalogMatch?.entry?.category ?: inferred.category,
             resolvedLogoUrl = resolvedLogo,
             manualLogoUrl = existing?.manualLogoUrl,
             metadataSource = when {
                 existing?.manualLogoUrl != null -> "manual"
                 !channel.logo.isNullOrBlank() -> "playlist"
-                catalogLogo != null -> inferred.logoSource
+                catalogMatch != null -> catalogMatch.source
                 else -> existing?.metadataSource
             },
             updatedAt = System.currentTimeMillis()
         )
-    }
-
-    private fun resolveLogo(channel: ChannelEntity, playlistSource: String?): String? {
-        val tvgKey = channel.tvgId?.lowercase(Locale.ROOT)?.trim()
-        if (!tvgKey.isNullOrBlank()) {
-            LOGO_BY_TVG_ID[tvgKey]?.let { return it }
-            val shortKey = tvgKey.substringBeforeLast('.')
-            LOGO_BY_TVG_ID[shortKey]?.let { return it }
-        }
-
-        val normalizedName = normalizeName(channel.name)
-        LOGO_BY_NAME_KEYWORD.firstOrNull { (keyword, _) ->
-            normalizedName.contains(keyword)
-        }?.let { return it.second }
-
-        val host = runCatching { Uri.parse(playlistSource).host.orEmpty().lowercase(Locale.ROOT) }
-            .getOrDefault("")
-        return LOGO_BY_SOURCE_HOST.entries.firstOrNull { (hostKeyword, _) ->
-            host.contains(hostKeyword)
-        }?.value
     }
 
     private fun inferMetadata(channel: ChannelEntity, playlistSource: String?): InferredMetadata {
@@ -145,13 +129,7 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         val country = COUNTRY_HINTS.firstOrNull { (hint, _) -> source.contains(hint) }?.second
         val language = LANGUAGE_HINTS.firstOrNull { (hint, _) -> source.contains(hint) }?.second
         val category = CATEGORY_HINTS.firstOrNull { (hint, _) -> source.contains(hint) }?.second ?: channel.groupName
-        val tvgId = channel.tvgId?.lowercase(Locale.ROOT)
-        val logoSource = when {
-            !tvgId.isNullOrBlank() && LOGO_BY_TVG_ID.containsKey(tvgId) -> "catalog:tvg-id"
-            LOGO_BY_NAME_KEYWORD.any { (keyword, _) -> normalizeName(channel.name).contains(keyword) } -> "catalog:name"
-            else -> "catalog:source"
-        }
-        return InferredMetadata(country, language, category, logoSource)
+        return InferredMetadata(country, language, category)
     }
 
     private suspend fun addLog(status: String, message: String) {
@@ -168,41 +146,10 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
     private data class InferredMetadata(
         val country: String?,
         val language: String?,
-        val category: String?,
-        val logoSource: String
+        val category: String?
     )
 
     private companion object {
-        val LOGO_BY_TVG_ID = mapOf(
-            "bbcone.uk" to "https://upload.wikimedia.org/wikipedia/commons/4/47/BBC_One_logo.svg",
-            "bbctwo.uk" to "https://upload.wikimedia.org/wikipedia/commons/6/62/BBC_Two_logo_2021.svg",
-            "cnn.us" to "https://upload.wikimedia.org/wikipedia/commons/b/b1/CNN.svg",
-            "euronews.fr" to "https://upload.wikimedia.org/wikipedia/commons/5/58/Euronews_2016_logo.svg",
-            "discoverychannel.us" to "https://upload.wikimedia.org/wikipedia/commons/4/43/Discovery_Channel_Logo.svg",
-            "cartoonnetwork.us" to "https://upload.wikimedia.org/wikipedia/commons/0/04/Cartoon_Network_2010_logo.svg",
-            "mtv.us" to "https://upload.wikimedia.org/wikipedia/commons/e/ea/MTV_Logo_2010.svg",
-            "nickelodeon.us" to "https://upload.wikimedia.org/wikipedia/commons/6/6e/Nickelodeon_2023_logo_%28outline%29.svg",
-            "animalplanet.us" to "https://upload.wikimedia.org/wikipedia/commons/2/2b/Animal_Planet_logo_2018.svg",
-            "natgeo.us" to "https://upload.wikimedia.org/wikipedia/commons/f/fc/Natgeologo.svg",
-            "tnt.us" to "https://upload.wikimedia.org/wikipedia/commons/c/c2/TNT_Logo_2016.svg"
-        )
-        val LOGO_BY_NAME_KEYWORD = listOf(
-            "bbc one" to "https://upload.wikimedia.org/wikipedia/commons/4/47/BBC_One_logo.svg",
-            "bbc two" to "https://upload.wikimedia.org/wikipedia/commons/6/62/BBC_Two_logo_2021.svg",
-            "cnn" to "https://upload.wikimedia.org/wikipedia/commons/b/b1/CNN.svg",
-            "euronews" to "https://upload.wikimedia.org/wikipedia/commons/5/58/Euronews_2016_logo.svg",
-            "discovery" to "https://upload.wikimedia.org/wikipedia/commons/4/43/Discovery_Channel_Logo.svg",
-            "national geographic" to "https://upload.wikimedia.org/wikipedia/commons/f/fc/Natgeologo.svg",
-            "nickelodeon" to "https://upload.wikimedia.org/wikipedia/commons/6/6e/Nickelodeon_2023_logo_%28outline%29.svg",
-            "cartoon network" to "https://upload.wikimedia.org/wikipedia/commons/0/04/Cartoon_Network_2010_logo.svg",
-            "animal planet" to "https://upload.wikimedia.org/wikipedia/commons/2/2b/Animal_Planet_logo_2018.svg",
-            "mtv" to "https://upload.wikimedia.org/wikipedia/commons/e/ea/MTV_Logo_2010.svg",
-            "eurosport" to "https://upload.wikimedia.org/wikipedia/commons/e/e7/Eurosport_2023.svg",
-            "espn" to "https://upload.wikimedia.org/wikipedia/commons/2/2f/ESPN_wordmark.svg"
-        )
-        val LOGO_BY_SOURCE_HOST = mapOf(
-            "iptv-org" to "https://iptv-org.github.io/assets/logo.png"
-        )
         val COUNTRY_HINTS = listOf(
             ".us" to "US",
             ".uk" to "UK",

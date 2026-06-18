@@ -1,0 +1,79 @@
+[
+  {
+    "tvgIds": ["bbcnews.uk", "bbc-news.uk"],
+    "names": ["BBC News"],
+    "country": "UK",
+    "language": "en",
+    "category": "News",
+    "logo": "https://upload.wikimedia.org/wikipedia/commons/a/a2/BBC_News_2022_%28Alt%29.svg"
+  },
+  {
+    "tvgIds": ["skynews.uk"],
+    "names": ["Sky News"],
+    "country": "UK",
+    "language": "en",
+    "category": "News",
+    "logo": "https://upload.wikimedia.org/wikipedia/en/a/a6/Sky_news_logo_2020.svg"
+  },
+  {
+    "tvgIds": ["france24.fr"],
+    "names": ["France 24"],
+    "country": "FR",
+    "language": "fr",
+    "category": "News",
+    "logo": "https://upload.wikimedia.org/wikipedia/commons/8/8a/France24.png"
+  },
+  {
+    "tvgIds": ["aljazeera.qa", "aljazeera.en"],
+    "names": ["Al Jazeera"],
+    "language": "en",
+    "category": "News",
+    "logo": "https://upload.wikimedia.org/wikipedia/en/f/f2/Aljazeera_eng.svg"
+  },
+  {
+    "tvgIds": ["rt.ru"],
+    "names": ["RT News"],
+    "country": "RU",
+    "language": "ru",
+    "category": "News",
+    "logo": "https://upload.wikimedia.org/wikipedia/commons/a/a0/Russia-today-logo.svg"
+  },
+  {
+    "tvgIds": ["khabar.kz"],
+    "names": ["Khabar", "Хабар"],
+    "country": "KZ",
+    "language": "kk",
+    "category": "News",
+    "logo": "https://upload.wikimedia.org/wikipedia/commons/8/83/Khabar_logo.png"
+  },
+  {
+    "tvgIds": ["qazaqstan.kz", "kazakhstan.kz"],
+    "names": ["Qazaqstan", "Казахстан"],
+    "country": "KZ",
+    "language": "kk",
+    "category": "General",
+    "logo": "https://upload.wikimedia.org/wikipedia/commons/6/66/Qazaqstan_%28television%29_logo.png"
+  },
+  {
+    "tvgIds": ["megamax.hu"],
+    "names": ["Megamax"],
+    "category": "Kids",
+    "logo": "https://upload.wikimedia.org/wikipedia/commons/f/fe/Megamax_logo.svg"
+  },
+  {
+    "tvgIds": ["paramountnetwork.us"],
+    "names": ["Paramount Network"],
+    "country": "US",
+    "language": "en",
+    "category": "Movies",
+    "logo": "https://upload.wikimedia.org/wikipedia/commons/9/95/Paramount_Network.svg"
+  },
+  {
+    "tvgIds": ["history.us", "historychannel.us"],
+    "names": ["History Channel", "History"],
+    "country": "US",
+    "language": "en",
+    "category": "Documentary",
+    "logo": "https://upload.wikimedia.org/wikipedia/commons/f/f5/History_Logo.svg"
+  }
+]

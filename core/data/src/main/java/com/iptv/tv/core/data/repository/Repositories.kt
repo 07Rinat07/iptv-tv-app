@@ -130,7 +130,8 @@ class PlaylistRepositoryImpl @Inject constructor(
     private val historyDao: HistoryDao,
     private val syncLogDao: SyncLogDao,
     private val parser: M3uParser,
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val logoCatalogResolver: LogoCatalogResolver = LogoCatalogResolver()
 ) : PlaylistRepository {
     private val streamCheckClient: OkHttpClient = okHttpClient.newBuilder()
         .connectTimeout(4, TimeUnit.SECONDS)
@@ -824,7 +825,7 @@ class PlaylistRepositoryImpl @Inject constructor(
                     if (!channel.logo.isNullOrBlank()) {
                         channel
                     } else {
-                        channel.copy(logo = resolveLogoFromCatalog(channel))
+                        channel.copy(logo = resolveLogoFromCatalog(channel, source))
                     }
                 }
                 val playlistId = playlistDao.insertPlaylist(
@@ -1370,22 +1371,12 @@ class PlaylistRepositoryImpl @Inject constructor(
         return url.trim().lowercase(Locale.ROOT)
     }
 
-    private fun resolveLogoFromCatalog(channel: Channel): String? {
-        val tvgIdKey = channel.tvgId
-            ?.trim()
-            ?.lowercase(Locale.ROOT)
-            ?.replace(Regex("[^a-z0-9._-]"), "")
-            .orEmpty()
-        if (tvgIdKey.isNotBlank()) {
-            LOGO_BY_TVG_ID[tvgIdKey]?.let { return it }
-        }
-
-        val nameKey = channel.name.trim().lowercase(Locale.ROOT)
-        LOGO_BY_NAME_KEYWORD.firstOrNull { (keyword, _) ->
-            nameKey.contains(keyword)
-        }?.let { return it.second }
-
-        return null
+    private fun resolveLogoFromCatalog(channel: Channel, playlistSource: String): String? {
+        return logoCatalogResolver.resolve(
+            name = channel.name,
+            tvgId = channel.tvgId,
+            playlistSource = playlistSource
+        )?.url
     }
 
     private fun getOrLoadXmlTv(url: String): XmlTvData {
@@ -1796,33 +1787,6 @@ class PlaylistRepositoryImpl @Inject constructor(
             Regex("^(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})?\\s*([+\\-]\\d{4})?.*$")
         val STALKER_MAC_REGEX = Regex("^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
         val RETRIABLE_HTTP_CODES = setOf(408, 429, 500, 502, 503, 504)
-        val LOGO_BY_TVG_ID = mapOf(
-            "bbcone.uk" to "https://upload.wikimedia.org/wikipedia/commons/4/47/BBC_One_logo.svg",
-            "bbctwo.uk" to "https://upload.wikimedia.org/wikipedia/commons/6/62/BBC_Two_logo_2021.svg",
-            "cnn.us" to "https://upload.wikimedia.org/wikipedia/commons/b/b1/CNN.svg",
-            "euronews.fr" to "https://upload.wikimedia.org/wikipedia/commons/5/58/Euronews_2016_logo.svg",
-            "discoverychannel.us" to "https://upload.wikimedia.org/wikipedia/commons/4/43/Discovery_Channel_Logo.svg",
-            "cartoonnetwork.us" to "https://upload.wikimedia.org/wikipedia/commons/0/04/Cartoon_Network_2010_logo.svg",
-            "mtv.us" to "https://upload.wikimedia.org/wikipedia/commons/e/ea/MTV_Logo_2010.svg",
-            "nickelodeon.us" to "https://upload.wikimedia.org/wikipedia/commons/6/6e/Nickelodeon_2023_logo_%28outline%29.svg",
-            "animalplanet.us" to "https://upload.wikimedia.org/wikipedia/commons/2/2b/Animal_Planet_logo_2018.svg",
-            "natgeo.us" to "https://upload.wikimedia.org/wikipedia/commons/f/fc/Natgeologo.svg",
-            "tnt.us" to "https://upload.wikimedia.org/wikipedia/commons/c/c2/TNT_Logo_2016.svg"
-        )
-        val LOGO_BY_NAME_KEYWORD = listOf(
-            "bbc one" to "https://upload.wikimedia.org/wikipedia/commons/4/47/BBC_One_logo.svg",
-            "bbc two" to "https://upload.wikimedia.org/wikipedia/commons/6/62/BBC_Two_logo_2021.svg",
-            "cnn" to "https://upload.wikimedia.org/wikipedia/commons/b/b1/CNN.svg",
-            "euronews" to "https://upload.wikimedia.org/wikipedia/commons/5/58/Euronews_2016_logo.svg",
-            "discovery" to "https://upload.wikimedia.org/wikipedia/commons/4/43/Discovery_Channel_Logo.svg",
-            "national geographic" to "https://upload.wikimedia.org/wikipedia/commons/f/fc/Natgeologo.svg",
-            "nickelodeon" to "https://upload.wikimedia.org/wikipedia/commons/6/6e/Nickelodeon_2023_logo_%28outline%29.svg",
-            "cartoon network" to "https://upload.wikimedia.org/wikipedia/commons/0/04/Cartoon_Network_2010_logo.svg",
-            "animal planet" to "https://upload.wikimedia.org/wikipedia/commons/2/2b/Animal_Planet_logo_2018.svg",
-            "mtv" to "https://upload.wikimedia.org/wikipedia/commons/e/ea/MTV_Logo_2010.svg",
-            "eurosport" to "https://upload.wikimedia.org/wikipedia/commons/e/e7/Eurosport_2023.svg",
-            "espn" to "https://upload.wikimedia.org/wikipedia/commons/2/2f/ESPN_wordmark.svg"
-        )
     }
 }
 
