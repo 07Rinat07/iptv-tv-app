@@ -64,14 +64,49 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
     }
 
     override suspend fun refreshMetadata(playlistId: Long): AppResult<Int> = withContext(Dispatchers.IO) {
+        refreshMetadataInternal(
+            playlistId = playlistId,
+            resolver = logoCatalogResolver,
+            logStatus = "metadata_refresh",
+            logPrefix = ""
+        )
+    }
+
+    override suspend fun refreshMetadataWithLogoPack(
+        playlistId: Long,
+        logoPackJson: String
+    ): AppResult<Int> = withContext(Dispatchers.IO) {
+        val normalizedPack = logoPackJson.trim()
+        if (normalizedPack.isBlank()) {
+            return@withContext AppResult.Error("Logo pack JSON пуст")
+        }
+        refreshMetadataInternal(
+            playlistId = playlistId,
+            resolver = LogoCatalogResolver(baseEntries = emptyList(), packJson = normalizedPack),
+            logStatus = "metadata_external_logo_pack",
+            logPrefix = "externalLogoPack=true, "
+        )
+    }
+
+    private suspend fun refreshMetadataInternal(
+        playlistId: Long,
+        resolver: LogoCatalogResolver,
+        logStatus: String,
+        logPrefix: String
+    ): AppResult<Int> {
         val playlist = playlistDao.findById(playlistId)
-            ?: return@withContext AppResult.Error("Плейлист не найден: id=$playlistId")
+            ?: return AppResult.Error("Плейлист не найден: id=$playlistId")
         val channels = channelDao.getChannels(playlistId)
         val existingByChannel = channelMetadataDao.findByChannelIds(channels.map { it.id })
             .associateBy { it.channelId }
         var changedLogos = 0
         channels.forEach { channel ->
-            val metadata = buildMetadata(channel, existingByChannel[channel.id]?.toModel(), playlist.source)
+            val metadata = buildMetadata(
+                channel = channel,
+                existing = existingByChannel[channel.id]?.toModel(),
+                playlistSource = playlist.source,
+                resolver = resolver
+            )
             channelMetadataDao.upsert(metadata.toEntity())
             val effectiveLogo = metadata.manualLogoUrl ?: channel.logo ?: metadata.resolvedLogoUrl
             if (!effectiveLogo.isNullOrBlank() && effectiveLogo != channel.logo) {
@@ -86,19 +121,20 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
             }
         }
         addLog(
-            status = "metadata_refresh",
-            message = "playlistId=$playlistId, channels=${channels.size}, changedLogos=$changedLogos"
+            status = logStatus,
+            message = "${logPrefix}playlistId=$playlistId, channels=${channels.size}, changedLogos=$changedLogos"
         )
-        AppResult.Success(changedLogos)
+        return AppResult.Success(changedLogos)
     }
 
     private fun buildMetadata(
         channel: ChannelEntity,
         existing: ChannelMetadata?,
-        playlistSource: String? = null
+        playlistSource: String? = null,
+        resolver: LogoCatalogResolver = logoCatalogResolver
     ): ChannelMetadata {
         val inferred = inferMetadata(channel, playlistSource)
-        val catalogMatch = logoCatalogResolver.resolve(
+        val catalogMatch = resolver.resolve(
             name = channel.name,
             tvgId = channel.tvgId,
             playlistSource = playlistSource

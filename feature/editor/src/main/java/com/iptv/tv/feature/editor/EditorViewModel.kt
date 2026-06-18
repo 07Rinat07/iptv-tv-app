@@ -54,6 +54,7 @@ data class EditorUiState(
     val customPlaylistName: String = "Мой плейлист",
     val editDraft: ChannelEditDraft = ChannelEditDraft(),
     val selectedMetadata: ChannelMetadata? = null,
+    val externalLogoPackJson: String = "",
     val exportPreview: String? = null,
     val exportFileExtension: String = "m3u",
     val exportedFilePath: String? = null,
@@ -460,6 +461,10 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(editDraft = it.editDraft.copy(logo = value), lastError = null) }
     }
 
+    fun updateExternalLogoPackJson(value: String) {
+        _uiState.update { it.copy(externalLogoPackJson = value, lastError = null) }
+    }
+
     fun updateDraftStreamUrl(value: String) {
         _uiState.update { it.copy(editDraft = it.editDraft.copy(streamUrl = value), lastError = null) }
     }
@@ -543,6 +548,35 @@ class EditorViewModel @Inject constructor(
                         it.copy(
                             isRefreshingMetadata = false,
                             lastInfo = "Метаданные обновлены, логотипов применено: ${result.data}",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> _uiState.update {
+                    it.copy(isRefreshingMetadata = false, lastError = result.message)
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun applyExternalLogoPack() {
+        val playlistId = currentPlaylistIdOrError() ?: return
+        val logoPackJson = _uiState.value.externalLogoPackJson.trim()
+        if (logoPackJson.isBlank()) {
+            _uiState.update { it.copy(lastError = "Вставьте JSON logo pack") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRefreshingMetadata = true, lastError = null, lastInfo = null) }
+            when (val result = channelMetadataRepository.refreshMetadataWithLogoPack(playlistId, logoPackJson)) {
+                is AppResult.Success -> {
+                    _uiState.value.editDraft.channelId?.let(::loadSelectedMetadata)
+                    _uiState.update {
+                        it.copy(
+                            isRefreshingMetadata = false,
+                            externalLogoPackJson = "",
+                            lastInfo = "Внешний logo pack применён, логотипов обновлено: ${result.data}",
                             lastError = null
                         )
                     }

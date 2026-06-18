@@ -379,6 +379,19 @@ fun EditorScreen(
                             ) {
                                 Text(if (state.isRefreshingMetadata) "Подбираю логотипы..." else "Подобрать логотипы для плейлиста")
                             }
+                            OutlinedTextField(
+                                value = state.externalLogoPackJson,
+                                onValueChange = viewModel::updateExternalLogoPackJson,
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Внешний logo pack JSON") },
+                                minLines = 3
+                            )
+                            Button(
+                                onClick = viewModel::applyExternalLogoPack,
+                                enabled = !state.isRefreshingMetadata && state.externalLogoPackJson.isNotBlank()
+                            ) {
+                                Text(if (state.isRefreshingMetadata) "Применяю..." else "Применить logo pack")
+                            }
                         }
                     }
                 }
