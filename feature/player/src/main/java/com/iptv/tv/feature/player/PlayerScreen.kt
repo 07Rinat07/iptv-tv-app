@@ -1397,6 +1397,8 @@ private fun InternalPlayerHost(
     val exoPlayer = playerBuildResult.getOrNull()
     val initError = playerBuildResult.exceptionOrNull()
     var currentTracks by remember(session.sessionId) { mutableStateOf(Tracks.EMPTY) }
+    val trackPreferenceStore = remember(context) { PlayerTrackPreferenceStore(context) }
+    var savedTrackPreferences by remember { mutableStateOf(trackPreferenceStore.loadAll()) }
 
     if (exoPlayer == null) {
         DisposableEffect(session.sessionId, initError?.message) {
@@ -1521,6 +1523,15 @@ private fun InternalPlayerHost(
         fullscreenMode = fullscreenMode
     )
 
+    LaunchedEffect(exoPlayer, currentTracks, savedTrackPreferences) {
+        val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@LaunchedEffect
+        applySavedTrackPreferences(
+            tracks = currentTracks,
+            selector = selector,
+            preferences = savedTrackPreferences
+        )
+    }
+
     Box(
         modifier = viewportModifier.pointerInput(session.sessionId) {
             detectTapGestures(onDoubleTap = { onToggleExpanded() })
@@ -1562,6 +1573,7 @@ private fun InternalPlayerHost(
 
     TrackSelectionPanel(
         tracks = currentTracks,
+        savedPreferences = savedTrackPreferences,
         onSelectAuto = { trackType ->
             val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
             selector.setParameters(
@@ -1569,6 +1581,7 @@ private fun InternalPlayerHost(
                     .setTrackTypeDisabled(trackType, false)
                     .clearOverridesOfType(trackType)
             )
+            savedTrackPreferences = trackPreferenceStore.saveAuto(trackType)
         },
         onDisable = { trackType ->
             val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
@@ -1577,15 +1590,35 @@ private fun InternalPlayerHost(
                     .clearOverridesOfType(trackType)
                     .setTrackTypeDisabled(trackType, true)
             )
+            savedTrackPreferences = trackPreferenceStore.saveDisabled(trackType)
         },
         onSelectTrack = { trackType, group, trackIndex ->
             val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+            val format = group.getTrackFormat(trackIndex)
             selector.setParameters(
                 selector.buildUponParameters()
                     .setTrackTypeDisabled(trackType, false)
                     .clearOverridesOfType(trackType)
                     .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, trackIndex))
             )
+            savedTrackPreferences = trackPreferenceStore.saveSelected(
+                trackType = trackType,
+                language = format.language,
+                label = format.label
+            )
+        },
+        onClearSavedPreferences = {
+            val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+            selector.setParameters(
+                selector.buildUponParameters()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            )
+            savedTrackPreferences = trackPreferenceStore.clearAll()
         }
     )
 }
@@ -1595,9 +1628,11 @@ private fun InternalPlayerHost(
 @Composable
 private fun TrackSelectionPanel(
     tracks: Tracks,
+    savedPreferences: Map<Int, PlayerTrackPreference>,
     onSelectAuto: (Int) -> Unit,
     onDisable: (Int) -> Unit,
-    onSelectTrack: (Int, Tracks.Group, Int) -> Unit
+    onSelectTrack: (Int, Tracks.Group, Int) -> Unit,
+    onClearSavedPreferences: () -> Unit
 ) {
     val groups = tracks.groups
     val videoOptions = remember(groups) { trackOptions(groups, C.TRACK_TYPE_VIDEO) }
@@ -1612,6 +1647,15 @@ private fun TrackSelectionPanel(
     Card(modifier = Modifier.fillMaxWidth().padding(top = 8.dp).tvFocusOutline()) {
         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Дорожки плеера", style = MaterialTheme.typography.titleSmall)
+            if (savedPreferences.isNotEmpty()) {
+                Text(
+                    text = "Сохранённые предпочтения применяются автоматически",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedButton(onClick = onClearSavedPreferences) {
+                    Text("Сбросить предпочтения")
+                }
+            }
             TrackTypeRow(
                 title = "Видео",
                 trackType = C.TRACK_TYPE_VIDEO,
@@ -1707,6 +1751,69 @@ private fun trackOptions(groups: List<Tracks.Group>, trackType: Int): List<Playe
                     trackIndex = trackIndex,
                     label = formatTrackLabel(group.getTrackFormat(trackIndex), trackType, trackIndex),
                     selected = group.isTrackSelected(trackIndex),
+                    supported = group.isTrackSupported(trackIndex)
+                )
+            }
+        }
+    }
+}
+
+@UnstableApi
+private fun applySavedTrackPreferences(
+    tracks: Tracks,
+    selector: DefaultTrackSelector,
+    preferences: Map<Int, PlayerTrackPreference>
+) {
+    if (tracks.groups.isEmpty() || preferences.isEmpty()) return
+
+    val builder = selector.buildUponParameters()
+    var changed = false
+    preferences.forEach { (trackType, preference) ->
+        when (preference.mode) {
+            PlayerTrackPreferenceMode.AUTO -> {
+                builder.setTrackTypeDisabled(trackType, false)
+                    .clearOverridesOfType(trackType)
+                changed = true
+            }
+            PlayerTrackPreferenceMode.DISABLED -> {
+                builder.clearOverridesOfType(trackType)
+                    .setTrackTypeDisabled(trackType, true)
+                changed = true
+            }
+            PlayerTrackPreferenceMode.SELECTED -> {
+                val candidate = PlayerTrackPreferenceMatcher.select(
+                    preference = preference,
+                    candidates = trackPreferenceCandidates(tracks.groups, trackType)
+                ) ?: return@forEach
+                val group = tracks.groups.getOrNull(candidate.groupIndex) ?: return@forEach
+                builder.setTrackTypeDisabled(trackType, false)
+                    .clearOverridesOfType(trackType)
+                    .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, candidate.trackIndex))
+                changed = true
+            }
+        }
+    }
+    if (changed) {
+        selector.setParameters(builder)
+    }
+}
+
+@UnstableApi
+private fun trackPreferenceCandidates(
+    groups: List<Tracks.Group>,
+    trackType: Int
+): List<PlayerTrackPreferenceCandidate> {
+    return groups.flatMapIndexed { groupIndex, group ->
+        if (group.type != trackType) {
+            emptyList()
+        } else {
+            (0 until group.length).map { trackIndex ->
+                val format = group.getTrackFormat(trackIndex)
+                PlayerTrackPreferenceCandidate(
+                    groupIndex = groupIndex,
+                    trackIndex = trackIndex,
+                    language = format.language,
+                    label = format.label,
                     supported = group.isTrackSupported(trackIndex)
                 )
             }
