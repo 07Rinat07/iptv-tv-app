@@ -22,4 +22,28 @@ internal object DownloadSourceClassifier {
             sourceType == DownloadSourceType.ACESTREAM ||
             sourceType == DownloadSourceType.TORRENT_FILE
     }
+
+    fun engineFailureLogStatus(message: String): String {
+        val lower = message.lowercase()
+        return when {
+            TRACKER_FAILURE_MARKERS.any { lower.contains(it) } -> "download_tracker_error"
+            PEER_FAILURE_MARKERS.any { lower.contains(it) } -> "download_peer_error"
+            else -> "download_engine_error"
+        }
+    }
+
+    private val TRACKER_FAILURE_MARKERS = listOf(
+        "tracker",
+        "announce",
+        "scrape"
+    )
+
+    private val PEER_FAILURE_MARKERS = listOf(
+        "peer",
+        "peers",
+        "seed",
+        "seeder",
+        "leech",
+        "swarm"
+    )
 }

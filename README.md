@@ -245,7 +245,7 @@ Production-oriented MVP IPTV-приложения для Android TV/TV Box (minS
 - Engine Stream / torrent-TV:
   - подключение к endpoint движка;
   - резолв `magnet/acestream/ace/.torrent` через движок;
-  - диагностика статуса движка/сети.
+  - диагностика статуса движка/сети и отдельные логи tracker/peer ошибок.
 - Глобальное избранное и история просмотров.
 - Диагностика и логи:
   - просмотр последних событий в приложении;
@@ -258,7 +258,7 @@ Production-oriented MVP IPTV-приложения для Android TV/TV Box (minS
 
 ## Ограничения текущего MVP
 - Доступность каналов зависит от внешних источников (часть URL может быть “мертвой”).
-- Загрузки torrent-задач пока базовые: очередь уже различает `magnet/acestream/.torrent/HLS/HTTP/local`, резолвит torrent/Ace через Engine Stream и пишет типы/ошибки в диагностику, но полноценный torrent-клиент с записью файлов ещё не встроен.
+- Загрузки torrent-задач пока базовые: очередь уже различает `magnet/acestream/.torrent/HLS/HTTP/local`, резолвит torrent/Ace через Engine Stream и пишет типы/ошибки в диагностику, включая отдельные tracker/peer ошибки, но полноценный torrent-клиент с записью файлов ещё не встроен.
 - Запись эфира пока поддерживает прямые `HTTP/HTTPS` потоки и базовый HLS `.m3u8` merge по сегментам; сохранение доступно во внутреннюю/app-specific папку и во внешнюю SAF-папку через системный picker, есть предварительная диагностика timeshift-буфера, но настоящий rolling timeshift, ffmpeg/Media3-рекордер и продвинутый HLS handling ещё не финализированы.
 - Android TV Home integration требует Android TV 8.0+ и системный `TvProvider`; на обычных Android-устройствах может быть недоступен. Ряды переиспользуют стабильный `internal_provider_id` и восстанавливаются, если системный канал был удалён или локальный `providerChannelId` устарел.
 - Каталог логотипов уже вынесен в локальный asset logo pack, parser готов к внешним JSON pack-ам, а редактор умеет применять внешний JSON pack к текущему плейлисту, загружать сетевой logo pack с cache fallback и вручную править metadata override для страны/языка/категории; более массовый metadata manager ещё в работе.
@@ -273,7 +273,7 @@ Production-oriented MVP IPTV-приложения для Android TV/TV Box (minS
 6. `Android TV Home`: публикация рядов `Недавние каналы`, `Избранное`, `Продолжить просмотр`, `Записи` через `TvProvider`, ручной publish, периодический worker, очистка отключённых/пустых рядов, диагностика и восстановление рядов по стабильному `internal_provider_id` после удаления системных каналов уже доступны; дальше нужна полировка карточек и проверка на реальных TV Box.
 7. `Parental Control`: PIN на настройки, защищённые профили и экспорт/импорт уже доступны; блокировка групп/каналов по ключевым словам теперь применяется в чтении каналов, EPG и прямом открытии канала. Дальше можно добавить отдельные PIN-защищённые пользовательские профили просмотра.
 8. `Logo/Metadata Resolver`: общий resolver, локальный asset logo pack, parser/применение внешних JSON logo pack-ов из редактора, сетевой logo pack cache с fallback при ошибке сети, ручные override-ы логотипа/страны/языка/категории и подбор по `tvg-id`, имени, стране, языку и домену источника уже доступны; дальше нужен более массовый metadata manager.
-9. `Torrent/загрузки`: очередь, статусы, progress, пауза/возобновление/отмена, классификация источников `magnet/acestream/.torrent/HLS/HTTP/local`, engine-aware resolve для torrent/Ace задач, storage preflight с оценкой размера/резервом и diagnostics `download_storage_error` уже доступны; дальше нужен реальный engine downloader с записью сегментов/файлов и ошибками по трекерам/пирам.
+9. `Torrent/загрузки`: очередь, статусы, progress, пауза/возобновление/отмена, классификация источников `magnet/acestream/.torrent/HLS/HTTP/local`, engine-aware resolve для torrent/Ace задач, storage preflight с оценкой размера/резервом, diagnostics `download_storage_error` и отдельные `download_tracker_error`/`download_peer_error` уже доступны; дальше нужен реальный engine downloader с записью сегментов/файлов.
 
 ## Технический стек
 - Kotlin, Coroutines/Flow

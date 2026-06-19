@@ -145,7 +145,7 @@ class DownloadRepositoryImpl @Inject constructor(
                         syncLogDao.insert(
                             SyncLogEntity(
                                 playlistId = null,
-                                status = "download_engine_error",
+                                status = DownloadSourceClassifier.engineFailureLogStatus(resolveResult.message),
                                 message = "downloadId=${nextQueued.id}, sourceType=${sourceType.name}, reason=${resolveResult.message.take(LOG_VALUE_LIMIT)}",
                                 createdAt = System.currentTimeMillis()
                             )

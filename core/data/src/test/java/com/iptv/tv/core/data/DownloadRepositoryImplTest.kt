@@ -80,6 +80,31 @@ class DownloadRepositoryImplTest {
     }
 
     @Test
+    fun tickQueue_logsTrackerDiagnosticWhenTorrentTrackerFails() = runTest {
+        val downloadDao = mockk<DownloadDao>()
+        val syncLogDao = mockk<SyncLogDao>()
+        val engineRepository = fakeEngineRepository(
+            resolveResult = AppResult.Error("Tracker announce timeout")
+        )
+        val queued = download(source = "magnet:?xt=urn:btih:abcdef")
+
+        coEvery { downloadDao.findByStatus(DownloadStatus.RUNNING.name) } returns emptyList()
+        coEvery { downloadDao.findFirstByStatus(DownloadStatus.QUEUED.name) } returns queued
+        coEvery { downloadDao.updateState(any(), any(), any()) } returns 1
+        coEvery { syncLogDao.insert(any()) } returns Unit
+
+        val repository = repository(downloadDao, syncLogDao, engineRepository)
+        val result = repository.tickQueue(maxConcurrent = 1)
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(0, (result as AppResult.Success).data)
+        coVerify {
+            downloadDao.updateState(1, DownloadStatus.FAILED.name, 0)
+            syncLogDao.insert(match<SyncLogEntity> { it.status == "download_tracker_error" })
+        }
+    }
+
+    @Test
     fun tickQueue_marksTaskFailedWhenStoragePreflightFails() = runTest {
         val downloadDao = mockk<DownloadDao>()
         val syncLogDao = mockk<SyncLogDao>()

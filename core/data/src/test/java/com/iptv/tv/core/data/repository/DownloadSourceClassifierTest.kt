@@ -44,4 +44,20 @@ class DownloadSourceClassifierTest {
         assertFalse(DownloadSourceClassifier.requiresExternalEngine(DownloadSourceType.HLS_PLAYLIST))
         assertFalse(DownloadSourceClassifier.requiresExternalEngine(DownloadSourceType.HTTP_STREAM))
     }
+
+    @Test
+    fun engineFailureLogStatus_classifiesTrackerAndPeerErrors() {
+        assertEquals(
+            "download_tracker_error",
+            DownloadSourceClassifier.engineFailureLogStatus("Tracker announce timeout")
+        )
+        assertEquals(
+            "download_peer_error",
+            DownloadSourceClassifier.engineFailureLogStatus("No peers in swarm")
+        )
+        assertEquals(
+            "download_engine_error",
+            DownloadSourceClassifier.engineFailureLogStatus("Engine offline")
+        )
+    }
 }
