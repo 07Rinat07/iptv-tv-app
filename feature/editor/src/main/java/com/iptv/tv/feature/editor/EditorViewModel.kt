@@ -146,6 +146,28 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    fun selectVisibleChannels() {
+        _uiState.update { state ->
+            val selectedIds = filterEditorChannels(state.channels, state.channelQuery).map { it.id }.toSet()
+            state.copy(
+                selectedChannelIds = selectedIds,
+                lastError = if (selectedIds.isEmpty()) "Нет каналов по текущему фильтру" else null,
+                lastInfo = if (selectedIds.isEmpty()) null else "Выбраны видимые каналы: ${selectedIds.size}"
+            )
+        }
+    }
+
+    fun selectVisibleChannelsWithoutLogo() {
+        _uiState.update { state ->
+            val selectedIds = filterEditorChannelsWithoutLogo(state.channels, state.channelQuery).map { it.id }.toSet()
+            state.copy(
+                selectedChannelIds = selectedIds,
+                lastError = if (selectedIds.isEmpty()) "По текущему фильтру нет каналов без логотипа" else null,
+                lastInfo = if (selectedIds.isEmpty()) null else "Выбраны каналы без логотипа: ${selectedIds.size}"
+            )
+        }
+    }
+
     fun clearSelection() {
         _uiState.update {
             it.copy(
@@ -901,6 +923,27 @@ private data class TextExportResult(
     val playlistsCount: Int,
     val channelsCount: Int
 )
+
+internal fun filterEditorChannels(channels: List<Channel>, query: String): List<Channel> {
+    val normalizedQuery = query.trim().lowercase()
+    if (normalizedQuery.isBlank()) {
+        return channels
+    }
+
+    return channels.filter { channel ->
+        listOfNotNull(
+            channel.name,
+            channel.group,
+            channel.tvgId,
+            channel.logo,
+            channel.streamUrl
+        ).any { value -> value.lowercase().contains(normalizedQuery) }
+    }
+}
+
+internal fun filterEditorChannelsWithoutLogo(channels: List<Channel>, query: String): List<Channel> {
+    return filterEditorChannels(channels, query).filter { it.logo.isNullOrBlank() }
+}
 
 private fun String.sanitizeFileName(): String {
     return trim()

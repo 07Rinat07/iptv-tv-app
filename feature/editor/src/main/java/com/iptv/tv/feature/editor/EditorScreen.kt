@@ -51,16 +51,7 @@ fun EditorScreen(
         uri?.let { viewModel.saveExportToUri(it.toString()) }
     }
     val filteredChannels = remember(state.channels, state.channelQuery) {
-        val query = state.channelQuery.trim().lowercase()
-        if (query.isBlank()) {
-            state.channels
-        } else {
-            state.channels.filter { channel ->
-                channel.name.lowercase().contains(query) ||
-                    channel.group?.lowercase()?.contains(query) == true ||
-                    channel.streamUrl.lowercase().contains(query)
-            }
-        }
+        filterEditorChannels(state.channels, state.channelQuery)
     }
     val visibleLogoCount = remember(filteredChannels) {
         filteredChannels.count { !it.logo.isNullOrBlank() }
@@ -147,6 +138,12 @@ fun EditorScreen(
                         }
                         Button(onClick = viewModel::selectAllChannels, enabled = !state.isLoading) {
                             Text("Выбрать все")
+                        }
+                        Button(onClick = viewModel::selectVisibleChannels, enabled = !state.isLoading) {
+                            Text("Выбрать видимые")
+                        }
+                        Button(onClick = viewModel::selectVisibleChannelsWithoutLogo, enabled = !state.isLoading) {
+                            Text("Без логотипа")
                         }
                         Button(onClick = viewModel::clearSelection, enabled = !state.isLoading) {
                             Text("Снять выбор")
