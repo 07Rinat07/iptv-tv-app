@@ -143,7 +143,8 @@ internal class AppDownloadArtifactWriter(
 
 internal data class DownloadHlsSegmentPlan(
     val mediaPlaylistUrl: String,
-    val segmentUrls: List<String>
+    val segmentUrls: List<String>,
+    val discontinuityCount: Int
 )
 
 internal object DownloadHlsSegmentPlanner {
@@ -169,7 +170,8 @@ internal object DownloadHlsSegmentPlanner {
                     }
                     return DownloadHlsSegmentPlan(
                         mediaPlaylistUrl = currentUrl,
-                        segmentUrls = segmentUrls
+                        segmentUrls = segmentUrls,
+                        discontinuityCount = manifest.discontinuityCount
                     )
                 }
             }

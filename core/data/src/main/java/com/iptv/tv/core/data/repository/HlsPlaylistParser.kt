@@ -12,7 +12,8 @@ internal object HlsPlaylistParser {
             val segments: List<String>,
             val targetDurationSeconds: Long?,
             val endList: Boolean,
-            val encrypted: Boolean
+            val encrypted: Boolean,
+            val discontinuityCount: Int
         ) : Manifest
     }
 
@@ -28,6 +29,7 @@ internal object HlsPlaylistParser {
         var targetDurationSeconds: Long? = null
         var endList = false
         var encrypted = false
+        var discontinuityCount = 0
         var pendingBandwidth: Int? = null
 
         lines.forEach { rawLine ->
@@ -56,6 +58,10 @@ internal object HlsPlaylistParser {
                     }
                 }
 
+                line.equals("#EXT-X-DISCONTINUITY", ignoreCase = true) -> {
+                    discontinuityCount += 1
+                }
+
                 line.startsWith("#") -> Unit
 
                 pendingBandwidth != null || variants.isNotEmpty() -> {
@@ -79,7 +85,8 @@ internal object HlsPlaylistParser {
                 segments = segments.toList(),
                 targetDurationSeconds = targetDurationSeconds,
                 endList = endList,
-                encrypted = encrypted
+                encrypted = encrypted,
+                discontinuityCount = discontinuityCount
             )
         }
     }

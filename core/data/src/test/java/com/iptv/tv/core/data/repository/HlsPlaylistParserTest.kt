@@ -28,6 +28,7 @@ class HlsPlaylistParserTest {
         assertEquals(6L, manifest.targetDurationSeconds)
         assertTrue(manifest.endList)
         assertFalse(manifest.encrypted)
+        assertEquals(0, manifest.discontinuityCount)
     }
 
     @Test
@@ -62,5 +63,26 @@ class HlsPlaylistParserTest {
         ) as HlsPlaylistParser.Manifest.Media
 
         assertTrue(manifest.encrypted)
+    }
+
+    @Test
+    fun parse_mediaPlaylist_countsDiscontinuityMarkers() {
+        val manifest = HlsPlaylistParser.parse(
+            url = "https://cdn.example/live/index.m3u8",
+            content = """
+                #EXTM3U
+                #EXTINF:5.0,
+                seg-01.ts
+                #EXT-X-DISCONTINUITY
+                #EXTINF:5.0,
+                seg-02.ts
+                #EXT-X-DISCONTINUITY
+                #EXTINF:5.0,
+                seg-03.ts
+            """.trimIndent()
+        ) as HlsPlaylistParser.Manifest.Media
+
+        assertEquals(3, manifest.segments.size)
+        assertEquals(2, manifest.discontinuityCount)
     }
 }

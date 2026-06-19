@@ -323,6 +323,7 @@ class RecordingRepositoryImpl @Inject constructor(
         try {
             if (streamUrl.isHlsPlaylistUrl()) {
                 writeHlsMergedStream(
+                    recordingId = recording.id,
                     playlistUrl = streamUrl,
                     headers = prepared.second,
                     target = target,
@@ -374,6 +375,7 @@ class RecordingRepositoryImpl @Inject constructor(
     }
 
     private suspend fun writeHlsMergedStream(
+        recordingId: Long,
         playlistUrl: String,
         headers: Map<String, String>,
         target: RecordingTarget,
@@ -382,6 +384,7 @@ class RecordingRepositoryImpl @Inject constructor(
         var currentPlaylistUrl = playlistUrl
         val seenSegments = linkedSetOf<String>()
         var written = 0L
+        var loggedDiscontinuities = 0
 
         target.openOutputStream().use { output ->
             while (System.currentTimeMillis() < hardEndAt && written < target.maxBytes) {
@@ -394,6 +397,17 @@ class RecordingRepositoryImpl @Inject constructor(
                     is HlsPlaylistParser.Manifest.Media -> {
                         if (manifest.encrypted) {
                             throw IOException("Encrypted HLS playlists are not supported yet")
+                        }
+                        if (manifest.discontinuityCount > loggedDiscontinuities) {
+                            syncLogDao.insert(
+                                SyncLogEntity(
+                                    playlistId = null,
+                                    status = "recording_hls_discontinuity",
+                                    message = "recordingId=$recordingId, playlist=$currentPlaylistUrl, discontinuities=${manifest.discontinuityCount}",
+                                    createdAt = System.currentTimeMillis()
+                                )
+                            )
+                            loggedDiscontinuities = manifest.discontinuityCount
                         }
                         val newSegments = manifest.segments.filterNot(seenSegments::contains)
                         if (newSegments.isEmpty()) {

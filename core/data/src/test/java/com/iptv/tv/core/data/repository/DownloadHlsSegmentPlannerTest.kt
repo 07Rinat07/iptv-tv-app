@@ -13,6 +13,7 @@ class DownloadHlsSegmentPlannerTest {
                 #EXTM3U
                 #EXTINF:6,
                 seg-01.ts
+                #EXT-X-DISCONTINUITY
                 #EXTINF:6,
                 /global/seg-02.ts
                 #EXT-X-ENDLIST
@@ -27,6 +28,7 @@ class DownloadHlsSegmentPlannerTest {
             ),
             plan.segmentUrls
         )
+        assertEquals(1, plan.discontinuityCount)
     }
 
     @Test
@@ -52,6 +54,7 @@ class DownloadHlsSegmentPlannerTest {
 
         assertEquals("https://cdn.example/hi/index.m3u8", plan.mediaPlaylistUrl)
         assertEquals(listOf("https://cdn.example/hi/hi-01.ts"), plan.segmentUrls)
+        assertEquals(0, plan.discontinuityCount)
     }
 
     @Test
