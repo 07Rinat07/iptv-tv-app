@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
+import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
@@ -13,14 +14,18 @@ import javax.inject.Singleton
 @Singleton
 class LogoCatalogResolver private constructor(
     private val assetReader: (() -> String?)?,
-    baseEntries: List<LogoCatalogEntry>
+    baseEntries: List<LogoCatalogEntry>,
+    private val networkCache: LogoPackNetworkCache?
 ) {
     private val entries: List<LogoCatalogEntry> by lazy {
         baseEntries + parseEntries(assetReader?.invoke())
     }
 
     @Inject
-    constructor(@ApplicationContext context: Context) : this(
+    constructor(
+        @ApplicationContext context: Context,
+        okHttpClient: OkHttpClient
+    ) : this(
         assetReader = {
             try {
                 context.assets.open(LOGO_CATALOG_ASSET).bufferedReader().use { it.readText() }
@@ -28,16 +33,25 @@ class LogoCatalogResolver private constructor(
                 null
             }
         },
-        baseEntries = DEFAULT_ENTRIES
+        baseEntries = DEFAULT_ENTRIES,
+        networkCache = LogoPackNetworkCache(
+            cacheRootProvider = { context.cacheDir?.let { java.io.File(it, "logo_pack_cache") } },
+            okHttpClient = okHttpClient
+        )
     )
 
-    constructor() : this(assetReader = null, baseEntries = DEFAULT_ENTRIES)
+    constructor() : this(assetReader = null, baseEntries = DEFAULT_ENTRIES, networkCache = null)
 
-    internal constructor(baseEntries: List<LogoCatalogEntry>) : this(assetReader = null, baseEntries = baseEntries)
+    internal constructor(baseEntries: List<LogoCatalogEntry>) : this(
+        assetReader = null,
+        baseEntries = baseEntries,
+        networkCache = null
+    )
 
     internal constructor(baseEntries: List<LogoCatalogEntry>, packJson: String) : this(
         assetReader = { packJson },
-        baseEntries = baseEntries
+        baseEntries = baseEntries,
+        networkCache = null
     )
 
     fun resolve(
@@ -64,6 +78,11 @@ class LogoCatalogResolver private constructor(
         }
 
         return null
+    }
+
+    internal fun fetchNetworkLogoPack(url: String): LogoPackNetworkResult {
+        return networkCache?.fetch(url)
+            ?: throw IllegalStateException("Сетевой cache logo pack недоступен")
     }
 
     data class ResolvedLogo(

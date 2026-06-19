@@ -407,6 +407,19 @@ fun EditorScreen(
                                 Text(if (state.isRefreshingMetadata) "Подбираю логотипы..." else "Подобрать логотипы для плейлиста")
                             }
                             OutlinedTextField(
+                                value = state.externalLogoPackUrl,
+                                onValueChange = viewModel::updateExternalLogoPackUrl,
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("URL внешнего logo pack JSON") },
+                                singleLine = true
+                            )
+                            Button(
+                                onClick = viewModel::applyExternalLogoPackUrl,
+                                enabled = !state.isRefreshingMetadata && state.externalLogoPackUrl.isNotBlank()
+                            ) {
+                                Text(if (state.isRefreshingMetadata) "Загружаю..." else "Загрузить и применить logo pack")
+                            }
+                            OutlinedTextField(
                                 value = state.externalLogoPackJson,
                                 onValueChange = viewModel::updateExternalLogoPackJson,
                                 modifier = Modifier.fillMaxWidth(),
@@ -522,6 +535,9 @@ private fun String?.toMetadataSourceLabel(): String {
         "manual" -> "ручной override"
         "manual_metadata" -> "ручные метаданные"
         "playlist" -> "из плейлиста"
+        "logo-pack:tvg-id" -> "logo pack по tvg-id"
+        "logo-pack:name" -> "logo pack по имени"
+        "logo-pack:source" -> "logo pack по источнику"
         "catalog:tvg-id" -> "каталог по tvg-id"
         "catalog:name" -> "каталог по имени"
         "catalog:source" -> "каталог по источнику"

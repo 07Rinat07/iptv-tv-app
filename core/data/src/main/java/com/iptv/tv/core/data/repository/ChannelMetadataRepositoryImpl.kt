@@ -112,6 +112,32 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         )
     }
 
+    override suspend fun refreshMetadataWithLogoPackUrl(
+        playlistId: Long,
+        logoPackUrl: String
+    ): AppResult<Int> = withContext(Dispatchers.IO) {
+        val normalizedUrl = logoPackUrl.trim()
+        if (normalizedUrl.isBlank()) {
+            return@withContext AppResult.Error("Logo pack URL пуст")
+        }
+        val networkPack = runCatching { logoCatalogResolver.fetchNetworkLogoPack(normalizedUrl) }
+            .getOrElse { throwable ->
+                return@withContext AppResult.Error(throwable.message ?: "Не удалось загрузить logo pack")
+            }
+        when (
+            val result = refreshMetadataInternal(
+                playlistId = playlistId,
+                resolver = LogoCatalogResolver(baseEntries = emptyList(), packJson = networkPack.json),
+                logStatus = "metadata_network_logo_pack",
+                logPrefix = "networkLogoPack=${normalizedUrl.take(LOGO_PACK_URL_LOG_LIMIT)}, fromCache=${networkPack.fromCache}, detail=${networkPack.detail}, "
+            )
+        ) {
+            is AppResult.Success -> result
+            is AppResult.Error -> result
+            AppResult.Loading -> AppResult.Loading
+        }
+    }
+
     private suspend fun refreshMetadataInternal(
         playlistId: Long,
         resolver: LogoCatalogResolver,
@@ -279,5 +305,7 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
                 .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
                 .trim()
         }
+
+        const val LOGO_PACK_URL_LOG_LIMIT = 160
     }
 }

@@ -58,6 +58,7 @@ data class EditorUiState(
     val manualLanguageInput: String = "",
     val manualCategoryInput: String = "",
     val externalLogoPackJson: String = "",
+    val externalLogoPackUrl: String = "",
     val exportPreview: String? = null,
     val exportFileExtension: String = "m3u",
     val exportedFilePath: String? = null,
@@ -635,6 +636,38 @@ class EditorViewModel @Inject constructor(
                             isRefreshingMetadata = false,
                             externalLogoPackJson = "",
                             lastInfo = "Внешний logo pack применён, логотипов обновлено: ${result.data}",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> _uiState.update {
+                    it.copy(isRefreshingMetadata = false, lastError = result.message)
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun updateExternalLogoPackUrl(value: String) {
+        _uiState.update { it.copy(externalLogoPackUrl = value, lastError = null, lastInfo = null) }
+    }
+
+    fun applyExternalLogoPackUrl() {
+        val playlistId = currentPlaylistIdOrError() ?: return
+        val logoPackUrl = _uiState.value.externalLogoPackUrl.trim()
+        if (logoPackUrl.isBlank()) {
+            _uiState.update { it.copy(lastError = "Введите URL logo pack") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRefreshingMetadata = true, lastError = null, lastInfo = null) }
+            when (val result = channelMetadataRepository.refreshMetadataWithLogoPackUrl(playlistId, logoPackUrl)) {
+                is AppResult.Success -> {
+                    _uiState.value.editDraft.channelId?.let(::loadSelectedMetadata)
+                    _uiState.update {
+                        it.copy(
+                            isRefreshingMetadata = false,
+                            lastInfo = "Сетевой logo pack применён, логотипов обновлено: ${result.data}",
                             lastError = null
                         )
                     }
