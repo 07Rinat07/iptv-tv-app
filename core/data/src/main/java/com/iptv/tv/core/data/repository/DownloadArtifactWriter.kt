@@ -53,27 +53,15 @@ internal class AppDownloadArtifactWriter(
     }
 
     private fun writeHls(downloadId: Long, source: String): DownloadArtifactResult = runCatching {
-        val playlistText = fetchText(source, MAX_PLAYLIST_BYTES)
-        if (playlistText.lineSequence().any { it.trim().startsWith("#EXT-X-KEY") && !it.contains("METHOD=NONE") }) {
-            return@runCatching DownloadArtifactResult.Failed("Encrypted HLS playlists are not supported yet")
-        }
-
-        val segmentUrls = playlistText.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() && !it.startsWith("#") }
-            .take(MAX_HLS_SEGMENTS)
-            .map { segment -> URL(URL(source), segment) }
-            .toList()
-
-        if (segmentUrls.isEmpty()) {
-            return@runCatching DownloadArtifactResult.Failed("HLS playlist has no media segments")
+        val hlsPlan = DownloadHlsSegmentPlanner.plan(source) { url ->
+            fetchText(url, MAX_PLAYLIST_BYTES)
         }
 
         val target = targetFile(downloadId, source, "ts")
         var totalBytes = 0L
         target.outputStream().use { output ->
-            segmentUrls.forEach { segmentUrl ->
-                val connection = segmentUrl.openConnection() as HttpURLConnection
+            hlsPlan.segmentUrls.forEach { segmentUrl ->
+                val connection = URL(segmentUrl).openConnection() as HttpURLConnection
                 connection.connectTimeout = NETWORK_TIMEOUT_MS
                 connection.readTimeout = NETWORK_TIMEOUT_MS
                 connection.instanceFollowRedirects = true
@@ -148,10 +136,49 @@ internal class AppDownloadArtifactWriter(
 
     private companion object {
         const val NETWORK_TIMEOUT_MS = 30_000
-        const val MAX_HLS_SEGMENTS = 256
         const val MAX_PLAYLIST_BYTES = 2 * 1024 * 1024
         const val MAX_FILE_NAME_CHARS = 80
     }
+}
+
+internal data class DownloadHlsSegmentPlan(
+    val mediaPlaylistUrl: String,
+    val segmentUrls: List<String>
+)
+
+internal object DownloadHlsSegmentPlanner {
+    fun plan(
+        source: String,
+        fetchText: (String) -> String
+    ): DownloadHlsSegmentPlan {
+        var currentUrl = source
+        repeat(MAX_MASTER_REDIRECTS) {
+            when (val manifest = HlsPlaylistParser.parse(currentUrl, fetchText(currentUrl))) {
+                is HlsPlaylistParser.Manifest.Master -> {
+                    currentUrl = HlsPlaylistParser.selectPreferredVariant(manifest)
+                        ?: error("Empty HLS master playlist")
+                }
+
+                is HlsPlaylistParser.Manifest.Media -> {
+                    if (manifest.encrypted) {
+                        error("Encrypted HLS playlists are not supported yet")
+                    }
+                    val segmentUrls = manifest.segments.take(MAX_HLS_SEGMENTS)
+                    if (segmentUrls.isEmpty()) {
+                        error("HLS playlist has no media segments")
+                    }
+                    return DownloadHlsSegmentPlan(
+                        mediaPlaylistUrl = currentUrl,
+                        segmentUrls = segmentUrls
+                    )
+                }
+            }
+        }
+        error("Too many nested HLS master playlists")
+    }
+
+    private const val MAX_HLS_SEGMENTS = 256
+    private const val MAX_MASTER_REDIRECTS = 3
 }
 
 private fun String.sanitizeDownloadFileName(): String {
