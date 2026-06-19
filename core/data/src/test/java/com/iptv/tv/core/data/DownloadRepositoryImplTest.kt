@@ -1,7 +1,9 @@
 package com.iptv.tv.core.data
 
+import android.content.Context
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.repository.DownloadRepositoryImpl
+import com.iptv.tv.core.data.repository.DownloadStoragePreflight
 import com.iptv.tv.core.database.dao.DownloadDao
 import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.DownloadEntity
@@ -39,7 +41,7 @@ class DownloadRepositoryImplTest {
         )
         coEvery { syncLogDao.insert(any()) } returns Unit
 
-        val repository = DownloadRepositoryImpl(downloadDao, syncLogDao, engineRepository)
+        val repository = repository(downloadDao, syncLogDao, engineRepository)
         val result = repository.tickQueue(maxConcurrent = 1)
 
         assertTrue(result is AppResult.Success)
@@ -65,7 +67,7 @@ class DownloadRepositoryImplTest {
         coEvery { downloadDao.updateState(any(), any(), any()) } returns 1
         coEvery { syncLogDao.insert(any()) } returns Unit
 
-        val repository = DownloadRepositoryImpl(downloadDao, syncLogDao, engineRepository)
+        val repository = repository(downloadDao, syncLogDao, engineRepository)
         val result = repository.tickQueue(maxConcurrent = 1)
 
         assertTrue(result is AppResult.Success)
@@ -74,6 +76,55 @@ class DownloadRepositoryImplTest {
             engineRepository.resolveTorrentStream("acestream://abcdef")
             downloadDao.updateState(1, DownloadStatus.FAILED.name, 0)
             syncLogDao.insert(match<SyncLogEntity> { it.status == "download_engine_error" })
+        }
+    }
+
+    @Test
+    fun tickQueue_marksTaskFailedWhenStoragePreflightFails() = runTest {
+        val downloadDao = mockk<DownloadDao>()
+        val syncLogDao = mockk<SyncLogDao>()
+        val engineRepository = fakeEngineRepository(
+            resolveResult = AppResult.Success("https://resolved.example/live.m3u8")
+        )
+        val queued = download(source = "https://example.com/movie.ts?size=10gb")
+
+        coEvery { downloadDao.findByStatus(DownloadStatus.RUNNING.name) } returns emptyList()
+        coEvery { downloadDao.findFirstByStatus(DownloadStatus.QUEUED.name) } returns queued
+        coEvery { downloadDao.updateState(any(), any(), any()) } returns 1
+        coEvery { syncLogDao.insert(any()) } returns Unit
+
+        val repository = repository(
+            downloadDao = downloadDao,
+            syncLogDao = syncLogDao,
+            engineRepository = engineRepository,
+            availableBytes = 1024L * 1024L * 1024L
+        )
+        val result = repository.tickQueue(maxConcurrent = 1)
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(0, (result as AppResult.Success).data)
+        coVerify(exactly = 0) {
+            engineRepository.resolveTorrentStream(any())
+        }
+        coVerify {
+            downloadDao.updateState(1, DownloadStatus.FAILED.name, 0)
+            syncLogDao.insert(match<SyncLogEntity> { it.status == "download_storage_error" })
+        }
+    }
+
+    private fun repository(
+        downloadDao: DownloadDao,
+        syncLogDao: SyncLogDao,
+        engineRepository: EngineRepository,
+        availableBytes: Long = 16L * 1024L * 1024L * 1024L
+    ): DownloadRepositoryImpl {
+        return DownloadRepositoryImpl(
+            context = mockk<Context>(relaxed = true),
+            downloadDao = downloadDao,
+            syncLogDao = syncLogDao,
+            engineRepository = engineRepository
+        ).apply {
+            storagePreflight = DownloadStoragePreflight { availableBytes }
         }
     }
 

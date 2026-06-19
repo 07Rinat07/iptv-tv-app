@@ -62,7 +62,7 @@ fun DownloadsScreen(
                 value = state.sourceInput,
                 onValueChange = viewModel::updateSourceInput,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("magnet:/acestream:/ace:/.torrent") },
+                label = { Text("HTTP/HLS/magnet/acestream/.torrent") },
                 minLines = 2
             )
         }

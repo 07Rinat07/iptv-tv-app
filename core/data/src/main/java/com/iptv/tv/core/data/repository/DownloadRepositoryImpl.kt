@@ -1,5 +1,6 @@
 package com.iptv.tv.core.data.repository
 
+import android.content.Context
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.mapper.toModel
 import com.iptv.tv.core.database.dao.DownloadDao
@@ -15,15 +16,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class DownloadRepositoryImpl @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val downloadDao: DownloadDao,
     private val syncLogDao: SyncLogDao,
     private val engineRepository: EngineRepository
 ) : DownloadRepository {
+    internal var storagePreflight = DownloadStoragePreflight { context.downloadStorageAvailableBytes() }
+
     override fun observeDownloads(limit: Int): Flow<List<DownloadTask>> {
         return downloadDao.observeDownloads(limit).map { rows -> rows.map { it.toModel() } }
     }
@@ -98,6 +104,25 @@ class DownloadRepositoryImpl @Inject constructor(
         repeat(availableSlots) {
             val nextQueued = downloadDao.findFirstByStatus(DownloadStatus.QUEUED.name) ?: return@repeat
             val sourceType = DownloadSourceClassifier.classify(nextQueued.source)
+            val storage = storagePreflight.evaluate(nextQueued.source, sourceType)
+            if (!storage.allowed) {
+                downloadDao.updateState(
+                    downloadId = nextQueued.id,
+                    status = DownloadStatus.FAILED.name,
+                    progress = nextQueued.progress
+                )
+                syncLogDao.insert(
+                    SyncLogEntity(
+                        playlistId = null,
+                        status = "download_storage_error",
+                        message = "downloadId=${nextQueued.id}, sourceType=${sourceType.name}, " +
+                            "estimatedBytes=${storage.estimatedBytes}, availableBytes=${storage.availableBytes}, " +
+                            "reserveBytes=${storage.reserveBytes}, reason=${storage.reason}",
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+                return@repeat
+            }
             val startProgress = if (DownloadSourceClassifier.requiresExternalEngine(sourceType)) {
                 when (val resolveResult = engineRepository.resolveTorrentStream(nextQueued.source)) {
                     is AppResult.Success -> {
@@ -206,4 +231,20 @@ class DownloadRepositoryImpl @Inject constructor(
         const val ENGINE_RESOLVED_PROGRESS = 10
         const val LOG_VALUE_LIMIT = 160
     }
+}
+
+private fun Context.downloadStorageAvailableBytes(): Long? {
+    return listOfNotNull(
+        filesDir,
+        cacheDir,
+        runCatching { getExternalFilesDir(null) }.getOrNull()
+    )
+        .mapNotNull { dir -> dir.safeUsableSpace() }
+        .maxOrNull()
+}
+
+private fun File.safeUsableSpace(): Long? {
+    return runCatching {
+        takeIf { exists() || mkdirs() }?.usableSpace
+    }.getOrNull()
 }
