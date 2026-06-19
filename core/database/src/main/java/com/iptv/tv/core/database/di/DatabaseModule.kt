@@ -3,6 +3,7 @@ package com.iptv.tv.core.database.di
 import android.content.Context
 import androidx.room.Room
 import com.iptv.tv.core.database.IptvDatabase
+import com.iptv.tv.core.database.MIGRATION_6_7
 import com.iptv.tv.core.database.dao.ChannelDao
 import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.DownloadDao
@@ -30,6 +31,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): IptvDatabase {
         return Room.databaseBuilder(context, IptvDatabase::class.java, "iptv.db")
+            .addMigrations(MIGRATION_6_7)
             .fallbackToDestructiveMigration()
             .build()
     }
