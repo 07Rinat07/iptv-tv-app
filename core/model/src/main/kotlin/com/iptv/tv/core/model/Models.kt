@@ -280,6 +280,7 @@ data class RecordingTask(
     val programTitle: String?,
     val streamUrl: String,
     val filePath: String?,
+    val progress: Int = 0,
     val status: RecordingStatus,
     val startedAt: Long?,
     val endedAt: Long?,

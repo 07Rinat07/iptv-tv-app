@@ -120,6 +120,7 @@ data class RecordingEntity(
     val programTitle: String?,
     val streamUrl: String,
     val filePath: String?,
+    val progress: Int = 0,
     val status: String,
     val startedAt: Long?,
     val endedAt: Long?,

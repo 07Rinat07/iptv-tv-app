@@ -221,8 +221,14 @@ interface RecordingDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: RecordingEntity): Long
 
-    @Query("UPDATE recordings SET status = :status, filePath = :filePath, startedAt = :startedAt WHERE id = :recordingId")
+    @Query(
+        "UPDATE recordings SET status = :status, filePath = :filePath, startedAt = :startedAt, " +
+            "progress = 0 WHERE id = :recordingId"
+    )
     suspend fun markStarted(recordingId: Long, status: String, filePath: String?, startedAt: Long): Int
+
+    @Query("UPDATE recordings SET progress = :progress WHERE id = :recordingId")
+    suspend fun updateProgress(recordingId: Long, progress: Int): Int
 
     @Query("UPDATE recordings SET status = :status, endedAt = :endedAt WHERE id = :recordingId")
     suspend fun markFinished(recordingId: Long, status: String, endedAt: Long): Int

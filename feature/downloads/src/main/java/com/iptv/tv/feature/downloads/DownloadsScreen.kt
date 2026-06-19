@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -349,6 +350,13 @@ private fun RecordingCard(
             Text("Финиш: ${recording.scheduledEndAt?.let(::formatEpoch) ?: "-"}")
             Text("Фактически: ${recording.toActualRecordingWindowLabel()}")
             Text("Длительность: ${recording.toActualRecordingDurationLabel()}")
+            if (recording.status == RecordingStatus.RECORDING || recording.progress > 0) {
+                Text("Прогресс записи: ${recording.progress.coerceIn(0, 100)}%")
+                LinearProgressIndicator(
+                    progress = { recording.progress.coerceIn(0, 100) / 100f },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             Text("Файл: ${recording.filePath.toRecordingPathLabel(context) ?: "ещё не создан"}")
             Text("Размер: ${recording.filePath.toRecordingFileSizeLabel(context)}")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

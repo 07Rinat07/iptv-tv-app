@@ -310,6 +310,12 @@ class RecordingRepositoryImpl @Inject constructor(
         val startedAt = System.currentTimeMillis()
         val maxBytes = target.maxBytes
         val hardEndAt = RecordingLimits.hardEndAt(startedAt, recording.scheduledEndAt)
+        val progressTracker = RecordingProgressTracker(
+            recordingId = recording.id,
+            startedAt = startedAt,
+            hardEndAt = hardEndAt,
+            recordingDao = recordingDao
+        )
         recordingDao.markStarted(
             recordingId = recording.id,
             status = RecordingStatus.RECORDING.name,
@@ -327,15 +333,18 @@ class RecordingRepositoryImpl @Inject constructor(
                     playlistUrl = streamUrl,
                     headers = prepared.second,
                     target = target,
-                    hardEndAt = hardEndAt
+                    hardEndAt = hardEndAt,
+                    progressTracker = progressTracker
                 )
             } else {
                 writeDirectStream(
                     request = requestBuilder.build(),
                     target = target,
-                    hardEndAt = hardEndAt
+                    hardEndAt = hardEndAt,
+                    progressTracker = progressTracker
                 )
             }
+            recordingDao.updateProgress(recording.id, 100)
             recordingDao.markFinished(recording.id, RecordingStatus.COMPLETED.name, System.currentTimeMillis())
             syncLogDao.insert(
                 SyncLogEntity(
@@ -355,7 +364,8 @@ class RecordingRepositoryImpl @Inject constructor(
     private suspend fun writeDirectStream(
         request: Request,
         target: RecordingTarget,
-        hardEndAt: Long
+        hardEndAt: Long,
+        progressTracker: RecordingProgressTracker
     ) {
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
@@ -367,7 +377,8 @@ class RecordingRepositoryImpl @Inject constructor(
                         maxBytes = target.maxBytes,
                         hardEndAt = hardEndAt,
                         input = input,
-                        output = output
+                        output = output,
+                        progressTracker = progressTracker
                     )
                 }
             }
@@ -379,7 +390,8 @@ class RecordingRepositoryImpl @Inject constructor(
         playlistUrl: String,
         headers: Map<String, String>,
         target: RecordingTarget,
-        hardEndAt: Long
+        hardEndAt: Long,
+        progressTracker: RecordingProgressTracker
     ) {
         var currentPlaylistUrl = playlistUrl
         val seenSegments = linkedSetOf<String>()
@@ -433,7 +445,8 @@ class RecordingRepositoryImpl @Inject constructor(
                                 output = output,
                                 initialWritten = written,
                                 maxBytes = target.maxBytes,
-                                hardEndAt = hardEndAt
+                                hardEndAt = hardEndAt,
+                                progressTracker = progressTracker
                             )
                             written += appended
                             seenSegments += segmentUrl
@@ -464,13 +477,14 @@ class RecordingRepositoryImpl @Inject constructor(
         }
     }
 
-    private fun appendHttpResource(
+    private suspend fun appendHttpResource(
         url: String,
         headers: Map<String, String>,
         output: OutputStream,
         initialWritten: Long,
         maxBytes: Long,
-        hardEndAt: Long
+        hardEndAt: Long,
+        progressTracker: RecordingProgressTracker
     ): Long {
         val requestBuilder = Request.Builder().url(url).get()
         headers.forEach { (key, value) -> requestBuilder.header(key, value) }
@@ -483,18 +497,20 @@ class RecordingRepositoryImpl @Inject constructor(
                     maxBytes = maxBytes,
                     hardEndAt = hardEndAt,
                     input = input,
-                    output = output
+                    output = output,
+                    progressTracker = progressTracker
                 )
             }
         }
     }
 
-    private fun copyInputStream(
+    private suspend fun copyInputStream(
         initialWritten: Long,
         maxBytes: Long,
         hardEndAt: Long,
         input: java.io.InputStream,
-        output: OutputStream
+        output: OutputStream,
+        progressTracker: RecordingProgressTracker
     ): Long {
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
         var appended = 0L
@@ -506,6 +522,7 @@ class RecordingRepositoryImpl @Inject constructor(
             val bytesToWrite = minOf(read.toLong(), remaining).toInt()
             output.write(buffer, 0, bytesToWrite)
             appended += bytesToWrite
+            progressTracker.update()
             if (bytesToWrite < read) break
         }
         return appended
@@ -711,6 +728,40 @@ private data class RecordingTarget(
     val maxBytes: Long,
     val openOutputStream: () -> OutputStream
 )
+
+private class RecordingProgressTracker(
+    private val recordingId: Long,
+    private val startedAt: Long,
+    private val hardEndAt: Long,
+    private val recordingDao: RecordingDao
+) {
+    private var lastProgress = 0
+    private var lastUpdateAt = startedAt
+
+    suspend fun update(now: Long = System.currentTimeMillis()) {
+        val progress = recordingProgressPercent(startedAt = startedAt, hardEndAt = hardEndAt, now = now)
+        val changedEnough = progress >= lastProgress + MIN_PROGRESS_UPDATE_STEP
+        val staleEnough = now - lastUpdateAt >= MIN_PROGRESS_UPDATE_INTERVAL_MS && progress > lastProgress
+        if (!changedEnough && !staleEnough) return
+        recordingDao.updateProgress(recordingId, progress)
+        lastProgress = progress
+        lastUpdateAt = now
+    }
+
+    private companion object {
+        const val MIN_PROGRESS_UPDATE_STEP = 5
+        const val MIN_PROGRESS_UPDATE_INTERVAL_MS = 15_000L
+    }
+}
+
+internal fun recordingProgressPercent(startedAt: Long, hardEndAt: Long, now: Long): Int {
+    val duration = hardEndAt - startedAt
+    if (duration <= 0L) return 99
+    val elapsed = (now - startedAt).coerceAtLeast(0L)
+    return ((elapsed * 100L) / duration)
+        .toInt()
+        .coerceIn(0, 99)
+}
 
 private fun String.isHlsPlaylistUrl(): Boolean {
     return substringBefore('?').endsWith(".m3u8", ignoreCase = true)
