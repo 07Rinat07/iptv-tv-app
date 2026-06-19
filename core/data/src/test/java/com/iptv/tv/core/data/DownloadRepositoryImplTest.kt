@@ -2,6 +2,8 @@ package com.iptv.tv.core.data
 
 import android.content.Context
 import com.iptv.tv.core.common.AppResult
+import com.iptv.tv.core.data.repository.DownloadArtifactResult
+import com.iptv.tv.core.data.repository.DownloadArtifactWriter
 import com.iptv.tv.core.data.repository.DownloadRepositoryImpl
 import com.iptv.tv.core.data.repository.DownloadStoragePreflight
 import com.iptv.tv.core.database.dao.DownloadDao
@@ -10,6 +12,7 @@ import com.iptv.tv.core.database.entity.DownloadEntity
 import com.iptv.tv.core.database.entity.SyncLogEntity
 import com.iptv.tv.core.domain.repository.EngineRepository
 import com.iptv.tv.core.model.DownloadStatus
+import com.iptv.tv.core.model.DownloadSourceType
 import com.iptv.tv.core.model.EngineStatus
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -137,6 +140,70 @@ class DownloadRepositoryImplTest {
         }
     }
 
+    @Test
+    fun tickQueue_writesHttpArtifactAndMarksTaskCompleted() = runTest {
+        val downloadDao = mockk<DownloadDao>()
+        val syncLogDao = mockk<SyncLogDao>()
+        val engineRepository = fakeEngineRepository(
+            resolveResult = AppResult.Success("https://resolved.example/live.m3u8")
+        )
+        val running = download(source = "https://example.com/movie.ts").copy(
+            status = DownloadStatus.RUNNING.name,
+            progress = 1
+        )
+
+        coEvery { downloadDao.findByStatus(DownloadStatus.RUNNING.name) } returns listOf(running)
+        coEvery { downloadDao.findById(1) } returns running
+        coEvery { downloadDao.updateState(any(), any(), any()) } returns 1
+        coEvery { syncLogDao.insert(any()) } returns Unit
+
+        val repository = repository(downloadDao, syncLogDao, engineRepository).apply {
+            artifactWriter = fakeArtifactWriter(
+                DownloadArtifactResult.Completed(filePath = "/tmp/movie.ts", bytesWritten = 42)
+            )
+        }
+        val result = repository.tickQueue(maxConcurrent = 1)
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(1, (result as AppResult.Success).data)
+        coVerify {
+            downloadDao.updateState(1, DownloadStatus.COMPLETED.name, 100)
+            syncLogDao.insert(match<SyncLogEntity> { it.status == "download_file_saved" })
+        }
+    }
+
+    @Test
+    fun tickQueue_marksRunningTaskFailedWhenArtifactWriteFails() = runTest {
+        val downloadDao = mockk<DownloadDao>()
+        val syncLogDao = mockk<SyncLogDao>()
+        val engineRepository = fakeEngineRepository(
+            resolveResult = AppResult.Success("https://resolved.example/live.m3u8")
+        )
+        val running = download(source = "https://example.com/live.m3u8").copy(
+            status = DownloadStatus.RUNNING.name,
+            progress = 12
+        )
+
+        coEvery { downloadDao.findByStatus(DownloadStatus.RUNNING.name) } returns listOf(running)
+        coEvery { downloadDao.findById(1) } returns running
+        coEvery { downloadDao.updateState(any(), any(), any()) } returns 1
+        coEvery { syncLogDao.insert(any()) } returns Unit
+
+        val repository = repository(downloadDao, syncLogDao, engineRepository).apply {
+            artifactWriter = fakeArtifactWriter(
+                DownloadArtifactResult.Failed(reason = "encrypted")
+            )
+        }
+        val result = repository.tickQueue(maxConcurrent = 1)
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(1, (result as AppResult.Success).data)
+        coVerify {
+            downloadDao.updateState(1, DownloadStatus.FAILED.name, 12)
+            syncLogDao.insert(match<SyncLogEntity> { it.status == "download_file_error" })
+        }
+    }
+
     private fun repository(
         downloadDao: DownloadDao,
         syncLogDao: SyncLogDao,
@@ -161,6 +228,16 @@ class DownloadRepositoryImplTest {
             )
             every { observeStatus() } returns emptyFlow()
             coEvery { resolveTorrentStream(any()) } returns resolveResult
+        }
+    }
+
+    private fun fakeArtifactWriter(result: DownloadArtifactResult): DownloadArtifactWriter {
+        return object : DownloadArtifactWriter {
+            override fun write(
+                downloadId: Long,
+                source: String,
+                sourceType: DownloadSourceType
+            ): DownloadArtifactResult = result
         }
     }
 

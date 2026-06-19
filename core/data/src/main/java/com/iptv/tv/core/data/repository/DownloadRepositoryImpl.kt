@@ -29,6 +29,7 @@ class DownloadRepositoryImpl @Inject constructor(
     private val engineRepository: EngineRepository
 ) : DownloadRepository {
     internal var storagePreflight = DownloadStoragePreflight { context.downloadStorageAvailableBytes() }
+    internal var artifactWriter: DownloadArtifactWriter = AppDownloadArtifactWriter(context)
 
     override fun observeDownloads(limit: Int): Flow<List<DownloadTask>> {
         return downloadDao.observeDownloads(limit).map { rows -> rows.map { it.toModel() } }
@@ -176,9 +177,36 @@ class DownloadRepositoryImpl @Inject constructor(
             if (fresh.status != DownloadStatus.RUNNING.name) return@forEach
 
             val sourceType = DownloadSourceClassifier.classify(fresh.source)
-            val nextProgress = (fresh.progress + progressStepFor(fresh.source, sourceType)).coerceAtMost(100)
-            val nextStatus = if (nextProgress >= 100) DownloadStatus.COMPLETED else DownloadStatus.RUNNING
-            downloadDao.updateState(fresh.id, nextStatus.name, nextProgress)
+            when (val artifact = artifactWriter.write(fresh.id, fresh.source, sourceType)) {
+                is DownloadArtifactResult.Completed -> {
+                    downloadDao.updateState(fresh.id, DownloadStatus.COMPLETED.name, 100)
+                    syncLogDao.insert(
+                        SyncLogEntity(
+                            playlistId = null,
+                            status = "download_file_saved",
+                            message = "downloadId=${fresh.id}, sourceType=${sourceType.name}, " +
+                                "bytes=${artifact.bytesWritten}, file=${artifact.filePath.take(LOG_VALUE_LIMIT)}",
+                            createdAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+                is DownloadArtifactResult.Failed -> {
+                    downloadDao.updateState(fresh.id, DownloadStatus.FAILED.name, fresh.progress)
+                    syncLogDao.insert(
+                        SyncLogEntity(
+                            playlistId = null,
+                            status = "download_file_error",
+                            message = "downloadId=${fresh.id}, sourceType=${sourceType.name}, reason=${artifact.reason.take(LOG_VALUE_LIMIT)}",
+                            createdAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+                DownloadArtifactResult.Unsupported -> {
+                    val nextProgress = (fresh.progress + progressStepFor(fresh.source, sourceType)).coerceAtMost(100)
+                    val nextStatus = if (nextProgress >= 100) DownloadStatus.COMPLETED else DownloadStatus.RUNNING
+                    downloadDao.updateState(fresh.id, nextStatus.name, nextProgress)
+                }
+            }
             processedTypes[sourceType] = (processedTypes[sourceType] ?: 0) + 1
             processed += 1
         }
