@@ -592,6 +592,53 @@ class ImporterViewModel @Inject constructor(
         }
     }
 
+    fun syncProviders(providerIds: List<Long>) {
+        val ids = providerIds.distinct()
+        if (ids.isEmpty()) {
+            _uiState.update { it.copy(lastError = "Нет провайдеров для синхронизации") }
+            return
+        }
+        if (_uiState.value.syncingProviderId != null || _uiState.value.checkingProviderId != null) return
+
+        viewModelScope.launch {
+            var synced = 0
+            var failed = 0
+            var lastPlaylistId: Long? = null
+            _uiState.update { it.copy(lastError = null, providerMessage = "Синхронизация провайдеров: 0/${ids.size}") }
+            safeLog(status = "provider_bulk_sync_start", message = "count=${ids.size}")
+
+            ids.forEachIndexed { index, providerId ->
+                _uiState.update {
+                    it.copy(
+                        syncingProviderId = providerId,
+                        providerMessage = "Синхронизация провайдеров: ${index + 1}/${ids.size}"
+                    )
+                }
+                when (val result = providerAccountRepository.syncProvider(providerId)) {
+                    is AppResult.Success -> {
+                        synced += 1
+                        lastPlaylistId = result.data
+                    }
+                    is AppResult.Error -> {
+                        failed += 1
+                        safeLog(status = "provider_bulk_sync_item_error", message = "providerId=$providerId, reason=${result.message}")
+                    }
+                    AppResult.Loading -> Unit
+                }
+            }
+
+            _uiState.update {
+                it.copy(
+                    syncingProviderId = null,
+                    providerMessage = "Синхронизация завершена: успешно $synced, ошибок $failed",
+                    lastError = if (synced == 0 && failed > 0) "Не удалось синхронизировать выбранные провайдеры" else null
+                )
+            }
+            lastPlaylistId?.let { playlistId -> loadContentSummary(playlistId) }
+            safeLog(status = "provider_bulk_sync_done", message = "count=${ids.size}, synced=$synced, failed=$failed")
+        }
+    }
+
     fun checkProvider(providerId: Long) {
         if (_uiState.value.checkingProviderId != null) return
         viewModelScope.launch {
@@ -620,6 +667,58 @@ class ImporterViewModel @Inject constructor(
                 }
                 AppResult.Loading -> Unit
             }
+        }
+    }
+
+    fun checkProviders(providerIds: List<Long>) {
+        val ids = providerIds.distinct()
+        if (ids.isEmpty()) {
+            _uiState.update { it.copy(lastError = "Нет провайдеров для проверки") }
+            return
+        }
+        if (_uiState.value.syncingProviderId != null || _uiState.value.checkingProviderId != null) return
+
+        viewModelScope.launch {
+            var ok = 0
+            var failed = 0
+            val statuses = mutableMapOf<Long, ProviderAccountStatus>()
+            _uiState.update { it.copy(lastError = null, providerMessage = "Проверка провайдеров: 0/${ids.size}") }
+            safeLog(status = "provider_bulk_check_start", message = "count=${ids.size}")
+
+            ids.forEachIndexed { index, providerId ->
+                _uiState.update {
+                    it.copy(
+                        checkingProviderId = providerId,
+                        providerMessage = "Проверка провайдеров: ${index + 1}/${ids.size}"
+                    )
+                }
+                when (val result = providerAccountRepository.checkProvider(providerId)) {
+                    is AppResult.Success -> {
+                        statuses[providerId] = result.data
+                        if (result.data.ok) {
+                            ok += 1
+                        } else {
+                            failed += 1
+                        }
+                    }
+                    is AppResult.Error -> {
+                        failed += 1
+                        safeLog(status = "provider_bulk_check_item_error", message = "providerId=$providerId, reason=${result.message}")
+                    }
+                    AppResult.Loading -> Unit
+                }
+            }
+
+            _uiState.update {
+                it.copy(
+                    checkingProviderId = null,
+                    lastProviderStatus = statuses.values.lastOrNull() ?: it.lastProviderStatus,
+                    providerStatuses = it.providerStatuses + statuses,
+                    providerMessage = "Проверка завершена: OK $ok, проблем $failed",
+                    lastError = if (ok == 0 && failed > 0) "Выбранные провайдеры не прошли проверку" else null
+                )
+            }
+            safeLog(status = "provider_bulk_check_done", message = "count=${ids.size}, ok=$ok, failed=$failed")
         }
     }
 

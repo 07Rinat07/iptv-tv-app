@@ -442,7 +442,9 @@ fun ImporterScreen(
                 syncingProviderId = state.syncingProviderId,
                 checkingProviderId = state.checkingProviderId,
                 onCheck = viewModel::checkProvider,
+                onCheckVisible = viewModel::checkProviders,
                 onSync = viewModel::syncProvider,
+                onSyncVisible = viewModel::syncProviders,
                 onDelete = viewModel::deleteProvider
             )
         }
@@ -615,7 +617,9 @@ private fun SavedProvidersSection(
     syncingProviderId: Long?,
     checkingProviderId: Long?,
     onCheck: (Long) -> Unit,
+    onCheckVisible: (List<Long>) -> Unit,
     onSync: (Long) -> Unit,
+    onSyncVisible: (List<Long>) -> Unit,
     onDelete: (Long) -> Unit
 ) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -687,6 +691,24 @@ private fun SavedProvidersSection(
                 "Показано: ${filteredProviders.size} из ${providers.size}",
                 style = MaterialTheme.typography.bodySmall
             )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val visibleProviderIds = bulkProviderIds(filteredProviders)
+                Button(
+                    onClick = { onCheckVisible(visibleProviderIds) },
+                    enabled = visibleProviderIds.isNotEmpty() && syncingProviderId == null && checkingProviderId == null
+                ) {
+                    Text("Проверить видимые")
+                }
+                Button(
+                    onClick = { onSyncVisible(visibleProviderIds) },
+                    enabled = visibleProviderIds.isNotEmpty() && syncingProviderId == null && checkingProviderId == null
+                ) {
+                    Text("Синхронизировать видимые")
+                }
+            }
             filteredProviders.forEach { card ->
                 ProviderAccountCard(
                     provider = card.provider,
@@ -878,6 +900,10 @@ internal fun filterSavedProviders(
         }
         .sortedWith(compareByDescending<SavedProviderCardModel> { it.provider.lastSyncedAt ?: 0L }.thenByDescending { it.provider.createdAt })
         .toList()
+}
+
+internal fun bulkProviderIds(providers: List<SavedProviderCardModel>): List<Long> {
+    return providers.map { it.provider.id }.distinct()
 }
 
 private fun ProviderSyncHistoryItem.toProviderSyncDetailLine(): String? {

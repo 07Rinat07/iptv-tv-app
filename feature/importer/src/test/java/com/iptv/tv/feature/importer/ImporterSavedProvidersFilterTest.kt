@@ -77,6 +77,29 @@ class ImporterSavedProvidersFilterTest {
         assertTrue(filtered.first().provider.name.contains("Plex"))
     }
 
+    @Test
+    fun bulkProviderIds_returnsVisibleUniqueIdsInOrder() {
+        val providers = listOf(
+            SavedProviderCardModel(
+                provider = provider(id = 3L, name = "Third", type = ProviderType.M3U, lastSyncedAt = 300L),
+                status = null,
+                history = emptyList()
+            ),
+            SavedProviderCardModel(
+                provider = provider(id = 1L, name = "First", type = ProviderType.PLEX, lastSyncedAt = 100L),
+                status = null,
+                history = emptyList()
+            ),
+            SavedProviderCardModel(
+                provider = provider(id = 3L, name = "Third copy", type = ProviderType.M3U, lastSyncedAt = 200L),
+                status = null,
+                history = emptyList()
+            )
+        )
+
+        assertEquals(listOf(3L, 1L), bulkProviderIds(providers))
+    }
+
     private fun provider(
         id: Long,
         name: String,
