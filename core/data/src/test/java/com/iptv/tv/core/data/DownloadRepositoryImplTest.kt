@@ -44,15 +44,33 @@ class DownloadRepositoryImplTest {
         )
         coEvery { syncLogDao.insert(any()) } returns Unit
 
-        val repository = repository(downloadDao, syncLogDao, engineRepository)
+        val artifactWrites = mutableListOf<ArtifactWriteCall>()
+        val repository = repository(downloadDao, syncLogDao, engineRepository).apply {
+            artifactWriter = fakeArtifactWriter(
+                result = DownloadArtifactResult.Completed(filePath = "/tmp/live.ts", bytesWritten = 512),
+                calls = artifactWrites
+            )
+        }
         val result = repository.tickQueue(maxConcurrent = 1)
 
         assertTrue(result is AppResult.Success)
         assertEquals(1, (result as AppResult.Success).data)
+        assertEquals(
+            listOf(
+                ArtifactWriteCall(
+                    downloadId = 1,
+                    source = "https://resolved.example/live.m3u8",
+                    sourceType = DownloadSourceType.HLS_PLAYLIST
+                )
+            ),
+            artifactWrites
+        )
         coVerify {
             engineRepository.resolveTorrentStream("magnet:?xt=urn:btih:abcdef")
             downloadDao.updateState(1, DownloadStatus.RUNNING.name, 10)
+            downloadDao.updateState(1, DownloadStatus.COMPLETED.name, 100)
             syncLogDao.insert(match<SyncLogEntity> { it.status == "download_engine_resolved" })
+            syncLogDao.insert(match<SyncLogEntity> { it.status == "download_file_saved" })
         }
     }
 
@@ -158,9 +176,7 @@ class DownloadRepositoryImplTest {
         coEvery { syncLogDao.insert(any()) } returns Unit
 
         val repository = repository(downloadDao, syncLogDao, engineRepository).apply {
-            artifactWriter = fakeArtifactWriter(
-                DownloadArtifactResult.Completed(filePath = "/tmp/movie.ts", bytesWritten = 42)
-            )
+            artifactWriter = fakeArtifactWriter(DownloadArtifactResult.Completed(filePath = "/tmp/movie.ts", bytesWritten = 42))
         }
         val result = repository.tickQueue(maxConcurrent = 1)
 
@@ -190,9 +206,7 @@ class DownloadRepositoryImplTest {
         coEvery { syncLogDao.insert(any()) } returns Unit
 
         val repository = repository(downloadDao, syncLogDao, engineRepository).apply {
-            artifactWriter = fakeArtifactWriter(
-                DownloadArtifactResult.Failed(reason = "encrypted")
-            )
+            artifactWriter = fakeArtifactWriter(DownloadArtifactResult.Failed(reason = "encrypted"))
         }
         val result = repository.tickQueue(maxConcurrent = 1)
 
@@ -231,13 +245,19 @@ class DownloadRepositoryImplTest {
         }
     }
 
-    private fun fakeArtifactWriter(result: DownloadArtifactResult): DownloadArtifactWriter {
+    private fun fakeArtifactWriter(
+        result: DownloadArtifactResult,
+        calls: MutableList<ArtifactWriteCall> = mutableListOf()
+    ): DownloadArtifactWriter {
         return object : DownloadArtifactWriter {
             override fun write(
                 downloadId: Long,
                 source: String,
                 sourceType: DownloadSourceType
-            ): DownloadArtifactResult = result
+            ): DownloadArtifactResult {
+                calls += ArtifactWriteCall(downloadId, source, sourceType)
+                return result
+            }
         }
     }
 
@@ -250,4 +270,10 @@ class DownloadRepositoryImplTest {
             createdAt = 1
         )
     }
+
+    private data class ArtifactWriteCall(
+        val downloadId: Long,
+        val source: String,
+        val sourceType: DownloadSourceType
+    )
 }

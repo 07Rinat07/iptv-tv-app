@@ -102,6 +102,7 @@ class DownloadRepositoryImpl @Inject constructor(
         val availableSlots = (safeConcurrent - running.size).coerceAtLeast(0)
 
         val startedTypes = mutableListOf<DownloadSourceType>()
+        val resolvedSources = mutableMapOf<Long, ResolvedDownloadSource>()
         repeat(availableSlots) {
             val nextQueued = downloadDao.findFirstByStatus(DownloadStatus.QUEUED.name) ?: return@repeat
             val sourceType = DownloadSourceClassifier.classify(nextQueued.source)
@@ -127,11 +128,17 @@ class DownloadRepositoryImpl @Inject constructor(
             val startProgress = if (DownloadSourceClassifier.requiresExternalEngine(sourceType)) {
                 when (val resolveResult = engineRepository.resolveTorrentStream(nextQueued.source)) {
                     is AppResult.Success -> {
+                        val resolvedSourceType = DownloadSourceClassifier.classify(resolveResult.data)
+                        resolvedSources[nextQueued.id] = ResolvedDownloadSource(
+                            source = resolveResult.data,
+                            sourceType = resolvedSourceType,
+                            originalSourceType = sourceType
+                        )
                         syncLogDao.insert(
                             SyncLogEntity(
                                 playlistId = null,
                                 status = "download_engine_resolved",
-                                message = "downloadId=${nextQueued.id}, sourceType=${sourceType.name}, resolved=${resolveResult.data.take(LOG_VALUE_LIMIT)}",
+                                message = "downloadId=${nextQueued.id}, sourceType=${sourceType.name}, resolvedType=${resolvedSourceType.name}, resolved=${resolveResult.data.take(LOG_VALUE_LIMIT)}",
                                 createdAt = System.currentTimeMillis()
                             )
                         )
@@ -177,14 +184,18 @@ class DownloadRepositoryImpl @Inject constructor(
             if (fresh.status != DownloadStatus.RUNNING.name) return@forEach
 
             val sourceType = DownloadSourceClassifier.classify(fresh.source)
-            when (val artifact = artifactWriter.write(fresh.id, fresh.source, sourceType)) {
+            val artifactSource = resolvedSources[fresh.id]
+                ?: prepareArtifactSource(fresh.id, fresh.source, sourceType, fresh.progress)
+                ?: return@forEach
+            when (val artifact = artifactWriter.write(fresh.id, artifactSource.source, artifactSource.sourceType)) {
                 is DownloadArtifactResult.Completed -> {
                     downloadDao.updateState(fresh.id, DownloadStatus.COMPLETED.name, 100)
                     syncLogDao.insert(
                         SyncLogEntity(
                             playlistId = null,
                             status = "download_file_saved",
-                            message = "downloadId=${fresh.id}, sourceType=${sourceType.name}, " +
+                            message = "downloadId=${fresh.id}, sourceType=${artifactSource.originalSourceType.name}, " +
+                                "artifactType=${artifactSource.sourceType.name}, " +
                                 "bytes=${artifact.bytesWritten}, file=${artifact.filePath.take(LOG_VALUE_LIMIT)}",
                             createdAt = System.currentTimeMillis()
                         )
@@ -196,18 +207,19 @@ class DownloadRepositoryImpl @Inject constructor(
                         SyncLogEntity(
                             playlistId = null,
                             status = "download_file_error",
-                            message = "downloadId=${fresh.id}, sourceType=${sourceType.name}, reason=${artifact.reason.take(LOG_VALUE_LIMIT)}",
+                            message = "downloadId=${fresh.id}, sourceType=${artifactSource.originalSourceType.name}, " +
+                                "artifactType=${artifactSource.sourceType.name}, reason=${artifact.reason.take(LOG_VALUE_LIMIT)}",
                             createdAt = System.currentTimeMillis()
                         )
                     )
                 }
                 DownloadArtifactResult.Unsupported -> {
-                    val nextProgress = (fresh.progress + progressStepFor(fresh.source, sourceType)).coerceAtMost(100)
+                    val nextProgress = (fresh.progress + progressStepFor(fresh.source, artifactSource.originalSourceType)).coerceAtMost(100)
                     val nextStatus = if (nextProgress >= 100) DownloadStatus.COMPLETED else DownloadStatus.RUNNING
                     downloadDao.updateState(fresh.id, nextStatus.name, nextProgress)
                 }
             }
-            processedTypes[sourceType] = (processedTypes[sourceType] ?: 0) + 1
+            processedTypes[artifactSource.sourceType] = (processedTypes[artifactSource.sourceType] ?: 0) + 1
             processed += 1
         }
 
@@ -222,6 +234,56 @@ class DownloadRepositoryImpl @Inject constructor(
             )
         }
         AppResult.Success(processed)
+    }
+
+    private suspend fun prepareArtifactSource(
+        downloadId: Long,
+        source: String,
+        sourceType: DownloadSourceType,
+        currentProgress: Int
+    ): ResolvedDownloadSource? {
+        if (!DownloadSourceClassifier.requiresExternalEngine(sourceType)) {
+            return ResolvedDownloadSource(
+                source = source,
+                sourceType = sourceType,
+                originalSourceType = sourceType
+            )
+        }
+        return when (val resolveResult = engineRepository.resolveTorrentStream(source)) {
+            is AppResult.Success -> {
+                val resolvedSourceType = DownloadSourceClassifier.classify(resolveResult.data)
+                syncLogDao.insert(
+                    SyncLogEntity(
+                        playlistId = null,
+                        status = "download_engine_resolved",
+                        message = "downloadId=$downloadId, sourceType=${sourceType.name}, resolvedType=${resolvedSourceType.name}, resolved=${resolveResult.data.take(LOG_VALUE_LIMIT)}",
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+                ResolvedDownloadSource(
+                    source = resolveResult.data,
+                    sourceType = resolvedSourceType,
+                    originalSourceType = sourceType
+                )
+            }
+            is AppResult.Error -> {
+                downloadDao.updateState(
+                    downloadId = downloadId,
+                    status = DownloadStatus.FAILED.name,
+                    progress = currentProgress
+                )
+                syncLogDao.insert(
+                    SyncLogEntity(
+                        playlistId = null,
+                        status = DownloadSourceClassifier.engineFailureLogStatus(resolveResult.message),
+                        message = "downloadId=$downloadId, sourceType=${sourceType.name}, reason=${resolveResult.message.take(LOG_VALUE_LIMIT)}",
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+                null
+            }
+            AppResult.Loading -> null
+        }
     }
 
     private fun progressStepFor(source: String, sourceType: DownloadSourceType): Int {
@@ -260,6 +322,12 @@ class DownloadRepositoryImpl @Inject constructor(
         const val LOG_VALUE_LIMIT = 160
     }
 }
+
+private data class ResolvedDownloadSource(
+    val source: String,
+    val sourceType: DownloadSourceType,
+    val originalSourceType: DownloadSourceType
+)
 
 private fun Context.downloadStorageAvailableBytes(): Long? {
     return listOfNotNull(
