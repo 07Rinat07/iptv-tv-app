@@ -71,20 +71,37 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
     ): AppResult<Int> = withContext(Dispatchers.IO) {
         val channel = channelDao.findById(channelId)
             ?: return@withContext AppResult.Error("Канал не найден: id=$channelId")
-        val existing = channelMetadataDao.findByChannelId(channelId)?.toModel()
-        val metadataWithOverrides = existing.copyOrNew(channel).copy(
-            manualCountry = normalizeOverride(country),
-            manualLanguage = normalizeOverride(language),
-            manualCategory = normalizeOverride(category)
-        )
-        val metadata = buildMetadata(channel = channel, existing = metadataWithOverrides)
-            .copy(updatedAt = System.currentTimeMillis())
+        val metadata = buildManualMetadata(channel, country, language, category)
         channelMetadataDao.upsert(metadata.toEntity())
         addLog(
             status = "metadata_manual_fields",
             message = "channelId=${channel.id}, country=${metadata.manualCountry}, language=${metadata.manualLanguage}, category=${metadata.manualCategory}"
         )
         AppResult.Success(1)
+    }
+
+    override suspend fun setManualMetadataBulk(
+        channelIds: List<Long>,
+        country: String?,
+        language: String?,
+        category: String?
+    ): AppResult<Int> = withContext(Dispatchers.IO) {
+        val ids = channelIds.distinct()
+        if (ids.isEmpty()) {
+            return@withContext AppResult.Error("Нет каналов для массового обновления метаданных")
+        }
+        var updated = 0
+        ids.forEach { channelId ->
+            val channel = channelDao.findById(channelId) ?: return@forEach
+            val metadata = buildManualMetadata(channel, country, language, category)
+            channelMetadataDao.upsert(metadata.toEntity())
+            updated += 1
+        }
+        addLog(
+            status = "metadata_manual_fields_bulk",
+            message = "requested=${ids.size}, updated=$updated, country=${normalizeOverride(country)}, language=${normalizeOverride(language)}, category=${normalizeOverride(category)}"
+        )
+        AppResult.Success(updated)
     }
 
     override suspend fun refreshMetadata(playlistId: Long): AppResult<Int> = withContext(Dispatchers.IO) {
@@ -229,6 +246,22 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
 
     private fun ChannelMetadata?.hasManualFields(): Boolean {
         return this?.manualCountry != null || this?.manualLanguage != null || this?.manualCategory != null
+    }
+
+    private suspend fun buildManualMetadata(
+        channel: ChannelEntity,
+        country: String?,
+        language: String?,
+        category: String?
+    ): ChannelMetadata {
+        val existing = channelMetadataDao.findByChannelId(channel.id)?.toModel()
+        val metadataWithOverrides = existing.copyOrNew(channel).copy(
+            manualCountry = normalizeOverride(country),
+            manualLanguage = normalizeOverride(language),
+            manualCategory = normalizeOverride(category)
+        )
+        return buildMetadata(channel = channel, existing = metadataWithOverrides)
+            .copy(updatedAt = System.currentTimeMillis())
     }
 
     private fun normalizeOverride(value: String?): String? {

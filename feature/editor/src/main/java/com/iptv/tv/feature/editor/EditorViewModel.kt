@@ -596,6 +596,37 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    fun saveManualMetadataForSelected() {
+        val state = _uiState.value
+        val selected = state.selectedChannelIds.toList()
+        if (selected.isEmpty()) {
+            _uiState.update { it.copy(lastError = "Выберите каналы для массовых метаданных") }
+            return
+        }
+        viewModelScope.launch {
+            when (
+                val result = channelMetadataRepository.setManualMetadataBulk(
+                    channelIds = selected,
+                    country = state.manualCountryInput,
+                    language = state.manualLanguageInput,
+                    category = state.manualCategoryInput
+                )
+            ) {
+                is AppResult.Success -> {
+                    _uiState.value.editDraft.channelId?.let(::loadSelectedMetadata)
+                    _uiState.update {
+                        it.copy(
+                            lastInfo = "Ручные метаданные применены к каналам: ${result.data}",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> _uiState.update { it.copy(lastError = result.message) }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
     fun refreshCurrentPlaylistMetadata() {
         val playlistId = currentPlaylistIdOrError() ?: return
         viewModelScope.launch {

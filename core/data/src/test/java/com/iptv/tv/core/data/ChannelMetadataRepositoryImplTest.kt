@@ -67,6 +67,59 @@ class ChannelMetadataRepositoryImplTest {
     }
 
     @Test
+    fun setManualMetadataBulk_appliesOverridesToExistingChannels() = runTest {
+        val metadataDao = mockk<ChannelMetadataDao>()
+        val channelDao = mockk<ChannelDao>()
+        val playlistDao = mockk<PlaylistDao>()
+        val syncLogDao = mockk<SyncLogDao>()
+
+        coEvery { channelDao.findById(10) } returns channel(id = 10, name = "Kazakh News", tvgId = null, logo = null)
+        coEvery { channelDao.findById(11) } returns channel(id = 11, name = "Kazakh Sport", tvgId = null, logo = null)
+        coEvery { channelDao.findById(99) } returns null
+        coEvery { metadataDao.findByChannelId(any()) } returns null
+        coEvery { metadataDao.upsert(any()) } returns Unit
+        coEvery { syncLogDao.insert(any()) } returns Unit
+
+        val repository = ChannelMetadataRepositoryImpl(
+            channelMetadataDao = metadataDao,
+            channelDao = channelDao,
+            playlistDao = playlistDao,
+            syncLogDao = syncLogDao
+        )
+        val result = repository.setManualMetadataBulk(
+            channelIds = listOf(10, 11, 10, 99),
+            country = " KZ ",
+            language = " kk ",
+            category = " Local "
+        )
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(2, (result as AppResult.Success).data)
+        coVerify(exactly = 2) {
+            metadataDao.upsert(
+                match<ChannelMetadataEntity> {
+                    it.country == "KZ" &&
+                        it.language == "kk" &&
+                        it.category == "Local" &&
+                        it.manualCountry == "KZ" &&
+                        it.manualLanguage == "kk" &&
+                        it.manualCategory == "Local" &&
+                        it.metadataSource == "manual_metadata"
+                }
+            )
+        }
+        coVerify {
+            syncLogDao.insert(
+                match<SyncLogEntity> {
+                    it.status == "metadata_manual_fields_bulk" &&
+                        it.message.contains("requested=3") &&
+                        it.message.contains("updated=2")
+                }
+            )
+        }
+    }
+
+    @Test
     fun refreshMetadataWithLogoPack_appliesExternalLogoPackToPlaylistChannels() = runTest {
         val metadataDao = mockk<ChannelMetadataDao>()
         val channelDao = mockk<ChannelDao>()

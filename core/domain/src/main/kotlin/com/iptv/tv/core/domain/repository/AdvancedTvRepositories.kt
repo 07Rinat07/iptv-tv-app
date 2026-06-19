@@ -64,6 +64,12 @@ interface ChannelMetadataRepository {
         language: String?,
         category: String?
     ): AppResult<Int>
+    suspend fun setManualMetadataBulk(
+        channelIds: List<Long>,
+        country: String?,
+        language: String?,
+        category: String?
+    ): AppResult<Int>
     suspend fun refreshMetadata(playlistId: Long): AppResult<Int>
     suspend fun refreshMetadataWithLogoPack(playlistId: Long, logoPackJson: String): AppResult<Int>
     suspend fun refreshMetadataWithLogoPackUrl(playlistId: Long, logoPackUrl: String): AppResult<Int>

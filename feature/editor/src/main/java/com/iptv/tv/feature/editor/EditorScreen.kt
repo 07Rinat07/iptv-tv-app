@@ -291,11 +291,22 @@ fun EditorScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
-                    Button(
-                        onClick = viewModel::saveManualMetadata,
-                        enabled = state.editDraft.channelId != null && !state.isLoading
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("Сохранить метаданные")
+                        Button(
+                            onClick = viewModel::saveManualMetadata,
+                            enabled = state.editDraft.channelId != null && !state.isLoading
+                        ) {
+                            Text("Сохранить метаданные")
+                        }
+                        Button(
+                            onClick = viewModel::saveManualMetadataForSelected,
+                            enabled = state.selectedChannelIds.isNotEmpty() && !state.isLoading
+                        ) {
+                            Text("Применить к выбранным")
+                        }
                     }
                     OutlinedTextField(
                         value = state.editDraft.streamUrl,
