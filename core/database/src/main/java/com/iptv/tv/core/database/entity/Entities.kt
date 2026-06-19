@@ -97,6 +97,8 @@ data class SyncLogEntity(
 data class DownloadEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val source: String,
+    val resolvedSource: String? = null,
+    val resolvedSourceType: String? = null,
     val progress: Int,
     val status: String,
     val createdAt: Long

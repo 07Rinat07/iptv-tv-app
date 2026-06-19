@@ -129,6 +129,7 @@ class DownloadRepositoryImpl @Inject constructor(
                 when (val resolveResult = engineRepository.resolveTorrentStream(nextQueued.source)) {
                     is AppResult.Success -> {
                         val resolvedSourceType = DownloadSourceClassifier.classify(resolveResult.data)
+                        downloadDao.updateResolvedSource(nextQueued.id, resolveResult.data, resolvedSourceType.name)
                         resolvedSources[nextQueued.id] = ResolvedDownloadSource(
                             source = resolveResult.data,
                             sourceType = resolvedSourceType,
@@ -185,6 +186,7 @@ class DownloadRepositoryImpl @Inject constructor(
 
             val sourceType = DownloadSourceClassifier.classify(fresh.source)
             val artifactSource = resolvedSources[fresh.id]
+                ?: fresh.toResolvedDownloadSource(sourceType)
                 ?: prepareArtifactSource(fresh.id, fresh.source, sourceType, fresh.progress)
                 ?: return@forEach
             when (val artifact = artifactWriter.write(fresh.id, artifactSource.source, artifactSource.sourceType)) {
@@ -252,6 +254,7 @@ class DownloadRepositoryImpl @Inject constructor(
         return when (val resolveResult = engineRepository.resolveTorrentStream(source)) {
             is AppResult.Success -> {
                 val resolvedSourceType = DownloadSourceClassifier.classify(resolveResult.data)
+                downloadDao.updateResolvedSource(downloadId, resolveResult.data, resolvedSourceType.name)
                 syncLogDao.insert(
                     SyncLogEntity(
                         playlistId = null,
@@ -328,6 +331,19 @@ private data class ResolvedDownloadSource(
     val sourceType: DownloadSourceType,
     val originalSourceType: DownloadSourceType
 )
+
+private fun DownloadEntity.toResolvedDownloadSource(originalSourceType: DownloadSourceType): ResolvedDownloadSource? {
+    if (!DownloadSourceClassifier.requiresExternalEngine(originalSourceType)) return null
+    val source = resolvedSource?.takeIf { it.isNotBlank() } ?: return null
+    val type = resolvedSourceType
+        ?.let { raw -> runCatching { DownloadSourceType.valueOf(raw) }.getOrNull() }
+        ?: DownloadSourceClassifier.classify(source)
+    return ResolvedDownloadSource(
+        source = source,
+        sourceType = type,
+        originalSourceType = originalSourceType
+    )
+}
 
 private fun Context.downloadStorageAvailableBytes(): Long? {
     return listOfNotNull(

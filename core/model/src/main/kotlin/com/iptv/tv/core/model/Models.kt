@@ -265,6 +265,8 @@ enum class TvHomeChannelType {
 data class DownloadTask(
     val id: Long,
     val source: String,
+    val resolvedSource: String? = null,
+    val resolvedSourceType: DownloadSourceType? = null,
     val progress: Int,
     val status: DownloadStatus,
     val createdAt: Long,

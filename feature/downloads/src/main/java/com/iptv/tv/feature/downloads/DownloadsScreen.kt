@@ -195,6 +195,12 @@ fun DownloadsScreen(
                         Text("Тип: ${task.sourceType.toDownloadSourceTypeLabel()}")
                         Text("Progress: ${task.progress}%")
                         Text("Source: ${task.source}")
+                        task.resolvedSource?.takeIf { it.isNotBlank() }?.let { resolvedSource ->
+                            Text(
+                                "Resolved: ${task.resolvedSourceType?.toDownloadSourceTypeLabel() ?: "Auto"} | $resolvedSource",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 onClick = { viewModel.pause(task.id) },

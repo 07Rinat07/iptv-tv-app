@@ -38,6 +38,7 @@ class DownloadRepositoryImplTest {
         coEvery { downloadDao.findByStatus(DownloadStatus.RUNNING.name) } returns emptyList()
         coEvery { downloadDao.findFirstByStatus(DownloadStatus.QUEUED.name) } returns queued
         coEvery { downloadDao.updateState(any(), any(), any()) } returns 1
+        coEvery { downloadDao.updateResolvedSource(any(), any(), any()) } returns 1
         coEvery { downloadDao.findById(1) } returns queued.copy(
             status = DownloadStatus.RUNNING.name,
             progress = 10
@@ -67,9 +68,63 @@ class DownloadRepositoryImplTest {
         )
         coVerify {
             engineRepository.resolveTorrentStream("magnet:?xt=urn:btih:abcdef")
+            downloadDao.updateResolvedSource(
+                1,
+                "https://resolved.example/live.m3u8",
+                DownloadSourceType.HLS_PLAYLIST.name
+            )
             downloadDao.updateState(1, DownloadStatus.RUNNING.name, 10)
             downloadDao.updateState(1, DownloadStatus.COMPLETED.name, 100)
             syncLogDao.insert(match<SyncLogEntity> { it.status == "download_engine_resolved" })
+            syncLogDao.insert(match<SyncLogEntity> { it.status == "download_file_saved" })
+        }
+    }
+
+    @Test
+    fun tickQueue_usesPersistedResolvedSourceForRunningTorrentTask() = runTest {
+        val downloadDao = mockk<DownloadDao>()
+        val syncLogDao = mockk<SyncLogDao>()
+        val engineRepository = fakeEngineRepository(
+            resolveResult = AppResult.Error("Engine should not be called")
+        )
+        val running = download(source = "magnet:?xt=urn:btih:abcdef").copy(
+            status = DownloadStatus.RUNNING.name,
+            progress = 25,
+            resolvedSource = "https://resolved.example/movie.ts",
+            resolvedSourceType = DownloadSourceType.HTTP_STREAM.name
+        )
+
+        coEvery { downloadDao.findByStatus(DownloadStatus.RUNNING.name) } returns listOf(running)
+        coEvery { downloadDao.findById(1) } returns running
+        coEvery { downloadDao.updateState(any(), any(), any()) } returns 1
+        coEvery { syncLogDao.insert(any()) } returns Unit
+
+        val artifactWrites = mutableListOf<ArtifactWriteCall>()
+        val repository = repository(downloadDao, syncLogDao, engineRepository).apply {
+            artifactWriter = fakeArtifactWriter(
+                result = DownloadArtifactResult.Completed(filePath = "/tmp/movie.ts", bytesWritten = 1024),
+                calls = artifactWrites
+            )
+        }
+        val result = repository.tickQueue(maxConcurrent = 1)
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(1, (result as AppResult.Success).data)
+        assertEquals(
+            listOf(
+                ArtifactWriteCall(
+                    downloadId = 1,
+                    source = "https://resolved.example/movie.ts",
+                    sourceType = DownloadSourceType.HTTP_STREAM
+                )
+            ),
+            artifactWrites
+        )
+        coVerify(exactly = 0) {
+            engineRepository.resolveTorrentStream(any())
+        }
+        coVerify {
+            downloadDao.updateState(1, DownloadStatus.COMPLETED.name, 100)
             syncLogDao.insert(match<SyncLogEntity> { it.status == "download_file_saved" })
         }
     }

@@ -17,6 +17,7 @@ import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.ChannelMetadata
 import com.iptv.tv.core.model.DownloadStatus
+import com.iptv.tv.core.model.DownloadSourceType
 import com.iptv.tv.core.model.DownloadTask
 import com.iptv.tv.core.model.ParentalControlProfile
 import com.iptv.tv.core.model.PlaybackHistoryItem
@@ -102,6 +103,9 @@ fun DownloadEntity.toModel(): DownloadTask {
     return DownloadTask(
         id = id,
         source = source,
+        resolvedSource = resolvedSource,
+        resolvedSourceType = resolvedSourceType
+            ?.let { raw -> runCatching { DownloadSourceType.valueOf(raw) }.getOrNull() },
         progress = progress,
         status = runCatching { DownloadStatus.valueOf(status) }.getOrDefault(DownloadStatus.QUEUED),
         createdAt = createdAt,
