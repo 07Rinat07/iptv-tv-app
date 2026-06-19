@@ -162,7 +162,7 @@ internal object DownloadHlsSegmentPlanner {
 
                 is HlsPlaylistParser.Manifest.Media -> {
                     if (manifest.encrypted) {
-                        error("Encrypted HLS playlists are not supported yet")
+                        error(manifest.unsupportedEncryptionMessage())
                     }
                     val segmentUrls = manifest.segments.take(MAX_HLS_SEGMENTS)
                     if (segmentUrls.isEmpty()) {
@@ -181,6 +181,11 @@ internal object DownloadHlsSegmentPlanner {
 
     private const val MAX_HLS_SEGMENTS = 256
     private const val MAX_MASTER_REDIRECTS = 3
+}
+
+private fun HlsPlaylistParser.Manifest.Media.unsupportedEncryptionMessage(): String {
+    val methods = encryptionMethods.sorted().joinToString(separator = ", ").ifBlank { "UNKNOWN" }
+    return "Encrypted HLS playlists are not supported yet: $methods"
 }
 
 private fun String.sanitizeDownloadFileName(): String {

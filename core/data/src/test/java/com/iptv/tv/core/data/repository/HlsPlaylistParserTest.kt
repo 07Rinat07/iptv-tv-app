@@ -63,6 +63,23 @@ class HlsPlaylistParserTest {
         ) as HlsPlaylistParser.Manifest.Media
 
         assertTrue(manifest.encrypted)
+        assertEquals(setOf("AES-128"), manifest.encryptionMethods)
+    }
+
+    @Test
+    fun parse_mediaPlaylist_doesNotMarkMethodNoneAsEncrypted() {
+        val manifest = HlsPlaylistParser.parse(
+            url = "https://cdn.example/live/index.m3u8",
+            content = """
+                #EXTM3U
+                #EXT-X-KEY:METHOD=NONE
+                #EXTINF:5.0,
+                seg.ts
+            """.trimIndent()
+        ) as HlsPlaylistParser.Manifest.Media
+
+        assertFalse(manifest.encrypted)
+        assertEquals(emptySet<String>(), manifest.encryptionMethods)
     }
 
     @Test

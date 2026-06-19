@@ -73,5 +73,6 @@ class DownloadHlsSegmentPlannerTest {
         assertTrue(result.isFailure)
         val error = result.exceptionOrNull()!!
         assertTrue(error.message.orEmpty().contains("Encrypted HLS"))
+        assertTrue(error.message.orEmpty().contains("AES-128"))
     }
 }

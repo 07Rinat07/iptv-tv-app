@@ -13,6 +13,7 @@ internal object HlsPlaylistParser {
             val targetDurationSeconds: Long?,
             val endList: Boolean,
             val encrypted: Boolean,
+            val encryptionMethods: Set<String>,
             val discontinuityCount: Int
         ) : Manifest
     }
@@ -28,7 +29,7 @@ internal object HlsPlaylistParser {
         val segments = mutableListOf<String>()
         var targetDurationSeconds: Long? = null
         var endList = false
-        var encrypted = false
+        val encryptionMethods = linkedSetOf<String>()
         var discontinuityCount = 0
         var pendingBandwidth: Int? = null
 
@@ -54,7 +55,11 @@ internal object HlsPlaylistParser {
                 line.startsWith("#EXT-X-KEY:", ignoreCase = true) -> {
                     val method = parseAttributeValue(line.substringAfter(':', ""), "METHOD")
                     if (!method.equals("NONE", ignoreCase = true)) {
-                        encrypted = true
+                        encryptionMethods += method
+                            ?.trim()
+                            ?.uppercase()
+                            ?.ifBlank { null }
+                            ?: "UNKNOWN"
                     }
                 }
 
@@ -85,7 +90,8 @@ internal object HlsPlaylistParser {
                 segments = segments.toList(),
                 targetDurationSeconds = targetDurationSeconds,
                 endList = endList,
-                encrypted = encrypted,
+                encrypted = encryptionMethods.isNotEmpty(),
+                encryptionMethods = encryptionMethods.toSet(),
                 discontinuityCount = discontinuityCount
             )
         }

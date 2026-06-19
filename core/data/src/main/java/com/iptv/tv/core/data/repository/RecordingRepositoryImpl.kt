@@ -396,7 +396,16 @@ class RecordingRepositoryImpl @Inject constructor(
 
                     is HlsPlaylistParser.Manifest.Media -> {
                         if (manifest.encrypted) {
-                            throw IOException("Encrypted HLS playlists are not supported yet")
+                            val encryptionMethods = manifest.encryptionMethodsSummary()
+                            syncLogDao.insert(
+                                SyncLogEntity(
+                                    playlistId = null,
+                                    status = "recording_hls_encrypted",
+                                    message = "recordingId=$recordingId, playlist=$currentPlaylistUrl, methods=$encryptionMethods",
+                                    createdAt = System.currentTimeMillis()
+                                )
+                            )
+                            throw IOException("Encrypted HLS playlists are not supported yet: $encryptionMethods")
                         }
                         if (manifest.discontinuityCount > loggedDiscontinuities) {
                             syncLogDao.insert(
@@ -709,4 +718,8 @@ private fun String.isHlsPlaylistUrl(): Boolean {
 
 private fun HlsPlaylistParser.Manifest.Media.pollDelayMs(): Long {
     return (targetDurationSeconds ?: 5L).coerceIn(1L, 15L) * 1000L
+}
+
+private fun HlsPlaylistParser.Manifest.Media.encryptionMethodsSummary(): String {
+    return encryptionMethods.sorted().joinToString(separator = ", ").ifBlank { "UNKNOWN" }
 }
