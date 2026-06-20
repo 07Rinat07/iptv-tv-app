@@ -520,6 +520,17 @@ fun EditorScreen(
                             ) {
                                 Text("Добавить rule")
                             }
+                            Text("Shared rules packs", style = MaterialTheme.typography.titleSmall)
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                sharedMetadataRulePacks.forEach { pack ->
+                                    Button(onClick = { viewModel.appendSharedMetadataRulesPack(pack.id) }) {
+                                        Text(pack.title)
+                                    }
+                                }
+                            }
                             OutlinedTextField(
                                 value = state.metadataRulesInput,
                                 onValueChange = viewModel::updateMetadataRulesInput,

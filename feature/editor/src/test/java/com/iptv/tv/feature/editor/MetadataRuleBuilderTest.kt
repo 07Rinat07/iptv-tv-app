@@ -56,6 +56,34 @@ class MetadataRuleBuilderTest {
         assertEquals(1, metadataRulePreviewCount(channels, METADATA_RULE_MATCH_SOURCE, "sport.example"))
     }
 
+    @Test
+    fun appendMetadataRulesText_keepsExistingRulesAndAddsPackAfterNewLine() {
+        val result = appendMetadataRulesText(
+            existingRules = "match=news; category=News",
+            newRules = "match=sport; category=Sports"
+        )
+
+        assertEquals("match=news; category=News\nmatch=sport; category=Sports", result)
+    }
+
+    @Test
+    fun sharedMetadataRulePacks_haveStableIdsAndRules() {
+        assertEquals(
+            listOf("basic-categories", "cis-language-country", "source-domains"),
+            sharedMetadataRulePacks.map { it.id }
+        )
+        sharedMetadataRulePacks.forEach { pack ->
+            val activeRules = pack.rules
+                .lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotBlank() && !it.startsWith("#") }
+                .toList()
+
+            assertEquals(true, activeRules.isNotEmpty())
+            assertEquals(true, activeRules.all { it.contains("=") && it.contains(";") })
+        }
+    }
+
     private fun channel(
         id: Long,
         name: String,

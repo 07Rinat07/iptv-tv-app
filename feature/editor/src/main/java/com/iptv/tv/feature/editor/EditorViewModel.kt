@@ -513,6 +513,21 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(metadataRulesInput = value, lastError = null, lastInfo = null) }
     }
 
+    fun appendSharedMetadataRulesPack(packId: String) {
+        val pack = sharedMetadataRulePacks.firstOrNull { it.id == packId }
+        if (pack == null) {
+            _uiState.update { it.copy(lastError = "Metadata rules pack не найден: $packId") }
+            return
+        }
+        _uiState.update {
+            it.copy(
+                metadataRulesInput = appendMetadataRulesText(it.metadataRulesInput, pack.rules),
+                lastError = null,
+                lastInfo = "Shared rules pack добавлен: ${pack.title}"
+            )
+        }
+    }
+
     fun saveMetadataRulesToStorage() {
         val rules = _uiState.value.metadataRulesInput.trim()
         if (rules.isBlank()) {
@@ -1170,6 +1185,59 @@ internal val metadataRuleMatcherTypes = listOf(
     METADATA_RULE_MATCH_SOURCE
 )
 
+internal data class SharedMetadataRulePack(
+    val id: String,
+    val title: String,
+    val rules: String
+)
+
+internal val sharedMetadataRulePacks = listOf(
+    SharedMetadataRulePack(
+        id = "basic-categories",
+        title = "Базовые категории",
+        rules = """
+            # Shared pack: basic categories
+            match=news; category=News
+            match=новост; category=News
+            match=sport; category=Sports
+            match=спорт; category=Sports
+            match=movie; category=Movies
+            match=кино; category=Movies
+            match=music; category=Music
+            match=музык; category=Music
+            match=kids; category=Kids
+            match=детск; category=Kids
+        """.trimIndent()
+    ),
+    SharedMetadataRulePack(
+        id = "cis-language-country",
+        title = "KZ/RU/UA язык и страна",
+        rules = """
+            # Shared pack: CIS language/country hints
+            match=kaz; country=KZ; language=kk
+            match=каз; country=KZ; language=kk
+            match=kz; country=KZ
+            match=rus; country=RU; language=ru
+            match=рос; country=RU; language=ru
+            match=ukr; country=UA; language=uk
+            match=укр; country=UA; language=uk
+        """.trimIndent()
+    ),
+    SharedMetadataRulePack(
+        id = "source-domains",
+        title = "Домены источников",
+        rules = """
+            # Shared pack: common source-domain hints
+            source=.kz; country=KZ
+            source=.ru; country=RU; language=ru
+            source=.ua; country=UA; language=uk
+            source=.tr; country=TR; language=tr
+            source=.de; country=DE; language=de
+            source=.fr; country=FR; language=fr
+        """.trimIndent()
+    )
+)
+
 internal fun buildMetadataRuleLine(
     matcherType: String,
     matcherValue: String,
@@ -1189,6 +1257,16 @@ internal fun buildMetadataRuleLine(
         it.startsWith("country=") || it.startsWith("language=") || it.startsWith("category=")
     }
     return fields.joinToString("; ").takeIf { normalizedMatcherValue.isNotBlank() && hasMetadata }
+}
+
+internal fun appendMetadataRulesText(existingRules: String, newRules: String): String {
+    val existing = existingRules.trim()
+    val incoming = newRules.trim()
+    return when {
+        existing.isBlank() -> incoming
+        incoming.isBlank() -> existing
+        else -> "$existing\n$incoming"
+    }
 }
 
 internal fun metadataRulePreviewCount(
