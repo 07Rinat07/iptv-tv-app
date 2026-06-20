@@ -50,6 +50,16 @@ fun EditorScreen(
     ) { uri ->
         uri?.let { viewModel.saveExportToUri(it.toString()) }
     }
+    val saveMetadataRulesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        uri?.let { viewModel.saveMetadataRulesToUri(it.toString()) }
+    }
+    val openMetadataRulesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { viewModel.importMetadataRulesFromUri(it.toString()) }
+    }
     val filteredChannels = remember(state.channels, state.channelQuery) {
         filterEditorChannels(state.channels, state.channelQuery)
     }
@@ -517,11 +527,43 @@ fun EditorScreen(
                                 label = { Text("Metadata rules") },
                                 minLines = 3
                             )
-                            Button(
-                                onClick = viewModel::applyMetadataRulesToSelectedOrVisible,
-                                enabled = !state.isRefreshingMetadata && state.metadataRulesInput.isNotBlank()
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(if (state.isRefreshingMetadata) "Применяю..." else "Применить metadata rules")
+                                Button(
+                                    onClick = viewModel::applyMetadataRulesToSelectedOrVisible,
+                                    enabled = !state.isRefreshingMetadata && state.metadataRulesInput.isNotBlank()
+                                ) {
+                                    Text(if (state.isRefreshingMetadata) "Применяю..." else "Применить metadata rules")
+                                }
+                                Button(
+                                    onClick = viewModel::saveMetadataRulesToStorage,
+                                    enabled = !state.isLoading && state.metadataRulesInput.isNotBlank()
+                                ) {
+                                    Text("Сохранить rules")
+                                }
+                                Button(
+                                    onClick = {
+                                        val playlistName = currentPlaylist
+                                            ?.name
+                                            ?.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                                            ?.replace(Regex("\\s+"), "_")
+                                            ?.take(40)
+                                            ?.ifBlank { "metadata_rules" }
+                                            ?: "metadata_rules"
+                                        saveMetadataRulesLauncher.launch("$playlistName-metadata-rules.txt")
+                                    },
+                                    enabled = !state.isLoading && state.metadataRulesInput.isNotBlank()
+                                ) {
+                                    Text("Сохранить rules как...")
+                                }
+                                Button(
+                                    onClick = { openMetadataRulesLauncher.launch(arrayOf("text/*", "application/octet-stream")) },
+                                    enabled = !state.isLoading
+                                ) {
+                                    Text("Импорт rules")
+                                }
                             }
                         }
                     }

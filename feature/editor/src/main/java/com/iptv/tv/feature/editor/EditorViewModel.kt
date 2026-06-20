@@ -513,6 +513,110 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(metadataRulesInput = value, lastError = null, lastInfo = null) }
     }
 
+    fun saveMetadataRulesToStorage() {
+        val rules = _uiState.value.metadataRulesInput.trim()
+        if (rules.isBlank()) {
+            _uiState.update { it.copy(lastError = "Сначала добавьте metadata rules") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, lastError = null, lastInfo = null) }
+            runCatching {
+                val playlistName = _uiState.value.playlists
+                    .firstOrNull { it.id == _uiState.value.effectivePlaylistId }
+                    ?.name
+                    ?.sanitizeFileName()
+                    .orEmpty()
+                    .ifBlank { "metadata-rules" }
+                val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                saveTextToPublicDownloads(
+                    fileName = "$playlistName-metadata-rules-$stamp.txt",
+                    content = rules
+                )
+            }.onSuccess { path ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        exportedFilePath = path,
+                        lastInfo = "Metadata rules сохранены: $path",
+                        lastError = null
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        lastError = "Не удалось сохранить metadata rules: ${throwable.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun saveMetadataRulesToUri(uriString: String) {
+        val rules = _uiState.value.metadataRulesInput.trim()
+        if (rules.isBlank()) {
+            _uiState.update { it.copy(lastError = "Сначала добавьте metadata rules") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, lastError = null, lastInfo = null) }
+            runCatching {
+                val uri = android.net.Uri.parse(uriString)
+                appContext.contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { writer ->
+                    writer.write(rules)
+                } ?: error("Не удалось открыть файл для записи")
+                uri.toString()
+            }.onSuccess { uri ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        exportedFilePath = uri,
+                        lastInfo = "Metadata rules сохранены: $uri",
+                        lastError = null
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        lastError = "Не удалось сохранить metadata rules: ${throwable.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun importMetadataRulesFromUri(uriString: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, lastError = null, lastInfo = null) }
+            runCatching {
+                val uri = android.net.Uri.parse(uriString)
+                appContext.contentResolver.openInputStream(uri)?.bufferedReader()?.use { reader ->
+                    reader.readText()
+                } ?: error("Не удалось открыть файл для чтения")
+            }.onSuccess { rules ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        metadataRulesInput = rules.trim(),
+                        lastInfo = "Metadata rules импортированы",
+                        lastError = null
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        lastError = "Не удалось импортировать metadata rules: ${throwable.message}"
+                    )
+                }
+            }
+        }
+    }
+
     fun updateMetadataRuleMatcherType(value: String) {
         _uiState.update {
             it.copy(
