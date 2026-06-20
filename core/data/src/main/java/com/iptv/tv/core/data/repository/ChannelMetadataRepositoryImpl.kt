@@ -104,6 +104,54 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         AppResult.Success(updated)
     }
 
+    override suspend fun applyMetadataRules(
+        playlistId: Long,
+        rulesText: String,
+        channelIds: List<Long>
+    ): AppResult<Int> = withContext(Dispatchers.IO) {
+        val rules = parseMetadataRules(rulesText)
+        if (rules.isEmpty()) {
+            return@withContext AppResult.Error("Нет корректных metadata rules")
+        }
+        val playlist = playlistDao.findById(playlistId)
+            ?: return@withContext AppResult.Error("Плейлист не найден: id=$playlistId")
+        val channels = channelDao.getChannels(playlistId)
+        val allowedIds = channelIds.toSet()
+        val targetChannels = if (allowedIds.isEmpty()) channels else channels.filter { it.id in allowedIds }
+        if (targetChannels.isEmpty()) {
+            return@withContext AppResult.Error("Нет каналов для применения metadata rules")
+        }
+        val existingByChannel = channelMetadataDao.findByChannelIds(targetChannels.map { it.id })
+            .associateBy { it.channelId }
+        var updated = 0
+        targetChannels.forEach { channel ->
+            val matchedRules = rules.filter { it.matches(channel, playlist.source) }
+            if (matchedRules.isEmpty()) return@forEach
+            val existing = existingByChannel[channel.id]?.toModel()
+            var metadata = existing.copyOrNew(channel)
+            matchedRules.forEach { rule ->
+                metadata = metadata.copy(
+                    manualCountry = rule.country ?: metadata.manualCountry,
+                    manualLanguage = rule.language ?: metadata.manualLanguage,
+                    manualCategory = rule.category ?: metadata.manualCategory
+                )
+            }
+            channelMetadataDao.upsert(
+                buildMetadata(
+                    channel = channel,
+                    existing = metadata,
+                    playlistSource = playlist.source
+                ).copy(updatedAt = System.currentTimeMillis()).toEntity()
+            )
+            updated += 1
+        }
+        addLog(
+            status = "metadata_rules_applied",
+            message = "playlistId=$playlistId, rules=${rules.size}, target=${targetChannels.size}, updated=$updated"
+        )
+        AppResult.Success(updated)
+    }
+
     override suspend fun refreshMetadata(playlistId: Long): AppResult<Int> = withContext(Dispatchers.IO) {
         refreshMetadataInternal(
             playlistId = playlistId,
@@ -341,4 +389,67 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
 
         const val LOGO_PACK_URL_LOG_LIMIT = 160
     }
+}
+
+internal fun parseMetadataRules(rulesText: String): List<MetadataRule> {
+    return rulesText
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotBlank() && !it.startsWith("#") }
+        .mapNotNull(::parseMetadataRule)
+        .toList()
+}
+
+internal data class MetadataRule(
+    val match: String? = null,
+    val name: String? = null,
+    val group: String? = null,
+    val tvgId: String? = null,
+    val source: String? = null,
+    val country: String? = null,
+    val language: String? = null,
+    val category: String? = null
+) {
+    fun matches(channel: ChannelEntity, playlistSource: String?): Boolean {
+        val anyText = listOfNotNull(channel.tvgId, channel.groupName, channel.name, playlistSource)
+            .joinToString(" ")
+            .lowercase(Locale.ROOT)
+        return matchesPart(match, anyText) &&
+            matchesPart(name, channel.name) &&
+            matchesPart(group, channel.groupName) &&
+            matchesPart(tvgId, channel.tvgId) &&
+            matchesPart(source, playlistSource)
+    }
+
+    private fun matchesPart(needle: String?, haystack: String?): Boolean {
+        if (needle.isNullOrBlank()) return true
+        return haystack.orEmpty().lowercase(Locale.ROOT).contains(needle.lowercase(Locale.ROOT))
+    }
+}
+
+private fun parseMetadataRule(line: String): MetadataRule? {
+    val parts = line
+        .split(';')
+        .mapNotNull { token ->
+            val keyValue = token.split('=', limit = 2)
+            if (keyValue.size != 2) return@mapNotNull null
+            val key = keyValue[0].trim().lowercase(Locale.ROOT)
+            val value = keyValue[1].trim().ifBlank { null } ?: return@mapNotNull null
+            key to value
+        }
+        .toMap()
+    if (parts.isEmpty()) return null
+    val rule = MetadataRule(
+        match = parts["match"] ?: parts["contains"],
+        name = parts["name"],
+        group = parts["group"],
+        tvgId = parts["tvg"] ?: parts["tvg-id"] ?: parts["tvgid"],
+        source = parts["source"] ?: parts["domain"],
+        country = parts["country"] ?: parts["countrycode"] ?: parts["country-code"],
+        language = parts["language"] ?: parts["lang"],
+        category = parts["category"] ?: parts["groupname"] ?: parts["group-name"]
+    )
+    val hasMatcher = listOf(rule.match, rule.name, rule.group, rule.tvgId, rule.source).any { !it.isNullOrBlank() }
+    val hasMetadata = listOf(rule.country, rule.language, rule.category).any { !it.isNullOrBlank() }
+    return rule.takeIf { hasMatcher && hasMetadata }
 }

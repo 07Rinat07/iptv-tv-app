@@ -2,6 +2,7 @@ package com.iptv.tv.core.data
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.repository.ChannelMetadataRepositoryImpl
+import com.iptv.tv.core.data.repository.parseMetadataRules
 import com.iptv.tv.core.database.dao.ChannelDao
 import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.PlaylistDao
@@ -257,6 +258,83 @@ class ChannelMetadataRepositoryImplTest {
                         it.metadataSource == "manual_metadata"
                 }
             )
+        }
+    }
+
+    @Test
+    fun parseMetadataRules_ignoresInvalidLinesAndKeepsRuleFields() {
+        val rules = parseMetadataRules(
+            """
+                # comment
+                match=news; country=US; language=en; category=News
+                group=sport; category=Sports
+                country=KZ
+            """.trimIndent()
+        )
+
+        assertEquals(2, rules.size)
+        assertEquals("news", rules[0].match)
+        assertEquals("US", rules[0].country)
+        assertEquals("en", rules[0].language)
+        assertEquals("News", rules[0].category)
+        assertEquals("sport", rules[1].group)
+        assertEquals("Sports", rules[1].category)
+    }
+
+    @Test
+    fun applyMetadataRules_appliesRulesToRequestedChannels() = runTest {
+        val metadataDao = mockk<ChannelMetadataDao>()
+        val channelDao = mockk<ChannelDao>()
+        val playlistDao = mockk<PlaylistDao>()
+        val syncLogDao = mockk<SyncLogDao>()
+
+        coEvery { playlistDao.findById(1) } returns playlist()
+        coEvery { channelDao.getChannels(1) } returns listOf(
+            channel(id = 10, name = "Kazakh News", tvgId = "kz.news", logo = null),
+            channel(id = 11, name = "Movie One", tvgId = "movie.one", logo = null)
+        )
+        coEvery { metadataDao.findByChannelIds(listOf(10, 11)) } returns emptyList()
+        coEvery { metadataDao.upsert(any()) } returns Unit
+        coEvery { syncLogDao.insert(any()) } returns Unit
+
+        val repository = ChannelMetadataRepositoryImpl(
+            channelMetadataDao = metadataDao,
+            channelDao = channelDao,
+            playlistDao = playlistDao,
+            syncLogDao = syncLogDao
+        )
+        val result = repository.applyMetadataRules(
+            playlistId = 1,
+            rulesText = """
+                match=kazakh; country=KZ; language=kk; category=Local
+                name=movie; category=Movies
+            """.trimIndent(),
+            channelIds = listOf(10, 11)
+        )
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(2, (result as AppResult.Success).data)
+        coVerify {
+            metadataDao.upsert(
+                match<ChannelMetadataEntity> {
+                    it.channelId == 10L &&
+                        it.manualCountry == "KZ" &&
+                        it.manualLanguage == "kk" &&
+                        it.manualCategory == "Local" &&
+                        it.metadataSource == "manual_metadata"
+                }
+            )
+            metadataDao.upsert(
+                match<ChannelMetadataEntity> {
+                    it.channelId == 11L &&
+                        it.manualCountry == null &&
+                        it.manualLanguage == null &&
+                        it.manualCategory == "Movies" &&
+                        it.category == "Movies" &&
+                        it.metadataSource == "manual_metadata"
+                }
+            )
+            syncLogDao.insert(match<SyncLogEntity> { it.status == "metadata_rules_applied" })
         }
     }
 

@@ -440,6 +440,19 @@ fun EditorScreen(
                             ) {
                                 Text(if (state.isRefreshingMetadata) "Применяю..." else "Применить logo pack")
                             }
+                            OutlinedTextField(
+                                value = state.metadataRulesInput,
+                                onValueChange = viewModel::updateMetadataRulesInput,
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Metadata rules") },
+                                minLines = 3
+                            )
+                            Button(
+                                onClick = viewModel::applyMetadataRulesToSelectedOrVisible,
+                                enabled = !state.isRefreshingMetadata && state.metadataRulesInput.isNotBlank()
+                            ) {
+                                Text(if (state.isRefreshingMetadata) "Применяю..." else "Применить metadata rules")
+                            }
                         }
                     }
                 }

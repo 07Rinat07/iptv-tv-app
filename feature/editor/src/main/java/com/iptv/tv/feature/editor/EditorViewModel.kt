@@ -59,6 +59,7 @@ data class EditorUiState(
     val manualCategoryInput: String = "",
     val externalLogoPackJson: String = "",
     val externalLogoPackUrl: String = "",
+    val metadataRulesInput: String = "",
     val exportPreview: String? = null,
     val exportFileExtension: String = "m3u",
     val exportedFilePath: String? = null,
@@ -503,6 +504,10 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(externalLogoPackJson = value, lastError = null) }
     }
 
+    fun updateMetadataRulesInput(value: String) {
+        _uiState.update { it.copy(metadataRulesInput = value, lastError = null, lastInfo = null) }
+    }
+
     fun updateManualCountry(value: String) {
         _uiState.update { it.copy(manualCountryInput = value, lastError = null) }
     }
@@ -644,6 +649,48 @@ class EditorViewModel @Inject constructor(
                     }
                 }
                 is AppResult.Error -> _uiState.update { it.copy(lastError = result.message) }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    fun applyMetadataRulesToSelectedOrVisible() {
+        val playlistId = currentPlaylistIdOrError() ?: return
+        val state = _uiState.value
+        val rules = state.metadataRulesInput.trim()
+        if (rules.isBlank()) {
+            _uiState.update { it.copy(lastError = "Введите metadata rules") }
+            return
+        }
+        val targetIds = state.selectedChannelIds
+            .ifEmpty { filterEditorChannels(state.channels, state.channelQuery).map { it.id }.toSet() }
+            .toList()
+        if (targetIds.isEmpty()) {
+            _uiState.update { it.copy(lastError = "Нет каналов для metadata rules") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRefreshingMetadata = true, lastError = null, lastInfo = null) }
+            when (
+                val result = channelMetadataRepository.applyMetadataRules(
+                    playlistId = playlistId,
+                    rulesText = rules,
+                    channelIds = targetIds
+                )
+            ) {
+                is AppResult.Success -> {
+                    _uiState.value.editDraft.channelId?.let(::loadSelectedMetadata)
+                    _uiState.update {
+                        it.copy(
+                            isRefreshingMetadata = false,
+                            lastInfo = "Metadata rules применены к каналам: ${result.data}",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> _uiState.update {
+                    it.copy(isRefreshingMetadata = false, lastError = result.message)
+                }
                 AppResult.Loading -> Unit
             }
         }

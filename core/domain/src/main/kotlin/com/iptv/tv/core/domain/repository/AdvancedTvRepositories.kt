@@ -70,6 +70,11 @@ interface ChannelMetadataRepository {
         language: String?,
         category: String?
     ): AppResult<Int>
+    suspend fun applyMetadataRules(
+        playlistId: Long,
+        rulesText: String,
+        channelIds: List<Long> = emptyList()
+    ): AppResult<Int>
     suspend fun refreshMetadata(playlistId: Long): AppResult<Int>
     suspend fun refreshMetadataWithLogoPack(playlistId: Long, logoPackJson: String): AppResult<Int>
     suspend fun refreshMetadataWithLogoPackUrl(playlistId: Long, logoPackUrl: String): AppResult<Int>
