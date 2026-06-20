@@ -532,6 +532,32 @@ fun EditorScreen(
                                 }
                             }
                             OutlinedTextField(
+                                value = state.externalMetadataRulesCatalogInput,
+                                onValueChange = viewModel::updateExternalMetadataRulesCatalogInput,
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Внешний shared rules catalog") },
+                                minLines = 3
+                            )
+                            Button(
+                                onClick = viewModel::loadExternalMetadataRulesCatalog,
+                                enabled = state.externalMetadataRulesCatalogInput.isNotBlank()
+                            ) {
+                                Text("Загрузить shared catalog")
+                            }
+                            if (state.externalSharedMetadataRulePacks.isNotEmpty()) {
+                                Text("External shared packs", style = MaterialTheme.typography.titleSmall)
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    state.externalSharedMetadataRulePacks.forEach { pack ->
+                                        Button(onClick = { viewModel.appendExternalMetadataRulesPack(pack.id) }) {
+                                            Text(pack.title)
+                                        }
+                                    }
+                                }
+                            }
+                            OutlinedTextField(
                                 value = state.metadataRulesInput,
                                 onValueChange = viewModel::updateMetadataRulesInput,
                                 modifier = Modifier.fillMaxWidth(),

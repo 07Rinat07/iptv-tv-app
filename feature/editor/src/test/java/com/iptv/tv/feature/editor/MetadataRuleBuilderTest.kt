@@ -84,6 +84,40 @@ class MetadataRuleBuilderTest {
         }
     }
 
+    @Test
+    fun parseSharedMetadataRulePacksCatalog_readsNamedPacks() {
+        val packs = parseSharedMetadataRulePacksCatalog(
+            """
+                # pack: Sports
+                match=sport; category=Sports
+                match=спорт; category=Sports
+                # pack: Countries
+                source=.kz; country=KZ
+                source=.ru; country=RU; language=ru
+            """.trimIndent()
+        )
+
+        assertEquals(listOf("Sports", "Countries"), packs.map { it.title })
+        assertEquals("external-1-sports", packs[0].id)
+        assertEquals("match=sport; category=Sports\nmatch=спорт; category=Sports", packs[0].rules)
+    }
+
+    @Test
+    fun parseSharedMetadataRulePacksCatalog_usesFallbackTitleAndSkipsInvalidPacks() {
+        val packs = parseSharedMetadataRulePacksCatalog(
+            """
+                # only a comment
+                match=news; category=News
+                # pack: Broken
+                just text
+            """.trimIndent()
+        )
+
+        assertEquals(1, packs.size)
+        assertEquals("Imported pack 1", packs[0].title)
+        assertEquals("external-1-imported-pack-1", packs[0].id)
+    }
+
     private fun channel(
         id: Long,
         name: String,

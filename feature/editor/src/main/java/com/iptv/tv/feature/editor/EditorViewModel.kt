@@ -65,6 +65,8 @@ data class EditorUiState(
     val metadataRuleCountryInput: String = "",
     val metadataRuleLanguageInput: String = "",
     val metadataRuleCategoryInput: String = "",
+    val externalMetadataRulesCatalogInput: String = "",
+    val externalSharedMetadataRulePacks: List<SharedMetadataRulePack> = emptyList(),
     val exportPreview: String? = null,
     val exportFileExtension: String = "m3u",
     val exportedFilePath: String? = null,
@@ -513,6 +515,26 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(metadataRulesInput = value, lastError = null, lastInfo = null) }
     }
 
+    fun updateExternalMetadataRulesCatalogInput(value: String) {
+        _uiState.update { it.copy(externalMetadataRulesCatalogInput = value, lastError = null, lastInfo = null) }
+    }
+
+    fun loadExternalMetadataRulesCatalog() {
+        val catalog = _uiState.value.externalMetadataRulesCatalogInput
+        val packs = parseSharedMetadataRulePacksCatalog(catalog)
+        if (packs.isEmpty()) {
+            _uiState.update { it.copy(lastError = "Нет корректных shared rules packs") }
+            return
+        }
+        _uiState.update {
+            it.copy(
+                externalSharedMetadataRulePacks = packs,
+                lastError = null,
+                lastInfo = "Shared rules catalog загружен: ${packs.size}"
+            )
+        }
+    }
+
     fun appendSharedMetadataRulesPack(packId: String) {
         val pack = sharedMetadataRulePacks.firstOrNull { it.id == packId }
         if (pack == null) {
@@ -524,6 +546,21 @@ class EditorViewModel @Inject constructor(
                 metadataRulesInput = appendMetadataRulesText(it.metadataRulesInput, pack.rules),
                 lastError = null,
                 lastInfo = "Shared rules pack добавлен: ${pack.title}"
+            )
+        }
+    }
+
+    fun appendExternalMetadataRulesPack(packId: String) {
+        val pack = _uiState.value.externalSharedMetadataRulePacks.firstOrNull { it.id == packId }
+        if (pack == null) {
+            _uiState.update { it.copy(lastError = "External metadata rules pack не найден: $packId") }
+            return
+        }
+        _uiState.update {
+            it.copy(
+                metadataRulesInput = appendMetadataRulesText(it.metadataRulesInput, pack.rules),
+                lastError = null,
+                lastInfo = "External rules pack добавлен: ${pack.title}"
             )
         }
     }
@@ -1185,7 +1222,7 @@ internal val metadataRuleMatcherTypes = listOf(
     METADATA_RULE_MATCH_SOURCE
 )
 
-internal data class SharedMetadataRulePack(
+data class SharedMetadataRulePack(
     val id: String,
     val title: String,
     val rules: String
@@ -1269,6 +1306,49 @@ internal fun appendMetadataRulesText(existingRules: String, newRules: String): S
     }
 }
 
+internal fun parseSharedMetadataRulePacksCatalog(catalogText: String): List<SharedMetadataRulePack> {
+    val packs = mutableListOf<SharedMetadataRulePack>()
+    var title: String? = null
+    val lines = mutableListOf<String>()
+
+    fun flushPack() {
+        val rules = lines.joinToString("\n").trim()
+        if (isValidSharedRulesPack(rules)) {
+            val packTitle = title?.trim().orEmpty().ifBlank { "Imported pack ${packs.size + 1}" }
+            packs += SharedMetadataRulePack(
+                id = "external-${packs.size + 1}-${packTitle.toPackId()}",
+                title = packTitle,
+                rules = rules
+            )
+        }
+        title = null
+        lines.clear()
+    }
+
+    catalogText.lineSequence().forEach { rawLine ->
+        val line = rawLine.trimEnd()
+        val nextTitle = line.trim().removePrefix("#").trim()
+            .takeIf { it.startsWith("pack:", ignoreCase = true) }
+            ?.substringAfter(':')
+            ?.trim()
+        if (nextTitle != null) {
+            flushPack()
+            title = nextTitle
+        } else {
+            lines += line
+        }
+    }
+    flushPack()
+    return packs
+}
+
+private fun isValidSharedRulesPack(rules: String): Boolean {
+    return rules.lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotBlank() && !it.startsWith("#") }
+        .any { it.contains('=') && it.contains(';') }
+}
+
 internal fun metadataRulePreviewCount(
     channels: List<Channel>,
     matcherType: String,
@@ -1303,6 +1383,13 @@ private fun String.toRuleValue(): String {
         .replace(';', ' ')
         .replace('=', ' ')
         .replace(Regex("\\s+"), " ")
+}
+
+private fun String.toPackId(): String {
+    return lowercase(Locale.ROOT)
+        .replace(Regex("[^a-z0-9]+"), "-")
+        .trim('-')
+        .ifBlank { "pack" }
 }
 
 private fun String.sanitizeFileName(): String {
