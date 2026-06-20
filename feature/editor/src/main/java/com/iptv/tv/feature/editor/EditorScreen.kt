@@ -62,6 +62,17 @@ fun EditorScreen(
             .distinct()
             .size
     }
+    val metadataRulePreviewCount = remember(
+        filteredChannels,
+        state.metadataRuleMatcherType,
+        state.metadataRuleMatcherInput
+    ) {
+        metadataRulePreviewCount(
+            channels = filteredChannels,
+            matcherType = state.metadataRuleMatcherType,
+            matcherValue = state.metadataRuleMatcherInput
+        )
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -440,6 +451,65 @@ fun EditorScreen(
                             ) {
                                 Text(if (state.isRefreshingMetadata) "Применяю..." else "Применить logo pack")
                             }
+                            Text("Конструктор metadata rules", style = MaterialTheme.typography.titleSmall)
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                metadataRuleMatcherTypes.forEach { matcherType ->
+                                    Button(
+                                        onClick = { viewModel.updateMetadataRuleMatcherType(matcherType) },
+                                        enabled = state.metadataRuleMatcherType != matcherType
+                                    ) {
+                                        Text(matcherType.toMetadataRuleMatcherLabel())
+                                    }
+                                }
+                            }
+                            OutlinedTextField(
+                                value = state.metadataRuleMatcherInput,
+                                onValueChange = viewModel::updateMetadataRuleMatcherInput,
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Условие совпадения") },
+                                singleLine = true
+                            )
+                            Text("Совпадений среди видимых каналов: $metadataRulePreviewCount")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = state.metadataRuleCountryInput,
+                                    onValueChange = viewModel::updateMetadataRuleCountryInput,
+                                    modifier = Modifier.weight(1f),
+                                    label = { Text("Страна") },
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = state.metadataRuleLanguageInput,
+                                    onValueChange = viewModel::updateMetadataRuleLanguageInput,
+                                    modifier = Modifier.weight(1f),
+                                    label = { Text("Язык") },
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = state.metadataRuleCategoryInput,
+                                    onValueChange = viewModel::updateMetadataRuleCategoryInput,
+                                    modifier = Modifier.weight(1f),
+                                    label = { Text("Категория") },
+                                    singleLine = true
+                                )
+                            }
+                            Button(
+                                onClick = viewModel::appendMetadataRuleFromBuilder,
+                                enabled = state.metadataRuleMatcherInput.isNotBlank() &&
+                                    listOf(
+                                        state.metadataRuleCountryInput,
+                                        state.metadataRuleLanguageInput,
+                                        state.metadataRuleCategoryInput
+                                    ).any { it.isNotBlank() }
+                            ) {
+                                Text("Добавить rule")
+                            }
                             OutlinedTextField(
                                 value = state.metadataRulesInput,
                                 onValueChange = viewModel::updateMetadataRulesInput,
@@ -583,5 +653,15 @@ private fun editorSourceTypeLabel(raw: String): String {
         "HDHOMERUN" -> "HdHomeRun"
         "CUSTOM" -> "Пользовательский"
         else -> raw
+    }
+}
+
+private fun String.toMetadataRuleMatcherLabel(): String {
+    return when (this) {
+        METADATA_RULE_MATCH_NAME -> "Имя"
+        METADATA_RULE_MATCH_GROUP -> "Группа"
+        METADATA_RULE_MATCH_TVG_ID -> "TVG ID"
+        METADATA_RULE_MATCH_SOURCE -> "Источник"
+        else -> "Любое"
     }
 }

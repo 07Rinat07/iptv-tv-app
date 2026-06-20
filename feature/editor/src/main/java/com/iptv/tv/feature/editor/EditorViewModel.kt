@@ -60,6 +60,11 @@ data class EditorUiState(
     val externalLogoPackJson: String = "",
     val externalLogoPackUrl: String = "",
     val metadataRulesInput: String = "",
+    val metadataRuleMatcherType: String = METADATA_RULE_MATCH_ANY,
+    val metadataRuleMatcherInput: String = "",
+    val metadataRuleCountryInput: String = "",
+    val metadataRuleLanguageInput: String = "",
+    val metadataRuleCategoryInput: String = "",
     val exportPreview: String? = null,
     val exportFileExtension: String = "m3u",
     val exportedFilePath: String? = null,
@@ -506,6 +511,61 @@ class EditorViewModel @Inject constructor(
 
     fun updateMetadataRulesInput(value: String) {
         _uiState.update { it.copy(metadataRulesInput = value, lastError = null, lastInfo = null) }
+    }
+
+    fun updateMetadataRuleMatcherType(value: String) {
+        _uiState.update {
+            it.copy(
+                metadataRuleMatcherType = normalizeMetadataRuleMatcherType(value),
+                lastError = null,
+                lastInfo = null
+            )
+        }
+    }
+
+    fun updateMetadataRuleMatcherInput(value: String) {
+        _uiState.update { it.copy(metadataRuleMatcherInput = value, lastError = null, lastInfo = null) }
+    }
+
+    fun updateMetadataRuleCountryInput(value: String) {
+        _uiState.update { it.copy(metadataRuleCountryInput = value, lastError = null, lastInfo = null) }
+    }
+
+    fun updateMetadataRuleLanguageInput(value: String) {
+        _uiState.update { it.copy(metadataRuleLanguageInput = value, lastError = null, lastInfo = null) }
+    }
+
+    fun updateMetadataRuleCategoryInput(value: String) {
+        _uiState.update { it.copy(metadataRuleCategoryInput = value, lastError = null, lastInfo = null) }
+    }
+
+    fun appendMetadataRuleFromBuilder() {
+        val state = _uiState.value
+        val rule = buildMetadataRuleLine(
+            matcherType = state.metadataRuleMatcherType,
+            matcherValue = state.metadataRuleMatcherInput,
+            country = state.metadataRuleCountryInput,
+            language = state.metadataRuleLanguageInput,
+            category = state.metadataRuleCategoryInput
+        )
+        if (rule == null) {
+            _uiState.update {
+                it.copy(lastError = "Заполните условие и хотя бы одно поле metadata")
+            }
+            return
+        }
+        _uiState.update {
+            val currentRules = it.metadataRulesInput.trim()
+            it.copy(
+                metadataRulesInput = if (currentRules.isBlank()) rule else "$currentRules\n$rule",
+                metadataRuleMatcherInput = "",
+                metadataRuleCountryInput = "",
+                metadataRuleLanguageInput = "",
+                metadataRuleCategoryInput = "",
+                lastError = null,
+                lastInfo = "Metadata rule добавлен"
+            )
+        }
     }
 
     fun updateManualCountry(value: String) {
@@ -990,6 +1050,77 @@ internal fun filterEditorChannels(channels: List<Channel>, query: String): List<
 
 internal fun filterEditorChannelsWithoutLogo(channels: List<Channel>, query: String): List<Channel> {
     return filterEditorChannels(channels, query).filter { it.logo.isNullOrBlank() }
+}
+
+internal const val METADATA_RULE_MATCH_ANY = "match"
+internal const val METADATA_RULE_MATCH_NAME = "name"
+internal const val METADATA_RULE_MATCH_GROUP = "group"
+internal const val METADATA_RULE_MATCH_TVG_ID = "tvg-id"
+internal const val METADATA_RULE_MATCH_SOURCE = "source"
+
+internal val metadataRuleMatcherTypes = listOf(
+    METADATA_RULE_MATCH_ANY,
+    METADATA_RULE_MATCH_NAME,
+    METADATA_RULE_MATCH_GROUP,
+    METADATA_RULE_MATCH_TVG_ID,
+    METADATA_RULE_MATCH_SOURCE
+)
+
+internal fun buildMetadataRuleLine(
+    matcherType: String,
+    matcherValue: String,
+    country: String,
+    language: String,
+    category: String
+): String? {
+    val normalizedMatcher = normalizeMetadataRuleMatcherType(matcherType)
+    val normalizedMatcherValue = matcherValue.toRuleValue()
+    val fields = listOfNotNull(
+        normalizedMatcher.takeIf { normalizedMatcherValue.isNotBlank() }?.let { "$it=$normalizedMatcherValue" },
+        country.toRuleValue().takeIf { it.isNotBlank() }?.let { "country=$it" },
+        language.toRuleValue().takeIf { it.isNotBlank() }?.let { "language=$it" },
+        category.toRuleValue().takeIf { it.isNotBlank() }?.let { "category=$it" }
+    )
+    val hasMetadata = fields.any {
+        it.startsWith("country=") || it.startsWith("language=") || it.startsWith("category=")
+    }
+    return fields.joinToString("; ").takeIf { normalizedMatcherValue.isNotBlank() && hasMetadata }
+}
+
+internal fun metadataRulePreviewCount(
+    channels: List<Channel>,
+    matcherType: String,
+    matcherValue: String
+): Int {
+    val needle = matcherValue.trim().lowercase(Locale.ROOT)
+    if (needle.isBlank()) return 0
+    val normalizedMatcher = normalizeMetadataRuleMatcherType(matcherType)
+    return channels.count { channel ->
+        when (normalizedMatcher) {
+            METADATA_RULE_MATCH_NAME -> channel.name.containsNeedle(needle)
+            METADATA_RULE_MATCH_GROUP -> channel.group.containsNeedle(needle)
+            METADATA_RULE_MATCH_TVG_ID -> channel.tvgId.containsNeedle(needle)
+            METADATA_RULE_MATCH_SOURCE -> channel.streamUrl.containsNeedle(needle)
+            else -> listOf(channel.name, channel.group, channel.tvgId, channel.logo, channel.streamUrl)
+                .any { it.containsNeedle(needle) }
+        }
+    }
+}
+
+internal fun normalizeMetadataRuleMatcherType(value: String): String {
+    return metadataRuleMatcherTypes.firstOrNull { it.equals(value.trim(), ignoreCase = true) }
+        ?: METADATA_RULE_MATCH_ANY
+}
+
+private fun String?.containsNeedle(needle: String): Boolean {
+    return orEmpty().lowercase(Locale.ROOT).contains(needle)
+}
+
+private fun String.toRuleValue(): String {
+    return trim()
+        .replace(';', ' ')
+        .replace('=', ' ')
+        .replace(Regex("\\s+"), " ")
 }
 
 private fun String.sanitizeFileName(): String {
