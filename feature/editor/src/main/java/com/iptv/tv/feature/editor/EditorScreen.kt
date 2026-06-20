@@ -532,6 +532,19 @@ fun EditorScreen(
                                 }
                             }
                             OutlinedTextField(
+                                value = state.externalMetadataRulesCatalogUrl,
+                                onValueChange = viewModel::updateExternalMetadataRulesCatalogUrl,
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("URL shared rules catalog") },
+                                singleLine = true
+                            )
+                            Button(
+                                onClick = viewModel::loadExternalMetadataRulesCatalogUrl,
+                                enabled = !state.isLoading && state.externalMetadataRulesCatalogUrl.isNotBlank()
+                            ) {
+                                Text(if (state.isLoading) "Загружаю catalog..." else "Загрузить catalog по URL")
+                            }
+                            OutlinedTextField(
                                 value = state.externalMetadataRulesCatalogInput,
                                 onValueChange = viewModel::updateExternalMetadataRulesCatalogInput,
                                 modifier = Modifier.fillMaxWidth(),
@@ -540,7 +553,7 @@ fun EditorScreen(
                             )
                             Button(
                                 onClick = viewModel::loadExternalMetadataRulesCatalog,
-                                enabled = state.externalMetadataRulesCatalogInput.isNotBlank()
+                                enabled = !state.isLoading && state.externalMetadataRulesCatalogInput.isNotBlank()
                             ) {
                                 Text("Загрузить shared catalog")
                             }

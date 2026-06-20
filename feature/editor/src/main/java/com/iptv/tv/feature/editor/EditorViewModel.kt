@@ -19,6 +19,7 @@ import com.iptv.tv.core.model.EditorActionResult
 import com.iptv.tv.core.model.Playlist
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,7 +27,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -66,6 +70,7 @@ data class EditorUiState(
     val metadataRuleLanguageInput: String = "",
     val metadataRuleCategoryInput: String = "",
     val externalMetadataRulesCatalogInput: String = "",
+    val externalMetadataRulesCatalogUrl: String = "",
     val externalSharedMetadataRulePacks: List<SharedMetadataRulePack> = emptyList(),
     val exportPreview: String? = null,
     val exportFileExtension: String = "m3u",
@@ -519,19 +524,78 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(externalMetadataRulesCatalogInput = value, lastError = null, lastInfo = null) }
     }
 
+    fun updateExternalMetadataRulesCatalogUrl(value: String) {
+        _uiState.update { it.copy(externalMetadataRulesCatalogUrl = value, lastError = null, lastInfo = null) }
+    }
+
     fun loadExternalMetadataRulesCatalog() {
         val catalog = _uiState.value.externalMetadataRulesCatalogInput
+        applyExternalMetadataRulesCatalog(catalog)
+    }
+
+    fun loadExternalMetadataRulesCatalogUrl() {
+        val url = normalizeSharedRulesCatalogUrl(_uiState.value.externalMetadataRulesCatalogUrl)
+        if (url == null) {
+            _uiState.update { it.copy(lastError = "Введите HTTP/HTTPS URL shared rules catalog") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, lastError = null, lastInfo = null) }
+            runCatching {
+                fetchExternalMetadataRulesCatalog(url)
+            }.onSuccess { catalog ->
+                applyExternalMetadataRulesCatalog(
+                    catalog = catalog,
+                    catalogInput = catalog,
+                    infoPrefix = "Shared rules catalog загружен по URL"
+                )
+            }.onFailure { throwable ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        lastError = "Не удалось загрузить shared rules catalog: ${throwable.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    private fun applyExternalMetadataRulesCatalog(
+        catalog: String,
+        catalogInput: String? = null,
+        infoPrefix: String = "Shared rules catalog загружен"
+    ) {
         val packs = parseSharedMetadataRulePacksCatalog(catalog)
         if (packs.isEmpty()) {
-            _uiState.update { it.copy(lastError = "Нет корректных shared rules packs") }
+            _uiState.update { it.copy(isLoading = false, lastError = "Нет корректных shared rules packs") }
             return
         }
         _uiState.update {
             it.copy(
+                isLoading = false,
+                externalMetadataRulesCatalogInput = catalogInput ?: it.externalMetadataRulesCatalogInput,
                 externalSharedMetadataRulePacks = packs,
                 lastError = null,
-                lastInfo = "Shared rules catalog загружен: ${packs.size}"
+                lastInfo = "$infoPrefix: ${packs.size}"
             )
+        }
+    }
+
+    private suspend fun fetchExternalMetadataRulesCatalog(url: String): String = withContext(Dispatchers.IO) {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 15_000
+        connection.instanceFollowRedirects = true
+        connection.setRequestProperty("Accept", "text/plain,*/*")
+        try {
+            val responseCode = connection.responseCode
+            if (responseCode !in 200..299) {
+                error("HTTP $responseCode")
+            }
+            connection.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            connection.disconnect()
         }
     }
 
@@ -1303,6 +1367,14 @@ internal fun appendMetadataRulesText(existingRules: String, newRules: String): S
         existing.isBlank() -> incoming
         incoming.isBlank() -> existing
         else -> "$existing\n$incoming"
+    }
+}
+
+internal fun normalizeSharedRulesCatalogUrl(value: String): String? {
+    val trimmed = value.trim()
+    val lower = trimmed.lowercase(Locale.ROOT)
+    return trimmed.takeIf {
+        lower.startsWith("https://") || lower.startsWith("http://")
     }
 }
 

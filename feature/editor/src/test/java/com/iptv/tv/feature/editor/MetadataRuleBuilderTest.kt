@@ -118,6 +118,18 @@ class MetadataRuleBuilderTest {
         assertEquals("external-1-imported-pack-1", packs[0].id)
     }
 
+    @Test
+    fun normalizeSharedRulesCatalogUrl_acceptsOnlyHttpUrls() {
+        assertEquals(
+            "https://example.com/rules.txt",
+            normalizeSharedRulesCatalogUrl("  https://example.com/rules.txt  ")
+        )
+        assertEquals("http://example.com/rules.txt", normalizeSharedRulesCatalogUrl("http://example.com/rules.txt"))
+        assertNull(normalizeSharedRulesCatalogUrl(""))
+        assertNull(normalizeSharedRulesCatalogUrl("ftp://example.com/rules.txt"))
+        assertNull(normalizeSharedRulesCatalogUrl("file:///tmp/rules.txt"))
+    }
+
     private fun channel(
         id: Long,
         name: String,
