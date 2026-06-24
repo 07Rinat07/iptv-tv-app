@@ -73,6 +73,7 @@ data class EditorUiState(
     val externalMetadataRulesCatalogInput: String = "",
     val externalMetadataRulesCatalogUrl: String = "",
     val externalMetadataRulesCatalogInfo: SharedMetadataRulesCatalogInfo? = null,
+    val externalMetadataRulesCatalogCacheLabel: String? = null,
     val externalSharedMetadataRulePacks: List<SharedMetadataRulePack> = emptyList(),
     val exportPreview: String? = null,
     val exportFileExtension: String = "m3u",
@@ -107,6 +108,7 @@ class EditorViewModel @Inject constructor(
     init {
         observePlaylists()
         observeFavorites()
+        loadCachedExternalMetadataRulesCatalog(silent = true)
     }
 
     fun selectPlaylist(playlistId: Long) {
@@ -535,6 +537,46 @@ class EditorViewModel @Inject constructor(
         applyExternalMetadataRulesCatalog(catalog)
     }
 
+    fun loadCachedExternalMetadataRulesCatalog() {
+        loadCachedExternalMetadataRulesCatalog(silent = false)
+    }
+
+    private fun loadCachedExternalMetadataRulesCatalog(silent: Boolean) {
+        viewModelScope.launch {
+            val cachedCatalog = readExternalMetadataRulesCatalogCache()
+            if (cachedCatalog.isNullOrBlank()) {
+                if (!silent) {
+                    _uiState.update { it.copy(lastError = "Cached shared rules catalog не найден") }
+                }
+                return@launch
+            }
+            applyExternalMetadataRulesCatalog(
+                catalog = cachedCatalog,
+                catalogInput = cachedCatalog,
+                infoPrefix = "Cached shared rules catalog загружен",
+                cacheAfterLoad = false,
+                showFeedback = !silent
+            )
+        }
+    }
+
+    fun clearExternalMetadataRulesCatalogCache() {
+        viewModelScope.launch {
+            val deleted = deleteExternalMetadataRulesCatalogCache()
+            _uiState.update {
+                it.copy(
+                    externalMetadataRulesCatalogCacheLabel = null,
+                    lastError = null,
+                    lastInfo = if (deleted) {
+                        "Cached shared rules catalog очищен"
+                    } else {
+                        "Cached shared rules catalog уже пуст"
+                    }
+                )
+            }
+        }
+    }
+
     fun loadExternalMetadataRulesCatalogUrl() {
         val url = normalizeSharedRulesCatalogUrl(_uiState.value.externalMetadataRulesCatalogUrl)
         if (url == null) {
@@ -566,12 +608,19 @@ class EditorViewModel @Inject constructor(
     private fun applyExternalMetadataRulesCatalog(
         catalog: String,
         catalogInput: String? = null,
-        infoPrefix: String = "Shared rules catalog загружен"
+        infoPrefix: String = "Shared rules catalog загружен",
+        cacheAfterLoad: Boolean = true,
+        showFeedback: Boolean = true
     ) {
         val packs = parseSharedMetadataRulePacksCatalog(catalog)
         val catalogInfo = parseSharedMetadataRulesCatalogInfo(catalog)
         if (packs.isEmpty()) {
-            _uiState.update { it.copy(isLoading = false, lastError = "Нет корректных shared rules packs") }
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    lastError = if (showFeedback) "Нет корректных shared rules packs" else it.lastError
+                )
+            }
             return
         }
         if (catalogInfo.checksumStatus == SharedRulesCatalogChecksumStatus.INVALID) {
@@ -579,7 +628,7 @@ class EditorViewModel @Inject constructor(
                 it.copy(
                     isLoading = false,
                     externalMetadataRulesCatalogInfo = catalogInfo,
-                    lastError = "Checksum shared rules catalog не совпадает"
+                    lastError = if (showFeedback) "Checksum shared rules catalog не совпадает" else it.lastError
                 )
             }
             return
@@ -589,10 +638,20 @@ class EditorViewModel @Inject constructor(
                 isLoading = false,
                 externalMetadataRulesCatalogInput = catalogInput ?: it.externalMetadataRulesCatalogInput,
                 externalMetadataRulesCatalogInfo = catalogInfo.takeIf { info -> info.hasAnyValue },
+                externalMetadataRulesCatalogCacheLabel = buildSharedRulesCatalogCacheLabel(packs.size, catalogInfo),
                 externalSharedMetadataRulePacks = packs,
                 lastError = null,
-                lastInfo = buildSharedRulesCatalogLoadedMessage(infoPrefix, packs.size, catalogInfo)
+                lastInfo = if (showFeedback) {
+                    buildSharedRulesCatalogLoadedMessage(infoPrefix, packs.size, catalogInfo)
+                } else {
+                    it.lastInfo
+                }
             )
+        }
+        if (cacheAfterLoad) {
+            viewModelScope.launch {
+                writeExternalMetadataRulesCatalogCache(catalog)
+            }
         }
     }
 
@@ -611,6 +670,27 @@ class EditorViewModel @Inject constructor(
         } finally {
             connection.disconnect()
         }
+    }
+
+    private suspend fun readExternalMetadataRulesCatalogCache(): String? = withContext(Dispatchers.IO) {
+        externalMetadataRulesCatalogCacheFile()
+            .takeIf { it.exists() && it.isFile }
+            ?.readText()
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    private suspend fun writeExternalMetadataRulesCatalogCache(catalog: String) = withContext(Dispatchers.IO) {
+        val file = externalMetadataRulesCatalogCacheFile()
+        file.parentFile?.mkdirs()
+        file.writeText(catalog)
+    }
+
+    private suspend fun deleteExternalMetadataRulesCatalogCache(): Boolean = withContext(Dispatchers.IO) {
+        externalMetadataRulesCatalogCacheFile().delete()
+    }
+
+    private fun externalMetadataRulesCatalogCacheFile(): File {
+        return File(appContext.filesDir, "metadata_rules/shared_rules_catalog.txt")
     }
 
     fun appendSharedMetadataRulesPack(packId: String) {
@@ -1480,6 +1560,27 @@ internal fun buildSharedRulesCatalogLoadedMessage(
         "$prefix: $packsCount"
     } else {
         "$prefix: $packsCount ($details)"
+    }
+}
+
+internal fun buildSharedRulesCatalogCacheLabel(
+    packsCount: Int,
+    info: SharedMetadataRulesCatalogInfo
+): String {
+    val details = listOfNotNull(
+        info.title?.takeIf { it.isNotBlank() },
+        info.version?.takeIf { it.isNotBlank() }?.let { "v$it" },
+        info.updatedAt?.takeIf { it.isNotBlank() }?.let { "updated $it" },
+        when (info.checksumStatus) {
+            SharedRulesCatalogChecksumStatus.VALID -> "sha256 ok"
+            SharedRulesCatalogChecksumStatus.INVALID -> "sha256 mismatch"
+            SharedRulesCatalogChecksumStatus.NOT_DECLARED -> null
+        }
+    ).joinToString(" · ")
+    return if (details.isBlank()) {
+        "Cached shared catalog: $packsCount packs"
+    } else {
+        "Cached shared catalog: $packsCount packs · $details"
     }
 }
 

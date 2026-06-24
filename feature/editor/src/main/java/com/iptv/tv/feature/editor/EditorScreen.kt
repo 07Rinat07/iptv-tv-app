@@ -544,6 +544,26 @@ fun EditorScreen(
                             ) {
                                 Text(if (state.isLoading) "Загружаю catalog..." else "Загрузить catalog по URL")
                             }
+                            state.externalMetadataRulesCatalogCacheLabel?.let { cacheLabel ->
+                                Text(cacheLabel, style = MaterialTheme.typography.bodySmall)
+                            }
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = viewModel::loadCachedExternalMetadataRulesCatalog,
+                                    enabled = !state.isLoading
+                                ) {
+                                    Text("Загрузить cached catalog")
+                                }
+                                Button(
+                                    onClick = viewModel::clearExternalMetadataRulesCatalogCache,
+                                    enabled = !state.isLoading
+                                ) {
+                                    Text("Очистить catalog cache")
+                                }
+                            }
                             OutlinedTextField(
                                 value = state.externalMetadataRulesCatalogInput,
                                 onValueChange = viewModel::updateExternalMetadataRulesCatalogInput,

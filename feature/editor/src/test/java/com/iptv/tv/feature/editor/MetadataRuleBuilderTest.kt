@@ -169,6 +169,24 @@ class MetadataRuleBuilderTest {
     }
 
     @Test
+    fun buildSharedRulesCatalogCacheLabel_includesPackCountVersionAndChecksum() {
+        val label = buildSharedRulesCatalogCacheLabel(
+            packsCount = 2,
+            info = SharedMetadataRulesCatalogInfo(
+                title = "Community IPTV metadata",
+                version = "2026.06",
+                updatedAt = "2026-06-24",
+                checksumStatus = SharedRulesCatalogChecksumStatus.VALID
+            )
+        )
+
+        assertEquals(
+            "Cached shared catalog: 2 packs · Community IPTV metadata · v2026.06 · updated 2026-06-24 · sha256 ok",
+            label
+        )
+    }
+
+    @Test
     fun parseSharedMetadataRulesCatalogInfo_marksValidSha256Checksum() {
         val catalogWithoutChecksum = """
             # catalog: Community IPTV metadata
