@@ -31,6 +31,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -71,6 +72,7 @@ data class EditorUiState(
     val metadataRuleCategoryInput: String = "",
     val externalMetadataRulesCatalogInput: String = "",
     val externalMetadataRulesCatalogUrl: String = "",
+    val externalMetadataRulesCatalogInfo: SharedMetadataRulesCatalogInfo? = null,
     val externalSharedMetadataRulePacks: List<SharedMetadataRulePack> = emptyList(),
     val exportPreview: String? = null,
     val exportFileExtension: String = "m3u",
@@ -567,17 +569,29 @@ class EditorViewModel @Inject constructor(
         infoPrefix: String = "Shared rules catalog загружен"
     ) {
         val packs = parseSharedMetadataRulePacksCatalog(catalog)
+        val catalogInfo = parseSharedMetadataRulesCatalogInfo(catalog)
         if (packs.isEmpty()) {
             _uiState.update { it.copy(isLoading = false, lastError = "Нет корректных shared rules packs") }
+            return
+        }
+        if (catalogInfo.checksumStatus == SharedRulesCatalogChecksumStatus.INVALID) {
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    externalMetadataRulesCatalogInfo = catalogInfo,
+                    lastError = "Checksum shared rules catalog не совпадает"
+                )
+            }
             return
         }
         _uiState.update {
             it.copy(
                 isLoading = false,
                 externalMetadataRulesCatalogInput = catalogInput ?: it.externalMetadataRulesCatalogInput,
+                externalMetadataRulesCatalogInfo = catalogInfo.takeIf { info -> info.hasAnyValue },
                 externalSharedMetadataRulePacks = packs,
                 lastError = null,
-                lastInfo = "$infoPrefix: ${packs.size}"
+                lastInfo = buildSharedRulesCatalogLoadedMessage(infoPrefix, packs.size, catalogInfo)
             )
         }
     }
@@ -1292,6 +1306,25 @@ data class SharedMetadataRulePack(
     val rules: String
 )
 
+data class SharedMetadataRulesCatalogInfo(
+    val title: String? = null,
+    val version: String? = null,
+    val updatedAt: String? = null,
+    val description: String? = null,
+    val checksumSha256: String? = null,
+    val computedSha256: String? = null,
+    val checksumStatus: SharedRulesCatalogChecksumStatus = SharedRulesCatalogChecksumStatus.NOT_DECLARED
+) {
+    val hasAnyValue: Boolean
+        get() = listOf(title, version, updatedAt, description, checksumSha256).any { !it.isNullOrBlank() }
+}
+
+enum class SharedRulesCatalogChecksumStatus {
+    NOT_DECLARED,
+    VALID,
+    INVALID
+}
+
 internal val sharedMetadataRulePacks = listOf(
     SharedMetadataRulePack(
         id = "basic-categories",
@@ -1378,6 +1411,82 @@ internal fun normalizeSharedRulesCatalogUrl(value: String): String? {
     }
 }
 
+internal fun parseSharedMetadataRulesCatalogInfo(catalogText: String): SharedMetadataRulesCatalogInfo {
+    var title: String? = null
+    var version: String? = null
+    var updatedAt: String? = null
+    var description: String? = null
+    var checksumSha256: String? = null
+
+    catalogText.lineSequence().forEach { rawLine ->
+        val line = rawLine.trim()
+        if (!line.startsWith("#")) return@forEach
+
+        val content = line.removePrefix("#").trim()
+        val key = content.substringBefore(':', missingDelimiterValue = "").trim().lowercase(Locale.ROOT)
+        val value = content.substringAfter(':', missingDelimiterValue = "").trim().takeIf { it.isNotBlank() }
+            ?: return@forEach
+
+        when (key) {
+            "catalog", "title", "name" -> if (title == null) title = value
+            "version", "catalog-version" -> if (version == null) version = value
+            "updated", "updated-at", "date" -> if (updatedAt == null) updatedAt = value
+            "description", "desc" -> if (description == null) description = value
+            "sha256", "checksum", "checksum-sha256" -> if (checksumSha256 == null) checksumSha256 = value
+        }
+    }
+
+    val normalizedChecksum = checksumSha256
+        ?.trim()
+        ?.lowercase(Locale.ROOT)
+        ?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
+    val computedChecksum = normalizedChecksum?.let {
+        catalogText.withoutSharedRulesChecksumHeaders().sha256Hex()
+    }
+    val checksumStatus = when {
+        checksumSha256 == null -> SharedRulesCatalogChecksumStatus.NOT_DECLARED
+        normalizedChecksum == null -> SharedRulesCatalogChecksumStatus.INVALID
+        normalizedChecksum == computedChecksum -> SharedRulesCatalogChecksumStatus.VALID
+        else -> SharedRulesCatalogChecksumStatus.INVALID
+    }
+
+    return SharedMetadataRulesCatalogInfo(
+        title = title,
+        version = version,
+        updatedAt = updatedAt,
+        description = description,
+        checksumSha256 = normalizedChecksum,
+        computedSha256 = computedChecksum,
+        checksumStatus = checksumStatus
+    )
+}
+
+internal fun buildSharedRulesCatalogLoadedMessage(
+    prefix: String,
+    packsCount: Int,
+    info: SharedMetadataRulesCatalogInfo
+): String {
+    val details = listOfNotNull(
+        info.title?.takeIf { it.isNotBlank() },
+        info.version?.takeIf { it.isNotBlank() }?.let { "v$it" },
+        info.updatedAt?.takeIf { it.isNotBlank() }?.let { "updated $it" },
+        when (info.checksumStatus) {
+            SharedRulesCatalogChecksumStatus.VALID -> "sha256 ok"
+            SharedRulesCatalogChecksumStatus.INVALID -> "sha256 mismatch"
+            SharedRulesCatalogChecksumStatus.NOT_DECLARED -> null
+        }
+    ).joinToString(", ")
+    return if (details.isBlank()) {
+        "$prefix: $packsCount"
+    } else {
+        "$prefix: $packsCount ($details)"
+    }
+}
+
+internal fun canonicalSharedRulesCatalogForChecksum(catalogText: String): String {
+    return catalogText.withoutSharedRulesChecksumHeaders()
+}
+
 internal fun parseSharedMetadataRulePacksCatalog(catalogText: String): List<SharedMetadataRulePack> {
     val packs = mutableListOf<SharedMetadataRulePack>()
     var title: String? = null
@@ -1462,6 +1571,26 @@ private fun String.toPackId(): String {
         .replace(Regex("[^a-z0-9]+"), "-")
         .trim('-')
         .ifBlank { "pack" }
+}
+
+private fun String.withoutSharedRulesChecksumHeaders(): String {
+    return lineSequence()
+        .filterNot { rawLine ->
+            val content = rawLine.trim()
+                .takeIf { it.startsWith("#") }
+                ?.removePrefix("#")
+                ?.trim()
+                .orEmpty()
+            val key = content.substringBefore(':', missingDelimiterValue = "").trim().lowercase(Locale.ROOT)
+            key == "sha256" || key == "checksum" || key == "checksum-sha256"
+        }
+        .joinToString("\n")
+        .trim()
+}
+
+private fun String.sha256Hex(): String {
+    val bytes = MessageDigest.getInstance("SHA-256").digest(toByteArray(Charsets.UTF_8))
+    return bytes.joinToString("") { "%02x".format(it.toInt() and 0xff) }
 }
 
 private fun String.sanitizeFileName(): String {

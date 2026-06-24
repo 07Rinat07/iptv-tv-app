@@ -5,6 +5,7 @@ import com.iptv.tv.core.model.ChannelHealth
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import java.security.MessageDigest
 
 class MetadataRuleBuilderTest {
     @Test
@@ -130,6 +131,78 @@ class MetadataRuleBuilderTest {
         assertNull(normalizeSharedRulesCatalogUrl("file:///tmp/rules.txt"))
     }
 
+    @Test
+    fun parseSharedMetadataRulesCatalogInfo_readsVersionedHeaders() {
+        val info = parseSharedMetadataRulesCatalogInfo(
+            """
+                # catalog: Community IPTV metadata
+                # version: 2026.06
+                # updated: 2026-06-20
+                # description: Base language and country hints
+                # pack: News
+                match=news; category=News
+            """.trimIndent()
+        )
+
+        assertEquals("Community IPTV metadata", info.title)
+        assertEquals("2026.06", info.version)
+        assertEquals("2026-06-20", info.updatedAt)
+        assertEquals("Base language and country hints", info.description)
+    }
+
+    @Test
+    fun buildSharedRulesCatalogLoadedMessage_includesVersionedInfoWhenAvailable() {
+        val message = buildSharedRulesCatalogLoadedMessage(
+            prefix = "Shared rules catalog загружен по URL",
+            packsCount = 3,
+            info = SharedMetadataRulesCatalogInfo(
+                title = "Community IPTV metadata",
+                version = "2026.06",
+                updatedAt = "2026-06-20"
+            )
+        )
+
+        assertEquals(
+            "Shared rules catalog загружен по URL: 3 (Community IPTV metadata, v2026.06, updated 2026-06-20)",
+            message
+        )
+    }
+
+    @Test
+    fun parseSharedMetadataRulesCatalogInfo_marksValidSha256Checksum() {
+        val catalogWithoutChecksum = """
+            # catalog: Community IPTV metadata
+            # version: 2026.06
+            # pack: News
+            match=news; category=News
+        """.trimIndent()
+        val checksum = catalogWithoutChecksum.sha256HexForTest()
+        val catalog = """
+            # sha256: $checksum
+            $catalogWithoutChecksum
+        """.trimIndent()
+
+        val info = parseSharedMetadataRulesCatalogInfo(catalog)
+
+        assertEquals(checksum, info.checksumSha256)
+        assertEquals(checksum, info.computedSha256)
+        assertEquals(SharedRulesCatalogChecksumStatus.VALID, info.checksumStatus)
+        assertEquals(catalogWithoutChecksum, canonicalSharedRulesCatalogForChecksum(catalog))
+    }
+
+    @Test
+    fun parseSharedMetadataRulesCatalogInfo_marksInvalidSha256Checksum() {
+        val catalog = """
+            # sha256: 0000000000000000000000000000000000000000000000000000000000000000
+            # pack: News
+            match=news; category=News
+        """.trimIndent()
+
+        val info = parseSharedMetadataRulesCatalogInfo(catalog)
+
+        assertEquals(SharedRulesCatalogChecksumStatus.INVALID, info.checksumStatus)
+    }
+
     private fun channel(
         id: Long,
         name: String,
@@ -149,5 +222,10 @@ class MetadataRuleBuilderTest {
             orderIndex = id.toInt(),
             isHidden = false
         )
+    }
+
+    private fun String.sha256HexForTest(): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 }

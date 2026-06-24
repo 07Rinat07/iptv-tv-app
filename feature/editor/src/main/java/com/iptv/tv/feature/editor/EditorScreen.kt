@@ -557,6 +557,20 @@ fun EditorScreen(
                             ) {
                                 Text("Загрузить shared catalog")
                             }
+                            state.externalMetadataRulesCatalogInfo?.let { info ->
+                                val details = listOfNotNull(
+                                    info.title?.takeIf { it.isNotBlank() },
+                                    info.version?.takeIf { it.isNotBlank() }?.let { "v$it" },
+                                    info.updatedAt?.takeIf { it.isNotBlank() }?.let { "updated $it" },
+                                    when (info.checksumStatus) {
+                                        SharedRulesCatalogChecksumStatus.VALID -> "sha256 ok"
+                                        SharedRulesCatalogChecksumStatus.INVALID -> "sha256 mismatch"
+                                        SharedRulesCatalogChecksumStatus.NOT_DECLARED -> null
+                                    },
+                                    info.description?.takeIf { it.isNotBlank() }
+                                ).joinToString(" · ")
+                                Text(details, style = MaterialTheme.typography.bodySmall)
+                            }
                             if (state.externalSharedMetadataRulePacks.isNotEmpty()) {
                                 Text("External shared packs", style = MaterialTheme.typography.titleSmall)
                                 FlowRow(
