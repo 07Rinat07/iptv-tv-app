@@ -17,8 +17,9 @@ import javax.inject.Singleton
 object EngineModule {
     fun provideEngineOkHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(12, TimeUnit.SECONDS)
+            .connectTimeout(2, TimeUnit.SECONDS)
+            .readTimeout(3, TimeUnit.SECONDS)
+            .callTimeout(5, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
     }

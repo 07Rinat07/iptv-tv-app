@@ -521,8 +521,9 @@ fun PlayerScreen(
                             selectedChannelName = selectedChannelName,
                             targetPaneIndex = selectedMultiviewTargetPane,
                             targetPaneIndices = configuredPaneIndices,
+                            primaryExpanded = state.internalPlayerExpanded,
                             scale = state.playerVideoScale,
-                            onPrimaryReady = viewModel::onInternalPlaybackReady,
+                            onPrimaryReady = { sessionId -> viewModel.onInternalPlaybackReady(sessionId) },
                             onPrimaryError = { message -> viewModel.onInternalPlaybackError(message, context) },
                             onPaneReady = viewModel::onAdditionalPlaybackReady,
                             onPaneError = viewModel::onAdditionalPlaybackError,
@@ -555,10 +556,10 @@ fun PlayerScreen(
                                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     Column(modifier = Modifier.weight(1.15f)) {
-                                        if (session != null) {
+                                        if (session != null && !state.internalPlayerExpanded) {
                                             InternalPlayerHost(
                                                 session = session,
-                                                onReady = viewModel::onInternalPlaybackReady,
+                                                onReady = { viewModel.onInternalPlaybackReady(session.sessionId) },
                                                 onError = { message -> viewModel.onInternalPlaybackError(message, context) },
                                                 scale = state.playerVideoScale,
                                                 expanded = false,
@@ -584,10 +585,10 @@ fun PlayerScreen(
                                     )
                                 }
                             } else {
-                                if (session != null) {
+                                if (session != null && !state.internalPlayerExpanded) {
                                     InternalPlayerHost(
                                         session = session,
-                                        onReady = viewModel::onInternalPlaybackReady,
+                                        onReady = { viewModel.onInternalPlaybackReady(session.sessionId) },
                                         onError = { message -> viewModel.onInternalPlaybackError(message, context) },
                                         scale = state.playerVideoScale,
                                         expanded = false,
@@ -799,7 +800,7 @@ fun PlayerScreen(
                 session = state.internalSession,
                 selectedChannelName = selectedChannelName,
                 scale = state.playerVideoScale,
-                onReady = viewModel::onInternalPlaybackReady,
+                onReady = { sessionId -> viewModel.onInternalPlaybackReady(sessionId) },
                 onError = { message -> viewModel.onInternalPlaybackError(message, context) },
                 onClose = { viewModel.setInternalPlayerExpanded(false) }
             )
@@ -817,8 +818,9 @@ private fun MultiviewPanel(
     selectedChannelName: String?,
     targetPaneIndex: Int,
     targetPaneIndices: List<Int>,
+    primaryExpanded: Boolean,
     scale: PlayerVideoScale,
-    onPrimaryReady: () -> Unit,
+    onPrimaryReady: (Long) -> Unit,
     onPrimaryError: (String) -> Unit,
     onPaneReady: (Int) -> Unit,
     onPaneError: (Int, String) -> Unit,
@@ -827,7 +829,7 @@ private fun MultiviewPanel(
     onStopPane: (Int) -> Unit
 ) {
     val paneSessions = buildList {
-        add(1 to primarySession)
+        add(1 to primarySession.takeUnless { primaryExpanded })
         when (multiviewMode) {
             MultiviewMode.OFF -> Unit
             MultiviewMode.TWO_UP -> add(2 to additionalSessions.getOrNull(0))
@@ -898,6 +900,7 @@ private fun MultiviewPanel(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 rowSessions.forEach { (paneIndex, session) ->
+                                    val realPrimarySession = primarySession.takeIf { paneIndex == 1 }
                                     MultiviewPane(
                                         title = "Окно $paneIndex",
                                         session = session,
@@ -907,7 +910,11 @@ private fun MultiviewPanel(
                                             session?.channelName
                                         },
                                         scale = scale,
-                                        onReady = if (paneIndex == 1) onPrimaryReady else ({ onPaneReady(paneIndex) }),
+                                        onReady = if (paneIndex == 1) {
+                                            { realPrimarySession?.sessionId?.let(onPrimaryReady) }
+                                        } else {
+                                            { onPaneReady(paneIndex) }
+                                        },
                                         onError = if (paneIndex == 1) onPrimaryError else { message -> onPaneError(paneIndex, message) },
                                         onToggleExpanded = if (paneIndex == 1) onTogglePrimaryExpanded else ({}),
                                         modifier = Modifier.weight(1f)
@@ -927,6 +934,7 @@ private fun MultiviewPanel(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         paneSessions.forEach { (paneIndex, session) ->
+                            val realPrimarySession = primarySession.takeIf { paneIndex == 1 }
                             MultiviewPane(
                                 title = "Окно $paneIndex",
                                 session = session,
@@ -936,7 +944,11 @@ private fun MultiviewPanel(
                                     session?.channelName
                                 },
                                 scale = scale,
-                                onReady = if (paneIndex == 1) onPrimaryReady else ({ onPaneReady(paneIndex) }),
+                                onReady = if (paneIndex == 1) {
+                                    { realPrimarySession?.sessionId?.let(onPrimaryReady) }
+                                } else {
+                                    { onPaneReady(paneIndex) }
+                                },
                                 onError = if (paneIndex == 1) onPrimaryError else { message -> onPaneError(paneIndex, message) },
                                 onToggleExpanded = if (paneIndex == 1) onTogglePrimaryExpanded else ({}),
                                 modifier = Modifier.weight(1f)
@@ -948,6 +960,7 @@ private fun MultiviewPanel(
                 else -> {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         paneSessions.forEach { (paneIndex, session) ->
+                            val realPrimarySession = primarySession.takeIf { paneIndex == 1 }
                             MultiviewPane(
                                 title = "Окно $paneIndex",
                                 session = session,
@@ -957,7 +970,11 @@ private fun MultiviewPanel(
                                     session?.channelName
                                 },
                                 scale = scale,
-                                onReady = if (paneIndex == 1) onPrimaryReady else ({ onPaneReady(paneIndex) }),
+                                onReady = if (paneIndex == 1) {
+                                    { realPrimarySession?.sessionId?.let(onPrimaryReady) }
+                                } else {
+                                    { onPaneReady(paneIndex) }
+                                },
                                 onError = if (paneIndex == 1) onPrimaryError else { message -> onPaneError(paneIndex, message) },
                                 onToggleExpanded = if (paneIndex == 1) onTogglePrimaryExpanded else ({}),
                                 modifier = Modifier.fillMaxWidth()
@@ -1021,7 +1038,7 @@ private fun FullscreenInternalPlayerOverlay(
     session: InternalPlaybackSession?,
     selectedChannelName: String?,
     scale: PlayerVideoScale,
-    onReady: () -> Unit,
+    onReady: (Long) -> Unit,
     onError: (String) -> Unit,
     onClose: () -> Unit
 ) {
@@ -1070,7 +1087,7 @@ private fun FullscreenInternalPlayerOverlay(
                     if (session != null) {
                         InternalPlayerHost(
                             session = session,
-                            onReady = onReady,
+                            onReady = { onReady(session.sessionId) },
                             onError = onError,
                             scale = scale,
                             expanded = true,
@@ -1397,6 +1414,7 @@ private fun InternalPlayerHost(
     val exoPlayer = playerBuildResult.getOrNull()
     val initError = playerBuildResult.exceptionOrNull()
     var currentTracks by remember(session.sessionId) { mutableStateOf(Tracks.EMPTY) }
+    var readyReported by remember(session.sessionId) { mutableStateOf(false) }
     val trackPreferenceStore = remember(context) { PlayerTrackPreferenceStore(context) }
     var savedTrackPreferences by remember { mutableStateOf(trackPreferenceStore.loadAll()) }
 
@@ -1415,7 +1433,8 @@ private fun InternalPlayerHost(
     DisposableEffect(session.sessionId) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY) {
+                if (playbackState == Player.STATE_READY && !readyReported) {
+                    readyReported = true
                     onReady()
                 }
             }
@@ -1459,6 +1478,12 @@ private fun InternalPlayerHost(
         }
 
         onDispose {
+            runCatching {
+                exoPlayer.playWhenReady = false
+                exoPlayer.stop()
+                exoPlayer.clearMediaItems()
+                exoPlayer.clearVideoSurface()
+            }
             exoPlayer.removeListener(listener)
             exoPlayer.release()
         }
@@ -1559,6 +1584,9 @@ private fun InternalPlayerHost(
                     PlayerVideoScale.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 }
                 view.player = exoPlayer
+            },
+            onRelease = { view ->
+                view.player = null
             }
         )
         OutlinedButton(

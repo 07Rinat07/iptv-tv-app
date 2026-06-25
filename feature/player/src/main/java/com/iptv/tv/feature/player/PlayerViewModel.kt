@@ -1056,13 +1056,25 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun onInternalPlaybackReady() {
+    fun onInternalPlaybackReady(sessionId: Long? = null) {
+        val state = _uiState.value
+        val currentSession = state.internalSession
+        if (sessionId != null && currentSession?.sessionId != sessionId) {
+            viewModelScope.launch {
+                diagnosticsRepository.addLog(
+                    status = "player_ready_ignored",
+                    message = "Ignored stale ready: sessionId=$sessionId, current=${currentSession?.sessionId ?: "-"}",
+                    playlistId = state.selectedPlaylistId
+                )
+            }
+            return
+        }
         val startupMs = (System.currentTimeMillis() - internalStartElapsedMs).coerceAtLeast(0L)
         viewModelScope.launch {
             diagnosticsRepository.addLog(
                 status = "player_ready",
-                message = "Internal ready, startupMs=$startupMs",
-                playlistId = _uiState.value.selectedPlaylistId
+                message = "Internal ready, startupMs=$startupMs, sessionId=${currentSession?.sessionId ?: "-"}",
+                playlistId = state.selectedPlaylistId
             )
         }
         _uiState.update { it.copy(isStartingPlayback = false, lastError = null) }

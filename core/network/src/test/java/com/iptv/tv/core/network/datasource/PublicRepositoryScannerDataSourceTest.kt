@@ -2,6 +2,7 @@ package com.iptv.tv.core.network.datasource
 
 import com.iptv.tv.core.model.ScannerSearchRequest
 import com.iptv.tv.core.model.ScannerProviderScope
+import com.iptv.tv.core.model.ScannerSearchMode
 import com.iptv.tv.core.network.api.BitbucketApi
 import com.iptv.tv.core.network.api.GitHubApi
 import com.iptv.tv.core.network.api.GitLabApi
@@ -311,7 +312,76 @@ class PublicRepositoryScannerDataSourceTest {
     }
 
     @Test
-    fun allScopeWithoutBitbucketRepoFilterStillThrowsWhenGitHubAndGitLabFail() = runTest {
+    fun allScopeAutoReturnsKnownSeedsWhenGitHubAndGitLabFail() = runTest {
+        val gitHubApi = object : GitHubApi {
+            override suspend fun searchCode(query: String, perPage: Int, page: Int): Response<GitHubSearchResponse> =
+                Response.error(500, "{}".toResponseBody("application/json".toMediaType()))
+
+            override suspend fun searchRepositories(
+                query: String,
+                sort: String,
+                order: String,
+                perPage: Int,
+                page: Int
+            ): Response<GitHubRepositorySearchResponse> =
+                Response.error(500, "{}".toResponseBody("application/json".toMediaType()))
+
+            override suspend fun getRepositoryTree(
+                owner: String,
+                repo: String,
+                treeRef: String,
+                recursive: Int
+            ): Response<GitHubTreeResponse> =
+                Response.error(500, "{}".toResponseBody("application/json".toMediaType()))
+        }
+
+        val gitLabApi = object : GitLabApi {
+            override suspend fun searchBlobs(
+                scope: String,
+                search: String,
+                perPage: Int,
+                page: Int
+            ): Response<List<GitLabBlob>> =
+                Response.error(500, "{}".toResponseBody("application/json".toMediaType()))
+
+            override suspend fun searchProjects(
+                search: String,
+                simple: Boolean,
+                perPage: Int,
+                page: Int
+            ): Response<List<GitLabProject>> =
+                Response.error(500, "{}".toResponseBody("application/json".toMediaType()))
+
+            override suspend fun getRepositoryTree(
+                projectId: Long,
+                recursive: Boolean,
+                perPage: Int,
+                page: Int
+            ): Response<List<GitLabTreeItem>> =
+                Response.error(500, "{}".toResponseBody("application/json".toMediaType()))
+        }
+
+        val source = PublicRepositoryScannerDataSource(
+            gitHubApi = gitHubApi,
+            gitLabApi = gitLabApi,
+            bitbucketApi = FakeBitbucketApi()
+        )
+
+        val result = source.search(
+            ScannerSearchRequest(
+                query = "iptv",
+                providerScope = ScannerProviderScope.ALL,
+                repoFilter = null,
+                limit = 10
+            )
+        )
+
+        assertTrue(result.isNotEmpty())
+        assertTrue(result.any { it.downloadUrl.endsWith(".m3u", ignoreCase = true) || it.downloadUrl.endsWith(".m3u8", ignoreCase = true) })
+    }
+
+    @Test
+    fun allScopeDirectApiStillThrowsWhenGitHubAndGitLabFail() = runTest {
         val gitHubApi = object : GitHubApi {
             override suspend fun searchCode(query: String, perPage: Int, page: Int): Response<GitHubSearchResponse> =
                 Response.error(500, "{}".toResponseBody("application/json".toMediaType()))
@@ -371,6 +441,7 @@ class PublicRepositoryScannerDataSourceTest {
                 ScannerSearchRequest(
                     query = "iptv",
                     providerScope = ScannerProviderScope.ALL,
+                    searchMode = ScannerSearchMode.DIRECT_API,
                     repoFilter = null,
                     limit = 10
                 )

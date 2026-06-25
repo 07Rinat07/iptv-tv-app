@@ -1447,7 +1447,7 @@ class ScannerViewModel @Inject constructor(
                 stepLabel = stepLabel,
                 request = request,
                 networkStepTimeoutMs = networkStepTimeoutMs,
-                respectCooldown = false
+                respectCooldown = true
             )
         }
     }
@@ -2784,10 +2784,10 @@ class ScannerViewModel @Inject constructor(
         const val SEARCH_MAX_RUNTIME_MS = 5 * 60 * 1000L
         const val SEARCH_WATCHDOG_MS = 8_000L
         const val STEP_PULSE_MS = 3_000L
-        const val NETWORK_STEP_TIMEOUT_MS = 25_000L
-        const val NETWORK_STEP_TIMEOUT_DEGRADED_MS = 12_000L
-        const val STEP_HARD_TIMEOUT_MS = 30_000L
-        const val STEP_HARD_TIMEOUT_DEGRADED_MS = 16_000L
+        const val NETWORK_STEP_TIMEOUT_MS = 12_000L
+        const val NETWORK_STEP_TIMEOUT_DEGRADED_MS = 8_000L
+        const val STEP_HARD_TIMEOUT_MS = 16_000L
+        const val STEP_HARD_TIMEOUT_DEGRADED_MS = 10_000L
         const val FAIL_FAST_MAX_STEP = 2
         const val MAX_PLAN_STEPS = 6
         const val MAX_PLAN_STEPS_AI = 14

@@ -118,8 +118,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
 
         val shouldUseSeeds =
             normalized.providerScope == ScannerProviderScope.ALL &&
-                normalized.searchMode != ScannerSearchMode.DIRECT_API &&
-                (filtered.isNotEmpty() || webFallback.items.isNotEmpty())
+                normalized.searchMode != ScannerSearchMode.DIRECT_API
         val seedCandidates = if (shouldUseSeeds && (filtered.size + webFallback.items.size) < normalized.limit) {
             buildKnownSeedCandidates(
                 request = normalized,
@@ -517,7 +516,12 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         val collected = linkedMapOf<String, PlaylistCandidate>()
         val errors = mutableListOf<String>()
         var probes = 0
-        val engines = listOf(SearchEngine.DUCKDUCKGO, SearchEngine.BING)
+        val engines = listOf(
+            SearchEngine.DUCKDUCKGO,
+            SearchEngine.BING,
+            SearchEngine.GOOGLE,
+            SearchEngine.YANDEX
+        )
 
         for (query in queries) {
             for (engine in engines) {
@@ -662,6 +666,10 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                 "https://duckduckgo.com/html/?q=${urlEncode(query)}&kl=wt-wt"
             SearchEngine.BING ->
                 "https://www.bing.com/search?q=${urlEncode(query)}&count=30&setlang=en-US"
+            SearchEngine.GOOGLE ->
+                "https://www.google.com/search?q=${urlEncode(query)}&num=30&hl=en"
+            SearchEngine.YANDEX ->
+                "https://yandex.com/search/?text=${urlEncode(query)}&numdoc=30"
         }
 
         val html = executeRawWithRetry(
@@ -691,6 +699,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                     .get()
                     .header("Accept", "text/html,application/xhtml+xml")
                     .header("Accept-Language", "en-US,en;q=0.7,ru;q=0.5")
+                    .header("User-Agent", "Mozilla/5.0 (Android TV; myscanerIPTV) AppleWebKit/537.36 Chrome/120 Safari/537.36")
                     .build()
 
                 val response = withTimeout(NETWORK_CALL_TIMEOUT_MS) {
@@ -779,6 +788,8 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             rawLink.startsWith("/") -> when (engine) {
                 SearchEngine.DUCKDUCKGO -> "https://duckduckgo.com$rawLink"
                 SearchEngine.BING -> "https://www.bing.com$rawLink"
+                SearchEngine.GOOGLE -> "https://www.google.com$rawLink"
+                SearchEngine.YANDEX -> "https://yandex.com$rawLink"
             }
             else -> return null
         }
@@ -798,6 +809,24 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                     return urlDecode(value)
                 }
             }
+            return null
+        }
+
+        if (host.contains("google.")) {
+            parsed.queryParameter("url")?.let { return urlDecode(it) }
+            parsed.queryParameter("q")?.let { value ->
+                if (value.startsWith("http://", ignoreCase = true) || value.startsWith("https://", ignoreCase = true)) {
+                    return urlDecode(value)
+                }
+            }
+            return null
+        }
+
+        if (host.contains("yandex.")) {
+            parsed.queryParameter("url")?.let { return urlDecode(it) }
+            parsed.queryParameter("to")?.let { return urlDecode(it) }
+            parsed.queryParameter("u")?.let { return urlDecode(it) }
+            return null
         }
 
         return absolute
@@ -1378,7 +1407,9 @@ class PublicRepositoryScannerDataSource @Inject constructor(
 
     private enum class SearchEngine(val id: String, val label: String) {
         DUCKDUCKGO(id = "ddg", label = "DuckDuckGo"),
-        BING(id = "bing", label = "Bing")
+        BING(id = "bing", label = "Bing"),
+        GOOGLE(id = "google", label = "Google"),
+        YANDEX(id = "yandex", label = "Yandex")
     }
 
     private data class KnownPlaylistSeed(
