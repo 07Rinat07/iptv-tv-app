@@ -548,6 +548,24 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                         collected[candidate.id] = candidate
                     }
                 }
+
+                if (request.providerScope == ScannerProviderScope.ALL && collected.size < request.limit && probes < MAX_WEB_PROBES) {
+                    val pageCandidates = crawlSearchResultPages(
+                        links = links,
+                        request = request,
+                        existingIds = collected.keys
+                    )
+                    for (candidate in pageCandidates) {
+                        if (collected.size >= request.limit) break
+                        if (probes >= MAX_WEB_PROBES) break
+                        if (collected.containsKey(candidate.id)) continue
+
+                        probes += 1
+                        if (isLikelyPlaylistUrl(candidate.downloadUrl)) {
+                            collected[candidate.id] = candidate
+                        }
+                    }
+                }
             }
             if (collected.size >= request.limit || probes >= MAX_WEB_PROBES) {
                 break
@@ -678,6 +696,99 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         ) ?: return emptyList()
 
         return extractLinksFromHtml(engine, html)
+    }
+
+    private suspend fun crawlSearchResultPages(
+        links: List<String>,
+        request: ScannerSearchRequest,
+        existingIds: Set<String>
+    ): List<PlaylistCandidate> {
+        val candidates = linkedMapOf<String, PlaylistCandidate>()
+        val pages = links
+            .asSequence()
+            .filter { shouldCrawlWebPage(it) }
+            .distinct()
+            .take(MAX_WEB_PAGE_CRAWLS)
+            .toList()
+
+        for (pageUrl in pages) {
+            if (candidates.size >= request.limit) break
+            val html = fetchWebPageHtml(pageUrl) ?: continue
+            val pageLinks = extractLinksFromPageHtml(pageUrl, html)
+            for (link in pageLinks.take(MAX_WEB_PAGE_LINKS)) {
+                if (candidates.size >= request.limit) break
+                val candidate = candidateFromDiscoveredLink(link, request.providerScope) ?: continue
+                if (candidate.id in existingIds || candidate.id in candidates) continue
+                candidates[candidate.id] = candidate
+            }
+        }
+
+        return candidates.values.toList()
+    }
+
+    private fun shouldCrawlWebPage(url: String): Boolean {
+        val parsed = url.toHttpUrlOrNull() ?: return false
+        val host = parsed.host.lowercase()
+        val path = parsed.encodedPath.lowercase()
+        if (isPlaylistPath(path) || canProbeExtensionlessPlaylist(host = host, path = path)) return false
+        if (host.contains("google.") || host.contains("yandex.") || host.contains("bing.com") || host.contains("duckduckgo.com")) {
+            return false
+        }
+        return parsed.scheme == "http" || parsed.scheme == "https"
+    }
+
+    private suspend fun fetchWebPageHtml(url: String): String? {
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("Accept", "text/html,application/xhtml+xml,text/plain")
+            .header("Accept-Language", "en-US,en;q=0.7,ru;q=0.5")
+            .header("User-Agent", "Mozilla/5.0 (Android TV; myscanerIPTV) AppleWebKit/537.36 Chrome/120 Safari/537.36")
+            .build()
+
+        return runCatching {
+            withTimeout(WEB_PAGE_FETCH_TIMEOUT_MS) {
+                okHttpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@withTimeout null
+                    val contentType = response.header("Content-Type").orEmpty().lowercase()
+                    if (
+                        contentType.isNotBlank() &&
+                        !contentType.contains("html") &&
+                        !contentType.contains("text")
+                    ) {
+                        return@withTimeout null
+                    }
+                    val reader = response.body?.charStream() ?: return@withTimeout null
+                    val buffer = CharArray(4096)
+                    val result = StringBuilder()
+                    while (result.length < WEB_PAGE_HTML_MAX_CHARS) {
+                        val remaining = WEB_PAGE_HTML_MAX_CHARS - result.length
+                        val read = reader.read(buffer, 0, min(buffer.size, remaining))
+                        if (read <= 0) break
+                        result.append(buffer, 0, read)
+                    }
+                    result.toString().takeIf { it.isNotBlank() }
+                }
+            }
+        }.getOrNull()
+    }
+
+    private fun extractLinksFromPageHtml(pageUrl: String, html: String): List<String> {
+        val base = pageUrl.toHttpUrlOrNull() ?: return emptyList()
+        val links = mutableListOf<String>()
+        HTML_LINK_REGEX.findAll(html).forEach { match ->
+            val rawLink = decodeHtmlEntities(match.groupValues[1]).trim()
+            if (rawLink.startsWith("javascript:", ignoreCase = true)) return@forEach
+            if (rawLink.startsWith("mailto:", ignoreCase = true)) return@forEach
+            val resolved = base.resolve(rawLink)?.toString() ?: return@forEach
+            links += resolved
+        }
+        URL_TEXT_REGEX.findAll(html).forEach { match ->
+            links += decodeHtmlEntities(match.value).trim()
+        }
+        return links
+            .filter { it.startsWith("http://") || it.startsWith("https://") }
+            .distinct()
     }
 
     private suspend fun executeRawWithRetry(
@@ -1482,9 +1593,14 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         const val MAX_WEB_SEARCH_QUERIES = 20
         const val MAX_WEB_LINKS_PER_QUERY = 36
         const val MAX_WEB_PROBES = 48
+        const val MAX_WEB_PAGE_CRAWLS = 12
+        const val MAX_WEB_PAGE_LINKS = 80
+        const val WEB_PAGE_FETCH_TIMEOUT_MS = 5_000L
+        const val WEB_PAGE_HTML_MAX_CHARS = 256 * 1024
         const val WEB_PROBE_TIMEOUT_MS = 4_000L
 
         val HTML_LINK_REGEX = Regex("href=[\"']([^\"'#<>]+)[\"']", RegexOption.IGNORE_CASE)
+        val URL_TEXT_REGEX = Regex("https?://[^\\s\"'<>]+", RegexOption.IGNORE_CASE)
         val PLAYLIST_EXTENSIONS = listOf("m3u", "m3u8")
         val PLAYLIST_CONTENT_TYPES = setOf(
             "application/vnd.apple.mpegurl",

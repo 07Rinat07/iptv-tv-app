@@ -69,7 +69,7 @@ fun ScannerScreen(
                     Text("1) Выберите пресет (например: Русские каналы)")
                     Text("2) Проверьте запрос и источник поиска")
                     Text("3) Нажмите \"Найти и сохранить найденное\"")
-                    Text("4) Поиск идет до 5 минут, затем найденное сохранится автоматически")
+                    Text("4) Поиск идет до ${state.progressTimeLimitSeconds / 60} минут, затем найденное сохранится автоматически")
                     Text("5) Откройте \"Мои плейлисты\"")
                 }
             }
@@ -148,7 +148,7 @@ fun ScannerScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(onClick = viewModel::scanAndSaveFound, enabled = !state.isLoading) {
-                    Text(if (state.isLoading) "Сканирование..." else "Найти и сохранить найденное (до 5 мин)")
+                    Text(if (state.isLoading) "Сканирование..." else "Найти и сохранить найденное (до ${state.progressTimeLimitSeconds / 60} мин)")
                 }
                 OutlinedButton(onClick = viewModel::scanOnlyTop10, enabled = !state.isLoading) {
                     Text("Только найти")

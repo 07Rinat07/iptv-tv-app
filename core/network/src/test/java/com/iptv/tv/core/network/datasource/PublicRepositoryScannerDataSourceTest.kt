@@ -21,7 +21,10 @@ import com.iptv.tv.core.network.dto.GitLabBlob
 import com.iptv.tv.core.network.dto.GitLabProject
 import com.iptv.tv.core.network.dto.GitLabTreeItem
 import kotlinx.coroutines.test.runTest
+import okhttp3.OkHttpClient
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Protocol
+import okhttp3.Response as OkHttpResponse
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -302,6 +305,7 @@ class PublicRepositoryScannerDataSourceTest {
                 ScannerSearchRequest(
                     query = "iptv",
                     providerScope = ScannerProviderScope.GITHUB,
+                    searchMode = ScannerSearchMode.DIRECT_API,
                     limit = 10
                 )
             )
@@ -364,7 +368,8 @@ class PublicRepositoryScannerDataSourceTest {
         val source = PublicRepositoryScannerDataSource(
             gitHubApi = gitHubApi,
             gitLabApi = gitLabApi,
-            bitbucketApi = FakeBitbucketApi()
+            bitbucketApi = FakeBitbucketApi(),
+            okHttpClient = failingWebClient()
         )
 
         val result = source.search(
@@ -378,6 +383,33 @@ class PublicRepositoryScannerDataSourceTest {
 
         assertTrue(result.isNotEmpty())
         assertTrue(result.any { it.downloadUrl.endsWith(".m3u", ignoreCase = true) || it.downloadUrl.endsWith(".m3u8", ignoreCase = true) })
+    }
+
+    private fun failingWebClient(): OkHttpClient {
+        return OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val url = chain.request().url
+                val isPlaylistProbe =
+                    url.encodedPath.endsWith(".m3u", ignoreCase = true) ||
+                        url.encodedPath.endsWith(".m3u8", ignoreCase = true) ||
+                        url.host == "raw.githubusercontent.com"
+                val code = if (isPlaylistProbe) 200 else 503
+                val message = if (isPlaylistProbe) "OK" else "Unavailable"
+                val body = if (isPlaylistProbe) {
+                    "#EXTM3U\n#EXTINF:-1,Seed\nhttps://stream.example.org/seed.m3u8\n"
+                } else {
+                    ""
+                }
+                val contentType = if (isPlaylistProbe) "audio/x-mpegurl" else "text/plain"
+                OkHttpResponse.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message(message)
+                    .body(body.toResponseBody(contentType.toMediaType()))
+                    .build()
+            }
+            .build()
     }
 
     @Test
@@ -640,6 +672,57 @@ class PublicRepositoryScannerDataSourceTest {
         assertTrue(gitLabApi.blobSearchQueries.any { it.endsWith("m3u8") })
         assertTrue(result.any { it.path.endsWith(".m3u", ignoreCase = true) })
         assertTrue(result.any { it.path.endsWith(".m3u8", ignoreCase = true) })
+    }
+
+    @Test
+    fun searchEngineFallbackCrawlsResultPageForPlaylistLinks() = runTest {
+        val client = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val request = chain.request()
+                val url = request.url
+                val body = when {
+                    url.host.contains("duckduckgo") ||
+                        url.host.contains("bing") ||
+                        url.host.contains("google") ||
+                        url.host.contains("yandex") ->
+                        """<html><body><a href="https://example.org/forum/post">Forum result</a></body></html>"""
+                    url.host == "example.org" && url.encodedPath == "/forum/post" ->
+                        """<html><body><a href="/lists/stage-crawl.m3u">Working IPTV list</a></body></html>"""
+                    url.host == "example.org" && url.encodedPath == "/lists/stage-crawl.m3u" ->
+                        "#EXTM3U\n#EXTINF:-1,Stage\nhttps://stream.example.org/live.m3u8\n"
+                    else -> ""
+                }
+                val contentType = if (url.encodedPath.endsWith(".m3u")) {
+                    "audio/x-mpegurl"
+                } else {
+                    "text/html"
+                }
+                OkHttpResponse.Builder()
+                    .request(request)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(body.toResponseBody(contentType.toMediaType()))
+                    .build()
+            }
+            .build()
+        val source = PublicRepositoryScannerDataSource(
+            gitHubApi = FakeGitHubApi(),
+            gitLabApi = FakeGitLabApi(),
+            bitbucketApi = FakeBitbucketApi(),
+            okHttpClient = client
+        )
+
+        val result = source.search(
+            ScannerSearchRequest(
+                query = "stagecrawl iptv",
+                providerScope = ScannerProviderScope.ALL,
+                searchMode = ScannerSearchMode.SEARCH_ENGINE,
+                limit = 10
+            )
+        )
+
+        assertTrue(result.any { it.downloadUrl == "https://example.org/lists/stage-crawl.m3u" })
     }
 
     private class FakeGitHubApi(

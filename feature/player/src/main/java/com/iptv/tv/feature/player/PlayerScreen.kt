@@ -1,5 +1,6 @@
 package com.iptv.tv.feature.player
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -80,8 +81,6 @@ import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -218,12 +217,22 @@ fun PlayerScreen(
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        if (state.internalPlayerExpanded) {
+            FullscreenInternalPlayerOverlay(
+                session = state.internalSession,
+                selectedChannelName = selectedChannelName,
+                scale = state.playerVideoScale,
+                onReady = { sessionId -> viewModel.onInternalPlaybackReady(sessionId) },
+                onError = { message -> viewModel.onInternalPlaybackError(message, context) },
+                onClose = { viewModel.setInternalPlayerExpanded(false) }
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
             item {
                 Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
                 Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
@@ -793,19 +802,9 @@ fun PlayerScreen(
                 }
             }
         }
-    }
-
-        if (state.internalPlayerExpanded) {
-            FullscreenInternalPlayerOverlay(
-                session = state.internalSession,
-                selectedChannelName = selectedChannelName,
-                scale = state.playerVideoScale,
-                onReady = { sessionId -> viewModel.onInternalPlaybackReady(sessionId) },
-                onError = { message -> viewModel.onInternalPlaybackError(message, context) },
-                onClose = { viewModel.setInternalPlayerExpanded(false) }
-            )
         }
     }
+}
 }
 
 @Composable
@@ -1042,68 +1041,60 @@ private fun FullscreenInternalPlayerOverlay(
     onError: (String) -> Unit,
     onClose: () -> Unit
 ) {
-    Dialog(
-        onDismissRequest = onClose,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false
-        )
+    BackHandler(onBack = onClose)
+    Card(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(8.dp)
+            .tvFocusOutline()
     ) {
-        Card(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(8.dp)
-                .tvFocusOutline()
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Column(
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (selectedChannelName != null) {
+                        "Fullscreen: $selectedChannelName"
+                    } else {
+                        "Fullscreen: встроенный плеер"
+                    },
+                    style = MaterialTheme.typography.titleSmall
+                )
+                OutlinedButton(onClick = onClose) {
+                    Text("Закрыть fullscreen")
+                }
+            }
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .weight(1f)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        if (selectedChannelName != null) {
-                            "Fullscreen: $selectedChannelName"
-                        } else {
-                            "Fullscreen: встроенный плеер"
-                        },
-                        style = MaterialTheme.typography.titleSmall
+                if (session != null) {
+                    InternalPlayerHost(
+                        session = session,
+                        onReady = { onReady(session.sessionId) },
+                        onError = onError,
+                        scale = scale,
+                        expanded = true,
+                        onToggleExpanded = onClose,
+                        forceFullWidth = true,
+                        fullscreenMode = true
                     )
-                    OutlinedButton(onClick = onClose) {
-                        Text("Закрыть fullscreen")
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .weight(1f)
-                ) {
-                    if (session != null) {
-                        InternalPlayerHost(
-                            session = session,
-                            onReady = { onReady(session.sessionId) },
-                            onError = onError,
-                            scale = scale,
-                            expanded = true,
-                            onToggleExpanded = onClose,
-                            forceFullWidth = true,
-                            fullscreenMode = true
-                        )
-                    } else {
-                        InternalPlayerPlaceholder(
-                            expanded = true,
-                            onToggleExpanded = onClose,
-                            forceFullWidth = true,
-                            selectedChannelName = selectedChannelName,
-                            fullscreenMode = true
-                        )
-                    }
+                } else {
+                    InternalPlayerPlaceholder(
+                        expanded = true,
+                        onToggleExpanded = onClose,
+                        forceFullWidth = true,
+                        selectedChannelName = selectedChannelName,
+                        fullscreenMode = true
+                    )
                 }
             }
         }

@@ -107,7 +107,7 @@ data class ScannerUiState(
     val progressStageLabel: String = "",
     val progressStageLocation: String = "",
     val progressElapsedSeconds: Long = 0,
-    val progressTimeLimitSeconds: Long = 300,
+    val progressTimeLimitSeconds: Long = 480,
     val exportedLinksPath: String? = null,
     val providerHealth: List<ScannerProviderHealthUi> = defaultProviderHealthUi()
 )
@@ -676,7 +676,7 @@ class ScannerViewModel @Inject constructor(
                             progressStageLocation = "Подготовка сохранения 0/${foundAll.size}",
                             statusType = ScannerStatusType.LOADING,
                             statusTitle = if (timedOut) {
-                                "Лимит 5 минут достигнут, сохраняем найденное"
+                                "Лимит $SEARCH_MAX_RUNTIME_MINUTES минут достигнут, сохраняем найденное"
                             } else if (stoppedManually) {
                                 "Остановка принята, сохраняем найденное"
                             } else {
@@ -769,7 +769,7 @@ class ScannerViewModel @Inject constructor(
                     else -> ScannerStatusType.INFO
                 }
                 val statusTitle = when {
-                    timedOut -> "Достигнут лимит времени поиска (5 минут)"
+                    timedOut -> "Достигнут лимит времени поиска ($SEARCH_MAX_RUNTIME_MINUTES минут)"
                     stoppedManually -> "Поиск остановлен пользователем"
                     importFailedCompletely -> "Поиск завершен, но сохранить не удалось"
                     foundAll.isNotEmpty() -> "Поиск завершен"
@@ -779,9 +779,9 @@ class ScannerViewModel @Inject constructor(
                 val statusDetails = when {
                     timedOut && foundAll.isNotEmpty() -> {
                         val summary = buildResultSummary(foundAll, importSummary)
-                        "$summary | поиск остановлен по лимиту 5 минут"
+                        "$summary | поиск остановлен по лимиту $SEARCH_MAX_RUNTIME_MINUTES минут"
                     }
-                    timedOut -> "За 5 минут совпадения не найдены. Уточните запрос или смените источник."
+                    timedOut -> "За $SEARCH_MAX_RUNTIME_MINUTES минут совпадения не найдены. Уточните запрос или смените источник."
                     stoppedManually && foundAll.isNotEmpty() -> {
                         val summary = buildResultSummary(foundAll, importSummary)
                         "$summary | остановлено вручную"
@@ -2074,7 +2074,7 @@ class ScannerViewModel @Inject constructor(
 
     private suspend fun runNetworkPreflight(mode: ScannerSearchMode): NetworkPreflight {
         val apiTargets = listOf("api.github.com", "gitlab.com")
-        val webTargets = listOf("duckduckgo.com", "www.bing.com")
+        val webTargets = WEB_SEARCH_PROBE_HOSTS
 
         val apiDetails = if (mode == ScannerSearchMode.SEARCH_ENGINE) {
             emptyList()
@@ -2225,7 +2225,7 @@ class ScannerViewModel @Inject constructor(
         return when (mode) {
             ScannerSearchMode.AUTO -> "Auto: сначала API, при пустом результате fallback через поисковики."
             ScannerSearchMode.DIRECT_API -> "Direct API: только прямой доступ к GitHub/GitLab/Bitbucket API."
-            ScannerSearchMode.SEARCH_ENGINE -> "Search Engine: поиск через DuckDuckGo/Bing с извлечением ссылок."
+            ScannerSearchMode.SEARCH_ENGINE -> "Search Engine: поиск через DuckDuckGo/Bing/Google/Yandex с извлечением ссылок."
         }
     }
 
@@ -2316,20 +2316,20 @@ class ScannerViewModel @Inject constructor(
     ): String {
         val hosts = when (provider) {
             ScannerProviderScope.GITHUB -> {
-                if (mode == ScannerSearchMode.SEARCH_ENGINE) listOf("duckduckgo.com", "www.bing.com")
+                if (mode == ScannerSearchMode.SEARCH_ENGINE) WEB_SEARCH_PROBE_HOSTS
                 else listOf("api.github.com")
             }
             ScannerProviderScope.GITLAB -> {
-                if (mode == ScannerSearchMode.SEARCH_ENGINE) listOf("duckduckgo.com", "www.bing.com")
+                if (mode == ScannerSearchMode.SEARCH_ENGINE) WEB_SEARCH_PROBE_HOSTS
                 else listOf("gitlab.com")
             }
             ScannerProviderScope.BITBUCKET -> {
-                if (mode == ScannerSearchMode.SEARCH_ENGINE) listOf("duckduckgo.com", "www.bing.com")
+                if (mode == ScannerSearchMode.SEARCH_ENGINE) WEB_SEARCH_PROBE_HOSTS
                 else listOf("api.bitbucket.org")
             }
             ScannerProviderScope.ALL -> {
                 if (mode == ScannerSearchMode.SEARCH_ENGINE) {
-                    listOf("duckduckgo.com", "www.bing.com")
+                    WEB_SEARCH_PROBE_HOSTS
                 } else {
                     listOf("api.github.com", "gitlab.com", "api.bitbucket.org")
                 }
@@ -2339,11 +2339,11 @@ class ScannerViewModel @Inject constructor(
     }
 
     private suspend fun probeHosts(hosts: List<String>): List<String> {
-        val results = mutableListOf<String>()
-        hosts.forEach { host ->
-            results += probeHost(host)
+        return coroutineScope {
+            hosts.distinct().map { host ->
+                async { probeHost(host) }
+            }.awaitAll()
         }
-        return results
     }
 
     private suspend fun probeHost(host: String): String {
@@ -2781,7 +2781,8 @@ class ScannerViewModel @Inject constructor(
     private companion object {
         const val SEARCH_DISPLAY_LIMIT = 120
         const val SEARCH_SAVE_FETCH_TARGET = Int.MAX_VALUE
-        const val SEARCH_MAX_RUNTIME_MS = 5 * 60 * 1000L
+        const val SEARCH_MAX_RUNTIME_MINUTES = 8
+        const val SEARCH_MAX_RUNTIME_MS = SEARCH_MAX_RUNTIME_MINUTES * 60 * 1000L
         const val SEARCH_WATCHDOG_MS = 8_000L
         const val STEP_PULSE_MS = 3_000L
         const val NETWORK_STEP_TIMEOUT_MS = 12_000L
@@ -2798,6 +2799,7 @@ class ScannerViewModel @Inject constructor(
         const val MAX_LOG_MESSAGE = 1200
         const val NETWORK_PROBE_TIMEOUT_MS = 1_500L
         const val NETWORK_PROBE_CACHE_MS = 30_000L
+        val WEB_SEARCH_PROBE_HOSTS = listOf("duckduckgo.com", "www.bing.com", "www.google.com", "yandex.ru")
         const val PROVIDER_TIMEOUT_STREAK_TO_BACKOFF = 2
         const val PROVIDER_TIMEOUT_BACKOFF_MS = 25_000L
         const val PROVIDER_TIMEOUT_BACKOFF_MAX_MS = 90_000L
