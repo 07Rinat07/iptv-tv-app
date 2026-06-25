@@ -164,6 +164,12 @@ fun ScannerScreen(
                 ) {
                     Text("Экспорт найденных ссылок (.txt)")
                 }
+                OutlinedButton(
+                    onClick = viewModel::exportFoundLinksToM3u8,
+                    enabled = !state.isLoading && (state.progressFoundItems > 0 || state.results.isNotEmpty())
+                ) {
+                    Text("Экспорт найденных ссылок (.m3u8)")
+                }
             }
             Text(
                 "Подсказка: при остановке сканера найденное сохраняется. Во время сохранения будет показан прогресс и текущий источник.",
@@ -305,6 +311,12 @@ fun ScannerScreen(
             state.exportedLinksPath?.let { path ->
                 Text(
                     text = "TXT сохранен: $path",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            state.exportedM3u8Path?.let { path ->
+                Text(
+                    text = "M3U8 сохранен: $path",
                     style = MaterialTheme.typography.bodySmall
                 )
             }

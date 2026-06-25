@@ -53,6 +53,10 @@ internal class LocalAiQueryAssistant {
         variants += "$normalized iptv channels m3u"
         variants += "$normalized tv channel list m3u8"
         variants += "$normalized live tv channels m3u8"
+        variants += "$normalized raw.githubusercontent.com m3u"
+        variants += "$normalized github m3u8"
+        variants += "$normalized iptv-org m3u"
+        variants += "$normalized github.io m3u8"
 
         detectIntents(lowered).forEach { intent ->
             intentTemplates[intent].orEmpty().forEach { template ->
@@ -83,6 +87,10 @@ internal class LocalAiQueryAssistant {
         variants += "site:bitbucket.org iptv m3u playlist"
         variants += "site:raw.githubusercontent.com iptv m3u"
         variants += "site:raw.githubusercontent.com iptv m3u8"
+        variants += "site:gist.githubusercontent.com iptv m3u"
+        variants += "site:github.io iptv m3u8"
+        variants += "iptv-org github m3u"
+        variants += "iptv-org categories m3u"
         variants += "site:gitlab.com raw iptv m3u"
         variants += "iptv channel list m3u"
         variants += "список каналов iptv m3u"
@@ -93,6 +101,8 @@ internal class LocalAiQueryAssistant {
             variants += "voxlist playlist m3u8"
             variants += "site:github.com voxlist m3u"
             variants += "site:gitlab.com voxlist m3u"
+            variants += "raw.githubusercontent.com Voxlist voxlist m3u"
+            variants += "github Voxlist voxlist.m3u"
         }
 
         return variants
@@ -310,8 +320,8 @@ internal class LocalAiQueryAssistant {
     }
 
     private companion object {
-        const val MAX_VARIANTS = 18
-        const val MAX_KEYWORDS = 20
+        const val MAX_VARIANTS = 28
+        const val MAX_KEYWORDS = 28
         const val MAX_LEARNED_VARIANTS = 4
         const val MIN_PRESET_FALLBACK_HITS = 3
         const val DAY_MS = 86_400_000L
@@ -365,7 +375,9 @@ internal class LocalAiQueryAssistant {
                 "russian tv channels iptv m3u8",
                 "russia iptv playlist m3u",
                 "русские каналы iptv m3u",
-                "список каналов iptv россия m3u8"
+                "список каналов iptv россия m3u8",
+                "ru iptv m3u github",
+                "russia channels playlist raw m3u"
             ),
             Intent.TURKEY to listOf(
                 "turkey turkiye iptv playlist m3u8",
@@ -377,18 +389,24 @@ internal class LocalAiQueryAssistant {
                 "world tv channels iptv m3u8",
                 "global international iptv playlist",
                 "countries channels m3u iptv",
-                "world iptv channel list m3u"
+                "world iptv channel list m3u",
+                "iptv-org countries m3u",
+                "all countries iptv playlist m3u8"
             ),
             Intent.SPORT to listOf(
                 "sport live channels iptv m3u8",
                 "football hockey sports playlist m3u",
-                "sports tv channel list iptv m3u8"
+                "sports tv channel list iptv m3u8",
+                "iptv-org sports m3u",
+                "live sports channels playlist m3u"
             ),
             Intent.MOVIE to listOf(
                 "movie vod iptv playlist m3u8",
                 "cinema films channels m3u iptv",
                 "series action thriller horror iptv m3u8",
-                "кино сериалы боевик триллер ужасы iptv m3u"
+                "кино сериалы боевик триллер ужасы iptv m3u",
+                "iptv-org movies series m3u",
+                "movie channels playlist raw m3u"
             ),
             Intent.NEWS to listOf(
                 "news channels live iptv m3u8",
@@ -419,7 +437,9 @@ internal class LocalAiQueryAssistant {
             Intent.RUSSIAN to listOf(
                 "russian iptv m3u github",
                 "русские iptv m3u gitlab",
-                "список русских каналов iptv m3u github"
+                "список русских каналов iptv m3u github",
+                "site:raw.githubusercontent.com russian iptv m3u",
+                "site:github.io russian iptv m3u8"
             ),
             Intent.TURKEY to listOf(
                 "turkey iptv m3u github",
@@ -429,17 +449,23 @@ internal class LocalAiQueryAssistant {
             Intent.WORLD to listOf(
                 "world iptv m3u github",
                 "global iptv m3u gitlab",
-                "world iptv channel list m3u github"
+                "world iptv channel list m3u github",
+                "site:raw.githubusercontent.com world iptv m3u",
+                "site:iptv-org.github.io countries m3u"
             ),
             Intent.SPORT to listOf(
                 "sport iptv m3u github",
                 "football iptv m3u gitlab",
-                "sports iptv channel list m3u8 github"
+                "sports iptv channel list m3u8 github",
+                "site:raw.githubusercontent.com sports iptv m3u",
+                "site:iptv-org.github.io sports m3u"
             ),
             Intent.MOVIE to listOf(
                 "movie iptv m3u github",
                 "vod iptv m3u gitlab",
-                "series action thriller horror iptv m3u github"
+                "series action thriller horror iptv m3u github",
+                "site:raw.githubusercontent.com movie vod iptv m3u",
+                "site:iptv-org.github.io movies series m3u"
             ),
             Intent.NEWS to listOf(
                 "news iptv m3u github",

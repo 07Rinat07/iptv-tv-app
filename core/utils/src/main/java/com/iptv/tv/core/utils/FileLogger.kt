@@ -4,6 +4,7 @@ import android.content.Context
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
+import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -41,9 +42,9 @@ object FileLogger {
                         pw.print("/")
                         pw.print(tag)
                         pw.print(": ")
-                        pw.println(message)
+                        pw.println(message.redactSensitiveLogData())
                         throwable?.let { t ->
-                            t.printStackTrace(pw)
+                            pw.print(t.toSanitizedStackTrace())
                         }
                     }
                 }
@@ -63,5 +64,22 @@ object FileLogger {
                 file.renameTo(old)
             }
         } catch (ignored: Exception) {}
+    }
+
+    private fun Throwable.toSanitizedStackTrace(): String {
+        return StringWriter().use { sw ->
+            PrintWriter(sw).use { pw ->
+                printStackTrace(pw)
+            }
+            sw.toString().redactSensitiveLogData()
+        }
+    }
+
+    private fun String.redactSensitiveLogData(): String {
+        return replace(Regex("(?i)(password|passwd|pass|pwd|token|access_token|refresh_token|api_key|apikey|secret|key|mac|username|login|user)=([^\\s&]+)")) {
+            "${it.groupValues[1]}=<redacted>"
+        }.replace(Regex("(?i)(://)([^\\s:/?#]+):([^\\s@/?#]+)@")) {
+            "${it.groupValues[1]}<redacted>:<redacted>@"
+        }
     }
 }

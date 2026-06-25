@@ -648,6 +648,8 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             variations += "$searchBase $site m3u"
             variations += "$searchBase $site m3u8"
             variations += "$searchBase $site iptv playlist"
+            variations += "$site \"$base\" \"#EXTM3U\""
+            variations += "$site \"$base\" raw m3u"
         }
 
         if (request.providerScope == ScannerProviderScope.ALL) {
@@ -666,6 +668,16 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             variations += "$searchBase reddit m3u8"
             variations += "$searchBase 4pda m3u"
             variations += "$searchBase 4pda m3u8"
+            variations += "$searchBase raw.githubusercontent.com playlist"
+            variations += "$searchBase gist.githubusercontent.com m3u"
+            variations += "$searchBase github.io m3u8"
+            variations += "$searchBase iptv-org m3u"
+            variations += "$searchBase \"#EXTINF\""
+            variations += "$searchBase \"#EXTM3U\""
+            variations += "$base site:iptv-org.github.io"
+            variations += "$base site:m3u4u.com"
+            variations += "$base site:pastebin.com m3u"
+            variations += "$base site:paste.ee m3u"
         }
 
         return variations
@@ -1590,7 +1602,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         const val BITBUCKET_SOURCE_PAGE_SIZE = 100
         const val MAX_BITBUCKET_PAGES = 3
 
-        const val MAX_WEB_SEARCH_QUERIES = 20
+        const val MAX_WEB_SEARCH_QUERIES = 32
         const val MAX_WEB_LINKS_PER_QUERY = 36
         const val MAX_WEB_PROBES = 48
         const val MAX_WEB_PAGE_CRAWLS = 12
@@ -1657,6 +1669,62 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                 repository = "iptv-org.github.io",
                 path = "iptv/index.country.m3u",
                 tags = setOf("iptv", "world", "countries", "global", "каналы")
+            ),
+            KnownPlaylistSeed(
+                name = "iptv-org RU",
+                url = "https://iptv-org.github.io/iptv/countries/ru.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv-org.github.io",
+                path = "iptv/countries/ru.m3u",
+                tags = setOf("iptv", "ru", "russian", "russia", "россия", "рус", "каналы")
+            ),
+            KnownPlaylistSeed(
+                name = "iptv-org Sports",
+                url = "https://iptv-org.github.io/iptv/categories/sports.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv-org.github.io",
+                path = "iptv/categories/sports.m3u",
+                tags = setOf("iptv", "sport", "sports", "football", "hockey", "спорт", "футбол")
+            ),
+            KnownPlaylistSeed(
+                name = "iptv-org Movies",
+                url = "https://iptv-org.github.io/iptv/categories/movies.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv-org.github.io",
+                path = "iptv/categories/movies.m3u",
+                tags = setOf("iptv", "movie", "movies", "cinema", "film", "кино", "фильмы")
+            ),
+            KnownPlaylistSeed(
+                name = "iptv-org Series",
+                url = "https://iptv-org.github.io/iptv/categories/series.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv-org.github.io",
+                path = "iptv/categories/series.m3u",
+                tags = setOf("iptv", "series", "serial", "tv show", "сериалы", "сериал")
+            ),
+            KnownPlaylistSeed(
+                name = "iptv-org News",
+                url = "https://iptv-org.github.io/iptv/categories/news.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv-org.github.io",
+                path = "iptv/categories/news.m3u",
+                tags = setOf("iptv", "news", "live", "новости", "новостные")
+            ),
+            KnownPlaylistSeed(
+                name = "iptv-org Kids",
+                url = "https://iptv-org.github.io/iptv/categories/kids.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv-org.github.io",
+                path = "iptv/categories/kids.m3u",
+                tags = setOf("iptv", "kids", "cartoon", "animation", "детские", "мультфильмы")
+            ),
+            KnownPlaylistSeed(
+                name = "iptv-org Music",
+                url = "https://iptv-org.github.io/iptv/categories/music.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv-org.github.io",
+                path = "iptv/categories/music.m3u",
+                tags = setOf("iptv", "music", "radio", "музыка", "радио")
             ),
             KnownPlaylistSeed(
                 name = "naggdd RU",

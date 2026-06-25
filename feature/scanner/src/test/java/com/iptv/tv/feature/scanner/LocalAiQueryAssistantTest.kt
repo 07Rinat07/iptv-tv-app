@@ -34,6 +34,32 @@ class LocalAiQueryAssistantTest {
     }
 
     @Test
+    fun `sport intent includes raw and category-oriented variants`() {
+        val keywords = assistant.inferIntentKeywords("sports football", emptyList())
+        val variants = assistant.buildAiVariants(
+            query = "sports football",
+            manualKeywords = keywords,
+            inferredKeywords = keywords
+        )
+
+        assertTrue(variants.any { it.contains("raw.githubusercontent.com", ignoreCase = true) })
+        assertTrue(variants.any { it.contains("iptv-org", ignoreCase = true) && it.contains("sports", ignoreCase = true) })
+    }
+
+    @Test
+    fun `voxlist intent keeps direct repository variants`() {
+        val keywords = assistant.inferIntentKeywords("voxlist iptv", emptyList())
+        val variants = assistant.buildAiVariants(
+            query = "voxlist iptv",
+            manualKeywords = keywords,
+            inferredKeywords = keywords
+        )
+
+        assertTrue(variants.any { it.contains("voxlist", ignoreCase = true) && it.contains("m3u", ignoreCase = true) })
+        assertTrue(variants.any { it.contains("raw.githubusercontent.com", ignoreCase = true) })
+    }
+
+    @Test
     fun `assistant always keeps playlist core terms`() {
         val keywords = assistant.inferIntentKeywords("sport", emptyList())
 

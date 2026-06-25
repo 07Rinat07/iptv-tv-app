@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -76,6 +78,7 @@ import android.content.Context
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.PlayerType
+import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.player.toLoadControl
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import java.text.SimpleDateFormat
@@ -640,26 +643,11 @@ fun PlayerScreen(
 
         if (showPlaylists) {
             item {
-                Text("Плейлисты (${state.playlists.size})", style = MaterialTheme.typography.titleMedium)
-            }
-            items(state.playlists, key = { it.id }) { playlist ->
-                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text("${playlist.name} (id=${playlist.id}, каналов=${playlist.channelCount})")
-                        Button(onClick = { viewModel.selectPlaylist(playlist.id) }) {
-                            Text(
-                                if (playlist.id == state.selectedPlaylistId) {
-                                    "Текущий плейлист"
-                                } else {
-                                    "Открыть плейлист"
-                                }
-                            )
-                        }
-                    }
-                }
+                PlaylistScrollPanel(
+                    playlists = state.playlists,
+                    selectedPlaylistId = state.selectedPlaylistId,
+                    onSelectPlaylist = viewModel::selectPlaylist
+                )
             }
         }
 
@@ -745,52 +733,15 @@ fun PlayerScreen(
                     Text("Нет каналов по текущему фильтру")
                 }
             } else {
-                items(filteredChannels, key = { it.id }) { channel ->
-                    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.Top
-                            ) {
-                                ChannelLogo(
-                                    logoUrl = channel.logo,
-                                    modifier = Modifier.size(54.dp)
-                                )
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(channel.name, style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    "Группа: ${channel.group ?: "-"} | health=${channel.health}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                if (showTechnicalInfo) {
-                                    Text("URL: ${channel.streamUrl}", style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                            }
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Button(onClick = { viewModel.playChannelInternal(channel.id) }) {
-                                    Text(if (channel.id == state.selectedChannelId) "Играет" else "Выбрать и играть")
-                                }
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    availablePaneTargets.forEach { paneIndex ->
-                                        OutlinedButton(onClick = { viewModel.playChannelInPane(channel.id, paneIndex) }) {
-                                            Text("В окно $paneIndex")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                item {
+                    ChannelCatalogScrollPanel(
+                        channels = filteredChannels,
+                        selectedChannelId = state.selectedChannelId,
+                        availablePaneTargets = availablePaneTargets,
+                        showTechnicalInfo = showTechnicalInfo,
+                        onPlayChannel = viewModel::playChannelInternal,
+                        onPlayInPane = viewModel::playChannelInPane
+                    )
                 }
             }
         }
@@ -1194,37 +1145,293 @@ private fun ChannelQuickPanel(
                     Text("В конец")
                 }
             }
-            LazyColumn(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 220.dp, max = 420.dp),
-                state = listState,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(limited, key = { it.id }) { channel ->
-                    OutlinedButton(
-                        onClick = { onSelect(channel.id) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        val mark = if (channel.id == selectedChannelId) "● " else ""
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(limited, key = { it.id }) { channel ->
+                        OutlinedButton(
+                            onClick = { onSelect(channel.id) },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            ChannelLogo(
-                                logoUrl = channel.logo,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Text(
-                                "$mark${channel.name}",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            val mark = if (channel.id == selectedChannelId) "● " else ""
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                ChannelLogo(
+                                    logoUrl = channel.logo,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Text(
+                                    "$mark${channel.name}",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+                VerticalListScrollControls(
+                    listState = listState,
+                    itemCount = limited.size,
+                    modifier = Modifier.fillMaxHeight()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaylistScrollPanel(
+    playlists: List<Playlist>,
+    selectedPlaylistId: Long?,
+    onSelectPlaylist: (Long) -> Unit
+) {
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(selectedPlaylistId, playlists) {
+        val index = playlists.indexOfFirst { it.id == selectedPlaylistId }
+        if (index >= 0) {
+            listState.scrollToItem(index)
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Плейлисты (${playlists.size})", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Прокрутка сбоку: начало/страницы/конец. Выбор открывает плейлист.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (playlists.isEmpty()) {
+                Text("Плейлисты не найдены")
+                return@Column
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 180.dp, max = 360.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(playlists, key = { it.id }) { playlist ->
+                        Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text("${playlist.name} (id=${playlist.id}, каналов=${playlist.channelCount})")
+                                Button(onClick = { onSelectPlaylist(playlist.id) }) {
+                                    Text(
+                                        if (playlist.id == selectedPlaylistId) {
+                                            "Текущий плейлист"
+                                        } else {
+                                            "Открыть плейлист"
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                VerticalListScrollControls(
+                    listState = listState,
+                    itemCount = playlists.size,
+                    modifier = Modifier.fillMaxHeight()
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChannelCatalogScrollPanel(
+    channels: List<Channel>,
+    selectedChannelId: Long?,
+    availablePaneTargets: List<Int>,
+    showTechnicalInfo: Boolean,
+    onPlayChannel: (Long) -> Unit,
+    onPlayInPane: (Long, Int) -> Unit
+) {
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(selectedChannelId, channels) {
+        val index = channels.indexOfFirst { it.id == selectedChannelId }
+        if (index >= 0) {
+            listState.scrollToItem(index)
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Каталог каналов: ${channels.size}", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Боковая прокрутка ускоряет переход по большому списку; выбор сразу запускает встроенный плеер.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 320.dp, max = 620.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(channels, key = { it.id }) { channel ->
+                        ChannelCatalogRow(
+                            channel = channel,
+                            selected = channel.id == selectedChannelId,
+                            availablePaneTargets = availablePaneTargets,
+                            showTechnicalInfo = showTechnicalInfo,
+                            onPlayChannel = onPlayChannel,
+                            onPlayInPane = onPlayInPane
+                        )
+                    }
+                }
+                VerticalListScrollControls(
+                    listState = listState,
+                    itemCount = channels.size,
+                    modifier = Modifier.fillMaxHeight()
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChannelCatalogRow(
+    channel: Channel,
+    selected: Boolean,
+    availablePaneTargets: List<Int>,
+    showTechnicalInfo: Boolean,
+    onPlayChannel: (Long) -> Unit,
+    onPlayInPane: (Long, Int) -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                ChannelLogo(
+                    logoUrl = channel.logo,
+                    modifier = Modifier.size(54.dp)
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(channel.name, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Группа: ${channel.group ?: "-"} | health=${channel.health}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (showTechnicalInfo) {
+                        Text("URL: ${channel.streamUrl}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(onClick = { onPlayChannel(channel.id) }) {
+                    Text(if (selected) "Играет" else "Выбрать и играть")
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    availablePaneTargets.forEach { paneIndex ->
+                        OutlinedButton(onClick = { onPlayInPane(channel.id, paneIndex) }) {
+                            Text("В окно $paneIndex")
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun VerticalListScrollControls(
+    listState: LazyListState,
+    itemCount: Int,
+    modifier: Modifier = Modifier,
+    lineStep: Int = QUICK_SCROLL_STEP,
+    pageStep: Int = QUICK_PAGE_STEP
+) {
+    val scope = rememberCoroutineScope()
+    val lastIndex = (itemCount - 1).coerceAtLeast(0)
+    val firstVisible = listState.firstVisibleItemIndex.coerceIn(0, lastIndex)
+    val enabled = itemCount > 1
+
+    fun scrollTo(index: Int) {
+        if (!enabled) return
+        scope.launch {
+            listState.animateScrollToItem(index.coerceIn(0, lastIndex))
+        }
+    }
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.SpaceBetween,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        OutlinedButton(onClick = { scrollTo(0) }, enabled = enabled) {
+            Text("В начало")
+        }
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            OutlinedButton(onClick = { scrollTo(firstVisible - pageStep) }, enabled = enabled) {
+                Text("Pg -")
+            }
+            OutlinedButton(onClick = { scrollTo(firstVisible - lineStep) }, enabled = enabled) {
+                Text("▲")
+            }
+            Text("${firstVisible + 1}/$itemCount", style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = { scrollTo(firstVisible + lineStep) }, enabled = enabled) {
+                Text("▼")
+            }
+            OutlinedButton(onClick = { scrollTo(firstVisible + pageStep) }, enabled = enabled) {
+                Text("Pg +")
+            }
+        }
+        OutlinedButton(onClick = { scrollTo(lastIndex) }, enabled = enabled) {
+            Text("В конец")
         }
     }
 }
@@ -1406,6 +1613,7 @@ private fun InternalPlayerHost(
     val initError = playerBuildResult.exceptionOrNull()
     var currentTracks by remember(session.sessionId) { mutableStateOf(Tracks.EMPTY) }
     var readyReported by remember(session.sessionId) { mutableStateOf(false) }
+    var fullscreenTrackPanelVisible by remember(session.sessionId) { mutableStateOf(false) }
     val trackPreferenceStore = remember(context) { PlayerTrackPreferenceStore(context) }
     var savedTrackPreferences by remember { mutableStateOf(trackPreferenceStore.loadAll()) }
 
@@ -1588,64 +1796,136 @@ private fun InternalPlayerHost(
         ) {
             Text(if (expanded) "Свернуть" else "Развернуть")
         }
+        if (fullscreenMode) {
+            OutlinedButton(
+                onClick = { fullscreenTrackPanelVisible = !fullscreenTrackPanelVisible },
+                modifier = Modifier
+                    .align(androidx.compose.ui.Alignment.TopEnd)
+                    .padding(8.dp)
+            ) {
+                Text(if (fullscreenTrackPanelVisible) "Скрыть дорожки" else "Дорожки")
+            }
+        }
+        if (fullscreenMode && fullscreenTrackPanelVisible) {
+            TrackSelectionPanel(
+                modifier = Modifier
+                    .align(androidx.compose.ui.Alignment.TopStart)
+                    .padding(8.dp)
+                    .fillMaxWidth(0.72f)
+                    .heightIn(max = 260.dp),
+                tracks = currentTracks,
+                savedPreferences = savedTrackPreferences,
+                onSelectAuto = { trackType ->
+                    val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+                    selector.setParameters(
+                        selector.buildUponParameters()
+                            .setTrackTypeDisabled(trackType, false)
+                            .clearOverridesOfType(trackType)
+                    )
+                    savedTrackPreferences = trackPreferenceStore.saveAuto(trackType)
+                },
+                onDisable = { trackType ->
+                    val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+                    selector.setParameters(
+                        selector.buildUponParameters()
+                            .clearOverridesOfType(trackType)
+                            .setTrackTypeDisabled(trackType, true)
+                    )
+                    savedTrackPreferences = trackPreferenceStore.saveDisabled(trackType)
+                },
+                onSelectTrack = { trackType, group, trackIndex ->
+                    val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+                    val format = group.getTrackFormat(trackIndex)
+                    selector.setParameters(
+                        selector.buildUponParameters()
+                            .setTrackTypeDisabled(trackType, false)
+                            .clearOverridesOfType(trackType)
+                            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, trackIndex))
+                    )
+                    savedTrackPreferences = trackPreferenceStore.saveSelected(
+                        trackType = trackType,
+                        language = format.language,
+                        label = format.label
+                    )
+                },
+                onClearSavedPreferences = {
+                    val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+                    selector.setParameters(
+                        selector.buildUponParameters()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
+                            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    )
+                    savedTrackPreferences = trackPreferenceStore.clearAll()
+                }
+            )
+        }
     }
 
-    TrackSelectionPanel(
-        tracks = currentTracks,
-        savedPreferences = savedTrackPreferences,
-        onSelectAuto = { trackType ->
-            val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
-            selector.setParameters(
-                selector.buildUponParameters()
-                    .setTrackTypeDisabled(trackType, false)
-                    .clearOverridesOfType(trackType)
-            )
-            savedTrackPreferences = trackPreferenceStore.saveAuto(trackType)
-        },
-        onDisable = { trackType ->
-            val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
-            selector.setParameters(
-                selector.buildUponParameters()
-                    .clearOverridesOfType(trackType)
-                    .setTrackTypeDisabled(trackType, true)
-            )
-            savedTrackPreferences = trackPreferenceStore.saveDisabled(trackType)
-        },
-        onSelectTrack = { trackType, group, trackIndex ->
-            val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
-            val format = group.getTrackFormat(trackIndex)
-            selector.setParameters(
-                selector.buildUponParameters()
-                    .setTrackTypeDisabled(trackType, false)
-                    .clearOverridesOfType(trackType)
-                    .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, trackIndex))
-            )
-            savedTrackPreferences = trackPreferenceStore.saveSelected(
-                trackType = trackType,
-                language = format.language,
-                label = format.label
-            )
-        },
-        onClearSavedPreferences = {
-            val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
-            selector.setParameters(
-                selector.buildUponParameters()
-                    .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
-                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
-                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                    .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
-                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
-            )
-            savedTrackPreferences = trackPreferenceStore.clearAll()
-        }
-    )
+    if (!fullscreenMode) {
+        TrackSelectionPanel(
+            tracks = currentTracks,
+            savedPreferences = savedTrackPreferences,
+            onSelectAuto = { trackType ->
+                val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+                selector.setParameters(
+                    selector.buildUponParameters()
+                        .setTrackTypeDisabled(trackType, false)
+                        .clearOverridesOfType(trackType)
+                )
+                savedTrackPreferences = trackPreferenceStore.saveAuto(trackType)
+            },
+            onDisable = { trackType ->
+                val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+                selector.setParameters(
+                    selector.buildUponParameters()
+                        .clearOverridesOfType(trackType)
+                        .setTrackTypeDisabled(trackType, true)
+                )
+                savedTrackPreferences = trackPreferenceStore.saveDisabled(trackType)
+            },
+            onSelectTrack = { trackType, group, trackIndex ->
+                val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+                val format = group.getTrackFormat(trackIndex)
+                selector.setParameters(
+                    selector.buildUponParameters()
+                        .setTrackTypeDisabled(trackType, false)
+                        .clearOverridesOfType(trackType)
+                        .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, trackIndex))
+                )
+                savedTrackPreferences = trackPreferenceStore.saveSelected(
+                    trackType = trackType,
+                    language = format.language,
+                    label = format.label
+                )
+            },
+            onClearSavedPreferences = {
+                val selector = exoPlayer.trackSelector as? DefaultTrackSelector ?: return@TrackSelectionPanel
+                selector.setParameters(
+                    selector.buildUponParameters()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
+                        .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                        .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+                        .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                        .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                )
+                savedTrackPreferences = trackPreferenceStore.clearAll()
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @UnstableApi
 @Composable
 private fun TrackSelectionPanel(
+    modifier: Modifier = Modifier
+        .fillMaxWidth()
+        .padding(top = 8.dp),
     tracks: Tracks,
     savedPreferences: Map<Int, PlayerTrackPreference>,
     onSelectAuto: (Int) -> Unit,
@@ -1663,8 +1943,13 @@ private fun TrackSelectionPanel(
         return
     }
 
-    Card(modifier = Modifier.fillMaxWidth().padding(top = 8.dp).tvFocusOutline()) {
-        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Card(modifier = modifier.tvFocusOutline()) {
+        Column(
+            modifier = Modifier
+                .padding(10.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Text("Дорожки плеера", style = MaterialTheme.typography.titleSmall)
             if (savedPreferences.isNotEmpty()) {
                 Text(

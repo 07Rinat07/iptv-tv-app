@@ -69,6 +69,7 @@ enum class MultiviewMode(val paneCount: Int) {
 
 private const val MULTIVIEW_FOUR_UP_MIN_CPU = 6
 private const val MULTIVIEW_FOUR_UP_MIN_HEAP_BYTES = 512L * 1024L * 1024L
+private const val DUPLICATE_INTERNAL_PLAY_WINDOW_MS = 1_500L
 
 private fun defaultMultiviewDeviceCapability(): MultiviewDeviceCapability {
     return evaluateMultiviewDeviceCapability(
@@ -228,6 +229,8 @@ class PlayerViewModel @Inject constructor(
     private var channelsJob: Job? = null
     private var overrideJob: Job? = null
     private var epgJob: Job? = null
+    private var lastInternalPlayRequestChannelId: Long? = null
+    private var lastInternalPlayRequestAtMs: Long = 0L
     private var lastEpgRequestedChannelId: Long? = null
     private val epgErrorLoggedAtMs = mutableMapOf<String, Long>()
     private val epgUiErrorShownAtMs = mutableMapOf<String, Long>()
@@ -928,6 +931,19 @@ class PlayerViewModel @Inject constructor(
             return
         }
 
+        if (
+            playerType == PlayerType.INTERNAL &&
+            !forceAceResolution &&
+            shouldIgnoreDuplicateInternalPlayRequest(channel.id)
+        ) {
+            logAsync(
+                status = "player_play_request_ignored",
+                message = "Duplicate internal playback request ignored: channelId=${channel.id}",
+                playlistId = channel.playlistId
+            )
+            return
+        }
+
         viewModelScope.launch {
             _uiState.update { it.copy(isStartingPlayback = true, lastError = null) }
             safeLog(
@@ -982,6 +998,20 @@ class PlayerViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun shouldIgnoreDuplicateInternalPlayRequest(channelId: Long): Boolean {
+        val now = System.currentTimeMillis()
+        val state = _uiState.value
+        val sameChannelAlreadyStarting = state.isStartingPlayback && state.internalSession?.channelId == channelId
+        val sameChannelRecentClick = lastInternalPlayRequestChannelId == channelId &&
+            now - lastInternalPlayRequestAtMs < DUPLICATE_INTERNAL_PLAY_WINDOW_MS
+        if (sameChannelAlreadyStarting || sameChannelRecentClick) {
+            return true
+        }
+        lastInternalPlayRequestChannelId = channelId
+        lastInternalPlayRequestAtMs = now
+        return false
     }
 
     fun stopInternalPlayback() {

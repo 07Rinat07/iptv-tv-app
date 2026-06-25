@@ -109,6 +109,7 @@ data class ScannerUiState(
     val progressElapsedSeconds: Long = 0,
     val progressTimeLimitSeconds: Long = 480,
     val exportedLinksPath: String? = null,
+    val exportedM3u8Path: String? = null,
     val providerHealth: List<ScannerProviderHealthUi> = defaultProviderHealthUi()
 )
 
@@ -118,6 +119,11 @@ private enum class SearchPhase {
     IMPORTING,
     EXPORTING
 }
+
+private data class ExportedPlaylistLinks(
+    val txtPath: String?,
+    val m3u8Path: String?
+)
 
 @HiltViewModel
 class ScannerViewModel @Inject constructor(
@@ -261,7 +267,7 @@ class ScannerViewModel @Inject constructor(
                 it.copy(
                     statusType = ScannerStatusType.INFO,
                     statusTitle = "Экспорт завершается",
-                    statusDetails = "Остановка принята. Дождитесь завершения записи TXT.",
+                    statusDetails = "Остановка принята. Дождитесь завершения записи TXT/M3U8.",
                     progressStageLabel = "Экспорт ссылок",
                     progressStageLocation = "Завершение записи файла..."
                 )
@@ -304,6 +310,14 @@ class ScannerViewModel @Inject constructor(
     }
 
     fun exportFoundLinksToTxt() {
+        exportFoundLinks(exportAsM3u8 = false)
+    }
+
+    fun exportFoundLinksToM3u8() {
+        exportFoundLinks(exportAsM3u8 = true)
+    }
+
+    private fun exportFoundLinks(exportAsM3u8: Boolean) {
         if (_uiState.value.isLoading) {
             _uiState.update {
                 it.copy(
@@ -349,19 +363,29 @@ class ScannerViewModel @Inject constructor(
                 )
                 return@launch
             }
-            exportCandidatesToTxt(candidates = refined, sourceQuery = sourceQuery)
+            val exportResult = if (exportAsM3u8) {
+                exportCandidatesToM3u8(candidates = refined, sourceQuery = sourceQuery)
+            } else {
+                exportCandidatesToTxt(candidates = refined, sourceQuery = sourceQuery)
+            }
+            val exportLabel = if (exportAsM3u8) "M3U8" else "TXT"
+            exportResult
                 .onSuccess { path ->
                 _uiState.update {
-                    it.copy(
-                        exportedLinksPath = path,
+                    val updated = if (exportAsM3u8) {
+                        it.copy(exportedM3u8Path = path)
+                    } else {
+                        it.copy(exportedLinksPath = path)
+                    }
+                    updated.copy(
                         statusType = ScannerStatusType.SUCCESS,
                         statusTitle = "Ссылки сохранены",
-                        statusDetails = "Экспортировано ${refined.size} ссылок в TXT: $path"
+                        statusDetails = "Экспортировано ${refined.size} ссылок в $exportLabel: $path"
                     )
                 }
                 safeLog(
                     status = "scanner_export_links_ok",
-                    message = "mode=manual, query=${sourceQuery.take(80)}, count=${refined.size}, path=$path"
+                    message = "mode=manual, format=$exportLabel, query=${sourceQuery.take(80)}, count=${refined.size}, path=$path"
                 )
             }.onFailure { throwable ->
                 val reason = throwable.message ?: throwable.javaClass.simpleName
@@ -369,15 +393,49 @@ class ScannerViewModel @Inject constructor(
                     it.copy(
                         statusType = ScannerStatusType.ERROR,
                         statusTitle = "Ошибка экспорта",
-                        statusDetails = "Не удалось сохранить TXT: $reason"
+                        statusDetails = "Не удалось сохранить $exportLabel: $reason"
                     )
                 }
                 safeLog(
                     status = "scanner_export_links_error",
-                    message = "mode=manual, query=${sourceQuery.take(80)}, reason=$reason"
+                    message = "mode=manual, format=$exportLabel, query=${sourceQuery.take(80)}, reason=$reason"
                 )
             }
         }
+    }
+
+    private suspend fun exportCandidatesToTxtAndM3u8(
+        candidates: List<PlaylistCandidate>,
+        sourceQuery: String,
+        mode: String,
+        attemptId: Long
+    ): ExportedPlaylistLinks {
+        val txtResult = exportCandidatesToTxt(candidates = candidates, sourceQuery = sourceQuery)
+        val m3u8Result = exportCandidatesToM3u8(candidates = candidates, sourceQuery = sourceQuery)
+        val txtPath = txtResult.getOrNull()
+        val m3u8Path = m3u8Result.getOrNull()
+
+        if (txtPath != null || m3u8Path != null) {
+            safeLog(
+                status = "scanner_export_links_ok",
+                message = "mode=$mode, attempt=$attemptId, query=${sourceQuery.take(80)}, count=${candidates.size}, txt=$txtPath, m3u8=$m3u8Path"
+            )
+        }
+
+        txtResult.exceptionOrNull()?.let { throwable ->
+            safeLog(
+                status = "scanner_export_links_error",
+                message = "mode=$mode, format=TXT, attempt=$attemptId, query=${sourceQuery.take(80)}, reason=${throwable.message ?: throwable.javaClass.simpleName}"
+            )
+        }
+        m3u8Result.exceptionOrNull()?.let { throwable ->
+            safeLog(
+                status = "scanner_export_links_error",
+                message = "mode=$mode, format=M3U8, attempt=$attemptId, query=${sourceQuery.take(80)}, reason=${throwable.message ?: throwable.javaClass.simpleName}"
+            )
+        }
+
+        return ExportedPlaylistLinks(txtPath = txtPath, m3u8Path = m3u8Path)
     }
 
     private suspend fun exportCandidatesToTxt(
@@ -408,12 +466,57 @@ class ScannerViewModel @Inject constructor(
         }
     }
 
-    private fun saveTextToPublicDownloads(fileName: String, content: String): String {
+    private suspend fun exportCandidatesToM3u8(
+        candidates: List<PlaylistCandidate>,
+        sourceQuery: String
+    ): Result<String> {
+        return runCatching {
+            withContext(Dispatchers.IO) {
+                val now = System.currentTimeMillis()
+                val content = buildString {
+                    appendLine("#EXTM3U")
+                    appendLine("#PLAYLIST:myscanerIPTV найденные плейлисты")
+                    appendLine("#EXTREM: Поиск: ${sourceQuery.toM3uText()}")
+                    appendLine("#EXTREM: Найдено: ${candidates.size}")
+                    appendLine("#EXTREM: Сформировано: $now")
+                    candidates.forEachIndexed { index, candidate ->
+                        val url = candidate.downloadUrl.trim()
+                        if (url.isBlank()) return@forEachIndexed
+                        val title = candidate.name
+                            .ifBlank { candidate.path.substringAfterLast('/') }
+                            .ifBlank { "Playlist ${index + 1}" }
+                            .toM3uText()
+                        val groupTitle = candidate.provider.ifBlank { "Найденные списки" }.toM3uAttribute()
+                        val tvgName = title.toM3uAttribute()
+                        appendLine(
+                            "#EXTINF:-1 tvg-name=\"$tvgName\" group-title=\"$groupTitle\",$title"
+                        )
+                        appendLine("#EXTVLCOPT:http-reconnect=true")
+                        appendLine(url)
+                    }
+                }
+                val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(now))
+                val queryPart = sourceQuery.toSafeFilePart()
+                val fileName = "Tv_list_${queryPart}_$stamp.m3u8"
+                saveTextToPublicDownloads(
+                    fileName = fileName,
+                    content = content,
+                    mimeType = "application/vnd.apple.mpegurl"
+                )
+            }
+        }
+    }
+
+    private fun saveTextToPublicDownloads(
+        fileName: String,
+        content: String,
+        mimeType: String = "text/plain"
+    ): String {
         val resolver = appContext.contentResolver
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(MediaStore.Downloads.MIME_TYPE, mimeType)
                 put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
@@ -554,7 +657,8 @@ class ScannerViewModel @Inject constructor(
                     progressStageLocation = providerDisplayName(state.selectedProvider),
                     progressElapsedSeconds = 0,
                     progressTimeLimitSeconds = searchRuntimeLimitMs / 1_000L,
-                    exportedLinksPath = null
+                    exportedLinksPath = null,
+                    exportedM3u8Path = null
                 )
             }
             safeLog(
@@ -703,27 +807,15 @@ class ScannerViewModel @Inject constructor(
                 } else {
                     null
                 }
-                val autoExportPath = if (saveFoundResults && foundAll.isNotEmpty()) {
+                val autoExportPaths = if (saveFoundResults && foundAll.isNotEmpty()) {
                     searchPhase = SearchPhase.EXPORTING
                     withContext(NonCancellable) {
-                        val exportResult = exportCandidatesToTxt(
+                        exportCandidatesToTxtAndM3u8(
                             candidates = foundAll,
-                            sourceQuery = runState.query
+                            sourceQuery = runState.query,
+                            mode = "auto",
+                            attemptId = attemptId
                         )
-                        val path = exportResult.getOrNull()
-                        if (path != null) {
-                            safeLog(
-                                status = "scanner_export_links_ok",
-                                message = "mode=auto, attempt=$attemptId, query=${runState.query.take(80)}, count=${foundAll.size}, path=$path"
-                            )
-                        } else {
-                            val throwable = exportResult.exceptionOrNull()
-                            safeLog(
-                                status = "scanner_export_links_error",
-                                message = "mode=auto, attempt=$attemptId, query=${runState.query.take(80)}, reason=${throwable?.message ?: throwable?.javaClass?.simpleName ?: "unknown"}"
-                            )
-                        }
-                        path
                     }
                 } else {
                     null
@@ -801,7 +893,8 @@ class ScannerViewModel @Inject constructor(
                         hasSearched = true,
                         results = foundForDisplay,
                         selectedPreview = foundForDisplay.firstOrNull(),
-                        exportedLinksPath = autoExportPath,
+                        exportedLinksPath = autoExportPaths?.txtPath,
+                        exportedM3u8Path = autoExportPaths?.m3u8Path,
                         statusType = statusType,
                         statusTitle = statusTitle,
                         statusDetails = statusDetails,
@@ -881,27 +974,15 @@ class ScannerViewModel @Inject constructor(
                 } else {
                     null
                 }
-                val autoExportPath = if (saveFoundResults && partial.isNotEmpty()) {
+                val autoExportPaths = if (saveFoundResults && partial.isNotEmpty()) {
                     searchPhase = SearchPhase.EXPORTING
                     withContext(NonCancellable) {
-                        val exportResult = exportCandidatesToTxt(
+                        exportCandidatesToTxtAndM3u8(
                             candidates = partial,
-                            sourceQuery = runState.query
+                            sourceQuery = runState.query,
+                            mode = "auto_cancel",
+                            attemptId = attemptId
                         )
-                        val path = exportResult.getOrNull()
-                        if (path != null) {
-                            safeLog(
-                                status = "scanner_export_links_ok",
-                                message = "mode=auto_cancel, attempt=$attemptId, query=${runState.query.take(80)}, count=${partial.size}, path=$path"
-                            )
-                        } else {
-                            val throwable = exportResult.exceptionOrNull()
-                            safeLog(
-                                status = "scanner_export_links_error",
-                                message = "mode=auto_cancel, attempt=$attemptId, query=${runState.query.take(80)}, reason=${throwable?.message ?: throwable?.javaClass?.simpleName ?: "unknown"}"
-                            )
-                        }
-                        path
                     }
                 } else {
                     null
@@ -923,7 +1004,8 @@ class ScannerViewModel @Inject constructor(
                         hasSearched = true,
                         results = partialForDisplay,
                         selectedPreview = partialForDisplay.firstOrNull(),
-                        exportedLinksPath = autoExportPath,
+                        exportedLinksPath = autoExportPaths?.txtPath,
+                        exportedM3u8Path = autoExportPaths?.m3u8Path,
                         statusType = if (partial.isEmpty()) ScannerStatusType.INFO else ScannerStatusType.SUCCESS,
                         statusTitle = "Поиск остановлен пользователем",
                         statusDetails = partialDetails,
@@ -1144,6 +1226,20 @@ class ScannerViewModel @Inject constructor(
                     query = broadQuery,
                     keywords = mergeKeywords(relaxed.keywords, intentKeywords.take(2)),
                     providerScope = broadProvider
+                )
+            )
+        }
+
+        presetFallbackQueries(
+            presetId = state.selectedPresetId,
+            baseQuery = base.query
+        ).forEachIndexed { idx, presetQuery ->
+            plan += SearchPlanStep(
+                label = "Пресет-вариант ${idx + 1}",
+                request = relaxed.copy(
+                    query = presetQuery,
+                    keywords = mergeKeywords(relaxed.keywords, inferIntentKeywords(presetQuery, relaxed.keywords)),
+                    providerScope = ScannerProviderScope.ALL
                 )
             )
         }
@@ -2652,6 +2748,80 @@ class ScannerViewModel @Inject constructor(
         }
     }
 
+    private fun presetFallbackQueries(presetId: String?, baseQuery: String): List<String> {
+        val normalizedPreset = presetId?.trim()?.lowercase().orEmpty()
+        val fallback = when (normalizedPreset) {
+            "general", "tvlists", "mixed_ru_en", "free_public" -> listOf(
+                "free public iptv channel list m3u8",
+                "site:raw.githubusercontent.com iptv playlist m3u",
+                "site:github.com iptv m3u8 playlist",
+                "iptv-org channels countries categories m3u"
+            )
+            "ru" -> listOf(
+                "russian iptv m3u github raw",
+                "русские каналы iptv m3u8 github",
+                "site:raw.githubusercontent.com russian iptv m3u",
+                "iptv-org ru russia channels m3u"
+            )
+            "kz" -> listOf(
+                "kazakhstan kazakh iptv m3u github raw",
+                "казахские каналы iptv m3u8 github",
+                "қазақша қазақстан телеарналар iptv m3u8",
+                "iptv-org kz kazakhstan channels m3u"
+            )
+            "world" -> listOf(
+                "world iptv countries m3u8 github",
+                "international tv channels playlist m3u",
+                "site:raw.githubusercontent.com world iptv m3u",
+                "iptv-org countries index m3u"
+            )
+            "sport" -> listOf(
+                "sports live channels iptv m3u8",
+                "football hockey sports playlist m3u github",
+                "site:raw.githubusercontent.com sports iptv m3u",
+                "iptv-org sports m3u"
+            )
+            "movies", "series", "genres_action" -> listOf(
+                "movie series vod iptv playlist m3u8",
+                "cinema films channels playlist m3u github",
+                "site:raw.githubusercontent.com movie vod iptv m3u",
+                "iptv-org movies series m3u"
+            )
+            "voxlist" -> listOf(
+                "Voxlist voxlist.m3u raw github",
+                "site:github.com Voxlist voxlist m3u",
+                "site:raw.githubusercontent.com Voxlist voxlist m3u",
+                "voxlist iptv playlist m3u8"
+            )
+            "kids" -> listOf(
+                "kids cartoon channels iptv m3u8",
+                "site:raw.githubusercontent.com kids iptv m3u",
+                "iptv-org kids animation m3u"
+            )
+            "news" -> listOf(
+                "news live channels iptv m3u8",
+                "site:raw.githubusercontent.com news iptv m3u",
+                "iptv-org news m3u"
+            )
+            "music" -> listOf(
+                "music radio channels iptv m3u8",
+                "site:raw.githubusercontent.com radio iptv m3u",
+                "iptv-org music m3u"
+            )
+            else -> emptyList()
+        }
+
+        return fallback
+            .asSequence()
+            .plus(listOf(baseQuery))
+            .map { it.replace(Regex("\\s+"), " ").trim() }
+            .filter { it.length >= 4 }
+            .filterNot { it.equals(baseQuery, ignoreCase = true) }
+            .distinctBy { it.lowercase() }
+            .take(PRESET_FALLBACK_QUERY_LIMIT)
+            .toList()
+    }
+
     private fun applyIntentBoost(query: String): String {
         val lowered = query.lowercase()
         val boosts = mutableListOf<String>()
@@ -2790,10 +2960,11 @@ class ScannerViewModel @Inject constructor(
         const val STEP_HARD_TIMEOUT_MS = 16_000L
         const val STEP_HARD_TIMEOUT_DEGRADED_MS = 10_000L
         const val FAIL_FAST_MAX_STEP = 2
-        const val MAX_PLAN_STEPS = 6
-        const val MAX_PLAN_STEPS_AI = 14
+        const val MAX_PLAN_STEPS = 10
+        const val MAX_PLAN_STEPS_AI = 18
+        const val PRESET_FALLBACK_QUERY_LIMIT = 4
         const val PREFLIGHT_DEGRADED_PLAN_STEPS = 2
-        const val AI_MAX_QUERY_VARIANTS = 8
+        const val AI_MAX_QUERY_VARIANTS = 10
         const val MAX_LEARNED_QUERY_VARIANTS = 4
         const val MAX_KEYWORDS = 10
         const val MAX_LOG_MESSAGE = 1200
@@ -2905,31 +3076,49 @@ private fun String.toSafeFilePart(): String {
         .ifBlank { "search" }
 }
 
+private fun String.toM3uText(): String {
+    return replace('\r', ' ')
+        .replace('\n', ' ')
+        .trim()
+}
+
+private fun String.toM3uAttribute(): String {
+    return toM3uText().replace('"', '\'')
+}
+
 private fun scannerPresets(): List<ScannerPreset> {
     return listOf(
         ScannerPreset(
             id = "general",
             title = "Общий IPTV",
-            query = "iptv playlist m3u",
-            keywords = "iptv, playlist, tv channels, m3u, m3u8, channel list, список каналов",
+            query = "free public iptv playlist m3u m3u8",
+            keywords = "iptv, playlist, playlists, tv channels, live tv, m3u, m3u8, raw, github, github.io, channel list, список каналов",
             provider = ScannerProviderScope.ALL,
-            description = "Базовый поиск RU/EN IPTV-плейлистов (широкий старт)."
+            description = "Широкий поиск открытых M3U/M3U8 с raw/GitHub/GitLab/web fallback."
         ),
         ScannerPreset(
             id = "ru",
             title = "Русские каналы",
-            query = "russian iptv playlist",
-            keywords = "russian, russia, ru, русские каналы, россия, список каналов, m3u, m3u8",
+            query = "russian ru iptv m3u m3u8 playlist",
+            keywords = "russian, russia, ru, russian tv, русские каналы, россия, список каналов, raw, github, iptv-org, m3u, m3u8",
             provider = ScannerProviderScope.ALL,
-            description = "Поиск RU-каналов и русскоязычных IPTV-списков."
+            description = "Поиск RU-каналов: GitHub/raw, iptv-org, Voxlist и русскоязычные списки."
+        ),
+        ScannerPreset(
+            id = "kz",
+            title = "Казахские каналы",
+            query = "kazakhstan kazakh kz iptv m3u m3u8 playlist",
+            keywords = "kazakhstan, kazakh, kz, qazaqstan, qazaq, қазақша, қазақстан, казахские каналы, казахстан, телеарна, tv channels, raw, github, iptv-org, m3u, m3u8",
+            provider = ScannerProviderScope.ALL,
+            description = "Поиск казахстанских и казахскоязычных IPTV-списков: KZ, қазақша, Қазақстан, GitHub/raw и iptv-org."
         ),
         ScannerPreset(
             id = "world",
             title = "Каналы мира",
-            query = "world international iptv",
-            keywords = "world, global, international, countries, tv channels, m3u, m3u8",
+            query = "world countries international iptv m3u m3u8",
+            keywords = "world, global, international, countries, country playlist, tv channels, iptv-org, github.io, raw, m3u, m3u8",
             provider = ScannerProviderScope.ALL,
-            description = "Поиск международных и мульти-страночных IPTV списков."
+            description = "Поиск международных списков по странам и глобальных M3U/M3U8."
         ),
         ScannerPreset(
             id = "turkey",
@@ -2974,18 +3163,18 @@ private fun scannerPresets(): List<ScannerPreset> {
         ScannerPreset(
             id = "sport",
             title = "Спорт",
-            query = "sport iptv channels",
-            keywords = "sport, sports, football, soccer, hockey, tennis, basketball, спорт, футбол, хоккей, m3u, m3u8",
+            query = "sports football live channels iptv m3u m3u8",
+            keywords = "sport, sports, football, soccer, hockey, tennis, basketball, live sports, спорт, футбол, хоккей, raw, github, iptv-org, m3u, m3u8",
             provider = ScannerProviderScope.ALL,
-            description = "Поиск спортивных плейлистов (футбол, хоккей и др.)."
+            description = "Поиск спортивных каналов и плейлистов через raw/GitHub/Search Engine."
         ),
         ScannerPreset(
             id = "movies",
             title = "Фильмы/Сериалы",
-            query = "movie iptv",
-            keywords = "movie, series, serial, cinema, vod, action, thriller, horror, кино, сериалы, боевик, триллер, ужасы",
+            query = "movie series vod iptv playlist m3u m3u8",
+            keywords = "movie, movies, series, serial, cinema, film, films, vod, action, thriller, horror, кино, фильмы, сериалы, боевик, триллер, ужасы, raw, github, iptv-org, m3u, m3u8",
             provider = ScannerProviderScope.ALL,
-            description = "Поиск плейлистов с фильмами, сериалами и VOD-каталогами."
+            description = "Поиск кино/сериалов/VOD и тематических каналов M3U/M3U8."
         ),
         ScannerPreset(
             id = "series",
@@ -3086,10 +3275,10 @@ private fun scannerPresets(): List<ScannerPreset> {
         ScannerPreset(
             id = "voxlist",
             title = "Voxlist/Repo",
-            query = "voxlist iptv",
-            keywords = "voxlist, iptv, channel list, m3u, m3u8, github, gitlab, список каналов",
+            query = "Voxlist voxlist.m3u iptv github raw",
+            keywords = "voxlist, voxlist.m3u, iptv, channel list, raw.githubusercontent.com, github, gitlab, m3u, m3u8, список каналов",
             provider = ScannerProviderScope.ALL,
-            description = "Целевой пресет для известных репозиториев/брендовых названий списков."
+            description = "Целевой поиск Voxlist и похожих репозиториев с прямыми raw M3U."
         ),
         ScannerPreset(
             id = "ace",
