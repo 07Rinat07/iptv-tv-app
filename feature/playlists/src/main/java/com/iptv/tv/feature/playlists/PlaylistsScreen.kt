@@ -236,8 +236,16 @@ private fun PlaylistContentSummaryCard(summary: PlaylistContentSummary) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text("Содержимое выбранного плейлиста", style = MaterialTheme.typography.titleMedium)
-            Text("Источник: ${sourceTypeLabel(summary.sourceType.name)} | ${summary.source}")
-            Text("EPG: ${summary.epgSourceUrl?.takeIf { it.isNotBlank() } ?: "не задан"}")
+            Text(
+                "Источник: ${sourceTypeLabel(summary.sourceType.name)} | ${summary.source}",
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                "EPG: ${summary.epgSourceUrl?.takeIf { it.isNotBlank() } ?: "не задан"}",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             Text(
                 "Каналы: всего=${summary.totalChannels}, видимых=${summary.visibleChannels}, " +
                     "скрытых=${summary.hiddenChannels}"
@@ -251,9 +259,13 @@ private fun PlaylistContentSummaryCard(summary: PlaylistContentSummary) {
                     "down=${summary.unavailableChannels}, unknown=${summary.unknownHealthChannels}"
             )
             if (summary.topGroups.isNotEmpty()) {
-                Text("Топ групп: ${summary.topGroups.joinToString { "${it.first} (${it.second})" }}")
+                Text(
+                    "Топ групп: ${summary.topGroups.joinToString { "${it.first} (${it.second})" }}",
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
-            Text("Примеры каналов и логотипов", style = MaterialTheme.typography.titleSmall)
+            Text("Примеры каналов", style = MaterialTheme.typography.titleSmall)
             summary.channelPreviews.take(12).forEach { preview ->
                 SummaryChannelPreviewRow(preview)
             }
@@ -280,10 +292,17 @@ private fun SummaryChannelPreviewRow(preview: ChannelPreview) {
             }
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(preview.name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                preview.name,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             Text(
                 "${preview.group ?: "Без группы"} | ${preview.health} | скрыт=${if (preview.isHidden) "да" else "нет"}",
-                style = MaterialTheme.typography.bodySmall
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
