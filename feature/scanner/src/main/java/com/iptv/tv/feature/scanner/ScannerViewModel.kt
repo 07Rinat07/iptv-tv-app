@@ -2950,14 +2950,14 @@ class ScannerViewModel @Inject constructor(
 
     private companion object {
         const val SEARCH_DISPLAY_LIMIT = 120
-        const val SEARCH_SAVE_FETCH_TARGET = Int.MAX_VALUE
+        const val SEARCH_SAVE_FETCH_TARGET = 200
         const val SEARCH_MAX_RUNTIME_MINUTES = 8
         const val SEARCH_MAX_RUNTIME_MS = SEARCH_MAX_RUNTIME_MINUTES * 60 * 1000L
         const val SEARCH_WATCHDOG_MS = 8_000L
         const val STEP_PULSE_MS = 3_000L
-        const val NETWORK_STEP_TIMEOUT_MS = 12_000L
+        const val NETWORK_STEP_TIMEOUT_MS = 18_000L
         const val NETWORK_STEP_TIMEOUT_DEGRADED_MS = 8_000L
-        const val STEP_HARD_TIMEOUT_MS = 16_000L
+        const val STEP_HARD_TIMEOUT_MS = 26_000L
         const val STEP_HARD_TIMEOUT_DEGRADED_MS = 10_000L
         const val FAIL_FAST_MAX_STEP = 2
         const val MAX_PLAN_STEPS = 10
@@ -2976,11 +2976,11 @@ class ScannerViewModel @Inject constructor(
         const val PROVIDER_TIMEOUT_BACKOFF_MAX_MS = 90_000L
         const val MAX_IMPORT_FAILURE_DETAILS = 5
         const val IMPORT_PROGRESS_LOG_EVERY = 5
-        const val IMPORT_PARALLELISM = 4
+        const val IMPORT_PARALLELISM = 2
         const val IMPORT_BATCH_SIZE = 12
         const val IMPORT_ITEM_TIMEOUT_MS = 25_000L
-        const val IMPORT_ITEM_TIMEOUT_M3U_MS = 45_000L
-        const val IMPORT_ITEM_TIMEOUT_M3U_HEAVY_MS = 60_000L
+        const val IMPORT_ITEM_TIMEOUT_M3U_MS = 60_000L
+        const val IMPORT_ITEM_TIMEOUT_M3U_HEAVY_MS = 90_000L
         const val PROXY_HTTP_HOST = "http.proxyHost"
         const val PROXY_HTTP_PORT = "http.proxyPort"
         const val PROXY_HTTPS_HOST = "https.proxyHost"

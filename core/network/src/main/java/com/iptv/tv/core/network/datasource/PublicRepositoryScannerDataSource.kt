@@ -1601,7 +1601,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         const val JITTER_MAX_MS = 300L
         const val FALLBACK_RATE_LIMIT_MS = 60_000L
         const val MAX_RATE_LIMIT_WAIT_MS = 10_000L
-        const val NETWORK_CALL_TIMEOUT_MS = 8_000L
+        const val NETWORK_CALL_TIMEOUT_MS = 12_000L
 
         const val MAX_FILES_PER_REPOSITORY = 200
 

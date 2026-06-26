@@ -206,6 +206,37 @@ class PlayerViewModelMultiviewTest {
         assertEquals("Окно 2 остановлено", state.lastInfo)
     }
 
+    @Test
+    fun onInternalPlaybackError_ignoresStaleSessionError() = runTest(dispatcher) {
+        val channels = listOf(
+            testChannel(id = 10L, name = "News HD", streamUrl = "https://example.com/live/news.m3u8"),
+            testChannel(id = 11L, name = "Sports HD", streamUrl = "https://example.com/live/sports.m3u8")
+        )
+        val viewModel = createViewModel(channels = channels)
+        advanceUntilIdle()
+
+        viewModel.playSelectedInternal()
+        advanceUntilIdle()
+        val firstSession = viewModel.uiState.value.internalSession
+        assertNotNull(firstSession)
+
+        viewModel.playChannelInternal(11L)
+        advanceUntilIdle()
+        val secondSession = viewModel.uiState.value.internalSession
+        assertNotNull(secondSession)
+
+        viewModel.onInternalPlaybackError(
+            message = "Source error: InvalidResponseCodeException: Response code: 504",
+            sessionId = firstSession?.sessionId
+        )
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals(11L, state.internalSession?.channelId)
+        assertEquals(secondSession?.sessionId, state.internalSession?.sessionId)
+        assertEquals(0, state.retryAttempt)
+    }
+
     private fun createViewModel(
         channels: List<Channel>,
         supportedPaneCount: Int = 4

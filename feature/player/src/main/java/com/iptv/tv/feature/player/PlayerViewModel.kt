@@ -229,6 +229,8 @@ class PlayerViewModel @Inject constructor(
     private var channelsJob: Job? = null
     private var overrideJob: Job? = null
     private var epgJob: Job? = null
+    private var primaryPlaybackJob: Job? = null
+    private var primaryPlaybackRequestId: Long = 0L
     private var lastInternalPlayRequestChannelId: Long? = null
     private var lastInternalPlayRequestAtMs: Long = 0L
     private var lastEpgRequestedChannelId: Long? = null
@@ -253,6 +255,21 @@ class PlayerViewModel @Inject constructor(
             4 -> state.quaternaryInternalSession
             else -> null
         }
+    }
+
+    private fun beginPrimaryPlaybackRequest(): Long {
+        primaryPlaybackJob?.cancel()
+        primaryPlaybackRequestId += 1L
+        return primaryPlaybackRequestId
+    }
+
+    private fun invalidatePrimaryPlaybackRequest() {
+        primaryPlaybackJob?.cancel()
+        primaryPlaybackRequestId += 1L
+    }
+
+    private fun isCurrentPrimaryPlaybackRequest(requestId: Long): Boolean {
+        return requestId == primaryPlaybackRequestId
     }
 
     private fun stopAdditionalSessionsForMode(
@@ -283,6 +300,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun selectPlaylist(playlistId: Long) {
+        invalidatePrimaryPlaybackRequest()
         lastEpgRequestedChannelId = null
         val selectedPlaylist = _uiState.value.playlists.firstOrNull { it.id == playlistId }
         _uiState.update {
@@ -305,6 +323,8 @@ class PlayerViewModel @Inject constructor(
                     "EPG мастер: выберите плейлист"
                 },
                 internalSession = null,
+                isStartingPlayback = false,
+                retryAttempt = 0,
                 lastError = null,
                 lastInfo = null
             ).let { clearedState ->
@@ -338,6 +358,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun selectGroup(group: String?) {
+        invalidatePrimaryPlaybackRequest()
         _uiState.update { state ->
             val normalized = group?.trim()?.ifBlank { null }
             val channelsByGroup = state.channels.filter { channel ->
@@ -374,6 +395,8 @@ class PlayerViewModel @Inject constructor(
                 channelEpgInfo = null,
                 epgStatus = if (selectedChannel != null) "EPG: загрузка..." else "EPG: канал не выбран",
                 internalSession = null,
+                isStartingPlayback = false,
+                retryAttempt = 0,
                 lastError = null,
                 lastInfo = null
             ).let { clearedState ->
@@ -400,6 +423,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun selectSubGroup(subGroup: String?) {
+        invalidatePrimaryPlaybackRequest()
         _uiState.update { state ->
             val normalizedSub = subGroup?.trim()?.ifBlank { null }
             val channelsByGroup = state.channels.filter { channel ->
@@ -425,6 +449,8 @@ class PlayerViewModel @Inject constructor(
                 channelEpgInfo = null,
                 epgStatus = if (selectedChannel != null) "EPG: загрузка..." else "EPG: канал не выбран",
                 internalSession = null,
+                isStartingPlayback = false,
+                retryAttempt = 0,
                 lastError = null,
                 lastInfo = null
             ).let { clearedState ->
@@ -944,7 +970,8 @@ class PlayerViewModel @Inject constructor(
             return
         }
 
-        viewModelScope.launch {
+        val requestId = beginPrimaryPlaybackRequest()
+        primaryPlaybackJob = viewModelScope.launch {
             _uiState.update { it.copy(isStartingPlayback = true, lastError = null) }
             safeLog(
                 status = "player_play_request",
@@ -953,6 +980,9 @@ class PlayerViewModel @Inject constructor(
             val resolvedChannel = when (val resolved = resolvePlayableChannel(channel, forceAceResolution)) {
                 is AppResult.Success -> channel.copy(streamUrl = resolved.data)
                 is AppResult.Error -> {
+                    if (!isCurrentPrimaryPlaybackRequest(requestId)) {
+                        return@launch
+                    }
                     _uiState.update {
                         it.copy(
                             isStartingPlayback = false,
@@ -970,6 +1000,15 @@ class PlayerViewModel @Inject constructor(
                 AppResult.Loading -> return@launch
             }
 
+            if (!isCurrentPrimaryPlaybackRequest(requestId)) {
+                safeLog(
+                    status = "player_play_request_stale",
+                    message = "Ignored stale playback request: requestId=$requestId, channelId=${channel.id}",
+                    playlistId = channel.playlistId
+                )
+                return@launch
+            }
+
             _uiState.update { it.copy(resolvedStreamUrl = resolvedChannel.streamUrl) }
             safeLog(
                 status = "player_resolve_ok",
@@ -978,7 +1017,11 @@ class PlayerViewModel @Inject constructor(
             )
 
             when (playerType) {
-                PlayerType.INTERNAL -> startInternalPlayback(resolvedChannel, infoMessage = "Запущен встроенный плеер")
+                PlayerType.INTERNAL -> startInternalPlayback(
+                    channel = resolvedChannel,
+                    infoMessage = "Запущен встроенный плеер",
+                    requestId = requestId
+                )
                 PlayerType.VLC -> {
                     if (context == null) {
                         _uiState.update {
@@ -993,7 +1036,7 @@ class PlayerViewModel @Inject constructor(
                             playlistId = channel.playlistId
                         )
                     } else {
-                        launchExternalVlcOrFallback(context, resolvedChannel)
+                        launchExternalVlcOrFallback(context, resolvedChannel, requestId)
                     }
                 }
             }
@@ -1015,6 +1058,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun stopInternalPlayback() {
+        invalidatePrimaryPlaybackRequest()
         _uiState.update {
             it.copy(
                 internalSession = null,
@@ -1151,9 +1195,17 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun onInternalPlaybackError(message: String, context: Context? = null) {
+    fun onInternalPlaybackError(message: String, context: Context? = null, sessionId: Long? = null) {
         val state = _uiState.value
         val session = state.internalSession ?: return
+        if (sessionId != null && session.sessionId != sessionId) {
+            logAsync(
+                status = "player_error_ignored",
+                message = "Ignored stale error: sessionId=$sessionId, current=${session.sessionId}",
+                playlistId = state.selectedPlaylistId
+            )
+            return
+        }
         val errorKind = classifyPlaybackError(message)
         if (!errorKind.retryable || state.retryAttempt >= MAX_AUTO_RETRIES) {
             viewModelScope.launch {
@@ -1283,6 +1335,7 @@ class PlayerViewModel @Inject constructor(
         channelsJob?.cancel()
         observedPlaylistId = playlistId
         if (playlistId == null) {
+            invalidatePrimaryPlaybackRequest()
             lastEpgRequestedChannelId = null
             _uiState.update {
                 stopAdditionalSessionsForMode(
@@ -1300,7 +1353,9 @@ class PlayerViewModel @Inject constructor(
                     channelPlayerOverride = null,
                     channelEpgInfo = null,
                     epgStatus = "EPG: канал не выбран",
-                    internalSession = null
+                    internalSession = null,
+                    isStartingPlayback = false,
+                    retryAttempt = 0
                     ),
                     MultiviewMode.OFF
                 )
@@ -1364,6 +1419,9 @@ class PlayerViewModel @Inject constructor(
                     val shouldStopPane2 = state.secondaryInternalSession?.channelId?.let { it !in visibleChannelIds } == true
                     val shouldStopPane3 = state.tertiaryInternalSession?.channelId?.let { it !in visibleChannelIds } == true
                     val shouldStopPane4 = state.quaternaryInternalSession?.channelId?.let { it !in visibleChannelIds } == true
+                    if (shouldStopSession) {
+                        invalidatePrimaryPlaybackRequest()
+                    }
 
                     state.copy(
                         channels = visibleChannels,
@@ -1380,6 +1438,8 @@ class PlayerViewModel @Inject constructor(
                         channelEpgInfo = if (selected == state.selectedChannelId) state.channelEpgInfo else null,
                         epgStatus = if (selected == state.selectedChannelId) state.epgStatus else "EPG: загрузка...",
                         internalSession = if (shouldStopSession) null else state.internalSession,
+                        isStartingPlayback = if (shouldStopSession) false else state.isStartingPlayback,
+                        retryAttempt = if (shouldStopSession) 0 else state.retryAttempt,
                         secondaryInternalSession = if (shouldStopPane2) null else state.secondaryInternalSession,
                         tertiaryInternalSession = if (shouldStopPane3) null else state.tertiaryInternalSession,
                         quaternaryInternalSession = if (shouldStopPane4) null else state.quaternaryInternalSession
@@ -1651,7 +1711,10 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private fun launchExternalVlcOrFallback(context: Context, channel: Channel) {
+    private fun launchExternalVlcOrFallback(context: Context, channel: Channel, requestId: Long) {
+        if (!isCurrentPrimaryPlaybackRequest(requestId)) {
+            return
+        }
         if (!vlcLauncher.isVlcInstalled(context)) {
             _uiState.update {
                 it.copy(
@@ -1664,7 +1727,11 @@ class PlayerViewModel @Inject constructor(
                 message = "VLC not installed, fallback to internal; channelId=${channel.id}",
                 playlistId = channel.playlistId
             )
-            startInternalPlayback(channel, infoMessage = "Запущен встроенный fallback")
+            startInternalPlayback(
+                channel = channel,
+                infoMessage = "Запущен встроенный fallback",
+                requestId = requestId
+            )
             return
         }
 
@@ -1708,7 +1775,11 @@ class PlayerViewModel @Inject constructor(
                 message = "VLC launch failed: ${throwable.message ?: throwable.javaClass.simpleName}, fallback to internal",
                 playlistId = channel.playlistId
             )
-            startInternalPlayback(channel, infoMessage = "Запущен встроенный fallback")
+            startInternalPlayback(
+                channel = channel,
+                infoMessage = "Запущен встроенный fallback",
+                requestId = requestId
+            )
         }
     }
 
@@ -1784,7 +1855,15 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private fun startInternalPlayback(channel: Channel, infoMessage: String) {
+    private fun startInternalPlayback(channel: Channel, infoMessage: String, requestId: Long? = null) {
+        if (requestId != null && !isCurrentPrimaryPlaybackRequest(requestId)) {
+            logAsync(
+                status = "player_start_ignored",
+                message = "Ignored stale internal start: requestId=$requestId, channelId=${channel.id}",
+                playlistId = channel.playlistId
+            )
+            return
+        }
         val state = _uiState.value
         val config = bufferConfigForProfile(
             profile = state.bufferProfile,
@@ -2196,13 +2275,36 @@ class PlayerViewModel @Inject constructor(
         val lowered = message.lowercase()
         return when {
             lowered.contains("unknownhostexception") || lowered.contains("unable to resolve host") ->
-                PlaybackErrorKind(code = "dns", hint = "DNS не может разрешить хост. Проверьте интернет/DNS/proxy.")
+                PlaybackErrorKind(
+                    code = "dns",
+                    hint = "DNS не может разрешить хост. Проверьте интернет/DNS/proxy.",
+                    retryable = false
+                )
             lowered.contains("timeout") || lowered.contains("timed out") ->
                 PlaybackErrorKind(code = "timeout", hint = "Сеть не отвечает вовремя. Увеличьте буфер или смените источник.")
             lowered.contains("http") && lowered.contains("403") ->
-                PlaybackErrorKind(code = "http_403", hint = "Доступ к потоку запрещен (403). Нужны корректные URL/заголовки.")
+                PlaybackErrorKind(
+                    code = "http_403",
+                    hint = "Доступ к потоку запрещен (403). Нужны корректные URL/заголовки.",
+                    retryable = false
+                )
             lowered.contains("http") && lowered.contains("404") ->
-                PlaybackErrorKind(code = "http_404", hint = "Поток не найден (404). Ссылка устарела или удалена.")
+                PlaybackErrorKind(
+                    code = "http_404",
+                    hint = "Поток не найден (404). Ссылка устарела или удалена.",
+                    retryable = false
+                )
+            lowered.contains("response code: 4") ->
+                PlaybackErrorKind(
+                    code = "http_4xx",
+                    hint = "Источник отклонил запрос. Ссылка или заголовки потока не подходят.",
+                    retryable = false
+                )
+            lowered.contains("response code: 5") ->
+                PlaybackErrorKind(
+                    code = "http_5xx",
+                    hint = "Сервер источника временно не отдает поток. Попробуйте другой источник или позже."
+                )
             lowered.contains("decoder") || lowered.contains("mediacodec") || lowered.contains("codec") ->
                 PlaybackErrorKind(code = "codec", hint = "Проблема декодера/кодека. Попробуйте VLC или другой поток.")
             lowered.contains("behind_live_window") ->
@@ -2234,9 +2336,9 @@ class PlayerViewModel @Inject constructor(
     )
 
     private companion object {
-        const val MAX_AUTO_RETRIES = 3
+        const val MAX_AUTO_RETRIES = 2
         // Exponential-ish backoff for retries to allow network recovery
-        val RETRY_DELAYS_MS = listOf(1_000L, 3_000L, 7_000L)
+        val RETRY_DELAYS_MS = listOf(800L, 2_000L)
         const val MAX_LOG_MESSAGE = 700
         const val MAX_PROBE_URL_LOG = 220
         const val IPTV_USER_AGENT = "myscanerIPTV/0.1 (Android TV; Media3)"

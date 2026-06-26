@@ -239,7 +239,13 @@ fun PlayerScreen(
                 selectedChannelName = selectedChannelName,
                 scale = state.playerVideoScale,
                 onReady = { sessionId -> viewModel.onInternalPlaybackReady(sessionId) },
-                onError = { message -> viewModel.onInternalPlaybackError(message, context) },
+                onError = { message ->
+                    viewModel.onInternalPlaybackError(
+                        message = message,
+                        context = context,
+                        sessionId = state.internalSession?.sessionId
+                    )
+                },
                 onClose = { viewModel.setInternalPlayerExpanded(false) }
             )
         } else {
@@ -561,7 +567,13 @@ fun PlayerScreen(
                             primaryExpanded = state.internalPlayerExpanded,
                             scale = state.playerVideoScale,
                             onPrimaryReady = { sessionId -> viewModel.onInternalPlaybackReady(sessionId) },
-                            onPrimaryError = { message -> viewModel.onInternalPlaybackError(message, context) },
+                            onPrimaryError = { sessionId, message ->
+                                viewModel.onInternalPlaybackError(
+                                    message = message,
+                                    context = context,
+                                    sessionId = sessionId
+                                )
+                            },
                             onPaneReady = viewModel::onAdditionalPlaybackReady,
                             onPaneError = viewModel::onAdditionalPlaybackError,
                             onTargetPaneSelected = { paneIndex -> selectedMultiviewTargetPane = paneIndex },
@@ -596,7 +608,13 @@ fun PlayerScreen(
                                             InternalPlayerHost(
                                                 session = session,
                                                 onReady = { viewModel.onInternalPlaybackReady(session.sessionId) },
-                                                onError = { message -> viewModel.onInternalPlaybackError(message, context) },
+                                                onError = { message ->
+                                                    viewModel.onInternalPlaybackError(
+                                                        message = message,
+                                                        context = context,
+                                                        sessionId = session.sessionId
+                                                    )
+                                                },
                                                 scale = state.playerVideoScale,
                                                 expanded = false,
                                                 onToggleExpanded = viewModel::toggleInternalPlayerSize,
@@ -625,7 +643,13 @@ fun PlayerScreen(
                                     InternalPlayerHost(
                                         session = session,
                                         onReady = { viewModel.onInternalPlaybackReady(session.sessionId) },
-                                        onError = { message -> viewModel.onInternalPlaybackError(message, context) },
+                                        onError = { message ->
+                                            viewModel.onInternalPlaybackError(
+                                                message = message,
+                                                context = context,
+                                                sessionId = session.sessionId
+                                            )
+                                        },
                                         scale = state.playerVideoScale,
                                         expanded = false,
                                         onToggleExpanded = viewModel::toggleInternalPlayerSize
@@ -851,7 +875,7 @@ private fun MultiviewPanel(
     primaryExpanded: Boolean,
     scale: PlayerVideoScale,
     onPrimaryReady: (Long) -> Unit,
-    onPrimaryError: (String) -> Unit,
+    onPrimaryError: (Long, String) -> Unit,
     onPaneReady: (Int) -> Unit,
     onPaneError: (Int, String) -> Unit,
     onTargetPaneSelected: (Int) -> Unit,
@@ -945,7 +969,11 @@ private fun MultiviewPanel(
                                         } else {
                                             { onPaneReady(paneIndex) }
                                         },
-                                        onError = if (paneIndex == 1) onPrimaryError else { message -> onPaneError(paneIndex, message) },
+                                        onError = if (paneIndex == 1) {
+                                            { message -> realPrimarySession?.sessionId?.let { onPrimaryError(it, message) } }
+                                        } else {
+                                            { message -> onPaneError(paneIndex, message) }
+                                        },
                                         onToggleExpanded = if (paneIndex == 1) onTogglePrimaryExpanded else ({}),
                                         modifier = Modifier.weight(1f)
                                     )
@@ -979,7 +1007,11 @@ private fun MultiviewPanel(
                                 } else {
                                     { onPaneReady(paneIndex) }
                                 },
-                                onError = if (paneIndex == 1) onPrimaryError else { message -> onPaneError(paneIndex, message) },
+                                onError = if (paneIndex == 1) {
+                                    { message -> realPrimarySession?.sessionId?.let { onPrimaryError(it, message) } }
+                                } else {
+                                    { message -> onPaneError(paneIndex, message) }
+                                },
                                 onToggleExpanded = if (paneIndex == 1) onTogglePrimaryExpanded else ({}),
                                 modifier = Modifier.weight(1f)
                             )
@@ -1005,7 +1037,11 @@ private fun MultiviewPanel(
                                 } else {
                                     { onPaneReady(paneIndex) }
                                 },
-                                onError = if (paneIndex == 1) onPrimaryError else { message -> onPaneError(paneIndex, message) },
+                                onError = if (paneIndex == 1) {
+                                    { message -> realPrimarySession?.sessionId?.let { onPrimaryError(it, message) } }
+                                } else {
+                                    { message -> onPaneError(paneIndex, message) }
+                                },
                                 onToggleExpanded = if (paneIndex == 1) onTogglePrimaryExpanded else ({}),
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -1683,6 +1719,7 @@ private fun InternalPlayerHost(
     val initError = playerBuildResult.exceptionOrNull()
     var currentTracks by remember(session.sessionId) { mutableStateOf(Tracks.EMPTY) }
     var readyReported by remember(session.sessionId) { mutableStateOf(false) }
+    var inlineTrackPanelVisible by remember(session.sessionId) { mutableStateOf(false) }
     var fullscreenTrackPanelVisible by remember(session.sessionId) { mutableStateOf(false) }
     val trackPreferenceStore = remember(context) { PlayerTrackPreferenceStore(context) }
     var savedTrackPreferences by remember { mutableStateOf(trackPreferenceStore.loadAll()) }
@@ -1935,7 +1972,16 @@ private fun InternalPlayerHost(
         }
     }
 
-    if (!fullscreenMode) {
+    if (!fullscreenMode && (currentTracks.groups.isNotEmpty() || savedTrackPreferences.isNotEmpty())) {
+        OutlinedButton(
+            onClick = { inlineTrackPanelVisible = !inlineTrackPanelVisible },
+            modifier = Modifier.padding(top = 8.dp)
+        ) {
+            Text(if (inlineTrackPanelVisible) "Скрыть дорожки" else "Дорожки")
+        }
+    }
+
+    if (!fullscreenMode && inlineTrackPanelVisible) {
         TrackSelectionPanel(
             modifier = Modifier
                 .fillMaxWidth()
