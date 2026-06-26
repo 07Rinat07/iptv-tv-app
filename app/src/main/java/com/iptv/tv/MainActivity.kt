@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
@@ -39,8 +41,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
@@ -109,6 +113,7 @@ private fun AppRoot(pendingDeepLinkRoute: MutableState<String?>) {
     val colorScheme = MaterialTheme.colorScheme
     var showExitConfirm by remember { mutableStateOf(false) }
     var showSectionsMenu by remember { mutableStateOf(false) }
+    var playerFullscreen by remember { mutableStateOf(false) }
 
     BackHandler {
         if (!navController.navigateUp()) {
@@ -121,6 +126,12 @@ private fun AppRoot(pendingDeepLinkRoute: MutableState<String?>) {
         pendingDeepLinkRoute.value = null
         navController.navigate(route) {
             launchSingleTop = true
+        }
+    }
+
+    LaunchedEffect(currentRoute) {
+        if (!currentRoute.startsWith(Routes.PLAYER)) {
+            playerFullscreen = false
         }
     }
 
@@ -140,64 +151,81 @@ private fun AppRoot(pendingDeepLinkRoute: MutableState<String?>) {
         Scaffold(
             containerColor = Color.Transparent,
             topBar = {
-                Surface(
-                    color = colorScheme.surface.copy(alpha = 0.92f),
-                    tonalElevation = 8.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                if (!playerFullscreen) {
+                    Surface(
+                        color = colorScheme.surface.copy(alpha = 0.92f),
+                        tonalElevation = 8.dp,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "myscanerIPTV",
-                                style = MaterialTheme.typography.headlineSmall,
-                                color = MaterialTheme.colorScheme.onSurface
+                            Image(
+                                painter = painterResource(id = R.drawable.rinat_logo),
+                                contentDescription = "Rinat",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .padding(end = 10.dp)
                             )
-                            Text(
-                                text = "Раздел: ${routeTitle(currentRoute)}",
-                                modifier = Modifier.testTag(TAG_ROUTE_LABEL),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = routeControlHint(currentRoute),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = "Rinat IPTV",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Раздел: ${routeTitle(currentRoute)}",
+                                    modifier = Modifier.testTag(TAG_ROUTE_LABEL),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            NavControlButtons(
+                                onBack = {
+                                    if (!navController.navigateUp()) {
+                                        showExitConfirm = true
+                                    }
+                                },
+                                onExit = { showExitConfirm = true },
+                                onSections = { showSectionsMenu = true }
                             )
                         }
-                        NavControlButtons(
-                            onBack = {
-                                if (!navController.navigateUp()) {
-                                    showExitConfirm = true
-                                }
-                            },
-                            onExit = { showExitConfirm = true },
-                            onSections = { showSectionsMenu = true }
-                        )
                     }
                 }
             }
         ) { paddingValues ->
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                modifier = if (playerFullscreen) {
+                    Modifier.fillMaxSize()
+                } else {
+                    Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                },
                 contentAlignment = Alignment.TopCenter
             ) {
                 Surface(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .widthIn(max = 1360.dp),
-                    color = colorScheme.surfaceVariant.copy(alpha = 0.58f),
-                    tonalElevation = 4.dp
+                    modifier = if (playerFullscreen) {
+                        Modifier.fillMaxSize()
+                    } else {
+                        Modifier
+                            .fillMaxSize()
+                            .widthIn(max = 1360.dp)
+                    },
+                    color = if (playerFullscreen) {
+                        Color.Transparent
+                    } else {
+                        colorScheme.surfaceVariant.copy(alpha = 0.58f)
+                    },
+                    tonalElevation = if (playerFullscreen) 0.dp else 4.dp
                 ) {
                     NavHost(
                         navController = navController,
@@ -293,7 +321,11 @@ private fun AppRoot(pendingDeepLinkRoute: MutableState<String?>) {
                             )
                         }
                         composable(Routes.PLAYER) {
-                            PlayerScreen(onPrimaryAction = { navController.navigate(Routes.SETTINGS) }, primaryLabel = "Сменить плеер")
+                            PlayerScreen(
+                                onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
+                                primaryLabel = "Сменить плеер",
+                                onFullscreenChanged = { playerFullscreen = it }
+                            )
                         }
                         composable(
                             route = Routes.PLAYER_WITH_ARG,
@@ -301,7 +333,11 @@ private fun AppRoot(pendingDeepLinkRoute: MutableState<String?>) {
                                 navArgument(PLAYER_PLAYLIST_ID_ARG) { type = NavType.LongType }
                             )
                         ) {
-                            PlayerScreen(onPrimaryAction = { navController.navigate(Routes.SETTINGS) }, primaryLabel = "Сменить плеер")
+                            PlayerScreen(
+                                onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
+                                primaryLabel = "Сменить плеер",
+                                onFullscreenChanged = { playerFullscreen = it }
+                            )
                         }
                         composable(
                             route = Routes.PLAYER_WITH_CHANNEL_ARG,
@@ -310,7 +346,11 @@ private fun AppRoot(pendingDeepLinkRoute: MutableState<String?>) {
                                 navArgument(PLAYER_CHANNEL_ID_ARG) { type = NavType.LongType }
                             )
                         ) {
-                            PlayerScreen(onPrimaryAction = { navController.navigate(Routes.SETTINGS) }, primaryLabel = "Сменить плеер")
+                            PlayerScreen(
+                                onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
+                                primaryLabel = "Сменить плеер",
+                                onFullscreenChanged = { playerFullscreen = it }
+                            )
                         }
                         composable(Routes.DOWNLOADS) {
                             DownloadsScreen()
@@ -469,15 +509,6 @@ private fun routeTitle(route: String): String = when {
         Routes.DIAGNOSTICS -> "Диагностика"
         else -> route
     }
-}
-
-private fun routeControlHint(route: String): String = when {
-    route.startsWith("player") ->
-        "Пульт: стрелки + OK, BACK. Мышь: двойной клик по видео = развернуть/свернуть."
-    route.startsWith("scanner") ->
-        "Пульт: стрелки + OK для кнопок. Мышь: клик по карточкам и кнопкам."
-    else ->
-        "Управление: пульт (D-pad + OK + BACK) и мышь."
 }
 
 object Routes {

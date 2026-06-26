@@ -66,6 +66,7 @@ class PublicRepositoryScannerDataSourceTest {
                 query = "iptv",
                 repoFilter = "demo/repo",
                 minSizeBytes = 100,
+                searchMode = ScannerSearchMode.DIRECT_API,
                 limit = 20
             )
         )
@@ -101,7 +102,11 @@ class PublicRepositoryScannerDataSourceTest {
             bitbucketApi = FakeBitbucketApi()
         )
 
-        val request = ScannerSearchRequest(query = "cache", limit = 20)
+        val request = ScannerSearchRequest(
+            query = "cache",
+            searchMode = ScannerSearchMode.DIRECT_API,
+            limit = 20
+        )
         val first = source.search(request)
         val second = source.search(request)
 
@@ -170,7 +175,13 @@ class PublicRepositoryScannerDataSourceTest {
             bitbucketApi = FakeBitbucketApi()
         )
 
-        val result = source.search(ScannerSearchRequest(query = "retry", limit = 10))
+        val result = source.search(
+            ScannerSearchRequest(
+                query = "retry",
+                searchMode = ScannerSearchMode.DIRECT_API,
+                limit = 10
+            )
+        )
 
         assertEquals(1, result.size)
     }
@@ -208,6 +219,7 @@ class PublicRepositoryScannerDataSourceTest {
             ScannerSearchRequest(
                 query = "iptv",
                 repoFilter = "demo",
+                searchMode = ScannerSearchMode.DIRECT_API,
                 limit = 20
             )
         )
@@ -262,6 +274,7 @@ class PublicRepositoryScannerDataSourceTest {
             ScannerSearchRequest(
                 query = "iptv",
                 providerScope = ScannerProviderScope.GITHUB,
+                searchMode = ScannerSearchMode.DIRECT_API,
                 limit = 20
             )
         )
@@ -515,6 +528,7 @@ class PublicRepositoryScannerDataSourceTest {
                 query = "iptv",
                 keywords = listOf("usa", "premium"),
                 providerScope = ScannerProviderScope.GITHUB,
+                searchMode = ScannerSearchMode.DIRECT_API,
                 limit = 20
             )
         )
@@ -576,6 +590,7 @@ class PublicRepositoryScannerDataSourceTest {
             ScannerSearchRequest(
                 query = "iptv",
                 providerScope = ScannerProviderScope.GITHUB,
+                searchMode = ScannerSearchMode.DIRECT_API,
                 limit = 10
             )
         )
@@ -624,6 +639,7 @@ class PublicRepositoryScannerDataSourceTest {
             ScannerSearchRequest(
                 query = "world iptv",
                 providerScope = ScannerProviderScope.GITHUB,
+                searchMode = ScannerSearchMode.DIRECT_API,
                 limit = 10
             )
         )
@@ -664,6 +680,7 @@ class PublicRepositoryScannerDataSourceTest {
             ScannerSearchRequest(
                 query = "iptv",
                 providerScope = ScannerProviderScope.GITLAB,
+                searchMode = ScannerSearchMode.DIRECT_API,
                 limit = 10
             )
         )

@@ -60,22 +60,6 @@ fun ScannerScreen(
         }
 
         item {
-            Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text("Быстрый старт", style = MaterialTheme.typography.titleMedium)
-                    Text("1) Выберите пресет (например: Русские каналы)")
-                    Text("2) Проверьте запрос и источник поиска")
-                    Text("3) Нажмите \"Найти и сохранить найденное\"")
-                    Text("4) Поиск идет до ${state.progressTimeLimitSeconds / 60} минут, затем найденное сохранится автоматически")
-                    Text("5) Откройте \"Мои плейлисты\"")
-                }
-            }
-        }
-
-        item {
             StatusCard(state = state)
         }
 
@@ -139,10 +123,6 @@ fun ScannerScreen(
         }
 
         item {
-            ProviderHealthCard(items = state.providerHealth)
-        }
-
-        item {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -171,14 +151,6 @@ fun ScannerScreen(
                     Text("Экспорт найденных ссылок (.m3u8)")
                 }
             }
-            Text(
-                "Подсказка: при остановке сканера найденное сохраняется. Во время сохранения будет показан прогресс и текущий источник.",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                "Управление: пульт (стрелки + OK) и мышь поддерживаются на всех кнопках.",
-                style = MaterialTheme.typography.bodySmall
-            )
         }
 
         item {
@@ -201,6 +173,10 @@ fun ScannerScreen(
         }
 
         if (state.showAdvancedFilters) {
+            item {
+                ProviderHealthCard(items = state.providerHealth)
+            }
+
             item {
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),

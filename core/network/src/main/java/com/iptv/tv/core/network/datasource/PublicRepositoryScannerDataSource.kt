@@ -110,7 +110,13 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             )
             .take(normalized.limit)
 
-        val webFallback = if (webEnabled && (normalized.searchMode == ScannerSearchMode.SEARCH_ENGINE || filtered.isEmpty())) {
+        val webFallback = if (
+            webEnabled &&
+            (
+                normalized.searchMode == ScannerSearchMode.SEARCH_ENGINE ||
+                    filtered.size < WEB_FALLBACK_MIN_RESULTS
+                )
+        ) {
             searchViaWebEngines(normalized)
         } else {
             WebFallbackResult(emptyList(), null)
@@ -678,6 +684,16 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             variations += "$base site:m3u4u.com"
             variations += "$base site:pastebin.com m3u"
             variations += "$base site:paste.ee m3u"
+            variations += "$searchBase \"#EXTINF\" \"http\""
+            variations += "$searchBase \"#EXTM3U\" \"http\""
+            variations += "$searchBase \"#EXTM3U\" \"tvg-name\""
+            variations += "$searchBase \"index.m3u\""
+            variations += "$searchBase \"playlist.m3u\""
+            variations += "$searchBase \"playlist.m3u8\""
+            variations += "$searchBase raw \"#EXTM3U\""
+            variations += "\"raw.githubusercontent.com\" \"$base\" \"#EXTM3U\""
+            variations += "\"gist.githubusercontent.com\" \"$base\" \"#EXTM3U\""
+            variations += "\"pastebin.com/raw\" \"$base\" \"#EXTM3U\""
         }
 
         return variations
@@ -1602,7 +1618,8 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         const val BITBUCKET_SOURCE_PAGE_SIZE = 100
         const val MAX_BITBUCKET_PAGES = 3
 
-        const val MAX_WEB_SEARCH_QUERIES = 32
+        const val WEB_FALLBACK_MIN_RESULTS = 8
+        const val MAX_WEB_SEARCH_QUERIES = 48
         const val MAX_WEB_LINKS_PER_QUERY = 36
         const val MAX_WEB_PROBES = 48
         const val MAX_WEB_PAGE_CRAWLS = 12

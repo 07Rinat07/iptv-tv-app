@@ -1,6 +1,7 @@
 package com.iptv.tv.feature.player
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -30,8 +31,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -39,6 +42,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.key.Key
@@ -86,7 +90,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-private const val CHANNEL_QUICK_PANEL_LIMIT = 500
+private const val CHANNEL_QUICK_PANEL_LIMIT = 200
 private const val QUICK_SCROLL_STEP = 8
 private const val QUICK_PAGE_STEP = 24
 private const val IPTV_USER_AGENT = "myscanerIPTV/0.1 (Android TV; Media3)"
@@ -105,6 +109,7 @@ private data class PlayerTrackOption(
 fun PlayerScreen(
     onPrimaryAction: (() -> Unit)? = null,
     primaryLabel: String = "Настройки",
+    onFullscreenChanged: (Boolean) -> Unit = {},
     viewModel: PlayerViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -181,7 +186,7 @@ fun PlayerScreen(
     var showStreamTools by rememberSaveable { mutableStateOf(false) }
     var showEpgWizard by rememberSaveable { mutableStateOf(false) }
     var showViewOptions by rememberSaveable { mutableStateOf(false) }
-    var selectedMultiviewTargetPane by rememberSaveable { mutableStateOf(2) }
+    var selectedMultiviewTargetPane by rememberSaveable { mutableIntStateOf(2) }
     val selectedChannelName = state.channels.firstOrNull { it.id == state.selectedChannelId }?.name
     val multiviewLabel = when (state.multiviewMode) {
         MultiviewMode.OFF -> "выкл"
@@ -215,6 +220,14 @@ fun PlayerScreen(
         if (validTargets.isNotEmpty() && selectedMultiviewTargetPane !in validTargets) {
             selectedMultiviewTargetPane = validTargets.first()
         }
+    }
+
+    LaunchedEffect(state.internalPlayerExpanded) {
+        onFullscreenChanged(state.internalPlayerExpanded)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { onFullscreenChanged(false) }
     }
 
     Box(
@@ -300,33 +313,6 @@ fun PlayerScreen(
                             }
                         }
                     }
-                }
-            }
-            item {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CompactToggleButton(
-                        selected = showQuickChannels,
-                        text = if (showQuickChannels) "Быстрый список" else "Показать список",
-                        onClick = { showQuickChannels = !showQuickChannels }
-                    )
-                    CompactToggleButton(
-                        selected = showChannelCatalog,
-                        text = "Каталог",
-                        onClick = { showChannelCatalog = !showChannelCatalog }
-                    )
-                    CompactToggleButton(
-                        selected = showPlaylists,
-                        text = "Плейлисты",
-                        onClick = { showPlaylists = !showPlaylists }
-                    )
-                    CompactToggleButton(
-                        selected = showActions,
-                        text = "Действия",
-                        onClick = { showActions = !showActions }
-                    )
                 }
             }
             if (showTechnicalInfo) {
@@ -1087,60 +1073,50 @@ private fun FullscreenInternalPlayerOverlay(
     onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
-    Card(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(8.dp)
-            .tvFocusOutline()
+            .background(Color.Black)
     ) {
-        Column(
+        if (session != null) {
+            InternalPlayerHost(
+                session = session,
+                onReady = { onReady(session.sessionId) },
+                onError = onError,
+                scale = scale,
+                expanded = true,
+                onToggleExpanded = onClose,
+                forceFullWidth = true,
+                fullscreenMode = true
+            )
+        } else {
+            InternalPlayerPlaceholder(
+                expanded = true,
+                onToggleExpanded = onClose,
+                forceFullWidth = true,
+                selectedChannelName = selectedChannelName,
+                fullscreenMode = true
+            )
+        }
+        Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .background(Color.Black.copy(alpha = 0.52f))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    if (selectedChannelName != null) {
-                        "Fullscreen: $selectedChannelName"
-                    } else {
-                        "Fullscreen: встроенный плеер"
-                    },
-                    style = MaterialTheme.typography.titleSmall
-                )
-                OutlinedButton(onClick = onClose) {
-                    Text("Закрыть fullscreen")
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .weight(1f)
-            ) {
-                if (session != null) {
-                    InternalPlayerHost(
-                        session = session,
-                        onReady = { onReady(session.sessionId) },
-                        onError = onError,
-                        scale = scale,
-                        expanded = true,
-                        onToggleExpanded = onClose,
-                        forceFullWidth = true,
-                        fullscreenMode = true
-                    )
-                } else {
-                    InternalPlayerPlaceholder(
-                        expanded = true,
-                        onToggleExpanded = onClose,
-                        forceFullWidth = true,
-                        selectedChannelName = selectedChannelName,
-                        fullscreenMode = true
-                    )
-                }
+            Text(
+                selectedChannelName ?: "Встроенный плеер",
+                style = MaterialTheme.typography.titleSmall,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedButton(onClick = onClose) {
+                Text("Свернуть")
             }
         }
     }
@@ -1238,7 +1214,7 @@ private fun ChannelQuickPanel(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 220.dp, max = 420.dp),
+                    .heightIn(min = 180.dp, max = 320.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 LazyColumn(
@@ -1256,13 +1232,9 @@ private fun ChannelQuickPanel(
                             val mark = if (channel.id == selectedChannelId) "● " else ""
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                ChannelLogo(
-                                    logoUrl = channel.logo,
-                                    modifier = Modifier.size(28.dp)
-                                )
                                 Text(
                                     "$mark${channel.name}",
                                     maxLines = 1,
@@ -1489,7 +1461,9 @@ private fun VerticalListScrollControls(
 ) {
     val scope = rememberCoroutineScope()
     val lastIndex = (itemCount - 1).coerceAtLeast(0)
-    val firstVisible = listState.firstVisibleItemIndex.coerceIn(0, lastIndex)
+    val firstVisible by remember(listState, lastIndex) {
+        derivedStateOf { listState.firstVisibleItemIndex.coerceIn(0, lastIndex) }
+    }
     val enabled = itemCount > 1
 
     fun scrollTo(index: Int) {
@@ -1963,6 +1937,9 @@ private fun InternalPlayerHost(
 
     if (!fullscreenMode) {
         TrackSelectionPanel(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
             tracks = currentTracks,
             savedPreferences = savedTrackPreferences,
             onSelectAuto = { trackType ->
@@ -2019,9 +1996,7 @@ private fun InternalPlayerHost(
 @UnstableApi
 @Composable
 private fun TrackSelectionPanel(
-    modifier: Modifier = Modifier
-        .fillMaxWidth()
-        .padding(top = 8.dp),
+    modifier: Modifier = Modifier,
     tracks: Tracks,
     savedPreferences: Map<Int, PlayerTrackPreference>,
     onSelectAuto: (Int) -> Unit,
@@ -2262,6 +2237,7 @@ private fun formatTrackLabel(format: Format, trackType: Int, trackIndex: Int): S
         ?: "Дорожка ${trackIndex + 1}"
 }
 
+@UnstableApi
 private fun inferMediaMimeType(url: String): String? {
     val lowered = url.substringBefore('|').lowercase(Locale.ROOT)
     val path = lowered.substringBefore('?').substringBefore('#')
