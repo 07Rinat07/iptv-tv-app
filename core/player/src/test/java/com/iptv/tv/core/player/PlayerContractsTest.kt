@@ -11,6 +11,16 @@ import org.junit.Test
 class PlayerContractsTest {
 
     @Test
+    fun standardBufferProfile_startsWithinTvBoxTargetWindow() {
+        val config = bufferConfigForProfile(profile = BufferProfile.STANDARD)
+
+        assertEquals(6_000, config.minBufferMs)
+        assertEquals(45_000, config.maxBufferMs)
+        assertEquals(1_500, config.bufferForPlaybackMs)
+        assertEquals(2_500, config.bufferForPlaybackAfterRebufferMs)
+    }
+
+    @Test
     fun manualBufferProfile_usesProvidedValues() {
         val config = bufferConfigForProfile(
             profile = BufferProfile.MANUAL,
@@ -49,4 +59,3 @@ class PlayerContractsTest {
         assertFalse(isExternalPlayer(PlayerType.INTERNAL))
     }
 }
-

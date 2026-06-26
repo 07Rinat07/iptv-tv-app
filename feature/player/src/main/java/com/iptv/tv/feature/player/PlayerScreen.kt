@@ -21,8 +21,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -91,6 +89,7 @@ import kotlinx.coroutines.launch
 private const val CHANNEL_QUICK_PANEL_LIMIT = 500
 private const val QUICK_SCROLL_STEP = 8
 private const val QUICK_PAGE_STEP = 24
+private const val IPTV_USER_AGENT = "myscanerIPTV/0.1 (Android TV; Media3)"
 
 private data class PlayerTrackOption(
     val groupIndex: Int,
@@ -177,10 +176,11 @@ fun PlayerScreen(
     var showTechnicalInfo by rememberSaveable { mutableStateOf(false) }
     var showPlaylists by rememberSaveable { mutableStateOf(false) }
     var showQuickChannels by rememberSaveable { mutableStateOf(true) }
-    var showChannelCatalog by rememberSaveable { mutableStateOf(true) }
+    var showChannelCatalog by rememberSaveable { mutableStateOf(false) }
     var showActions by rememberSaveable { mutableStateOf(false) }
     var showStreamTools by rememberSaveable { mutableStateOf(false) }
     var showEpgWizard by rememberSaveable { mutableStateOf(false) }
+    var showViewOptions by rememberSaveable { mutableStateOf(false) }
     var selectedMultiviewTargetPane by rememberSaveable { mutableStateOf(2) }
     val selectedChannelName = state.channels.firstOrNull { it.id == state.selectedChannelId }?.name
     val multiviewLabel = when (state.multiviewMode) {
@@ -237,57 +237,96 @@ fun PlayerScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
             item {
-                Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
-                Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    "Health: рабочих=${healthStats.first} | unknown=${healthStats.second} | unavailable=${healthStats.third}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text("Выбранный поток: ${state.selectedStreamKind}", style = MaterialTheme.typography.bodySmall)
-                Text(state.epgStatus, style = MaterialTheme.typography.bodySmall)
-                if (state.parentalControlEnabled && state.parentalHideAdultChannels) {
-                    Text("Parental: скрыто adult-каналов=$parentalHiddenCount", style = MaterialTheme.typography.bodySmall)
+                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(text = "Плеер", style = MaterialTheme.typography.headlineSmall)
+                        Text(
+                            text = selectedChannelName?.let { "Выбран канал: $it" }
+                                ?: "Выберите канал из списка",
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(onClick = { viewModel.playSelected(context) }, enabled = state.selectedChannelId != null && !state.isStartingPlayback) {
+                                Text(if (state.isStartingPlayback) "Запуск..." else "Смотреть")
+                            }
+                            OutlinedButton(onClick = viewModel::stopInternalPlayback) {
+                                Text("Стоп")
+                            }
+                            OutlinedButton(onClick = { viewModel.toggleInternalPlayerSize() }) {
+                                Text("Fullscreen")
+                            }
+                            OutlinedButton(onClick = { showViewOptions = !showViewOptions }) {
+                                Text(if (showViewOptions) "Скрыть настройки вида" else "Вид")
+                            }
+                        }
+                        if (showViewOptions) {
+                            PlayerViewOptions(
+                                showQuickChannels = showQuickChannels,
+                                showChannelCatalog = showChannelCatalog,
+                                showPlaylists = showPlaylists,
+                                showActions = showActions,
+                                showStreamTools = showStreamTools,
+                                showEpgWizard = showEpgWizard,
+                                showTechnicalInfo = showTechnicalInfo,
+                                hideUnavailable = hideUnavailable,
+                                onToggleQuickChannels = { showQuickChannels = !showQuickChannels },
+                                onToggleChannelCatalog = { showChannelCatalog = !showChannelCatalog },
+                                onTogglePlaylists = { showPlaylists = !showPlaylists },
+                                onToggleActions = { showActions = !showActions },
+                                onToggleStreamTools = { showStreamTools = !showStreamTools },
+                                onToggleEpgWizard = { showEpgWizard = !showEpgWizard },
+                                onToggleTechnicalInfo = { showTechnicalInfo = !showTechnicalInfo },
+                                onToggleUnavailable = { hideUnavailable = !hideUnavailable },
+                                onExportLogs = { viewModel.exportLogs(context) }
+                            )
+                        }
+                        if (showTechnicalInfo) {
+                            Text(
+                                "Каналы: рабочих=${healthStats.first}, неизвестно=${healthStats.second}, недоступно=${healthStats.third}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text("Поток: ${state.selectedStreamKind}", style = MaterialTheme.typography.bodySmall)
+                            Text(state.epgStatus, style = MaterialTheme.typography.bodySmall)
+                            if (state.parentalControlEnabled && state.parentalHideAdultChannels) {
+                                Text("Скрыто родительским фильтром: $parentalHiddenCount", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
                 }
+            }
+            item {
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(onClick = { showActions = !showActions }) {
-                        Text(if (showActions) "Скрыть действия" else "Показать действия")
-                    }
-                    OutlinedButton(onClick = { showStreamTools = !showStreamTools }) {
-                        Text(if (showStreamTools) "Скрыть тест потока" else "Показать тест потока")
-                    }
-                    OutlinedButton(onClick = { showTechnicalInfo = !showTechnicalInfo }) {
-                        Text(if (showTechnicalInfo) "Скрыть тех.инфо" else "Показать тех.инфо")
-                    }
-                    OutlinedButton(onClick = { showPlaylists = !showPlaylists }) {
-                        Text(if (showPlaylists) "Свернуть плейлисты" else "Развернуть плейлисты")
-                    }
-                    OutlinedButton(onClick = { showQuickChannels = !showQuickChannels }) {
-                        Text(if (showQuickChannels) "Скрыть быстрый список каналов" else "Показать быстрый список каналов")
-                    }
-                    OutlinedButton(onClick = { showChannelCatalog = !showChannelCatalog }) {
-                        Text(if (showChannelCatalog) "Свернуть каталог каналов" else "Развернуть каталог каналов")
-                    }
-                    OutlinedButton(onClick = { showEpgWizard = !showEpgWizard }) {
-                        Text(if (showEpgWizard) "Скрыть EPG мастер" else "Показать EPG мастер")
-                    }
-                    OutlinedButton(onClick = { viewModel.toggleInternalPlayerSize() }) {
-                        Text(if (state.internalPlayerExpanded) "Выйти из fullscreen" else "Fullscreen плеер")
-                    }
-                    OutlinedButton(onClick = { hideUnavailable = !hideUnavailable }) {
-                        Text(
-                            if (hideUnavailable) {
-                                "Показывать UNAVAILABLE"
-                            } else {
-                                "Скрывать UNAVAILABLE"
-                            }
-                        )
-                    }
-                    OutlinedButton(onClick = { viewModel.exportLogs(context) }) {
-                        Text("Экспорт логов")
-                    }
+                    CompactToggleButton(
+                        selected = showQuickChannels,
+                        text = if (showQuickChannels) "Быстрый список" else "Показать список",
+                        onClick = { showQuickChannels = !showQuickChannels }
+                    )
+                    CompactToggleButton(
+                        selected = showChannelCatalog,
+                        text = "Каталог",
+                        onClick = { showChannelCatalog = !showChannelCatalog }
+                    )
+                    CompactToggleButton(
+                        selected = showPlaylists,
+                        text = "Плейлисты",
+                        onClick = { showPlaylists = !showPlaylists }
+                    )
+                    CompactToggleButton(
+                        selected = showActions,
+                        text = "Действия",
+                        onClick = { showActions = !showActions }
+                    )
                 }
             }
             if (showTechnicalInfo) {
@@ -551,7 +590,6 @@ fun PlayerScreen(
                                 channels = filteredChannels,
                                 selectedChannelId = multiviewTargetChannelId,
                                 title = "Быстрый выбор для окна $selectedMultiviewTargetPane",
-                                hint = "OK: отправить канал в окно $selectedMultiviewTargetPane. Переключите окно кнопками выше.",
                                 onSelect = { channelId ->
                                     viewModel.playChannelInPane(channelId, selectedMultiviewTargetPane)
                                 }
@@ -756,6 +794,62 @@ fun PlayerScreen(
         }
     }
 }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PlayerViewOptions(
+    showQuickChannels: Boolean,
+    showChannelCatalog: Boolean,
+    showPlaylists: Boolean,
+    showActions: Boolean,
+    showStreamTools: Boolean,
+    showEpgWizard: Boolean,
+    showTechnicalInfo: Boolean,
+    hideUnavailable: Boolean,
+    onToggleQuickChannels: () -> Unit,
+    onToggleChannelCatalog: () -> Unit,
+    onTogglePlaylists: () -> Unit,
+    onToggleActions: () -> Unit,
+    onToggleStreamTools: () -> Unit,
+    onToggleEpgWizard: () -> Unit,
+    onToggleTechnicalInfo: () -> Unit,
+    onToggleUnavailable: () -> Unit,
+    onExportLogs: () -> Unit
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        CompactToggleButton(showQuickChannels, "Быстрый список", onToggleQuickChannels)
+        CompactToggleButton(showChannelCatalog, "Каталог", onToggleChannelCatalog)
+        CompactToggleButton(showPlaylists, "Плейлисты", onTogglePlaylists)
+        CompactToggleButton(showActions, "Действия", onToggleActions)
+        CompactToggleButton(showStreamTools, "Тест потока", onToggleStreamTools)
+        CompactToggleButton(showEpgWizard, "EPG", onToggleEpgWizard)
+        CompactToggleButton(showTechnicalInfo, "Техинфо", onToggleTechnicalInfo)
+        CompactToggleButton(!hideUnavailable, "Недоступные", onToggleUnavailable)
+        OutlinedButton(onClick = onExportLogs) {
+            Text("Логи")
+        }
+    }
+}
+
+@Composable
+private fun CompactToggleButton(
+    selected: Boolean,
+    text: String,
+    onClick: () -> Unit
+) {
+    if (selected) {
+        Button(onClick = onClick) {
+            Text(text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    } else {
+        OutlinedButton(onClick = onClick) {
+            Text(text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
 }
 
 @Composable
@@ -1059,7 +1153,6 @@ private fun ChannelQuickPanel(
     channels: List<Channel>,
     selectedChannelId: Long?,
     title: String = "Список каналов",
-    hint: String = "Прокрутка + OK: выбрать и сразу играть.",
     onSelect: (Long) -> Unit
 ) {
     val limited = channels.take(CHANNEL_QUICK_PANEL_LIMIT)
@@ -1112,14 +1205,11 @@ private fun ChannelQuickPanel(
                 .focusGroup(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
             Text(
-                "$hint Показано: ${limited.size}${if (channels.size > limited.size) " из ${channels.size}" else ""}",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                "Пульт: кнопки ниже (▲/▼/Pg/края). За краем списка идет переход к началу/концу.",
-                style = MaterialTheme.typography.bodySmall
+                "$title · ${limited.size}${if (channels.size > limited.size) " из ${channels.size}" else ""}",
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
@@ -1213,10 +1303,6 @@ private fun PlaylistScrollPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text("Плейлисты (${playlists.size})", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Прокрутка сбоку: начало/страницы/конец. Выбор открывает плейлист.",
-                style = MaterialTheme.typography.bodySmall
-            )
             if (playlists.isEmpty()) {
                 Text("Плейлисты не найдены")
                 return@Column
@@ -1240,7 +1326,13 @@ private fun PlaylistScrollPanel(
                                 modifier = Modifier.padding(10.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text("${playlist.name} (id=${playlist.id}, каналов=${playlist.channelCount})")
+                                Text(
+                                    playlist.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text("${playlist.channelCount} каналов", style = MaterialTheme.typography.bodySmall)
                                 Button(onClick = { onSelectPlaylist(playlist.id) }) {
                                     Text(
                                         if (playlist.id == selectedPlaylistId) {
@@ -1288,11 +1380,7 @@ private fun ChannelCatalogScrollPanel(
             modifier = Modifier.padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Каталог каналов: ${channels.size}", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "Боковая прокрутка ускоряет переход по большому списку; выбор сразу запускает встроенный плеер.",
-                style = MaterialTheme.typography.bodySmall
-            )
+            Text("Каталог каналов · ${channels.size}", style = MaterialTheme.typography.titleSmall)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1355,10 +1443,17 @@ private fun ChannelCatalogRow(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(channel.name, style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "Группа: ${channel.group ?: "-"} | health=${channel.health}",
-                        style = MaterialTheme.typography.bodySmall
+                        channel.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        channel.group ?: "Без группы",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (showTechnicalInfo) {
                         Text("URL: ${channel.streamUrl}", style = MaterialTheme.typography.bodySmall)
@@ -1583,16 +1678,17 @@ private fun InternalPlayerHost(
     val context = LocalContext.current
     val playerBuildResult = remember(session.sessionId, session.requestHeaders) {
         runCatching {
+            val requestHeaders = compatibleHttpHeaders(session.requestHeaders)
             val httpDataSourceFactory = DefaultHttpDataSource.Factory()
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(10_000)
                 .setReadTimeoutMs(20_000)
-                .setUserAgent("myscanerIPTV/0.1")
-                .setDefaultRequestProperties(session.requestHeaders)
+                .setUserAgent(requestHeaders["User-Agent"] ?: IPTV_USER_AGENT)
+                .setDefaultRequestProperties(requestHeaders.filterKeys { it != "User-Agent" })
             val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
             val renderersFactory = DefaultRenderersFactory(context)
                 .setEnableDecoderFallback(true)
-                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             val trackSelector = DefaultTrackSelector(context).apply {
                 setParameters(
                     buildUponParameters()
@@ -1943,50 +2039,62 @@ private fun TrackSelectionPanel(
         return
     }
 
-    Card(modifier = modifier.tvFocusOutline()) {
-        Column(
+    Card(modifier = modifier.heightIn(max = 260.dp).tvFocusOutline()) {
+        LazyColumn(
             modifier = Modifier
-                .padding(10.dp)
-                .verticalScroll(rememberScrollState()),
+                .fillMaxWidth()
+                .padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Дорожки плеера", style = MaterialTheme.typography.titleSmall)
+            item {
+                Text("Дорожки плеера", style = MaterialTheme.typography.titleSmall)
+            }
             if (savedPreferences.isNotEmpty()) {
-                Text(
-                    text = "Сохранённые предпочтения применяются автоматически",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                OutlinedButton(onClick = onClearSavedPreferences) {
-                    Text("Сбросить предпочтения")
+                item {
+                    Text(
+                        text = "Сохранённые предпочтения применяются автоматически",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                item {
+                    OutlinedButton(onClick = onClearSavedPreferences) {
+                        Text("Сбросить предпочтения")
+                    }
                 }
             }
-            TrackTypeRow(
-                title = "Видео",
-                trackType = C.TRACK_TYPE_VIDEO,
-                options = videoOptions,
-                groups = groups,
-                onSelectAuto = onSelectAuto,
-                onDisable = onDisable,
-                onSelectTrack = onSelectTrack
-            )
-            TrackTypeRow(
-                title = "Аудио",
-                trackType = C.TRACK_TYPE_AUDIO,
-                options = audioOptions,
-                groups = groups,
-                onSelectAuto = onSelectAuto,
-                onDisable = onDisable,
-                onSelectTrack = onSelectTrack
-            )
-            TrackTypeRow(
-                title = "Субтитры",
-                trackType = C.TRACK_TYPE_TEXT,
-                options = textOptions,
-                groups = groups,
-                onSelectAuto = onSelectAuto,
-                onDisable = onDisable,
-                onSelectTrack = onSelectTrack
-            )
+            item {
+                TrackTypeRow(
+                    title = "Видео",
+                    trackType = C.TRACK_TYPE_VIDEO,
+                    options = videoOptions,
+                    groups = groups,
+                    onSelectAuto = onSelectAuto,
+                    onDisable = onDisable,
+                    onSelectTrack = onSelectTrack
+                )
+            }
+            item {
+                TrackTypeRow(
+                    title = "Аудио",
+                    trackType = C.TRACK_TYPE_AUDIO,
+                    options = audioOptions,
+                    groups = groups,
+                    onSelectAuto = onSelectAuto,
+                    onDisable = onDisable,
+                    onSelectTrack = onSelectTrack
+                )
+            }
+            item {
+                TrackTypeRow(
+                    title = "Субтитры",
+                    trackType = C.TRACK_TYPE_TEXT,
+                    options = textOptions,
+                    groups = groups,
+                    onSelectAuto = onSelectAuto,
+                    onDisable = onDisable,
+                    onSelectTrack = onSelectTrack
+                )
+            }
         }
     }
 }
@@ -2155,13 +2263,48 @@ private fun formatTrackLabel(format: Format, trackType: Int, trackIndex: Int): S
 }
 
 private fun inferMediaMimeType(url: String): String? {
-    val lowered = url.lowercase()
+    val lowered = url.substringBefore('|').lowercase(Locale.ROOT)
+    val path = lowered.substringBefore('?').substringBefore('#')
+    val query = lowered.substringAfter('?', "")
     return when {
-        lowered.contains(".m3u8") -> MimeTypes.APPLICATION_M3U8
-        lowered.contains(".mpd") -> MimeTypes.APPLICATION_MPD
-        lowered.contains("/manifest") && lowered.contains("ism") -> MimeTypes.APPLICATION_SS
+        path.endsWith(".m3u8") ||
+            path.endsWith(".m3u") ||
+            query.contains("type=m3u8") ||
+            query.contains("format=m3u8") ||
+            query.contains("extension=m3u8") -> MimeTypes.APPLICATION_M3U8
+        path.endsWith(".mpd") || query.contains("type=mpd") -> MimeTypes.APPLICATION_MPD
+        (path.contains("/manifest") && path.contains("ism")) ||
+            path.endsWith(".ism") ||
+            path.endsWith(".isml") -> MimeTypes.APPLICATION_SS
         lowered.startsWith("rtsp://") -> MimeTypes.APPLICATION_RTSP
+        path.endsWith(".ts") || path.endsWith(".m2ts") || path.endsWith(".mts") -> MimeTypes.VIDEO_MP2T
+        path.endsWith(".flv") -> MimeTypes.VIDEO_FLV
+        path.endsWith(".mp4") || path.endsWith(".m4v") || path.endsWith(".mov") -> MimeTypes.VIDEO_MP4
+        path.endsWith(".mkv") -> MimeTypes.VIDEO_MATROSKA
+        path.endsWith(".webm") -> MimeTypes.VIDEO_WEBM
+        path.endsWith(".avi") -> MimeTypes.VIDEO_AVI
+        path.endsWith(".mpg") || path.endsWith(".mpeg") || path.endsWith(".vob") -> MimeTypes.VIDEO_PS
+        path.endsWith(".mp3") -> MimeTypes.AUDIO_MPEG
+        path.endsWith(".aac") -> MimeTypes.AUDIO_AAC
+        path.endsWith(".ac3") -> MimeTypes.AUDIO_AC3
+        path.endsWith(".ec3") || path.endsWith(".eac3") -> MimeTypes.AUDIO_E_AC3
+        path.endsWith(".ogg") || path.endsWith(".oga") -> MimeTypes.AUDIO_OGG
+        path.endsWith(".wav") -> MimeTypes.AUDIO_WAV
+        path.endsWith(".flac") -> MimeTypes.AUDIO_FLAC
         else -> null
+    }
+}
+
+private fun compatibleHttpHeaders(headers: Map<String, String>): Map<String, String> {
+    return buildMap {
+        put("User-Agent", IPTV_USER_AGENT)
+        put("Accept", "*/*")
+        put("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
+        headers.forEach { (name, value) ->
+            if (name.isNotBlank() && value.isNotBlank()) {
+                put(name, value)
+            }
+        }
     }
 }
 

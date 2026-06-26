@@ -10,6 +10,7 @@ import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.sync.SyncScheduler
 import com.iptv.tv.core.utils.FileLogger
+import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -31,10 +32,10 @@ class IptvApp : Application(), Configuration.Provider {
     lateinit var workerFactory: HiltWorkerFactory
 
     @Inject
-    lateinit var settingsRepository: SettingsRepository
+    lateinit var settingsRepository: Lazy<SettingsRepository>
 
     @Inject
-    lateinit var diagnosticsRepository: DiagnosticsRepository
+    lateinit var diagnosticsRepository: Lazy<DiagnosticsRepository>
 
     private val applicationErrorHandler = CoroutineExceptionHandler { _, throwable ->
         if (throwable !is CancellationException) {
@@ -75,8 +76,9 @@ class IptvApp : Application(), Configuration.Provider {
             SyncScheduler.scheduleDownloadQueue(workManager, repeatMinutes = 15)
             SyncScheduler.scheduleRecordingQueue(workManager, repeatMinutes = 15)
             SyncScheduler.scheduleTvHomePublish(workManager, repeatHours = 6)
-            settingsRepository.observeProviderAutoSyncEnabled()
-                .combine(settingsRepository.observeProviderAutoSyncIntervalHours()) { enabled, hours ->
+            val settings = settingsRepository.get()
+            settings.observeProviderAutoSyncEnabled()
+                .combine(settings.observeProviderAutoSyncIntervalHours()) { enabled, hours ->
                     enabled to hours
                 }
                 .distinctUntilChanged()
@@ -120,14 +122,14 @@ class IptvApp : Application(), Configuration.Provider {
             runCatching {
                 runBlocking(Dispatchers.IO) {
                     withTimeoutOrNull(FATAL_DIAGNOSTICS_WRITE_TIMEOUT_MS) {
-                        diagnosticsRepository.addLog(status = status, message = message)
+                        diagnosticsRepository.get().addLog(status = status, message = message)
                     }
                 }
             }
         } else {
             applicationScope.launch(Dispatchers.IO) {
                 runCatching {
-                    diagnosticsRepository.addLog(status = status, message = message)
+                    diagnosticsRepository.get().addLog(status = status, message = message)
                 }
             }
         }
@@ -138,7 +140,7 @@ class IptvApp : Application(), Configuration.Provider {
         FileLogger.write(this, "WARN", "Application", "$status | $safeMessage")
         applicationScope.launch(Dispatchers.IO) {
             runCatching {
-                diagnosticsRepository.addLog(status = status, message = safeMessage)
+                diagnosticsRepository.get().addLog(status = status, message = safeMessage)
             }
         }
     }

@@ -1155,7 +1155,7 @@ class PlayerViewModel @Inject constructor(
         val state = _uiState.value
         val session = state.internalSession ?: return
         val errorKind = classifyPlaybackError(message)
-        if (state.retryAttempt >= MAX_AUTO_RETRIES) {
+        if (!errorKind.retryable || state.retryAttempt >= MAX_AUTO_RETRIES) {
             viewModelScope.launch {
                 diagnosticsRepository.addLog(
                     status = "player_error",
@@ -2034,7 +2034,7 @@ class PlayerViewModel @Inject constructor(
         val parts = source.split('|', limit = 2)
         val baseUrl = parts.firstOrNull().orEmpty().trim().ifBlank { source }
         if (parts.size < 2) {
-            return PreparedStream(baseUrl, emptyMap())
+            return PreparedStream(baseUrl, defaultHttpHeadersFor(baseUrl))
         }
 
         val headers = parts[1]
@@ -2042,19 +2042,43 @@ class PlayerViewModel @Inject constructor(
             .mapNotNull { token ->
                 val kv = token.split('=', limit = 2)
                 val key = kv.getOrNull(0)?.trim()?.lowercase().orEmpty()
-                val value = kv.getOrNull(1)?.trim().orEmpty()
+                val value = kv.getOrNull(1)
+                    ?.trim()
+                    ?.let(::decodeHeaderValue)
+                    .orEmpty()
                 if (key.isBlank() || value.isBlank()) return@mapNotNull null
                 val normalizedKey = when (key) {
                     "ua", "user-agent", "user_agent" -> "User-Agent"
                     "referer", "referrer", "http-referrer", "http_referer" -> "Referer"
                     "origin" -> "Origin"
+                    "cookie" -> "Cookie"
+                    "accept" -> "Accept"
+                    "accept-language", "accept_language" -> "Accept-Language"
                     else -> key
                 }
                 normalizedKey to value
             }
             .toMap()
 
-        return PreparedStream(baseUrl, headers)
+        return PreparedStream(baseUrl, defaultHttpHeadersFor(baseUrl) + headers)
+    }
+
+    private fun defaultHttpHeadersFor(url: String): Map<String, String> {
+        val lowered = url.trim().lowercase(Locale.ROOT)
+        if (!lowered.startsWith("http://") && !lowered.startsWith("https://")) {
+            return emptyMap()
+        }
+        return mapOf(
+            "User-Agent" to IPTV_USER_AGENT,
+            "Accept" to "*/*",
+            "Accept-Language" to "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+        )
+    }
+
+    private fun decodeHeaderValue(value: String): String {
+        return runCatching {
+            URLDecoder.decode(value, StandardCharsets.UTF_8.toString())
+        }.getOrDefault(value)
     }
 
     private suspend fun probeStreamUrl(
@@ -2183,6 +2207,14 @@ class PlayerViewModel @Inject constructor(
                 PlaybackErrorKind(code = "codec", hint = "Проблема декодера/кодека. Попробуйте VLC или другой поток.")
             lowered.contains("behind_live_window") ->
                 PlaybackErrorKind(code = "live_window", hint = "Сбой live-окна HLS. Нужна переподготовка потока.")
+            lowered.contains("parsing_container_unsupported") ||
+                lowered.contains("unrecognizedinputformatexception") ||
+                lowered.contains("none of the available extractors") ->
+                PlaybackErrorKind(
+                    code = "unsupported_container",
+                    hint = "Формат потока не поддержан встроенным плеером. Попробуйте VLC или другой источник.",
+                    retryable = false
+                )
             lowered.contains("source error") ->
                 PlaybackErrorKind(code = "source", hint = "Источник потока недоступен или отдает невалидные данные.")
             else ->
@@ -2197,7 +2229,8 @@ class PlayerViewModel @Inject constructor(
 
     private data class PlaybackErrorKind(
         val code: String,
-        val hint: String
+        val hint: String,
+        val retryable: Boolean = true
     )
 
     private companion object {
@@ -2206,6 +2239,7 @@ class PlayerViewModel @Inject constructor(
         val RETRY_DELAYS_MS = listOf(1_000L, 3_000L, 7_000L)
         const val MAX_LOG_MESSAGE = 700
         const val MAX_PROBE_URL_LOG = 220
+        const val IPTV_USER_AGENT = "myscanerIPTV/0.1 (Android TV; Media3)"
         const val PROBE_CONNECT_TIMEOUT_MS = 8_000
         const val PROBE_READ_TIMEOUT_MS = 12_000
         const val EPG_ERROR_LOG_COOLDOWN_MS = 20_000L

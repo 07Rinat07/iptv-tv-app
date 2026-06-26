@@ -19,9 +19,9 @@ data class BufferConfig(
 
 fun bufferConfigForProfile(profile: BufferProfile, manual: ManualBufferSettings? = null): BufferConfig =
     when (profile) {
-        BufferProfile.MINIMAL -> BufferConfig(5_000, 20_000, 800, 1_500)
-        // Более консервативные значения по умолчанию для стабильности при нестабильной сети
-        BufferProfile.STANDARD -> BufferConfig(15_000, 60_000, 2_000, 3_000)
+        BufferProfile.MINIMAL -> BufferConfig(3_000, 15_000, 700, 1_200)
+        // Баланс для TV Box: старт около нескольких секунд без большого расхода памяти.
+        BufferProfile.STANDARD -> BufferConfig(6_000, 45_000, 1_500, 2_500)
         BufferProfile.HIGH -> BufferConfig(30_000, 120_000, 3_000, 5_000)
         BufferProfile.MANUAL -> {
             val boundedStart = (manual?.startMs ?: 12_000).coerceIn(250, 120_000)

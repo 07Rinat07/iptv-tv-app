@@ -21,9 +21,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
@@ -45,6 +49,7 @@ fun PlaylistsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val totalChannels = state.playlists.sumOf { it.channelCount }
+    var showDetails by rememberSaveable { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -54,10 +59,10 @@ fun PlaylistsScreen(
     ) {
         item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
-            Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
-            Text("Счетчики: списков=${state.playlists.size} | каналов во всех списках=$totalChannels")
-            Text("Совет: выберите плейлист и используйте быстрые кнопки ниже.")
-            Text("Управление: пульт (стрелки + OK) и мышь.")
+            Text(
+                text = "${state.playlists.size} плейлистов · $totalChannels каналов",
+                style = MaterialTheme.typography.bodyLarge
+            )
         }
 
         item {
@@ -70,24 +75,35 @@ fun PlaylistsScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Управление списками", style = MaterialTheme.typography.titleMedium)
+                    Text("Выбранный плейлист", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Всего плейлистов: ${state.playlists.size} | " +
-                            "текущий: ${current?.name ?: "не выбран"}"
+                        current?.name ?: "Плейлист не выбран",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     current?.let {
-                        Text("Источник: ${sourceTypeLabel(it.sourceType.name)}")
-                        Text("Ссылка/путь: ${it.source}")
-                        Text("Каналов: ${it.channelCount} | Последняя синхронизация: ${formatSyncTime(it.lastSyncedAt)}")
+                        Text("${sourceTypeLabel(it.sourceType.name)} · ${it.channelCount} каналов")
+                        if (showDetails) {
+                            Text(
+                                "Источник: ${it.source}",
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text("Последняя синхронизация: ${formatSyncTime(it.lastSyncedAt)}", style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                     if (state.isLoadingSummary) {
                         Text("Сводка плейлиста загружается...")
+                    }
+                    OutlinedButton(onClick = { showDetails = !showDetails }) {
+                        Text(if (showDetails) "Скрыть детали" else "Детали")
                     }
                 }
             }
         }
 
-        state.selectedSummary?.let { summary ->
+        if (showDetails) state.selectedSummary?.let { summary ->
             item {
                 PlaylistContentSummaryCard(summary)
             }
@@ -172,11 +188,18 @@ fun PlaylistsScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            "ID: ${playlist.id} | тип: ${sourceTypeLabel(playlist.sourceType.name)} | " +
-                                "кастомный=${if (playlist.isCustom) "да" else "нет"} | каналов=${playlist.channelCount}"
+                            "${sourceTypeLabel(playlist.sourceType.name)} · ${playlist.channelCount} каналов",
+                            style = MaterialTheme.typography.bodySmall
                         )
-                        Text("Источник: ${playlist.source}")
-                        Text("Последняя синхронизация: ${formatSyncTime(playlist.lastSyncedAt)}")
+                        if (showDetails) {
+                            Text(
+                                "Источник: ${playlist.source}",
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text("Обновлено: ${formatSyncTime(playlist.lastSyncedAt)}", style = MaterialTheme.typography.bodySmall)
+                        }
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)

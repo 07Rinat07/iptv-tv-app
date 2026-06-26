@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 
@@ -44,24 +45,6 @@ fun HomeScreen(
     ) {
         item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
-            Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
-        }
-
-        item {
-            Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("Сценарий работы", style = MaterialTheme.typography.titleMedium)
-                    Text("1) Сканер: найти и сохранить найденные плейлисты")
-                    Text("2) Мои плейлисты: выбрать нужный список")
-                    Text("3) Редактор: чистка, сортировка, экспорт")
-                    Text("4) Плеер: встроенный, VLC или через Engine Stream")
-                }
-            }
         }
 
         item {
@@ -161,7 +144,12 @@ private fun HomeActionCard(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
             if (primary) {
                 Button(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
                     Text("Открыть")
