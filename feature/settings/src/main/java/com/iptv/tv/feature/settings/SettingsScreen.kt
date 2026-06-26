@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -21,9 +22,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.model.RecordingStorageLocation
@@ -58,6 +64,19 @@ fun SettingsScreen(
             viewModel.setRecordingStorageCustomTree(it.toString())
         }
     }
+    var showQuickStart by rememberSaveable { mutableStateOf(true) }
+    var showAiScanner by rememberSaveable { mutableStateOf(false) }
+    var showScannerProxy by rememberSaveable { mutableStateOf(false) }
+    var showNetworkTest by rememberSaveable { mutableStateOf(false) }
+    var showPlayerSettings by rememberSaveable { mutableStateOf(true) }
+    var showBufferSettings by rememberSaveable { mutableStateOf(true) }
+    var showEngineSettings by rememberSaveable { mutableStateOf(false) }
+    var showNetworkSecurity by rememberSaveable { mutableStateOf(false) }
+    var showProviderAccounts by rememberSaveable { mutableStateOf(false) }
+    var showParentalControl by rememberSaveable { mutableStateOf(false) }
+    var showDownloads by rememberSaveable { mutableStateOf(false) }
+    var showTvHome by rememberSaveable { mutableStateOf(false) }
+    var showLegal by rememberSaveable { mutableStateOf(!state.legalAccepted) }
 
     LazyColumn(
         modifier = Modifier
@@ -76,7 +95,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Быстрый старт",
-                subtitle = "Безопасные значения для большинства TV Box"
+                subtitle = "Безопасные значения для большинства TV Box",
+                expanded = showQuickStart,
+                onToggleExpanded = { showQuickStart = !showQuickStart }
             ) {
                 Button(onClick = viewModel::applyRecommendedSettings) {
                     Text("Рекомендуемые настройки")
@@ -87,7 +108,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "AI-сканер",
-                subtitle = "Локальный AI (offline): умный подбор запросов и fallback-стратегий"
+                subtitle = "Локальный AI (offline): умный подбор запросов и fallback-стратегий",
+                expanded = showAiScanner,
+                onToggleExpanded = { showAiScanner = !showAiScanner }
             ) {
                 Text("Статус: ${if (state.scannerAiEnabled) "Включен" else "Выключен"}")
                 FlowRow(
@@ -117,7 +140,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Прокси для сканера",
-                subtitle = "Ручной proxy для GitHub/GitLab/Bitbucket поиска"
+                subtitle = "Ручной proxy для GitHub/GitLab/Bitbucket поиска",
+                expanded = showScannerProxy,
+                onToggleExpanded = { showScannerProxy = !showScannerProxy }
             ) {
                 Text("Статус: ${if (state.scannerProxyEnabled) "Включен" else "Выключен"}")
                 FlowRow(
@@ -175,7 +200,9 @@ fun SettingsScreen(
             item {
                 SettingsSectionCard(
                     title = "Сетевой тест сканера",
-                    subtitle = "One-click проверка DNS/API/Web и текущего прокси"
+                    subtitle = "One-click проверка DNS/API/Web и текущего прокси",
+                    expanded = showNetworkTest,
+                    onToggleExpanded = { showNetworkTest = !showNetworkTest }
                 ) {
                     Button(onClick = openNetworkTest) {
                         Text("Открыть сетевой тест")
@@ -187,7 +214,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Плеер",
-                subtitle = "Выбор проигрывателя по умолчанию"
+                subtitle = "Выбор проигрывателя по умолчанию",
+                expanded = showPlayerSettings,
+                onToggleExpanded = { showPlayerSettings = !showPlayerSettings }
             ) {
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -216,7 +245,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Буферизация",
-                subtitle = "Стандартный профиль подходит в большинстве случаев"
+                subtitle = "Стандартный профиль подходит в большинстве случаев",
+                expanded = showBufferSettings,
+                onToggleExpanded = { showBufferSettings = !showBufferSettings }
             ) {
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -258,29 +289,31 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyMedium
                 )
 
-                OutlinedTextField(
-                    value = state.manualStartMs,
-                    onValueChange = viewModel::updateManualStart,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Стартовый буфер (мс)") },
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = state.manualRebufferMs,
-                    onValueChange = viewModel::updateManualRebuffer,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Подкачка после rebuffer (мс)") },
-                    singleLine = true
-                )
-                OutlinedTextField(
-                    value = state.manualMaxMs,
-                    onValueChange = viewModel::updateManualMax,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Максимальный буфер (мс)") },
-                    singleLine = true
-                )
-                Button(onClick = viewModel::saveManualBuffer, enabled = !state.isSaving) {
-                    Text(if (state.isSaving) "Сохранение..." else "Сохранить ручной буфер")
+                if (state.bufferProfile == CoreBufferProfile.MANUAL) {
+                    OutlinedTextField(
+                        value = state.manualStartMs,
+                        onValueChange = viewModel::updateManualStart,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Стартовый буфер (мс)") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = state.manualRebufferMs,
+                        onValueChange = viewModel::updateManualRebuffer,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Подкачка после rebuffer (мс)") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = state.manualMaxMs,
+                        onValueChange = viewModel::updateManualMax,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Максимальный буфер (мс)") },
+                        singleLine = true
+                    )
+                    Button(onClick = viewModel::saveManualBuffer, enabled = !state.isSaving) {
+                        Text(if (state.isSaving) "Сохранение..." else "Сохранить ручной буфер")
+                    }
                 }
             }
         }
@@ -288,7 +321,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Engine Stream",
-                subtitle = "Используется для torrent/ace потоков"
+                subtitle = "Используется для torrent/ace потоков",
+                expanded = showEngineSettings,
+                onToggleExpanded = { showEngineSettings = !showEngineSettings }
             ) {
                 OutlinedTextField(
                     value = state.engineEndpoint,
@@ -320,7 +355,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Сеть и безопасность",
-                subtitle = "Рекомендуется: Tor выключен, только HTTPS"
+                subtitle = "Рекомендуется: Tor выключен, только HTTPS",
+                expanded = showNetworkSecurity,
+                onToggleExpanded = { showNetworkSecurity = !showNetworkSecurity }
             ) {
                 Text("Tor: ${if (state.torEnabled) "Включен" else "Выключен"}")
                 FlowRow(
@@ -365,7 +402,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Provider Accounts",
-                subtitle = "Фоновая автосинхронизация сохранённых провайдеров"
+                subtitle = "Фоновая автосинхронизация сохранённых провайдеров",
+                expanded = showProviderAccounts,
+                onToggleExpanded = { showProviderAccounts = !showProviderAccounts }
             ) {
                 Text(
                     "Статус: ${if (state.providerAutoSyncEnabled) "Включена" else "Выключена"} | " +
@@ -411,7 +450,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Родительский контроль",
-                subtitle = "PIN, защищённые профили и экспорт/импорт настроек блокировки"
+                subtitle = "PIN, защищённые профили и экспорт/импорт настроек блокировки",
+                expanded = showParentalControl,
+                onToggleExpanded = { showParentalControl = !showParentalControl }
             ) {
                 val activeProfile = state.parentalProfiles.firstOrNull { it.enabled }
                 if (activeProfile != null) {
@@ -646,7 +687,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Загрузки",
-                subtitle = "Ограничения сети и количества задач"
+                subtitle = "Ограничения сети и количества задач",
+                expanded = showDownloads,
+                onToggleExpanded = { showDownloads = !showDownloads }
             ) {
                 Text("Сеть: ${if (state.downloadsWifiOnly) "Только Wi-Fi/Ethernet" else "Любая"}")
                 FlowRow(
@@ -763,7 +806,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Android TV Home",
-                subtitle = "Публикация рядов Недавние, Избранное, Watch Next и Записи на главный экран TV Box"
+                subtitle = "Публикация рядов Недавние, Избранное, Watch Next и Записи на главный экран TV Box",
+                expanded = showTvHome,
+                onToggleExpanded = { showTvHome = !showTvHome }
             ) {
                 state.tvHomeStates.forEach { rowState ->
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -812,7 +857,9 @@ fun SettingsScreen(
         item {
             SettingsSectionCard(
                 title = "Юридическое подтверждение",
-                subtitle = "Используйте только контент, на который у вас есть права"
+                subtitle = "Используйте только контент, на который у вас есть права",
+                expanded = showLegal,
+                onToggleExpanded = { showLegal = !showLegal }
             ) {
                 Text(
                     text = if (state.legalAccepted) "Статус: подтверждено" else "Статус: не подтверждено"
@@ -862,6 +909,8 @@ fun SettingsScreen(
 private fun SettingsSectionCard(
     title: String,
     subtitle: String? = null,
+    expanded: Boolean = true,
+    onToggleExpanded: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -871,11 +920,31 @@ private fun SettingsSectionCard(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             content = {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-                subtitle?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(title, style = MaterialTheme.typography.titleMedium)
+                        subtitle?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = if (expanded) 2 else 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    onToggleExpanded?.let { toggle ->
+                        OutlinedButton(onClick = toggle) {
+                            Text(if (expanded) "Скрыть" else "Открыть")
+                        }
+                    }
                 }
-                content()
+                if (expanded) {
+                    content()
+                }
             }
         )
     }
