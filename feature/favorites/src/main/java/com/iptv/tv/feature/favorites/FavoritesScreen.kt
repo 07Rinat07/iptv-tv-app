@@ -25,6 +25,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import com.iptv.tv.core.model.EpgProgram
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -34,6 +39,14 @@ fun FavoritesScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     var showDetails by rememberSaveable { mutableStateOf(false) }
+    var expandedProgramChannelIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
+    fun toggleProgram(channelId: Long) {
+        expandedProgramChannelIds = if (channelId in expandedProgramChannelIds) {
+            expandedProgramChannelIds - channelId
+        } else {
+            expandedProgramChannelIds + channelId
+        }
+    }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -43,6 +56,7 @@ fun FavoritesScreen(
         item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
             Text("Избранных каналов: ${state.channels.size}", style = MaterialTheme.typography.bodyLarge)
+            Text(state.epgStatus, style = MaterialTheme.typography.bodySmall)
         }
 
         item {
@@ -88,6 +102,8 @@ fun FavoritesScreen(
         } else {
             items(state.channels, key = { it.id }) { channel ->
                 val selected = channel.id == state.selectedChannelId
+                val programs = state.epgProgramsByChannel[channel.id].orEmpty()
+                val programExpanded = channel.id in expandedProgramChannelIds
                 Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                     Column(
                         modifier = Modifier.padding(12.dp),
@@ -105,6 +121,10 @@ fun FavoritesScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        EpgCompactLine(programs = state.epgProgramsByChannel[channel.id].orEmpty())
+                        if (programExpanded) {
+                            EpgProgramList(programs = programs)
+                        }
                         if (showDetails) {
                             Text(
                                 "URL: ${channel.streamUrl}",
@@ -119,6 +139,12 @@ fun FavoritesScreen(
                         ) {
                             Button(onClick = { viewModel.selectChannel(channel.id) }) {
                                 Text(if (selected) "Выбрано" else "Выбрать")
+                            }
+                            OutlinedButton(
+                                onClick = { toggleProgram(channel.id) },
+                                enabled = programs.isNotEmpty()
+                            ) {
+                                Text(if (programExpanded) "Скрыть программу" else "Программа")
                             }
                             if (selected) {
                                 OutlinedButton(
@@ -139,3 +165,58 @@ fun FavoritesScreen(
         }
     }
 }
+
+@Composable
+private fun EpgProgramList(programs: List<EpgProgram>) {
+    if (programs.isEmpty()) {
+        Text("Программа не найдена", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        programs.take(6).forEach { program ->
+            Text(
+                text = "${formatEpgTime(program.startEpochMs)}-${formatEpgTime(program.endEpochMs)}  ${program.title}",
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun EpgCompactLine(programs: List<EpgProgram>) {
+    if (programs.isEmpty()) return
+    val now = programs.firstOrNull()
+    val next = programs.drop(1).firstOrNull()
+    val text = buildString {
+        now?.let {
+            append("Сейчас: ")
+            append(formatEpgTime(it.startEpochMs))
+            append(" ")
+            append(it.title)
+        }
+        next?.let {
+            if (isNotEmpty()) append(" | ")
+            append("Далее: ")
+            append(formatEpgTime(it.startEpochMs))
+            append(" ")
+            append(it.title)
+        }
+    }
+    if (text.isBlank()) return
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+private fun formatEpgTime(epochMs: Long): String {
+    return SimpleDateFormat("HH:mm", Locale.getDefault()).apply {
+        timeZone = FAVORITES_EPG_TIME_ZONE
+    }.format(Date(epochMs))
+}
+
+private val FAVORITES_EPG_TIME_ZONE: TimeZone = TimeZone.getTimeZone("Asia/Oral")

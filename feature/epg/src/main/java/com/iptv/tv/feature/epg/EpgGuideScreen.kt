@@ -51,6 +51,7 @@ import com.iptv.tv.core.model.Playlist
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import kotlin.math.ceil
 import kotlin.math.max
@@ -670,14 +671,19 @@ private fun EpgProgramDetailDialog(
 }
 
 private fun formatTime(epochMs: Long): String {
-    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epochMs))
+    return SimpleDateFormat("HH:mm", Locale.getDefault()).apply {
+        timeZone = EPG_GUIDE_TIME_ZONE
+    }.format(Date(epochMs))
 }
 
 private fun formatWindow(startMs: Long, endMs: Long): String {
     if (startMs <= 0L || endMs <= 0L) return "-"
     val formatter = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
+    formatter.timeZone = EPG_GUIDE_TIME_ZONE
     return "${formatter.format(Date(startMs))} - ${formatter.format(Date(endMs))}"
 }
+
+private val EPG_GUIDE_TIME_ZONE: TimeZone = TimeZone.getTimeZone("Asia/Oral")
 
 private fun gridHourCount(startMs: Long, endMs: Long): Int {
     val durationMs = (endMs - startMs).coerceAtLeast(TimeUnit.HOURS.toMillis(1))

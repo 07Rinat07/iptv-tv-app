@@ -1,37 +1,42 @@
-# Stage 4: Playlist Editor and Copy-on-Write
+# Stage 4: Playlist Editor
 
-## Delivered
-- Added `PlaylistEditorRepository` binding and implementation wiring in DI.
-- Implemented safe copy-on-write editing for non-custom playlists:
-  - first editor action on source playlist creates a custom working copy;
-  - further actions continue on the working copy.
-- Implemented editor actions in `core:data`:
-  - hide/unhide selected channels;
-  - delete selected channels;
-  - delete unavailable channels (`health=UNAVAILABLE`);
-  - move selected channels to top/bottom;
-  - update channel fields (`name`, `groupName`, `logo`, `streamUrl`);
-  - create custom playlist from selected channels;
-  - export selected/visible channels to M3U.
-- Upgraded UI layer:
-  - `feature:playlists` now loads real playlists from repository;
-  - playlist refresh and selection added;
-  - navigation to editor with `playlistId` argument;
-  - `feature:editor` now provides batch actions, selection, edit form, custom playlist creation and M3U preview.
+## Scope
 
-## Robustness updates
-- Added defensive error handling in `PlaylistEditorRepositoryImpl` returning `AppResult.Error` instead of throwing.
-- Added unit tests for editor repository behavior:
-  - COW copy creation for non-custom playlist;
-  - delete on custom playlist without extra copy;
-  - M3U export excluding hidden channels by default.
+The editor lets the user clean, organize and export playlist data without damaging the original imported source.
 
-## Verified
-- `:core:data:test`
-- `:feature:playlists:assembleDebug`
-- `:feature:editor:assembleDebug`
-- `:app:assembleDebug`
+## Current behavior
 
-## Notes
-- Editor route supports both `editor` and `editor/{playlistId}`.
-- Stage 4 focuses on playlist editing domain and UI; player runtime behavior remains part of Stage 5.
+- Non-custom playlists are edited through a safe working copy.
+- Custom playlists can be edited directly.
+- Channels can be selected manually or through visible-list actions.
+- Supported channel actions:
+  - hide or show;
+  - delete;
+  - delete unavailable channels;
+  - move selected channels to top or bottom;
+  - edit name, group, logo and stream URL.
+- The editor can create a custom playlist from selected channels.
+- Export is available in `M3U`, `M3U8` and `TXT`.
+- The main editor screen keeps advanced tools collapsed by default.
+- EPG data is shown for channels when the playlist has a configured EPG source.
+- The `Program` action expands the current/next program list for a channel; `Hide program` collapses it.
+- EPG time is formatted for `Asia/Oral` / Uralsk / UTC+5.
+
+## Robustness
+
+- Repository errors are returned as `AppResult.Error`.
+- Editing operations validate empty selection and missing playlist/channel states.
+- Export uses generated playlist text instead of mutating the original imported source.
+
+## Navigation
+
+- `editor`
+- `editor/{playlistId}`
+
+## Verification
+
+Use the CI-equivalent command from the root `README.md`, or run focused editor checks:
+
+```bash
+env JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew --no-daemon --stacktrace :core:data:testDebugUnitTest :feature:editor:testDebugUnitTest :feature:editor:assembleDebug
+```

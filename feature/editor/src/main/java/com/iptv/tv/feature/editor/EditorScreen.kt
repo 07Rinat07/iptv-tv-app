@@ -17,23 +17,30 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelMetadata
+import com.iptv.tv.core.model.EpgProgram
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -42,6 +49,17 @@ fun EditorScreen(
     viewModel: EditorViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    var showPlaylistPicker by rememberSaveable { mutableStateOf(false) }
+    var showAdvancedTools by rememberSaveable { mutableStateOf(false) }
+    var showExportPreview by rememberSaveable { mutableStateOf(false) }
+    var expandedProgramChannelIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
+    fun toggleProgram(channelId: Long) {
+        expandedProgramChannelIds = if (channelId in expandedProgramChannelIds) {
+            expandedProgramChannelIds - channelId
+        } else {
+            expandedProgramChannelIds + channelId
+        }
+    }
     val currentPlaylist = remember(state.playlists, state.effectivePlaylistId) {
         state.playlists.firstOrNull { it.id == state.effectivePlaylistId }
     }
@@ -92,33 +110,60 @@ fun EditorScreen(
     ) {
         item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
-            Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
             Text(
-                text = "Сейчас редактируется: ${currentPlaylist?.name ?: "не выбран"} " +
-                    "(ID: ${state.effectivePlaylistId ?: "-"})"
+                text = "Плейлист: ${currentPlaylist?.name ?: "не выбран"}",
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            Text("Отмечено каналов: ${state.selectedChannelIds.size}")
             currentPlaylist?.let { playlist ->
-                Text("Источник: ${editorSourceTypeLabel(playlist.sourceType.name)}")
-                Text("Ссылка/путь: ${playlist.source}")
-                Text("Всего каналов в списке: ${playlist.channelCount}")
+                Text(
+                    "Каналов: ${playlist.channelCount} | выбрано: ${state.selectedChannelIds.size} | источник: ${editorSourceTypeLabel(playlist.sourceType.name)}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    playlist.source,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
-            Text("Шаги: выбрать список -> выбрать каналы -> действие -> экспорт/сохранение")
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = { showPlaylistPicker = !showPlaylistPicker }) {
+                    Text(if (showPlaylistPicker) "Скрыть списки" else "Выбрать список")
+                }
+                OutlinedButton(onClick = { showAdvancedTools = !showAdvancedTools }) {
+                    Text(if (showAdvancedTools) "Скрыть расширенные" else "Расширенные")
+                }
+                OutlinedButton(onClick = { showExportPreview = !showExportPreview }) {
+                    Text(if (showExportPreview) "Скрыть предпросмотр" else "Предпросмотр")
+                }
+            }
         }
 
-        if (state.playlists.isNotEmpty()) {
+        if (showPlaylistPicker && state.playlists.isNotEmpty()) {
             items(state.playlists, key = { it.id }) { playlist ->
                 Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                     Column(
                         modifier = Modifier.padding(10.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text("${playlist.name} (id=${playlist.id}, custom=${playlist.isCustom})")
-                        Text("Источник: ${editorSourceTypeLabel(playlist.sourceType.name)}")
-                        Text("Ссылка/путь: ${playlist.source}")
-                        Text("Каналов: ${playlist.channelCount}")
+                        Text(playlist.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            "${editorSourceTypeLabel(playlist.sourceType.name)} | каналов: ${playlist.channelCount}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            playlist.source,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                         Button(onClick = { viewModel.selectPlaylist(playlist.id) }) {
-                            Text(if (playlist.id == state.effectivePlaylistId) "Редактируется сейчас" else "Редактировать этот плейлист")
+                            Text(if (playlist.id == state.effectivePlaylistId) "Выбран" else "Редактировать")
                         }
                     }
                 }
@@ -131,43 +176,45 @@ fun EditorScreen(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Массовые действия", style = MaterialTheme.typography.titleMedium)
+                    Text("Правка списка", style = MaterialTheme.typography.titleMedium)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(onClick = viewModel::ensureEditablePlaylist, enabled = !state.isLoading) {
-                            Text("Подготовить COW")
-                        }
-                        Button(onClick = { viewModel.hideSelected(true) }, enabled = !state.isLoading) {
-                            Text("Скрыть")
-                        }
-                        Button(onClick = { viewModel.hideSelected(false) }, enabled = !state.isLoading) {
-                            Text("Показать")
-                        }
                         Button(onClick = viewModel::deleteSelected, enabled = !state.isLoading) {
-                            Text("Удалить")
+                            Text("Удалить выбранные")
                         }
                         Button(onClick = viewModel::deleteUnavailable, enabled = !state.isLoading) {
                             Text("Удалить битые")
                         }
-                        Button(onClick = viewModel::moveSelectedToTop, enabled = !state.isLoading) {
+                        OutlinedButton(onClick = { viewModel.hideSelected(true) }, enabled = !state.isLoading) {
+                            Text("Скрыть")
+                        }
+                        OutlinedButton(onClick = { viewModel.hideSelected(false) }, enabled = !state.isLoading) {
+                            Text("Показать")
+                        }
+                        OutlinedButton(onClick = viewModel::moveSelectedToTop, enabled = !state.isLoading) {
                             Text("Вверх")
                         }
-                        Button(onClick = viewModel::moveSelectedToBottom, enabled = !state.isLoading) {
+                        OutlinedButton(onClick = viewModel::moveSelectedToBottom, enabled = !state.isLoading) {
                             Text("Вниз")
                         }
-                        Button(onClick = viewModel::selectAllChannels, enabled = !state.isLoading) {
-                            Text("Выбрать все")
-                        }
-                        Button(onClick = viewModel::selectVisibleChannels, enabled = !state.isLoading) {
+                        OutlinedButton(onClick = viewModel::selectVisibleChannels, enabled = !state.isLoading) {
                             Text("Выбрать видимые")
                         }
-                        Button(onClick = viewModel::selectVisibleChannelsWithoutLogo, enabled = !state.isLoading) {
-                            Text("Без логотипа")
+                        OutlinedButton(onClick = viewModel::selectAllChannels, enabled = !state.isLoading) {
+                            Text("Выбрать все")
                         }
-                        Button(onClick = viewModel::clearSelection, enabled = !state.isLoading) {
+                        OutlinedButton(onClick = viewModel::clearSelection, enabled = !state.isLoading) {
                             Text("Снять выбор")
+                        }
+                        if (showAdvancedTools) {
+                            OutlinedButton(onClick = viewModel::ensureEditablePlaylist, enabled = !state.isLoading) {
+                                Text("Подготовить копию")
+                            }
+                            OutlinedButton(onClick = viewModel::selectVisibleChannelsWithoutLogo, enabled = !state.isLoading) {
+                                Text("Без логотипа")
+                            }
                         }
                     }
                 }
@@ -185,20 +232,30 @@ fun EditorScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(onClick = viewModel::exportSelectedOrVisibleM3u, enabled = !state.isLoading) {
-                            Text("Экспорт M3U")
+                        Button(onClick = viewModel::saveCurrentPlaylistM3uToStorage, enabled = !state.isLoading) {
+                            Text("Сохранить M3U")
                         }
-                        Button(onClick = viewModel::exportSelectedOrVisibleM3u8, enabled = !state.isLoading) {
-                            Text("Экспорт M3U8")
+                        Button(onClick = viewModel::saveCurrentPlaylistM3u8ToStorage, enabled = !state.isLoading) {
+                            Text("Сохранить M3U8")
                         }
-                        Button(onClick = viewModel::exportAllPlaylistsToTxt, enabled = !state.isLoading) {
-                            Text("Экспорт TXT (все списки)")
+                        Button(onClick = viewModel::saveAllPlaylistsTxtToStorage, enabled = !state.isLoading) {
+                            Text("Сохранить TXT")
                         }
-                        Button(onClick = viewModel::saveExportToStorage, enabled = !state.isLoading) {
-                            Text("Сохранить в память ТВ")
-                        }
-                        Button(
-                            onClick = {
+                        if (showAdvancedTools) {
+                            OutlinedButton(onClick = viewModel::exportSelectedOrVisibleM3u, enabled = !state.isLoading) {
+                                Text("Подготовить M3U")
+                            }
+                            OutlinedButton(onClick = viewModel::exportSelectedOrVisibleM3u8, enabled = !state.isLoading) {
+                                Text("Подготовить M3U8")
+                            }
+                            OutlinedButton(onClick = viewModel::exportAllPlaylistsToTxt, enabled = !state.isLoading) {
+                                Text("Подготовить TXT")
+                            }
+                            OutlinedButton(onClick = viewModel::saveExportToStorage, enabled = !state.isLoading) {
+                                Text("Сохранить подготовленное")
+                            }
+                            Button(
+                                onClick = {
                                 val ext = state.exportFileExtension.ifBlank { "m3u" }
                                 if (ext.equals("txt", ignoreCase = true)) {
                                     val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
@@ -225,16 +282,17 @@ fun EditorScreen(
                                     }
                                 saveDocumentLauncher.launch("$playlistName.$ext")
                             },
-                            enabled = !state.isLoading
-                        ) {
-                            Text("Сохранить как...")
+                                enabled = !state.isLoading
+                            ) {
+                                Text("Сохранить как...")
+                            }
                         }
                     }
                 }
             }
         }
 
-        item {
+        if (showAdvancedTools) item {
             Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
@@ -377,7 +435,7 @@ fun EditorScreen(
             }
         }
 
-        state.exportPreview?.let { preview ->
+        if (showExportPreview) state.exportPreview?.let { preview ->
             item {
                 Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -425,222 +483,187 @@ fun EditorScreen(
                                 "Показано=${filteredChannels.size} из ${state.channels.size} | " +
                                     "с логотипами=$visibleLogoCount | групп=$visibleGroups"
                             )
+                            Text(state.epgStatus, style = MaterialTheme.typography.bodySmall)
                             Text(
                                 "Выбрано=${state.selectedChannelIds.size} | " +
                                     "скрытых в фильтре=${filteredChannels.count { it.isHidden }}"
                             )
-                            Button(
-                                onClick = viewModel::refreshCurrentPlaylistMetadata,
-                                enabled = !state.isRefreshingMetadata
-                            ) {
-                                Text(if (state.isRefreshingMetadata) "Подбираю логотипы..." else "Подобрать логотипы для плейлиста")
-                            }
-                            OutlinedTextField(
-                                value = state.externalLogoPackUrl,
-                                onValueChange = viewModel::updateExternalLogoPackUrl,
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("URL внешнего logo pack JSON") },
-                                singleLine = true
-                            )
-                            Button(
-                                onClick = viewModel::applyExternalLogoPackUrl,
-                                enabled = !state.isRefreshingMetadata && state.externalLogoPackUrl.isNotBlank()
-                            ) {
-                                Text(if (state.isRefreshingMetadata) "Загружаю..." else "Загрузить и применить logo pack")
-                            }
-                            OutlinedTextField(
-                                value = state.externalLogoPackJson,
-                                onValueChange = viewModel::updateExternalLogoPackJson,
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Внешний logo pack JSON") },
-                                minLines = 3
-                            )
-                            Button(
-                                onClick = viewModel::applyExternalLogoPack,
-                                enabled = !state.isRefreshingMetadata && state.externalLogoPackJson.isNotBlank()
-                            ) {
-                                Text(if (state.isRefreshingMetadata) "Применяю..." else "Применить logo pack")
-                            }
-                            Text("Конструктор metadata rules", style = MaterialTheme.typography.titleSmall)
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                metadataRuleMatcherTypes.forEach { matcherType ->
-                                    Button(
-                                        onClick = { viewModel.updateMetadataRuleMatcherType(matcherType) },
-                                        enabled = state.metadataRuleMatcherType != matcherType
-                                    ) {
-                                        Text(matcherType.toMetadataRuleMatcherLabel())
-                                    }
-                                }
-                            }
-                            OutlinedTextField(
-                                value = state.metadataRuleMatcherInput,
-                                onValueChange = viewModel::updateMetadataRuleMatcherInput,
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Условие совпадения") },
-                                singleLine = true
-                            )
-                            Text("Совпадений среди видимых каналов: $metadataRulePreviewCount")
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedTextField(
-                                    value = state.metadataRuleCountryInput,
-                                    onValueChange = viewModel::updateMetadataRuleCountryInput,
-                                    modifier = Modifier.weight(1f),
-                                    label = { Text("Страна") },
-                                    singleLine = true
-                                )
-                                OutlinedTextField(
-                                    value = state.metadataRuleLanguageInput,
-                                    onValueChange = viewModel::updateMetadataRuleLanguageInput,
-                                    modifier = Modifier.weight(1f),
-                                    label = { Text("Язык") },
-                                    singleLine = true
-                                )
-                                OutlinedTextField(
-                                    value = state.metadataRuleCategoryInput,
-                                    onValueChange = viewModel::updateMetadataRuleCategoryInput,
-                                    modifier = Modifier.weight(1f),
-                                    label = { Text("Категория") },
-                                    singleLine = true
-                                )
-                            }
-                            Button(
-                                onClick = viewModel::appendMetadataRuleFromBuilder,
-                                enabled = state.metadataRuleMatcherInput.isNotBlank() &&
-                                    listOf(
-                                        state.metadataRuleCountryInput,
-                                        state.metadataRuleLanguageInput,
-                                        state.metadataRuleCategoryInput
-                                    ).any { it.isNotBlank() }
-                            ) {
-                                Text("Добавить rule")
-                            }
-                            Text("Shared rules packs", style = MaterialTheme.typography.titleSmall)
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                sharedMetadataRulePacks.forEach { pack ->
-                                    Button(onClick = { viewModel.appendSharedMetadataRulesPack(pack.id) }) {
-                                        Text(pack.title)
-                                    }
-                                }
-                            }
-                            OutlinedTextField(
-                                value = state.externalMetadataRulesCatalogUrl,
-                                onValueChange = viewModel::updateExternalMetadataRulesCatalogUrl,
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("URL shared rules catalog") },
-                                singleLine = true
-                            )
-                            Button(
-                                onClick = viewModel::loadExternalMetadataRulesCatalogUrl,
-                                enabled = !state.isLoading && state.externalMetadataRulesCatalogUrl.isNotBlank()
-                            ) {
-                                Text(if (state.isLoading) "Загружаю catalog..." else "Загрузить catalog по URL")
-                            }
-                            state.externalMetadataRulesCatalogCacheLabel?.let { cacheLabel ->
-                                Text(cacheLabel, style = MaterialTheme.typography.bodySmall)
-                            }
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
+                            if (showAdvancedTools) {
                                 Button(
-                                    onClick = viewModel::loadCachedExternalMetadataRulesCatalog,
-                                    enabled = !state.isLoading
+                                    onClick = viewModel::refreshCurrentPlaylistMetadata,
+                                    enabled = !state.isRefreshingMetadata
                                 ) {
-                                    Text("Загрузить cached catalog")
+                                    Text(if (state.isRefreshingMetadata) "Подбираю логотипы..." else "Подобрать логотипы для плейлиста")
                                 }
+                                OutlinedTextField(
+                                    value = state.externalLogoPackUrl,
+                                    onValueChange = viewModel::updateExternalLogoPackUrl,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("URL внешнего logo pack JSON") },
+                                    singleLine = true
+                                )
                                 Button(
-                                    onClick = viewModel::clearExternalMetadataRulesCatalogCache,
-                                    enabled = !state.isLoading
+                                    onClick = viewModel::applyExternalLogoPackUrl,
+                                    enabled = !state.isRefreshingMetadata && state.externalLogoPackUrl.isNotBlank()
                                 ) {
-                                    Text("Очистить catalog cache")
+                                    Text(if (state.isRefreshingMetadata) "Загружаю..." else "Загрузить и применить logo pack")
                                 }
-                            }
-                            OutlinedTextField(
-                                value = state.externalMetadataRulesCatalogInput,
-                                onValueChange = viewModel::updateExternalMetadataRulesCatalogInput,
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Внешний shared rules catalog") },
-                                minLines = 3
-                            )
-                            Button(
-                                onClick = viewModel::loadExternalMetadataRulesCatalog,
-                                enabled = !state.isLoading && state.externalMetadataRulesCatalogInput.isNotBlank()
-                            ) {
-                                Text("Загрузить shared catalog")
-                            }
-                            state.externalMetadataRulesCatalogInfo?.let { info ->
-                                val details = listOfNotNull(
-                                    info.title?.takeIf { it.isNotBlank() },
-                                    info.version?.takeIf { it.isNotBlank() }?.let { "v$it" },
-                                    info.updatedAt?.takeIf { it.isNotBlank() }?.let { "updated $it" },
-                                    when (info.checksumStatus) {
-                                        SharedRulesCatalogChecksumStatus.VALID -> "sha256 ok"
-                                        SharedRulesCatalogChecksumStatus.INVALID -> "sha256 mismatch"
-                                        SharedRulesCatalogChecksumStatus.NOT_DECLARED -> null
-                                    },
-                                    info.description?.takeIf { it.isNotBlank() }
-                                ).joinToString(" · ")
-                                Text(details, style = MaterialTheme.typography.bodySmall)
-                            }
-                            if (state.externalSharedMetadataRulePacks.isNotEmpty()) {
-                                Text("External shared packs", style = MaterialTheme.typography.titleSmall)
+                                OutlinedTextField(
+                                    value = state.externalLogoPackJson,
+                                    onValueChange = viewModel::updateExternalLogoPackJson,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("Внешний logo pack JSON") },
+                                    minLines = 3
+                                )
+                                Button(
+                                    onClick = viewModel::applyExternalLogoPack,
+                                    enabled = !state.isRefreshingMetadata && state.externalLogoPackJson.isNotBlank()
+                                ) {
+                                    Text(if (state.isRefreshingMetadata) "Применяю..." else "Применить logo pack")
+                                }
+                                Text("Конструктор metadata rules", style = MaterialTheme.typography.titleSmall)
                                 FlowRow(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    state.externalSharedMetadataRulePacks.forEach { pack ->
-                                        Button(onClick = { viewModel.appendExternalMetadataRulesPack(pack.id) }) {
+                                    metadataRuleMatcherTypes.forEach { matcherType ->
+                                        Button(
+                                            onClick = { viewModel.updateMetadataRuleMatcherType(matcherType) },
+                                            enabled = state.metadataRuleMatcherType != matcherType
+                                        ) {
+                                            Text(matcherType.toMetadataRuleMatcherLabel())
+                                        }
+                                    }
+                                }
+                                OutlinedTextField(
+                                    value = state.metadataRuleMatcherInput,
+                                    onValueChange = viewModel::updateMetadataRuleMatcherInput,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("Условие совпадения") },
+                                    singleLine = true
+                                )
+                                Text("Совпадений среди видимых каналов: $metadataRulePreviewCount")
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = state.metadataRuleCountryInput,
+                                        onValueChange = viewModel::updateMetadataRuleCountryInput,
+                                        modifier = Modifier.weight(1f),
+                                        label = { Text("Страна") },
+                                        singleLine = true
+                                    )
+                                    OutlinedTextField(
+                                        value = state.metadataRuleLanguageInput,
+                                        onValueChange = viewModel::updateMetadataRuleLanguageInput,
+                                        modifier = Modifier.weight(1f),
+                                        label = { Text("Язык") },
+                                        singleLine = true
+                                    )
+                                    OutlinedTextField(
+                                        value = state.metadataRuleCategoryInput,
+                                        onValueChange = viewModel::updateMetadataRuleCategoryInput,
+                                        modifier = Modifier.weight(1f),
+                                        label = { Text("Категория") },
+                                        singleLine = true
+                                    )
+                                }
+                                Button(
+                                    onClick = viewModel::appendMetadataRuleFromBuilder,
+                                    enabled = state.metadataRuleMatcherInput.isNotBlank() &&
+                                        listOf(
+                                            state.metadataRuleCountryInput,
+                                            state.metadataRuleLanguageInput,
+                                            state.metadataRuleCategoryInput
+                                        ).any { it.isNotBlank() }
+                                ) {
+                                    Text("Добавить rule")
+                                }
+                                Text("Shared rules packs", style = MaterialTheme.typography.titleSmall)
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    sharedMetadataRulePacks.forEach { pack ->
+                                        Button(onClick = { viewModel.appendSharedMetadataRulesPack(pack.id) }) {
                                             Text(pack.title)
                                         }
                                     }
                                 }
-                            }
-                            OutlinedTextField(
-                                value = state.metadataRulesInput,
-                                onValueChange = viewModel::updateMetadataRulesInput,
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Metadata rules") },
-                                minLines = 3
-                            )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Button(
-                                    onClick = viewModel::applyMetadataRulesToSelectedOrVisible,
-                                    enabled = !state.isRefreshingMetadata && state.metadataRulesInput.isNotBlank()
+                                Text("External shared rules catalog", style = MaterialTheme.typography.titleSmall)
+                                OutlinedTextField(
+                                    value = state.externalMetadataRulesCatalogUrl,
+                                    onValueChange = viewModel::updateExternalMetadataRulesCatalogUrl,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("URL shared rules catalog") },
+                                    singleLine = true
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Text(if (state.isRefreshingMetadata) "Применяю..." else "Применить metadata rules")
+                                    Button(
+                                        onClick = viewModel::loadExternalMetadataRulesCatalogUrl,
+                                        enabled = !state.isLoading && state.externalMetadataRulesCatalogUrl.isNotBlank()
+                                    ) {
+                                        Text(if (state.isLoading) "Загружаю catalog..." else "Загрузить catalog")
+                                    }
+                                    OutlinedButton(
+                                        onClick = viewModel::loadCachedExternalMetadataRulesCatalog,
+                                        enabled = !state.isLoading
+                                    ) {
+                                        Text("Cached catalog")
+                                    }
+                                    OutlinedButton(
+                                        onClick = viewModel::clearExternalMetadataRulesCatalogCache,
+                                        enabled = !state.isLoading
+                                    ) {
+                                        Text("Очистить cache")
+                                    }
                                 }
-                                Button(
-                                    onClick = viewModel::saveMetadataRulesToStorage,
-                                    enabled = !state.isLoading && state.metadataRulesInput.isNotBlank()
-                                ) {
-                                    Text("Сохранить rules")
+                                state.externalMetadataRulesCatalogCacheLabel?.let { cacheLabel ->
+                                    Text(cacheLabel, style = MaterialTheme.typography.bodySmall)
                                 }
+                                state.externalMetadataRulesCatalogInfo?.let { info ->
+                                    val details = listOfNotNull(
+                                        info.title?.takeIf { it.isNotBlank() },
+                                        info.version?.takeIf { it.isNotBlank() }?.let { "v$it" },
+                                        info.updatedAt?.takeIf { it.isNotBlank() }?.let { "updated $it" },
+                                        when (info.checksumStatus) {
+                                            SharedRulesCatalogChecksumStatus.VALID -> "sha256 ok"
+                                            SharedRulesCatalogChecksumStatus.INVALID -> "sha256 mismatch"
+                                            SharedRulesCatalogChecksumStatus.NOT_DECLARED -> null
+                                        },
+                                        info.description?.takeIf { it.isNotBlank() }
+                                    ).joinToString(" · ")
+                                    Text(details, style = MaterialTheme.typography.bodySmall)
+                                }
+                                if (state.externalSharedMetadataRulePacks.isNotEmpty()) {
+                                    Text("External shared packs", style = MaterialTheme.typography.titleSmall)
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        state.externalSharedMetadataRulePacks.forEach { pack ->
+                                            Button(onClick = { viewModel.appendExternalMetadataRulesPack(pack.id) }) {
+                                                Text(pack.title)
+                                            }
+                                        }
+                                    }
+                                }
+                                OutlinedTextField(
+                                    value = state.externalMetadataRulesCatalogInput,
+                                    onValueChange = viewModel::updateExternalMetadataRulesCatalogInput,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("Shared rules catalog text") },
+                                    minLines = 3
+                                )
                                 Button(
-                                    onClick = {
-                                        val playlistName = currentPlaylist
-                                            ?.name
-                                            ?.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-                                            ?.replace(Regex("\\s+"), "_")
-                                            ?.take(40)
-                                            ?.ifBlank { "metadata_rules" }
-                                            ?: "metadata_rules"
-                                        saveMetadataRulesLauncher.launch("$playlistName-metadata-rules.txt")
-                                    },
-                                    enabled = !state.isLoading && state.metadataRulesInput.isNotBlank()
+                                    onClick = viewModel::loadExternalMetadataRulesCatalog,
+                                    enabled = !state.isLoading && state.externalMetadataRulesCatalogInput.isNotBlank()
                                 ) {
-                                    Text("Сохранить rules как...")
+                                    Text("Загрузить catalog из текста")
                                 }
                                 Button(
                                     onClick = { openMetadataRulesLauncher.launch(arrayOf("text/*", "application/octet-stream")) },
@@ -648,12 +671,53 @@ fun EditorScreen(
                                 ) {
                                     Text("Импорт rules")
                                 }
+                                OutlinedTextField(
+                                    value = state.metadataRulesInput,
+                                    onValueChange = viewModel::updateMetadataRulesInput,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("Metadata rules") },
+                                    minLines = 3
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = viewModel::applyMetadataRulesToSelectedOrVisible,
+                                        enabled = !state.isRefreshingMetadata && state.metadataRulesInput.isNotBlank()
+                                    ) {
+                                        Text(if (state.isRefreshingMetadata) "Применяю..." else "Применить metadata rules")
+                                    }
+                                    Button(
+                                        onClick = viewModel::saveMetadataRulesToStorage,
+                                        enabled = !state.isLoading && state.metadataRulesInput.isNotBlank()
+                                    ) {
+                                        Text("Сохранить rules")
+                                    }
+                                    Button(
+                                        onClick = {
+                                            val playlistName = currentPlaylist
+                                                ?.name
+                                                ?.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                                                ?.replace(Regex("\\s+"), "_")
+                                                ?.take(40)
+                                                ?.ifBlank { "metadata_rules" }
+                                                ?: "metadata_rules"
+                                            saveMetadataRulesLauncher.launch("$playlistName-metadata-rules.txt")
+                                        },
+                                        enabled = !state.isLoading && state.metadataRulesInput.isNotBlank()
+                                    ) {
+                                        Text("Сохранить rules как...")
+                                    }
+                                }
                             }
                         }
                     }
                 }
                 items(filteredChannels, key = { it.id }) { channel ->
                     val selected = channel.id in state.selectedChannelIds
+                    val programs = state.epgProgramsByChannel[channel.id].orEmpty()
+                    val programExpanded = channel.id in expandedProgramChannelIds
                     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                         Column(
                             modifier = Modifier.padding(12.dp),
@@ -661,11 +725,32 @@ fun EditorScreen(
                         ) {
                             val isFavorite = state.favoriteChannelIds.contains(channel.id)
                             ChannelTitleWithLogo(channel = channel, selected = selected)
-                            Text("Group: ${channel.group ?: "-"} | health=${channel.health} | hidden=${channel.isHidden}")
-                            channel.logo?.takeIf { it.isNotBlank() }?.let { logo ->
-                                Text("Logo: $logo")
+                            Text(
+                                "Группа: ${channel.group ?: "Без группы"} | ${channel.health} | скрыт=${if (channel.isHidden) "да" else "нет"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            EpgCompactLine(programs = programs)
+                            if (programExpanded) {
+                                EpgProgramList(programs = programs)
                             }
-                            Text("URL: ${channel.streamUrl}")
+                            if (showAdvancedTools) {
+                                channel.logo?.takeIf { it.isNotBlank() }?.let { logo ->
+                                    Text(
+                                        "Logo: $logo",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Text(
+                                    "URL: ${channel.streamUrl}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -673,16 +758,22 @@ fun EditorScreen(
                                 Button(onClick = { viewModel.toggleChannelSelection(channel.id) }) {
                                     Text(if (selected) "Снять выбор" else "Выбрать")
                                 }
-                                Button(onClick = { viewModel.pickChannelForEdit(channel.id) }) {
-                                    Text("Редактировать")
+                                OutlinedButton(onClick = { viewModel.pickChannelForEdit(channel.id) }) {
+                                    Text("Изменить")
                                 }
-                                Button(onClick = { viewModel.setSingleChannelHidden(channel.id, !channel.isHidden) }) {
+                                OutlinedButton(
+                                    onClick = { toggleProgram(channel.id) },
+                                    enabled = programs.isNotEmpty()
+                                ) {
+                                    Text(if (programExpanded) "Скрыть программу" else "Программа")
+                                }
+                                OutlinedButton(onClick = { viewModel.setSingleChannelHidden(channel.id, !channel.isHidden) }) {
                                     Text(if (channel.isHidden) "Показать канал" else "Скрыть канал")
                                 }
-                                Button(onClick = { viewModel.deleteSingleChannel(channel.id) }) {
-                                    Text("Удалить канал")
+                                OutlinedButton(onClick = { viewModel.deleteSingleChannel(channel.id) }) {
+                                    Text("Удалить")
                                 }
-                                Button(onClick = { viewModel.toggleChannelFavorite(channel.id) }) {
+                                OutlinedButton(onClick = { viewModel.toggleChannelFavorite(channel.id) }) {
                                     Text(if (isFavorite) "Убрать из избранного" else "В избранное")
                                 }
                             }
@@ -737,11 +828,15 @@ private fun ChannelTitleWithLogo(channel: Channel, selected: Boolean) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = if (selected) "[x] ${channel.name}" else "[ ] ${channel.name}",
-                style = MaterialTheme.typography.titleSmall
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = "ID=${channel.id} | tvg-id=${channel.tvgId ?: "-"}",
-                style = MaterialTheme.typography.bodySmall
+                text = "tvg-id=${channel.tvgId ?: "-"}",
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -781,6 +876,61 @@ private fun editorSourceTypeLabel(raw: String): String {
         else -> raw
     }
 }
+
+@Composable
+private fun EpgCompactLine(programs: List<EpgProgram>) {
+    if (programs.isEmpty()) return
+    val now = programs.firstOrNull()
+    val next = programs.drop(1).firstOrNull()
+    val text = buildString {
+        now?.let {
+            append("Сейчас: ")
+            append(formatEpgTime(it.startEpochMs))
+            append(" ")
+            append(it.title)
+        }
+        next?.let {
+            if (isNotEmpty()) append(" | ")
+            append("Далее: ")
+            append(formatEpgTime(it.startEpochMs))
+            append(" ")
+            append(it.title)
+        }
+    }
+    if (text.isBlank()) return
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+@Composable
+private fun EpgProgramList(programs: List<EpgProgram>) {
+    if (programs.isEmpty()) {
+        Text("Программа не найдена", style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        programs.take(6).forEach { program ->
+            Text(
+                text = "${formatEpgTime(program.startEpochMs)}-${formatEpgTime(program.endEpochMs)}  ${program.title}",
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+private fun formatEpgTime(epochMs: Long): String {
+    return SimpleDateFormat("HH:mm", Locale.getDefault()).apply {
+        timeZone = EDITOR_EPG_TIME_ZONE
+    }.format(Date(epochMs))
+}
+
+private val EDITOR_EPG_TIME_ZONE: TimeZone = TimeZone.getTimeZone("Asia/Oral")
 
 private fun String.toMetadataRuleMatcherLabel(): String {
     return when (this) {

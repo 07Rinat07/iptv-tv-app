@@ -79,6 +79,7 @@ import com.iptv.tv.core.utils.FileLogger
 import android.content.Context
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
+import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.player.toLoadControl
@@ -86,6 +87,7 @@ import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -186,6 +188,7 @@ fun PlayerScreen(
     var showStreamTools by rememberSaveable { mutableStateOf(false) }
     var showEpgWizard by rememberSaveable { mutableStateOf(false) }
     var showViewOptions by rememberSaveable { mutableStateOf(false) }
+    var expandedEpgChannelIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
     var selectedMultiviewTargetPane by rememberSaveable { mutableIntStateOf(2) }
     val selectedChannelName = state.channels.firstOrNull { it.id == state.selectedChannelId }?.name
     val multiviewLabel = when (state.multiviewMode) {
@@ -213,6 +216,13 @@ fun PlayerScreen(
         3 -> state.tertiaryInternalSession?.channelId
         4 -> state.quaternaryInternalSession?.channelId
         else -> null
+    }
+    fun toggleChannelProgram(channelId: Long) {
+        expandedEpgChannelIds = if (channelId in expandedEpgChannelIds) {
+            expandedEpgChannelIds - channelId
+        } else {
+            expandedEpgChannelIds + channelId
+        }
     }
 
     LaunchedEffect(configuredPaneIndices, availablePaneTargets) {
@@ -279,9 +289,6 @@ fun PlayerScreen(
                             OutlinedButton(onClick = viewModel::stopInternalPlayback) {
                                 Text("Стоп")
                             }
-                            OutlinedButton(onClick = { viewModel.toggleInternalPlayerSize() }) {
-                                Text("Fullscreen")
-                            }
                             OutlinedButton(onClick = { showViewOptions = !showViewOptions }) {
                                 Text(if (showViewOptions) "Скрыть настройки вида" else "Вид")
                             }
@@ -314,6 +321,7 @@ fun PlayerScreen(
                             )
                             Text("Поток: ${state.selectedStreamKind}", style = MaterialTheme.typography.bodySmall)
                             Text(state.epgStatus, style = MaterialTheme.typography.bodySmall)
+                            Text(state.channelListEpgStatus, style = MaterialTheme.typography.bodySmall)
                             if (state.parentalControlEnabled && state.parentalHideAdultChannels) {
                                 Text("Скрыто родительским фильтром: $parentalHiddenCount", style = MaterialTheme.typography.bodySmall)
                             }
@@ -587,7 +595,10 @@ fun PlayerScreen(
                                     .padding(top = 10.dp),
                                 channels = filteredChannels,
                                 selectedChannelId = multiviewTargetChannelId,
+                                epgProgramsByChannel = state.channelListEpgPrograms,
+                                expandedEpgChannelIds = expandedEpgChannelIds,
                                 title = "Быстрый выбор для окна $selectedMultiviewTargetPane",
+                                onToggleProgram = ::toggleChannelProgram,
                                 onSelect = { channelId ->
                                     viewModel.playChannelInPane(channelId, selectedMultiviewTargetPane)
                                 }
@@ -635,6 +646,9 @@ fun PlayerScreen(
                                             .fillMaxHeight(),
                                         channels = filteredChannels,
                                         selectedChannelId = state.selectedChannelId,
+                                        epgProgramsByChannel = state.channelListEpgPrograms,
+                                        expandedEpgChannelIds = expandedEpgChannelIds,
+                                        onToggleProgram = ::toggleChannelProgram,
                                         onSelect = viewModel::playChannelInternal
                                     )
                                 }
@@ -668,6 +682,9 @@ fun PlayerScreen(
                                             .padding(top = 10.dp),
                                         channels = filteredChannels,
                                         selectedChannelId = state.selectedChannelId,
+                                        epgProgramsByChannel = state.channelListEpgPrograms,
+                                        expandedEpgChannelIds = expandedEpgChannelIds,
+                                        onToggleProgram = ::toggleChannelProgram,
                                         onSelect = viewModel::playChannelInternal
                                     )
                                 }
@@ -785,8 +802,11 @@ fun PlayerScreen(
                     ChannelCatalogScrollPanel(
                         channels = filteredChannels,
                         selectedChannelId = state.selectedChannelId,
+                        epgProgramsByChannel = state.channelListEpgPrograms,
+                        expandedEpgChannelIds = expandedEpgChannelIds,
                         availablePaneTargets = availablePaneTargets,
                         showTechnicalInfo = showTechnicalInfo,
+                        onToggleProgram = ::toggleChannelProgram,
                         onPlayChannel = viewModel::playChannelInternal,
                         onPlayInPane = viewModel::playChannelInPane
                     )
@@ -1164,7 +1184,10 @@ private fun ChannelQuickPanel(
     modifier: Modifier = Modifier,
     channels: List<Channel>,
     selectedChannelId: Long?,
+    epgProgramsByChannel: Map<Long, List<EpgProgram>>,
+    expandedEpgChannelIds: Set<Long>,
     title: String = "Список каналов",
+    onToggleProgram: (Long) -> Unit,
     onSelect: (Long) -> Unit
 ) {
     val limited = channels.take(CHANNEL_QUICK_PANEL_LIMIT)
@@ -1261,21 +1284,39 @@ private fun ChannelQuickPanel(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(limited, key = { it.id }) { channel ->
-                        OutlinedButton(
-                            onClick = { onSelect(channel.id) },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                        val programs = epgProgramsByChannel[channel.id].orEmpty()
+                        val programExpanded = channel.id in expandedEpgChannelIds
+                        Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                             val mark = if (channel.id == selectedChannelId) "● " else ""
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Text(
                                     "$mark${channel.name}",
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                ChannelEpgCompactLine(programs = programs)
+                                if (programExpanded) {
+                                    ChannelProgramList(programs = programs)
+                                }
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(onClick = { onSelect(channel.id) }) {
+                                        Text(if (channel.id == selectedChannelId) "Играет" else "Играть")
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onToggleProgram(channel.id) },
+                                        enabled = programs.isNotEmpty()
+                                    ) {
+                                        Text(if (programExpanded) "Скрыть программу" else "Программа")
+                                    }
+                                }
                             }
                         }
                     }
@@ -1369,8 +1410,11 @@ private fun PlaylistScrollPanel(
 private fun ChannelCatalogScrollPanel(
     channels: List<Channel>,
     selectedChannelId: Long?,
+    epgProgramsByChannel: Map<Long, List<EpgProgram>>,
+    expandedEpgChannelIds: Set<Long>,
     availablePaneTargets: List<Int>,
     showTechnicalInfo: Boolean,
+    onToggleProgram: (Long) -> Unit,
     onPlayChannel: (Long) -> Unit,
     onPlayInPane: (Long, Int) -> Unit
 ) {
@@ -1406,8 +1450,11 @@ private fun ChannelCatalogScrollPanel(
                         ChannelCatalogRow(
                             channel = channel,
                             selected = channel.id == selectedChannelId,
+                            epgPrograms = epgProgramsByChannel[channel.id].orEmpty(),
+                            programExpanded = channel.id in expandedEpgChannelIds,
                             availablePaneTargets = availablePaneTargets,
                             showTechnicalInfo = showTechnicalInfo,
+                            onToggleProgram = onToggleProgram,
                             onPlayChannel = onPlayChannel,
                             onPlayInPane = onPlayInPane
                         )
@@ -1428,8 +1475,11 @@ private fun ChannelCatalogScrollPanel(
 private fun ChannelCatalogRow(
     channel: Channel,
     selected: Boolean,
+    epgPrograms: List<EpgProgram>,
+    programExpanded: Boolean,
     availablePaneTargets: List<Int>,
     showTechnicalInfo: Boolean,
+    onToggleProgram: (Long) -> Unit,
     onPlayChannel: (Long) -> Unit,
     onPlayInPane: (Long, Int) -> Unit
 ) {
@@ -1463,6 +1513,10 @@ private fun ChannelCatalogRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    ChannelEpgCompactLine(programs = epgPrograms)
+                    if (programExpanded) {
+                        ChannelProgramList(programs = epgPrograms)
+                    }
                     if (showTechnicalInfo) {
                         Text("URL: ${channel.streamUrl}", style = MaterialTheme.typography.bodySmall)
                     }
@@ -1471,6 +1525,12 @@ private fun ChannelCatalogRow(
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(onClick = { onPlayChannel(channel.id) }) {
                     Text(if (selected) "Играет" else "Выбрать и играть")
+                }
+                OutlinedButton(
+                    onClick = { onToggleProgram(channel.id) },
+                    enabled = epgPrograms.isNotEmpty()
+                ) {
+                    Text(if (programExpanded) "Скрыть программу" else "Программа")
                 }
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1483,6 +1543,59 @@ private fun ChannelCatalogRow(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ChannelEpgCompactLine(programs: List<EpgProgram>) {
+    if (programs.isEmpty()) return
+    val now = programs.firstOrNull()
+    val next = programs.drop(1).firstOrNull()
+    val text = buildString {
+        now?.let { program ->
+            append("Сейчас: ")
+            append(formatEpgTime(program.startEpochMs))
+            append(" ")
+            append(program.title)
+        }
+        next?.let { program ->
+            if (isNotEmpty()) append(" | ")
+            append("Далее: ")
+            append(formatEpgTime(program.startEpochMs))
+            append(" ")
+            append(program.title)
+        }
+    }
+    if (text.isBlank()) return
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+@Composable
+private fun ChannelProgramList(programs: List<EpgProgram>) {
+    if (programs.isEmpty()) {
+        Text(
+            text = "Программа не найдена",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        programs.take(6).forEach { program ->
+            Text(
+                text = "${formatEpgTime(program.startEpochMs)}-${formatEpgTime(program.endEpochMs)}  ${program.title}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -1795,12 +1908,13 @@ private fun InternalPlayerHost(
         }
     }
 
-    // Простая авто-восстановительная логика: если плеер долго в состоянии BUFFERING,
-    // попытаться переподготовить поток (stop -> prepare -> play). Это помогает при зависаниях сети/декодера.
+    // Один мягкий retry при долгой буферизации. Без лимита старые ТВ-боксы могут зависать
+    // на повторяющихся stop/prepare во время плохого потока.
     DisposableEffect(session.sessionId, exoPlayer) {
         val recoveryJob = kotlinx.coroutines.Job()
-        val recoveryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + recoveryJob)
+        val recoveryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate + recoveryJob)
         var bufferingSince = 0L
+        var recoveryAttempted = false
 
         val stateListener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1826,14 +1940,18 @@ private fun InternalPlayerHost(
                     val since = bufferingSince
                     if (since != 0L) {
                         val elapsed = System.currentTimeMillis() - since
-                        if (elapsed > 10_000) {
+                        if (elapsed > 12_000 && !recoveryAttempted) {
+                            recoveryAttempted = true
+                            bufferingSince = 0L
                             runCatching {
                                 exoPlayer.playWhenReady = false
-                                exoPlayer.playbackState // touch
                                 exoPlayer.stop()
                                 exoPlayer.prepare()
                                 exoPlayer.playWhenReady = true
                             }
+                        } else if (elapsed > 24_000 && recoveryAttempted) {
+                            onError("Buffering timeout after recovery attempt")
+                            break
                         }
                     }
                 }
@@ -2378,6 +2496,9 @@ private fun formatPlaybackException(error: PlaybackException): String {
 private fun formatEpgTime(epochMs: Long): String {
     return runCatching {
         val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
+        formatter.timeZone = PLAYER_EPG_TIME_ZONE
         formatter.format(Date(epochMs))
     }.getOrDefault("--:--")
 }
+
+private val PLAYER_EPG_TIME_ZONE: TimeZone = TimeZone.getTimeZone("Asia/Oral")

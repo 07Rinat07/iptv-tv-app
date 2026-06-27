@@ -14,6 +14,7 @@ import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelEpgInfo
+import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.ManualBufferSettings
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.Playlist
@@ -70,6 +71,8 @@ enum class MultiviewMode(val paneCount: Int) {
 private const val MULTIVIEW_FOUR_UP_MIN_CPU = 6
 private const val MULTIVIEW_FOUR_UP_MIN_HEAP_BYTES = 512L * 1024L * 1024L
 private const val DUPLICATE_INTERNAL_PLAY_WINDOW_MS = 1_500L
+private const val CHANNEL_LIST_EPG_WINDOW_MS = 3 * 60 * 60 * 1000L
+private const val CHANNEL_LIST_EPG_REFRESH_MS = 10 * 60 * 1000L
 
 private fun defaultMultiviewDeviceCapability(): MultiviewDeviceCapability {
     return evaluateMultiviewDeviceCapability(
@@ -164,6 +167,8 @@ data class PlayerUiState(
     val selectedStreamKind: String = "Канал не выбран",
     val resolvedStreamUrl: String? = null,
     val channelEpgInfo: ChannelEpgInfo? = null,
+    val channelListEpgPrograms: Map<Long, List<EpgProgram>> = emptyMap(),
+    val channelListEpgStatus: String = "EPG в списке: нет данных",
     val epgStatus: String = "EPG: нет данных",
     val epgWizardUrl: String = "",
     val epgWizardStatus: String = "EPG мастер: выберите плейлист",
@@ -229,6 +234,9 @@ class PlayerViewModel @Inject constructor(
     private var channelsJob: Job? = null
     private var overrideJob: Job? = null
     private var epgJob: Job? = null
+    private var channelListEpgJob: Job? = null
+    private var channelListEpgLoadedPlaylistId: Long? = null
+    private var channelListEpgLoadedAtMs: Long = 0L
     private var primaryPlaybackJob: Job? = null
     private var primaryPlaybackRequestId: Long = 0L
     private var lastInternalPlayRequestChannelId: Long? = null
@@ -315,6 +323,8 @@ class PlayerViewModel @Inject constructor(
                 selectedChannelAceCapable = false,
                 resolvedStreamUrl = null,
                 channelEpgInfo = null,
+                channelListEpgPrograms = emptyMap(),
+                channelListEpgStatus = "EPG в списке: загрузка...",
                 epgStatus = "EPG: загрузка...",
                 epgWizardUrl = selectedPlaylist?.epgSourceUrl.orEmpty(),
                 epgWizardStatus = if (selectedPlaylist != null) {
@@ -1352,6 +1362,8 @@ class PlayerViewModel @Inject constructor(
                     resolvedStreamUrl = null,
                     channelPlayerOverride = null,
                     channelEpgInfo = null,
+                    channelListEpgPrograms = emptyMap(),
+                    channelListEpgStatus = "EPG в списке: нет данных",
                     epgStatus = "EPG: канал не выбран",
                     internalSession = null,
                     isStartingPlayback = false,
@@ -1466,6 +1478,80 @@ class PlayerViewModel @Inject constructor(
                         )
                     }
                 }
+                loadChannelListEpgWindow(playlistId)
+            }
+        }
+    }
+
+    private fun loadChannelListEpgWindow(playlistId: Long) {
+        val stateSnapshot = _uiState.value
+        val playlist = stateSnapshot.playlists.firstOrNull { it.id == playlistId }
+        if (playlist == null || stateSnapshot.channels.isEmpty()) {
+            channelListEpgJob?.cancel()
+            channelListEpgLoadedPlaylistId = null
+            _uiState.update {
+                it.copy(
+                    channelListEpgPrograms = emptyMap(),
+                    channelListEpgStatus = "EPG в списке: нет данных"
+                )
+            }
+            return
+        }
+
+        if (playlist.epgSourceUrl.isNullOrBlank()) {
+            channelListEpgJob?.cancel()
+            channelListEpgLoadedPlaylistId = null
+            _uiState.update {
+                it.copy(
+                    channelListEpgPrograms = emptyMap(),
+                    channelListEpgStatus = "EPG в списке: источник не настроен"
+                )
+            }
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        if (
+            channelListEpgLoadedPlaylistId == playlistId &&
+            now - channelListEpgLoadedAtMs < CHANNEL_LIST_EPG_REFRESH_MS &&
+            stateSnapshot.channelListEpgPrograms.isNotEmpty()
+        ) {
+            return
+        }
+
+        channelListEpgJob?.cancel()
+        channelListEpgJob = viewModelScope.launch {
+            _uiState.update { it.copy(channelListEpgStatus = "EPG в списке: загрузка...") }
+            when (
+                val result = playlistRepository.getPlaylistEpgWindow(
+                    playlistId = playlistId,
+                    startEpochMs = now,
+                    endEpochMs = now + CHANNEL_LIST_EPG_WINDOW_MS
+                )
+            ) {
+                is AppResult.Success -> {
+                    channelListEpgLoadedPlaylistId = playlistId
+                    channelListEpgLoadedAtMs = System.currentTimeMillis()
+                    _uiState.update {
+                        it.copy(
+                            channelListEpgPrograms = result.data,
+                            channelListEpgStatus = if (result.data.isEmpty()) {
+                                "EPG в списке: передач не найдено"
+                            } else {
+                                "EPG в списке: найдено для каналов ${result.data.size}"
+                            }
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update {
+                        it.copy(
+                            channelListEpgPrograms = emptyMap(),
+                            channelListEpgStatus = "EPG в списке: ${result.message}"
+                        )
+                    }
+                }
+                AppResult.Loading -> Unit
             }
         }
     }

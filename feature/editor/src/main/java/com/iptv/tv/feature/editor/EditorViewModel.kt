@@ -16,6 +16,7 @@ import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelMetadata
 import com.iptv.tv.core.model.EditorActionResult
+import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.Playlist
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -53,6 +54,8 @@ data class EditorUiState(
     val playlists: List<Playlist> = emptyList(),
     val effectivePlaylistId: Long? = null,
     val channels: List<Channel> = emptyList(),
+    val epgProgramsByChannel: Map<Long, List<EpgProgram>> = emptyMap(),
+    val epgStatus: String = "EPG: нет данных",
     val channelQuery: String = "",
     val favoriteChannelIds: Set<Long> = emptySet(),
     val selectedChannelIds: Set<Long> = emptySet(),
@@ -101,6 +104,9 @@ class EditorViewModel @Inject constructor(
 
     private var observedPlaylistId: Long? = null
     private var channelsJob: Job? = null
+    private var epgJob: Job? = null
+    private var epgLoadedPlaylistId: Long? = null
+    private var epgLoadedAtMs: Long = 0L
     private var lastExportContent: String? = null
     private var lastExportPlaylistId: Long? = null
     private var lastExportExtension: String = "m3u"
@@ -123,6 +129,8 @@ class EditorViewModel @Inject constructor(
                 manualCategoryInput = "",
                 exportPreview = null,
                 exportedFilePath = null,
+                epgProgramsByChannel = emptyMap(),
+                epgStatus = "EPG: загрузка...",
                 lastError = null,
                 lastInfo = null
             )
@@ -270,44 +278,7 @@ class EditorViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, lastError = null, lastInfo = null) }
             runCatching {
-                val playlists = playlistRepository.observePlaylists().first()
-                if (playlists.isEmpty()) {
-                    error("Плейлистов пока нет")
-                }
-
-                val contentBuilder = StringBuilder()
-                var totalChannels = 0
-
-                contentBuilder.appendLine("myscanerIPTV | Экспорт плейлистов")
-                contentBuilder.appendLine("Плейлистов: ${playlists.size}")
-                contentBuilder.appendLine("Сформировано: ${System.currentTimeMillis()}")
-                contentBuilder.appendLine()
-
-                playlists.forEachIndexed { playlistIndex, playlist ->
-                    val channels = playlistRepository.observeChannels(playlist.id).first()
-                    totalChannels += channels.size
-
-                    contentBuilder.appendLine("${playlistIndex + 1}. ${playlist.name}")
-                    contentBuilder.appendLine("ID=${playlist.id} | type=${playlist.sourceType} | channels=${channels.size}")
-                    contentBuilder.appendLine("Source: ${playlist.source}")
-
-                    if (channels.isEmpty()) {
-                        contentBuilder.appendLine("  (каналов нет)")
-                    } else {
-                        channels.forEachIndexed { channelIndex, channel ->
-                            val groupSuffix = channel.group?.takeIf { it.isNotBlank() }?.let { " | group=$it" }.orEmpty()
-                            contentBuilder.appendLine("  ${channelIndex + 1}) ${channel.name}$groupSuffix")
-                            contentBuilder.appendLine("     URL: ${channel.streamUrl}")
-                        }
-                    }
-                    contentBuilder.appendLine()
-                }
-
-                TextExportResult(
-                    content = contentBuilder.toString(),
-                    playlistsCount = playlists.size,
-                    channelsCount = totalChannels
-                )
+                buildAllPlaylistsTxtExport()
             }.onSuccess { export ->
                 lastExportContent = export.content
                 lastExportPlaylistId = null
@@ -327,6 +298,53 @@ class EditorViewModel @Inject constructor(
                     it.copy(
                         isLoading = false,
                         lastError = "Не удалось подготовить TXT: ${throwable.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun saveCurrentPlaylistM3uToStorage() {
+        exportSelectedOrVisibleToStorage(extension = "m3u")
+    }
+
+    fun saveCurrentPlaylistM3u8ToStorage() {
+        exportSelectedOrVisibleToStorage(extension = "m3u8")
+    }
+
+    fun saveAllPlaylistsTxtToStorage() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, lastError = null, lastInfo = null) }
+            runCatching {
+                val export = buildAllPlaylistsTxtExport()
+                lastExportContent = export.content
+                lastExportPlaylistId = null
+                lastExportExtension = "txt"
+                val path = saveTextToPublicDownloads(
+                    fileName = buildExportFileName(playlistId = null, extension = "txt"),
+                    content = export.content
+                )
+                ExportSaveResult(
+                    path = path,
+                    channelCount = export.channelsCount,
+                    extension = "txt"
+                )
+            }.onSuccess { saved ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        exportPreview = lastExportContent?.take(EXPORT_PREVIEW_MAX_LEN),
+                        exportFileExtension = saved.extension,
+                        exportedFilePath = saved.path,
+                        lastInfo = "TXT сохранен в память ТВ: каналов=${saved.channelCount}",
+                        lastError = null
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        lastError = "Не удалось сохранить TXT: ${throwable.message}"
                     )
                 }
             }
@@ -363,6 +381,60 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    private fun exportSelectedOrVisibleToStorage(extension: String) {
+        val playlistId = currentPlaylistIdOrError() ?: return
+        val selected = _uiState.value.selectedChannelIds.toList()
+        val normalizedExtension = if (extension.equals("m3u8", ignoreCase = true)) "m3u8" else "m3u"
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, lastError = null, lastInfo = null) }
+            when (val result = editorRepository.exportToM3u(playlistId, selected)) {
+                is AppResult.Success -> {
+                    val content = result.data.m3uContent
+                    runCatching {
+                        val path = saveTextToPublicDownloads(
+                            fileName = buildExportFileName(
+                                playlistId = result.data.playlistId,
+                                extension = normalizedExtension
+                            ),
+                            content = content
+                        )
+                        ExportSaveResult(
+                            path = path,
+                            channelCount = result.data.channelCount,
+                            extension = normalizedExtension
+                        )
+                    }.onSuccess { saved ->
+                        lastExportContent = content
+                        lastExportPlaylistId = result.data.playlistId
+                        lastExportExtension = normalizedExtension
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                exportPreview = content.take(EXPORT_PREVIEW_MAX_LEN),
+                                exportFileExtension = normalizedExtension,
+                                exportedFilePath = saved.path,
+                                lastInfo = "Плейлист .$normalizedExtension сохранен в память ТВ: каналов=${saved.channelCount}",
+                                lastError = null
+                            )
+                        }
+                    }.onFailure { throwable ->
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                lastError = "Не удалось сохранить .$normalizedExtension: ${throwable.message}"
+                            )
+                        }
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(isLoading = false, lastError = result.message) }
+                }
+                AppResult.Loading -> Unit
+            }
+        }
+    }
+
     fun saveExportToStorage() {
         val content = lastExportContent
         if (content.isNullOrBlank()) {
@@ -385,12 +457,11 @@ class EditorViewModel @Inject constructor(
                         .ifBlank { "playlist-$playlistId" }
                 }
                 val ext = _uiState.value.exportFileExtension.ifBlank { lastExportExtension }
-                val fileName = if (ext.equals("txt", ignoreCase = true)) {
-                    val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                    "Tv_list_$stamp.txt"
-                } else {
-                    "$playlistName-${System.currentTimeMillis()}.$ext"
-                }
+                val fileName = buildExportFileName(
+                    playlistId = playlistId,
+                    extension = ext,
+                    fallbackPlaylistName = playlistName
+                )
                 saveTextToPublicDownloads(fileName = fileName, content = content)
             }.onSuccess { path ->
                 _uiState.update {
@@ -410,6 +481,47 @@ class EditorViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private suspend fun buildAllPlaylistsTxtExport(): TextExportResult {
+        val playlists = playlistRepository.observePlaylists().first()
+        if (playlists.isEmpty()) {
+            error("Плейлистов пока нет")
+        }
+
+        val contentBuilder = StringBuilder()
+        var totalChannels = 0
+
+        contentBuilder.appendLine("myscanerIPTV | Экспорт плейлистов")
+        contentBuilder.appendLine("Плейлистов: ${playlists.size}")
+        contentBuilder.appendLine("Сформировано: ${System.currentTimeMillis()}")
+        contentBuilder.appendLine()
+
+        playlists.forEachIndexed { playlistIndex, playlist ->
+            val channels = playlistRepository.observeChannels(playlist.id).first()
+            totalChannels += channels.size
+
+            contentBuilder.appendLine("${playlistIndex + 1}. ${playlist.name}")
+            contentBuilder.appendLine("ID=${playlist.id} | type=${playlist.sourceType} | channels=${channels.size}")
+            contentBuilder.appendLine("Source: ${playlist.source}")
+
+            if (channels.isEmpty()) {
+                contentBuilder.appendLine("  (каналов нет)")
+            } else {
+                channels.forEachIndexed { channelIndex, channel ->
+                    val groupSuffix = channel.group?.takeIf { it.isNotBlank() }?.let { " | group=$it" }.orEmpty()
+                    contentBuilder.appendLine("  ${channelIndex + 1}) ${channel.name}$groupSuffix")
+                    contentBuilder.appendLine("     URL: ${channel.streamUrl}")
+                }
+            }
+            contentBuilder.appendLine()
+        }
+
+        return TextExportResult(
+            content = contentBuilder.toString(),
+            playlistsCount = playlists.size,
+            channelsCount = totalChannels
+        )
     }
 
     private fun saveTextToPublicDownloads(fileName: String, content: String): String {
@@ -1208,6 +1320,8 @@ class EditorViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     channels = emptyList(),
+                    epgProgramsByChannel = emptyMap(),
+                    epgStatus = "EPG: нет данных",
                     selectedChannelIds = emptySet(),
                     editDraft = ChannelEditDraft()
                 )
@@ -1226,11 +1340,77 @@ class EditorViewModel @Inject constructor(
                     }
                     state.copy(
                         channels = channels,
+                        epgProgramsByChannel = state.epgProgramsByChannel.filterKeys { id ->
+                            channels.any { it.id == id }
+                        },
                         selectedChannelIds = selected,
                         editDraft = draft,
                         selectedMetadata = state.selectedMetadata.takeIf { it?.channelId == draft.channelId }
                     )
                 }
+                loadPlaylistEpgWindow(playlistId)
+            }
+        }
+    }
+
+    private fun loadPlaylistEpgWindow(playlistId: Long) {
+        val state = _uiState.value
+        val playlist = state.playlists.firstOrNull { it.id == playlistId }
+        if (playlist == null || state.channels.isEmpty()) {
+            epgJob?.cancel()
+            epgLoadedPlaylistId = null
+            _uiState.update { it.copy(epgProgramsByChannel = emptyMap(), epgStatus = "EPG: нет данных") }
+            return
+        }
+        if (playlist.epgSourceUrl.isNullOrBlank()) {
+            epgJob?.cancel()
+            epgLoadedPlaylistId = null
+            _uiState.update { it.copy(epgProgramsByChannel = emptyMap(), epgStatus = "EPG: источник не настроен") }
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        if (
+            epgLoadedPlaylistId == playlistId &&
+            now - epgLoadedAtMs < EDITOR_EPG_REFRESH_MS &&
+            state.epgProgramsByChannel.isNotEmpty()
+        ) {
+            return
+        }
+
+        epgJob?.cancel()
+        epgJob = viewModelScope.launch {
+            _uiState.update { it.copy(epgStatus = "EPG: загрузка программы...") }
+            when (
+                val result = playlistRepository.getPlaylistEpgWindow(
+                    playlistId = playlistId,
+                    startEpochMs = now,
+                    endEpochMs = now + EDITOR_EPG_WINDOW_MS
+                )
+            ) {
+                is AppResult.Success -> {
+                    epgLoadedPlaylistId = playlistId
+                    epgLoadedAtMs = System.currentTimeMillis()
+                    _uiState.update {
+                        it.copy(
+                            epgProgramsByChannel = result.data,
+                            epgStatus = if (result.data.isEmpty()) {
+                                "EPG: передач не найдено"
+                            } else {
+                                "EPG: найдено для каналов ${result.data.size}"
+                            }
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update {
+                        it.copy(
+                            epgProgramsByChannel = emptyMap(),
+                            epgStatus = "EPG: ${result.message}"
+                        )
+                    }
+                }
+                AppResult.Loading -> Unit
             }
         }
     }
@@ -1286,6 +1466,7 @@ class EditorViewModel @Inject constructor(
 
     private fun onActionSuccess(result: EditorActionResult) {
         val copySuffix = if (result.createdWorkingCopy) " (создана COW-копия)" else ""
+        val actionMessage = "${result.message}: ${result.affectedCount}$copySuffix"
         _uiState.update {
             it.copy(
                 isLoading = false,
@@ -1297,12 +1478,43 @@ class EditorViewModel @Inject constructor(
                 manualLanguageInput = "",
                 manualCategoryInput = "",
                 exportedFilePath = null,
-                lastInfo = "${result.message}: ${result.affectedCount}$copySuffix",
+                lastInfo = "$actionMessage. Изменения сохранены внутри приложения",
                 lastError = null
             )
         }
         if (result.effectivePlaylistId != observedPlaylistId) {
             observeChannels(result.effectivePlaylistId)
+        }
+        refreshM3uPreviewAfterEdit(result.effectivePlaylistId, actionMessage)
+    }
+
+    private fun refreshM3uPreviewAfterEdit(playlistId: Long, actionMessage: String) {
+        viewModelScope.launch {
+            when (val export = editorRepository.exportToM3u(playlistId, emptyList())) {
+                is AppResult.Success -> {
+                    lastExportContent = export.data.m3uContent
+                    lastExportPlaylistId = export.data.playlistId
+                    lastExportExtension = "m3u"
+                    _uiState.update {
+                        it.copy(
+                            exportPreview = export.data.m3uContent.take(EXPORT_PREVIEW_MAX_LEN),
+                            exportFileExtension = "m3u",
+                            lastInfo = "$actionMessage. Изменения сохранены, M3U обновлен: каналов=${export.data.channelCount}",
+                            lastError = null
+                        )
+                    }
+                }
+                is AppResult.Error -> {
+                    _uiState.update {
+                        it.copy(
+                            exportPreview = null,
+                            lastInfo = "$actionMessage. Изменения сохранены, но экспорт пока пуст",
+                            lastError = null
+                        )
+                    }
+                }
+                AppResult.Loading -> Unit
+            }
         }
     }
 
@@ -1334,6 +1546,29 @@ class EditorViewModel @Inject constructor(
         )
     }
 
+    private fun buildExportFileName(
+        playlistId: Long?,
+        extension: String,
+        fallbackPlaylistName: String? = null
+    ): String {
+        val normalizedExtension = extension.trim().lowercase().ifBlank { "m3u" }
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        if (normalizedExtension == "txt") {
+            return "myscanerIPTV-all-playlists-$stamp.txt"
+        }
+        val playlistName = fallbackPlaylistName
+            ?: playlistId?.let { id ->
+                _uiState.value.playlists
+                    .firstOrNull { it.id == id }
+                    ?.name
+                    ?.sanitizeFileName()
+            }
+        val safeName = playlistName.orEmpty().ifBlank {
+            playlistId?.let { "playlist-$it" } ?: "playlist"
+        }
+        return "$safeName-$stamp.$normalizedExtension"
+    }
+
     private companion object {
         const val EXPORT_PREVIEW_MAX_LEN = 4000
     }
@@ -1344,6 +1579,15 @@ private data class TextExportResult(
     val playlistsCount: Int,
     val channelsCount: Int
 )
+
+private data class ExportSaveResult(
+    val path: String,
+    val channelCount: Int,
+    val extension: String
+)
+
+private const val EDITOR_EPG_WINDOW_MS = 3 * 60 * 60 * 1000L
+private const val EDITOR_EPG_REFRESH_MS = 10 * 60 * 1000L
 
 internal fun filterEditorChannels(channels: List<Channel>, query: String): List<Channel> {
     val normalizedQuery = query.trim().lowercase()

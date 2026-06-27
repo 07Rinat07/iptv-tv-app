@@ -1,47 +1,46 @@
-# Stage 5: Player Runtime (Media3 + VLC Fallback)
+# Stage 5: Player
 
-## Delivered
-- Implemented real runtime player flow in `feature:player`:
-  - load playlists and channels from repository;
-  - choose playlist and channel for playback;
-  - play with internal Media3/ExoPlayer or external VLC.
-- Added internal playback host with ExoPlayer (`PlayerView` in Compose):
-  - builds `LoadControl` from selected buffer profile;
-  - supports manual buffer values for `MANUAL` profile;
-  - reports ready/error states back to ViewModel.
-- Added VLC runtime behavior:
-  - installed check before launch;
-  - explicit install actions (`market://` then web fallback);
-  - automatic fallback to internal player if VLC missing or launch fails.
-- Added playback resiliency:
-  - auto-retry for internal playback errors with staged delays.
-- Added per-channel player override:
-  - persisted in DataStore via `SettingsRepository`;
-  - effective player = channel override or default player.
-- Added Settings runtime screen:
-  - default player selection;
-  - buffer profile selection;
-  - manual buffer values edit/save.
+## Scope
 
-## Data/Domain updates
-- `SettingsRepository` extended with:
-  - `observeManualBuffer()`
-  - `observeChannelPlayerOverride(channelId)`
-  - `setChannelPlayerOverride(channelId, playerType?)`
-- DataStore keys extended with channel override map storage.
-- `ManualBufferSettings` model introduced in `core:model`.
+The player module provides channel playback, playlist navigation, fallback playback through VLC, and EPG-aware channel lists.
 
-## Navigation updates
-- Added player route with playlist argument:
-  - `player`
-  - `player/{playlistId}`
-- `Playlists` screen now opens `Player` with selected playlist id.
+## Current behavior
 
-## Tests and verification
-- New unit tests:
-  - `core/player/src/test/.../PlayerContractsTest.kt`
-- Verified commands:
-  - `:core:player:test`
-  - `:feature:settings:assembleDebug`
-  - `:feature:player:assembleDebug`
-  - `:app:assembleDebug`
+- Internal playback uses Media3/ExoPlayer.
+- VLC can be used as an external fallback for streams that fail internally.
+- Playlists, groups, subgroups and channels are loaded from the repository.
+- Channel selection starts internal playback immediately.
+- The quick channel list and full channel catalog support TV remote navigation.
+- Channel rows show logos when available.
+- EPG data is shown in channel lists when the selected playlist has an EPG source.
+- The `Program` action expands the current/next program list for a channel; `Hide program` collapses it.
+- EPG time is formatted for the player timezone: `Asia/Oral` / Uralsk / UTC+5.
+- Technical panels are collapsible to keep the player screen clean.
+- Duplicate fullscreen controls were removed from the top-right overlay.
+
+## Playback resilience
+
+- Internal playback errors are reported to the ViewModel.
+- The player performs a limited soft retry instead of entering an endless retry loop.
+- Stream probe and player diagnostics are written to app logs.
+- VLC direct launch falls back to a compatible `ACTION_VIEW` launch when needed.
+
+## Settings integration
+
+- Default player selection.
+- Buffer profile selection.
+- Manual buffer values for advanced troubleshooting.
+- Per-channel player override where supported by settings.
+
+## Navigation
+
+- `player`
+- `player/{playlistId}`
+
+## Verification
+
+Use the CI-equivalent command from the root `README.md`, or run the focused player checks:
+
+```bash
+env JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew --no-daemon --stacktrace :core:player:testDebugUnitTest :feature:player:testDebugUnitTest :feature:player:assembleDebug
+```
