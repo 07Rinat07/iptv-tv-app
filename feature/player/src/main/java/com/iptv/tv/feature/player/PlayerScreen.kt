@@ -1154,14 +1154,12 @@ private fun FullscreenInternalPlayerOverlay(
                 fullscreenMode = true
             )
         }
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
                 .background(Color.Black.copy(alpha = 0.52f))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Text(
                 selectedChannelName ?: "Встроенный плеер",
@@ -1169,11 +1167,8 @@ private fun FullscreenInternalPlayerOverlay(
                 color = Color.White,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth()
             )
-            OutlinedButton(onClick = onClose) {
-                Text("Свернуть")
-            }
         }
     }
 }
