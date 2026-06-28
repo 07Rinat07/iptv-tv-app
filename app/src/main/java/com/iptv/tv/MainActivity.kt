@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,7 +54,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.media3.common.util.UnstableApi
+import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.designsystem.theme.IptvTheme
+import com.iptv.tv.core.model.AppStartDestination
 import com.iptv.tv.feature.editor.EDITOR_PLAYLIST_ID_ARG
 import com.iptv.tv.feature.diagnostics.DiagnosticsScreen
 import com.iptv.tv.feature.downloads.DownloadsScreen
@@ -74,6 +77,7 @@ import com.iptv.tv.feature.scanner.ScannerScreen
 import com.iptv.tv.feature.settings.NetworkTestScreen
 import com.iptv.tv.feature.settings.SettingsScreen
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 const val TAG_ROUTE_LABEL = "top_route_label"
 private const val TAG_NAV_PREFIX = "nav_button_"
@@ -86,13 +90,16 @@ fun navButtonTag(route: String): String = TAG_NAV_PREFIX + route
 class MainActivity : ComponentActivity() {
     private val pendingDeepLinkRoute = mutableStateOf<String?>(null)
 
+    @Inject
+    lateinit var settingsRepository: SettingsRepository
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingDeepLinkRoute.value = intent.toAppRoute()
         enableEdgeToEdge()
         setContent {
             IptvTheme {
-                AppRoot(pendingDeepLinkRoute)
+                AppRoot(pendingDeepLinkRoute, settingsRepository)
             }
         }
     }
@@ -106,7 +113,10 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 @androidx.annotation.OptIn(UnstableApi::class)
-private fun AppRoot(pendingDeepLinkRoute: MutableState<String?>) {
+private fun AppRoot(
+    pendingDeepLinkRoute: MutableState<String?>,
+    settingsRepository: SettingsRepository
+) {
     val navController = rememberNavController()
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route ?: Routes.HOME
     val activity = LocalContext.current as? ComponentActivity
@@ -114,6 +124,12 @@ private fun AppRoot(pendingDeepLinkRoute: MutableState<String?>) {
     var showExitConfirm by remember { mutableStateOf(false) }
     var showSectionsMenu by remember { mutableStateOf(false) }
     var playerFullscreen by remember { mutableStateOf(false) }
+    val configuredStartDestination by settingsRepository
+        .observeAppStartDestination()
+        .collectAsState(initial = null)
+    var startupNavigationApplied by remember {
+        mutableStateOf(pendingDeepLinkRoute.value != null)
+    }
 
     BackHandler {
         if (!navController.navigateUp()) {
@@ -124,8 +140,21 @@ private fun AppRoot(pendingDeepLinkRoute: MutableState<String?>) {
     LaunchedEffect(pendingDeepLinkRoute.value) {
         val route = pendingDeepLinkRoute.value ?: return@LaunchedEffect
         pendingDeepLinkRoute.value = null
+        startupNavigationApplied = true
         navController.navigate(route) {
             launchSingleTop = true
+        }
+    }
+
+    LaunchedEffect(configuredStartDestination) {
+        val destination = configuredStartDestination ?: return@LaunchedEffect
+        if (startupNavigationApplied) return@LaunchedEffect
+        startupNavigationApplied = true
+        val route = destination.toAppRoute()
+        if (route != Routes.HOME) {
+            navController.navigate(route) {
+                launchSingleTop = true
+            }
         }
     }
 
@@ -508,6 +537,16 @@ private fun routeTitle(route: String): String = when {
         Routes.NETWORK_TEST -> "Сетевой тест"
         Routes.DIAGNOSTICS -> "Диагностика"
         else -> route
+    }
+}
+
+private fun AppStartDestination.toAppRoute(): String {
+    return when (this) {
+        AppStartDestination.HOME -> Routes.HOME
+        AppStartDestination.PLAYER -> Routes.PLAYER
+        AppStartDestination.SCANNER -> Routes.SCANNER
+        AppStartDestination.FAVORITES -> Routes.FAVORITES
+        AppStartDestination.PLAYLISTS -> Routes.PLAYLISTS
     }
 }
 

@@ -28,6 +28,14 @@ enum class PlayerType {
     VLC
 }
 
+enum class AppStartDestination {
+    HOME,
+    PLAYER,
+    SCANNER,
+    FAVORITES,
+    PLAYLISTS
+}
+
 enum class BufferProfile {
     MINIMAL,
     STANDARD,

@@ -33,6 +33,7 @@ import com.iptv.tv.core.domain.repository.ProviderAccountRepository
 import com.iptv.tv.core.domain.repository.ScannerRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.engine.data.EngineStreamClient
+import com.iptv.tv.core.model.AppStartDestination
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.ChannelEpgInfo
 import com.iptv.tv.core.model.ChannelPreview
@@ -2616,6 +2617,13 @@ class SettingsRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val parentalProfileDao: ParentalProfileDao
 ) : SettingsRepository {
+    override fun observeAppStartDestination(): Flow<AppStartDestination> {
+        return context.settingsDataStore.data.map { prefs ->
+            val stored = prefs[SettingsKeys.appStartDestination] ?: AppStartDestination.HOME.name
+            runCatching { AppStartDestination.valueOf(stored) }.getOrDefault(AppStartDestination.HOME)
+        }
+    }
+
     override fun observeDefaultPlayer(): Flow<PlayerType> {
         return context.settingsDataStore.data.map { prefs ->
             val stored = prefs[SettingsKeys.defaultPlayer] ?: PlayerType.INTERNAL.name
@@ -2747,6 +2755,12 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override fun observeParentalControlProfiles(): Flow<List<ParentalControlProfile>> {
         return parentalProfileDao.observeProfiles().map { rows -> rows.map { it.toModel() } }
+    }
+
+    override suspend fun setAppStartDestination(destination: AppStartDestination) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[SettingsKeys.appStartDestination] = destination.name
+        }
     }
 
     override suspend fun setDefaultPlayer(playerType: PlayerType) {

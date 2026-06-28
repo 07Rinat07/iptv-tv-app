@@ -8,6 +8,7 @@ import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.HistoryRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
+import com.iptv.tv.core.model.AppStartDestination
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelEpgInfo
@@ -333,6 +334,8 @@ class PlayerViewModelMultiviewTest {
     }
 
     private class FakeSettingsRepository : SettingsRepository {
+        override fun observeAppStartDestination(): Flow<AppStartDestination> =
+            MutableStateFlow(AppStartDestination.HOME)
         override fun observeDefaultPlayer(): Flow<PlayerType> = MutableStateFlow(PlayerType.INTERNAL)
         override fun observeBufferProfile(): Flow<BufferProfile> = MutableStateFlow(BufferProfile.STANDARD)
         override fun observeManualBuffer(): Flow<ManualBufferSettings> = MutableStateFlow(
@@ -364,6 +367,7 @@ class PlayerViewModelMultiviewTest {
         )
         override fun observeParentalControlProfiles(): Flow<List<ParentalControlProfile>> = emptyFlow()
 
+        override suspend fun setAppStartDestination(destination: AppStartDestination) = Unit
         override suspend fun setDefaultPlayer(playerType: PlayerType) = Unit
         override suspend fun setBufferProfile(profile: BufferProfile) = Unit
         override suspend fun setManualBuffer(startMs: Int, rebufferMs: Int, maxMs: Int) = Unit

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.domain.repository.TvHomeIntegrationRepository
+import com.iptv.tv.core.model.AppStartDestination
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.ParentalControlProfile
 import com.iptv.tv.core.model.PlayerType
@@ -24,6 +25,7 @@ import javax.inject.Inject
 data class SettingsUiState(
     val title: String = "Настройки",
     val description: String = "Плеер, буфер, Engine Stream и Tor",
+    val appStartDestination: AppStartDestination = AppStartDestination.HOME,
     val defaultPlayer: PlayerType = PlayerType.INTERNAL,
     val bufferProfile: BufferProfile = BufferProfile.STANDARD,
     val manualStartMs: String = "12000",
@@ -78,6 +80,19 @@ class SettingsViewModel @Inject constructor(
         observeSettings()
         observeParentalProfiles()
         observeTvHomeStates()
+    }
+
+    fun setAppStartDestination(destination: AppStartDestination) {
+        if (!ensureSettingsUnlocked()) return
+        viewModelScope.launch {
+            settingsRepository.setAppStartDestination(destination)
+            _uiState.update {
+                it.copy(
+                    lastInfo = "Стартовый экран: ${destination.toUiLabel()}",
+                    lastError = null
+                )
+            }
+        }
     }
 
     fun setDefaultPlayer(playerType: PlayerType) {
@@ -755,6 +770,11 @@ class SettingsViewModel @Inject constructor(
 
     private fun observeSettings() {
         viewModelScope.launch {
+            settingsRepository.observeAppStartDestination().collect { destination ->
+                _uiState.update { it.copy(appStartDestination = destination) }
+            }
+        }
+        viewModelScope.launch {
             settingsRepository.observeDefaultPlayer().collect { player ->
                 _uiState.update { it.copy(defaultPlayer = player) }
             }
@@ -937,6 +957,16 @@ class SettingsViewModel @Inject constructor(
             if (hours <= 0) return DEFAULT_PROVIDER_AUTO_SYNC_HOURS
             return allowed.minBy { candidate -> kotlin.math.abs(candidate - hours) }
         }
+    }
+}
+
+private fun AppStartDestination.toUiLabel(): String {
+    return when (this) {
+        AppStartDestination.HOME -> "Главная"
+        AppStartDestination.PLAYER -> "Плеер"
+        AppStartDestination.SCANNER -> "Сканер"
+        AppStartDestination.FAVORITES -> "Избранное"
+        AppStartDestination.PLAYLISTS -> "Мои плейлисты"
     }
 }
 

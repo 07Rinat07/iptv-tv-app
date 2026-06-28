@@ -37,6 +37,7 @@ import com.iptv.tv.core.model.TvHomeChannelType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.iptv.tv.core.model.AppStartDestination as CoreAppStartDestination
 import com.iptv.tv.core.model.BufferProfile as CoreBufferProfile
 import com.iptv.tv.core.model.PlayerType as CorePlayerType
 
@@ -102,6 +103,49 @@ fun SettingsScreen(
                 Button(onClick = viewModel::applyRecommendedSettings) {
                     Text("Рекомендуемые настройки")
                 }
+                Text(
+                    text = "Стартовый экран: ${state.appStartDestination.toUiLabel()}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SelectionButton(
+                        selected = state.appStartDestination == CoreAppStartDestination.HOME,
+                        label = "Главная",
+                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.HOME) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = state.appStartDestination == CoreAppStartDestination.PLAYER,
+                        label = "Плеер",
+                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.PLAYER) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = state.appStartDestination == CoreAppStartDestination.SCANNER,
+                        label = "Сканер",
+                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.SCANNER) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = state.appStartDestination == CoreAppStartDestination.FAVORITES,
+                        label = "Избранное",
+                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.FAVORITES) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                    SelectionButton(
+                        selected = state.appStartDestination == CoreAppStartDestination.PLAYLISTS,
+                        label = "Плейлисты",
+                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.PLAYLISTS) },
+                        modifier = Modifier.fillMaxWidth(0.48f)
+                    )
+                }
+                Text(
+                    text = "При следующем запуске приложение откроет выбранный раздел.",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
 
@@ -972,6 +1016,16 @@ private fun CorePlayerType.toUiLabel(): String {
     return when (this) {
         CorePlayerType.INTERNAL -> "Встроенный"
         CorePlayerType.VLC -> "VLC"
+    }
+}
+
+private fun CoreAppStartDestination.toUiLabel(): String {
+    return when (this) {
+        CoreAppStartDestination.HOME -> "Главная"
+        CoreAppStartDestination.PLAYER -> "Плеер"
+        CoreAppStartDestination.SCANNER -> "Сканер"
+        CoreAppStartDestination.FAVORITES -> "Избранное"
+        CoreAppStartDestination.PLAYLISTS -> "Мои плейлисты"
     }
 }
 

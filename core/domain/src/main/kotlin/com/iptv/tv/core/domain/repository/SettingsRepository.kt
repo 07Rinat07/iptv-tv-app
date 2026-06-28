@@ -1,6 +1,7 @@
 package com.iptv.tv.core.domain.repository
 
 import com.iptv.tv.core.common.AppResult
+import com.iptv.tv.core.model.AppStartDestination
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.ManualBufferSettings
 import com.iptv.tv.core.model.ParentalControlProfile
@@ -13,6 +14,7 @@ import com.iptv.tv.core.model.ScannerProxySettings
 import kotlinx.coroutines.flow.Flow
 
 interface SettingsRepository {
+    fun observeAppStartDestination(): Flow<AppStartDestination>
     fun observeDefaultPlayer(): Flow<PlayerType>
     fun observeBufferProfile(): Flow<BufferProfile>
     fun observeManualBuffer(): Flow<ManualBufferSettings>
@@ -32,6 +34,7 @@ interface SettingsRepository {
     fun observeScannerLearnedQueries(): Flow<List<ScannerLearnedQuery>>
     fun observeParentalControlSettings(): Flow<ParentalControlSettings>
     fun observeParentalControlProfiles(): Flow<List<ParentalControlProfile>>
+    suspend fun setAppStartDestination(destination: AppStartDestination)
     suspend fun setDefaultPlayer(playerType: PlayerType)
     suspend fun setBufferProfile(profile: BufferProfile)
     suspend fun setManualBuffer(startMs: Int, rebufferMs: Int, maxMs: Int)

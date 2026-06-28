@@ -10,6 +10,7 @@ import androidx.datastore.preferences.preferencesDataStore
 val Context.settingsDataStore by preferencesDataStore(name = "iptv_settings")
 
 object SettingsKeys {
+    val appStartDestination: Preferences.Key<String> = stringPreferencesKey("app_start_destination")
     val defaultPlayer: Preferences.Key<String> = stringPreferencesKey("default_player")
     val bufferProfile: Preferences.Key<String> = stringPreferencesKey("buffer_profile")
     val manualStartMs: Preferences.Key<Int> = intPreferencesKey("manual_start_ms")

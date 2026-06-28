@@ -3,6 +3,7 @@ package com.iptv.tv.feature.settings
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.domain.repository.TvHomeIntegrationRepository
+import com.iptv.tv.core.model.AppStartDestination
 import com.iptv.tv.core.model.BufferProfile
 import com.iptv.tv.core.model.ManualBufferSettings
 import com.iptv.tv.core.model.ParentalControlProfile
@@ -306,6 +307,8 @@ class SettingsViewModelParentalTest {
         var lastParentalHideAdultChannels: Boolean? = null
         var lastParentalKeywords: List<String> = emptyList()
 
+        override fun observeAppStartDestination(): Flow<AppStartDestination> =
+            MutableStateFlow(AppStartDestination.HOME)
         override fun observeDefaultPlayer(): Flow<PlayerType> = MutableStateFlow(PlayerType.INTERNAL)
         override fun observeBufferProfile(): Flow<BufferProfile> = MutableStateFlow(BufferProfile.STANDARD)
         override fun observeManualBuffer(): Flow<ManualBufferSettings> = MutableStateFlow(
@@ -331,6 +334,7 @@ class SettingsViewModelParentalTest {
         override fun observeParentalControlSettings(): Flow<ParentalControlSettings> = parentalFlow
         override fun observeParentalControlProfiles(): Flow<List<ParentalControlProfile>> = parentalProfilesFlow
 
+        override suspend fun setAppStartDestination(destination: AppStartDestination) = Unit
         override suspend fun setDefaultPlayer(playerType: PlayerType) = Unit
         override suspend fun setBufferProfile(profile: BufferProfile) = Unit
         override suspend fun setManualBuffer(startMs: Int, rebufferMs: Int, maxMs: Int) = Unit
