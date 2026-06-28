@@ -144,6 +144,7 @@ env GRADLE_USER_HOME=/tmp/iptv-gh-clean JAVA_HOME=/usr/lib/jvm/java-17-openjdk-a
 - `docs/stage7-hardening.md` - стабилизация.
 - `docs/stage8-release-readiness.md` - подготовка к релизу.
 - `docs/stage9-device-acceptance-release-runbook.md` - проверка на устройстве.
+- `docs/stage10-navigation-scroll.md` - общий скролл и план навигации под пульт/телефон.
 
 ## Безопасность
 

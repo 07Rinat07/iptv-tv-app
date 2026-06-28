@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +31,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.TvHomeChannelType
 import java.text.SimpleDateFormat
@@ -79,7 +79,7 @@ fun SettingsScreen(
     var showTvHome by rememberSaveable { mutableStateOf(false) }
     var showLegal by rememberSaveable { mutableStateOf(!state.legalAccepted) }
 
-    LazyColumn(
+    TvScrollableLazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp),

@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -39,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
+import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistProvider
@@ -122,7 +122,7 @@ fun ImporterScreen(
         }
     }
 
-    LazyColumn(
+    TvScrollableLazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp)

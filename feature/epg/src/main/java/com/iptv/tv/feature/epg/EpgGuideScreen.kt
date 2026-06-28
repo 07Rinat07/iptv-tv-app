@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -45,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.Playlist
@@ -103,7 +103,7 @@ fun EpgGuideScreen(
         )
     }
 
-    LazyColumn(
+    TvScrollableLazyColumn(
         state = listState,
         modifier = Modifier
             .fillMaxSize()

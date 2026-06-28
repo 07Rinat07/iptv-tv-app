@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -27,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.DownloadSourceType
 import com.iptv.tv.core.model.DownloadStatus
@@ -47,7 +47,7 @@ fun DownloadsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
-    LazyColumn(
+    TvScrollableLazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp),

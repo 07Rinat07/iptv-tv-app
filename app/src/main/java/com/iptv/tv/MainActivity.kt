@@ -25,7 +25,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -54,6 +53,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.media3.common.util.UnstableApi
+import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.designsystem.theme.IptvTheme
 import com.iptv.tv.core.model.AppStartDestination
@@ -492,7 +492,7 @@ private fun SectionsMenuDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Выберите экран. Список прокручивается вниз/вверх.")
-                LazyColumn(
+                TvScrollableLazyColumn(
                     modifier = Modifier
                         .heightIn(max = dialogListMaxHeight)
                         .testTag(TAG_SECTIONS_LIST),
