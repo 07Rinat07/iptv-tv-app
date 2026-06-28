@@ -814,6 +814,24 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    fun toggleChannelFavorite(channelId: Long) {
+        viewModelScope.launch {
+            val wasFavorite = _uiState.value.favoriteChannelIds.contains(channelId)
+            favoritesRepository.toggleFavorite(channelId)
+            val channelName = _uiState.value.channels.firstOrNull { it.id == channelId }?.name ?: "Канал"
+            _uiState.update {
+                it.copy(
+                    lastInfo = if (wasFavorite) {
+                        "$channelName удален из избранного"
+                    } else {
+                        "$channelName добавлен в избранное"
+                    },
+                    lastError = null
+                )
+            }
+        }
+    }
+
     fun playSelected(context: Context) {
         playSelectedWith(playerType = _uiState.value.effectivePlayer, context = context)
     }

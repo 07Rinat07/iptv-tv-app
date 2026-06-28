@@ -84,6 +84,18 @@ fun FavoritesScreen(
                 ) {
                     Text("Удалить")
                 }
+                OutlinedButton(
+                    onClick = viewModel::exportFavoritesTxt,
+                    enabled = state.channels.isNotEmpty() && !state.isExporting
+                ) {
+                    Text("Сохранить TXT")
+                }
+                OutlinedButton(
+                    onClick = viewModel::exportFavoritesM3u8,
+                    enabled = state.channels.isNotEmpty() && !state.isExporting
+                ) {
+                    Text("Сохранить M3U8")
+                }
                 OutlinedButton(onClick = { showDetails = !showDetails }) {
                     Text(if (showDetails) "Скрыть детали" else "Детали")
                 }
@@ -95,6 +107,16 @@ fun FavoritesScreen(
         }
         state.lastInfo?.let { info ->
             item { Text(text = info) }
+        }
+        state.exportedFilePath?.let { path ->
+            item {
+                Text(
+                    text = "Файл: $path",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
 
         if (state.channels.isEmpty()) {

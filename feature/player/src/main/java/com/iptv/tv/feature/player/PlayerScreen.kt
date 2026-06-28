@@ -88,6 +88,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -595,10 +596,12 @@ fun PlayerScreen(
                                     .padding(top = 10.dp),
                                 channels = filteredChannels,
                                 selectedChannelId = multiviewTargetChannelId,
+                                favoriteChannelIds = state.favoriteChannelIds,
                                 epgProgramsByChannel = state.channelListEpgPrograms,
                                 expandedEpgChannelIds = expandedEpgChannelIds,
                                 title = "Быстрый выбор для окна $selectedMultiviewTargetPane",
                                 onToggleProgram = ::toggleChannelProgram,
+                                onToggleFavorite = viewModel::toggleChannelFavorite,
                                 onSelect = { channelId ->
                                     viewModel.playChannelInPane(channelId, selectedMultiviewTargetPane)
                                 }
@@ -646,9 +649,11 @@ fun PlayerScreen(
                                             .fillMaxHeight(),
                                         channels = filteredChannels,
                                         selectedChannelId = state.selectedChannelId,
+                                        favoriteChannelIds = state.favoriteChannelIds,
                                         epgProgramsByChannel = state.channelListEpgPrograms,
                                         expandedEpgChannelIds = expandedEpgChannelIds,
                                         onToggleProgram = ::toggleChannelProgram,
+                                        onToggleFavorite = viewModel::toggleChannelFavorite,
                                         onSelect = viewModel::playChannelInternal
                                     )
                                 }
@@ -682,9 +687,11 @@ fun PlayerScreen(
                                             .padding(top = 10.dp),
                                         channels = filteredChannels,
                                         selectedChannelId = state.selectedChannelId,
+                                        favoriteChannelIds = state.favoriteChannelIds,
                                         epgProgramsByChannel = state.channelListEpgPrograms,
                                         expandedEpgChannelIds = expandedEpgChannelIds,
                                         onToggleProgram = ::toggleChannelProgram,
+                                        onToggleFavorite = viewModel::toggleChannelFavorite,
                                         onSelect = viewModel::playChannelInternal
                                     )
                                 }
@@ -802,11 +809,13 @@ fun PlayerScreen(
                     ChannelCatalogScrollPanel(
                         channels = filteredChannels,
                         selectedChannelId = state.selectedChannelId,
+                        favoriteChannelIds = state.favoriteChannelIds,
                         epgProgramsByChannel = state.channelListEpgPrograms,
                         expandedEpgChannelIds = expandedEpgChannelIds,
                         availablePaneTargets = availablePaneTargets,
                         showTechnicalInfo = showTechnicalInfo,
                         onToggleProgram = ::toggleChannelProgram,
+                        onToggleFavorite = viewModel::toggleChannelFavorite,
                         onPlayChannel = viewModel::playChannelInternal,
                         onPlayInPane = viewModel::playChannelInPane
                     )
@@ -1154,12 +1163,21 @@ private fun FullscreenInternalPlayerOverlay(
                 fullscreenMode = true
             )
         }
-        Box(
+        var localTime by remember { mutableStateOf(formatPlayerLocalTime(System.currentTimeMillis())) }
+        LaunchedEffect(Unit) {
+            while (isActive) {
+                localTime = formatPlayerLocalTime(System.currentTimeMillis())
+                delay(1_000L)
+            }
+        }
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
                 .background(Color.Black.copy(alpha = 0.52f))
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 selectedChannelName ?: "Встроенный плеер",
@@ -1167,7 +1185,13 @@ private fun FullscreenInternalPlayerOverlay(
                 color = Color.White,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                localTime,
+                style = MaterialTheme.typography.titleSmall,
+                color = Color.White,
+                maxLines = 1
             )
         }
     }
@@ -1179,10 +1203,12 @@ private fun ChannelQuickPanel(
     modifier: Modifier = Modifier,
     channels: List<Channel>,
     selectedChannelId: Long?,
+    favoriteChannelIds: Set<Long>,
     epgProgramsByChannel: Map<Long, List<EpgProgram>>,
     expandedEpgChannelIds: Set<Long>,
     title: String = "Список каналов",
     onToggleProgram: (Long) -> Unit,
+    onToggleFavorite: (Long) -> Unit,
     onSelect: (Long) -> Unit
 ) {
     val limited = channels.take(CHANNEL_QUICK_PANEL_LIMIT)
@@ -1281,6 +1307,7 @@ private fun ChannelQuickPanel(
                     items(limited, key = { it.id }) { channel ->
                         val programs = epgProgramsByChannel[channel.id].orEmpty()
                         val programExpanded = channel.id in expandedEpgChannelIds
+                        val isFavorite = channel.id in favoriteChannelIds
                         Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                             val mark = if (channel.id == selectedChannelId) "● " else ""
                             Column(
@@ -1310,6 +1337,9 @@ private fun ChannelQuickPanel(
                                         enabled = programs.isNotEmpty()
                                     ) {
                                         Text(if (programExpanded) "Скрыть программу" else "Программа")
+                                    }
+                                    OutlinedButton(onClick = { onToggleFavorite(channel.id) }) {
+                                        Text(if (isFavorite) "Убрать из избранного" else "В избранное")
                                     }
                                 }
                             }
@@ -1405,11 +1435,13 @@ private fun PlaylistScrollPanel(
 private fun ChannelCatalogScrollPanel(
     channels: List<Channel>,
     selectedChannelId: Long?,
+    favoriteChannelIds: Set<Long>,
     epgProgramsByChannel: Map<Long, List<EpgProgram>>,
     expandedEpgChannelIds: Set<Long>,
     availablePaneTargets: List<Int>,
     showTechnicalInfo: Boolean,
     onToggleProgram: (Long) -> Unit,
+    onToggleFavorite: (Long) -> Unit,
     onPlayChannel: (Long) -> Unit,
     onPlayInPane: (Long, Int) -> Unit
 ) {
@@ -1447,9 +1479,11 @@ private fun ChannelCatalogScrollPanel(
                             selected = channel.id == selectedChannelId,
                             epgPrograms = epgProgramsByChannel[channel.id].orEmpty(),
                             programExpanded = channel.id in expandedEpgChannelIds,
+                            isFavorite = channel.id in favoriteChannelIds,
                             availablePaneTargets = availablePaneTargets,
                             showTechnicalInfo = showTechnicalInfo,
                             onToggleProgram = onToggleProgram,
+                            onToggleFavorite = onToggleFavorite,
                             onPlayChannel = onPlayChannel,
                             onPlayInPane = onPlayInPane
                         )
@@ -1472,9 +1506,11 @@ private fun ChannelCatalogRow(
     selected: Boolean,
     epgPrograms: List<EpgProgram>,
     programExpanded: Boolean,
+    isFavorite: Boolean,
     availablePaneTargets: List<Int>,
     showTechnicalInfo: Boolean,
     onToggleProgram: (Long) -> Unit,
+    onToggleFavorite: (Long) -> Unit,
     onPlayChannel: (Long) -> Unit,
     onPlayInPane: (Long, Int) -> Unit
 ) {
@@ -1526,6 +1562,9 @@ private fun ChannelCatalogRow(
                     enabled = epgPrograms.isNotEmpty()
                 ) {
                     Text(if (programExpanded) "Скрыть программу" else "Программа")
+                }
+                OutlinedButton(onClick = { onToggleFavorite(channel.id) }) {
+                    Text(if (isFavorite) "Убрать из избранного" else "В избранное")
                 }
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2489,6 +2528,14 @@ private fun formatPlaybackException(error: PlaybackException): String {
 }
 
 private fun formatEpgTime(epochMs: Long): String {
+    return runCatching {
+        val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
+        formatter.timeZone = PLAYER_EPG_TIME_ZONE
+        formatter.format(Date(epochMs))
+    }.getOrDefault("--:--")
+}
+
+private fun formatPlayerLocalTime(epochMs: Long): String {
     return runCatching {
         val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
         formatter.timeZone = PLAYER_EPG_TIME_ZONE
