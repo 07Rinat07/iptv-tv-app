@@ -1248,53 +1248,15 @@ class PlayerViewModel @Inject constructor(
                     playlistId = state.selectedPlaylistId
                 )
             }
-            val channel = state.channels.firstOrNull { it.id == session.channelId }
-            if (context != null && vlcLauncher.isVlcInstalled(context) && channel != null) {
-                runCatching {
-                    val vlcUrl = parseKodiStyleStream(state.resolvedStreamUrl ?: channel.streamUrl).streamUrl
-                    val launchMode = openVlc(
-                        context = context,
-                        channel = channel,
-                        streamUrl = vlcUrl,
-                        launchReason = "auto_fallback"
-                    )
-                    viewModelScope.launch {
-                        diagnosticsRepository.addLog(
-                            status = "player_auto_vlc",
-                            message = "Internal failed, switched to VLC($launchMode): channelId=${channel.id}",
-                            playlistId = channel.playlistId
-                        )
-                    }
-                    _uiState.update {
-                        it.copy(
-                            isStartingPlayback = false,
-                            internalSession = null,
-                            retryAttempt = 0,
-                            lastError = null,
-                            lastInfo = if (launchMode == "direct") {
-                                "Встроенный плеер не справился, открыто воспроизведение во VLC (fullscreen)"
-                            } else {
-                                "Встроенный плеер не справился, открыто воспроизведение во VLC (режим совместимости)"
-                            }
-                        )
-                    }
-                }.onFailure { throwable ->
-                    _uiState.update {
-                        it.copy(
-                            isStartingPlayback = false,
-                            lastError = "Поток недоступен (${errorKind.code}): ${errorKind.hint}. Автопереход во VLC не удался: ${throwable.message}",
-                            lastInfo = null
-                        )
-                    }
-                }
-            } else {
-                _uiState.update {
-                    it.copy(
-                        isStartingPlayback = false,
-                        lastError = "Поток недоступен (${errorKind.code}): ${errorKind.hint}",
-                        lastInfo = null
-                    )
-                }
+            val canSuggestVlc = context != null && vlcLauncher.isVlcInstalled(context)
+            _uiState.update {
+                it.copy(
+                    isStartingPlayback = false,
+                    internalSession = null,
+                    retryAttempt = 0,
+                    lastError = buildInternalPlaybackFailureMessage(errorKind, canSuggestVlc),
+                    lastInfo = null
+                )
             }
             return
         }
@@ -1805,6 +1767,18 @@ class PlayerViewModel @Inject constructor(
         val ip = Regex("""\b\d{1,3}(?:\.\d{1,3}){3}\b""").find(message)?.value
         if (!ip.isNullOrBlank()) return ip
         return Regex("""\b[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b""").find(message)?.value
+    }
+
+    private fun buildInternalPlaybackFailureMessage(
+        errorKind: PlaybackErrorKind,
+        canSuggestVlc: Boolean
+    ): String {
+        val suggestion = if (canSuggestVlc) {
+            " Можно попробовать кнопку VLC вручную."
+        } else {
+            ""
+        }
+        return "Поток недоступен во встроенном плеере (${errorKind.code}): ${errorKind.hint}.$suggestion"
     }
 
     private fun observeFavorites() {

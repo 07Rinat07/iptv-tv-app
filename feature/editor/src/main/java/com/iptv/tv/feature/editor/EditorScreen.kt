@@ -2,18 +2,28 @@ package com.iptv.tv.feature.editor
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -22,13 +32,18 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -41,6 +56,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -101,14 +117,23 @@ fun EditorScreen(
             matcherValue = state.metadataRuleMatcherInput
         )
     }
+    val editorListState = rememberLazyListState()
+    val showEditorScrollControls = LocalConfiguration.current.screenWidthDp >= 600
 
-    LazyColumn(
+    Row(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        item {
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            state = editorListState,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
             Text(
                 text = "Плейлист: ${currentPlaylist?.name ?: "не выбран"}",
@@ -782,6 +807,84 @@ fun EditorScreen(
                 }
             }
         }
+        }
+        if (showEditorScrollControls) {
+            EditorVerticalScrollControls(
+                listState = editorListState,
+                modifier = Modifier.fillMaxHeight()
+            )
+        }
+    }
+}
+
+@Composable
+private fun EditorVerticalScrollControls(
+    listState: LazyListState,
+    modifier: Modifier = Modifier
+) {
+    val scope = rememberCoroutineScope()
+    val totalItems by remember(listState) {
+        derivedStateOf { listState.layoutInfo.totalItemsCount }
+    }
+    val visibleItems by remember(listState) {
+        derivedStateOf { listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1) }
+    }
+    val lastIndex = (totalItems - 1).coerceAtLeast(0)
+    val firstVisible by remember(listState, lastIndex) {
+        derivedStateOf { listState.firstVisibleItemIndex.coerceIn(0, lastIndex) }
+    }
+    val scrollableItems = (totalItems - visibleItems).coerceAtLeast(1)
+    val enabled = totalItems > visibleItems
+    val density = LocalDensity.current
+
+    BoxWithConstraints(
+        modifier = modifier.width(28.dp),
+        contentAlignment = Alignment.TopCenter
+    ) {
+        val trackHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+        val thumbHeightFraction = if (totalItems <= 0) {
+            1f
+        } else {
+            (visibleItems.toFloat() / totalItems.toFloat()).coerceIn(0.08f, 1f)
+        }
+        val thumbHeightPx = trackHeightPx * thumbHeightFraction
+        val maxThumbOffsetPx = (trackHeightPx - thumbHeightPx).coerceAtLeast(0f)
+        val thumbOffsetPx = if (!enabled) {
+            0f
+        } else {
+            maxThumbOffsetPx * (firstVisible.toFloat() / scrollableItems.toFloat())
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(12.dp)
+                .background(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                    shape = MaterialTheme.shapes.small
+                )
+        )
+        Box(
+            modifier = Modifier
+                .offset(y = with(density) { thumbOffsetPx.toDp() })
+                .width(20.dp)
+                .height(with(density) { thumbHeightPx.toDp().coerceAtLeast(44.dp) })
+                .background(
+                    color = if (enabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outline
+                    },
+                    shape = MaterialTheme.shapes.small
+                )
+                .pointerInput(enabled, totalItems) {
+                    if (!enabled) return@pointerInput
+                    detectVerticalDragGestures { _, dragAmount ->
+                        scope.launch {
+                            listState.scrollBy(dragAmount * 6f)
+                        }
+                    }
+                }
+        )
     }
 }
 

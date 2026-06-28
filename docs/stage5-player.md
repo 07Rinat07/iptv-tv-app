@@ -24,6 +24,7 @@ The player module provides channel playback, playlist navigation, fallback playb
 
 - Internal playback errors are reported to the ViewModel.
 - The player performs a limited soft retry instead of entering an endless retry loop.
+- Internal playback failures stay inside the app and suggest manual VLC playback instead of automatically switching the user to an external app.
 - Stream probe and player diagnostics are written to app logs.
 - VLC direct launch falls back to a compatible `ACTION_VIEW` launch when needed.
 
