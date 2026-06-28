@@ -93,7 +93,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-private const val CHANNEL_QUICK_PANEL_LIMIT = 200
 private const val QUICK_SCROLL_STEP = 8
 private const val QUICK_PAGE_STEP = 24
 private const val IPTV_USER_AGENT = "myscanerIPTV/0.1 (Android TV; Media3)"
@@ -1211,14 +1210,13 @@ private fun ChannelQuickPanel(
     onToggleFavorite: (Long) -> Unit,
     onSelect: (Long) -> Unit
 ) {
-    val limited = channels.take(CHANNEL_QUICK_PANEL_LIMIT)
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
     fun scrollQuick(delta: Int) {
-        if (limited.isEmpty()) return
+        if (channels.isEmpty()) return
         val current = listState.firstVisibleItemIndex
-        val last = (limited.lastIndex).coerceAtLeast(0)
+        val last = (channels.lastIndex).coerceAtLeast(0)
         val target = wrappedIndex(current + delta, last)
         scope.launch {
             listState.animateScrollToItem(target)
@@ -1226,17 +1224,17 @@ private fun ChannelQuickPanel(
     }
 
     fun scrollToStart() {
-        if (limited.isEmpty()) return
+        if (channels.isEmpty()) return
         scope.launch { listState.animateScrollToItem(0) }
     }
 
     fun scrollToEnd() {
-        if (limited.isEmpty()) return
-        scope.launch { listState.animateScrollToItem(limited.lastIndex.coerceAtLeast(0)) }
+        if (channels.isEmpty()) return
+        scope.launch { listState.animateScrollToItem(channels.lastIndex.coerceAtLeast(0)) }
     }
 
-    LaunchedEffect(selectedChannelId, limited) {
-        val index = limited.indexOfFirst { it.id == selectedChannelId }
+    LaunchedEffect(selectedChannelId, channels) {
+        val index = channels.indexOfFirst { it.id == selectedChannelId }
         if (index >= 0) {
             listState.scrollToItem(index)
         }
@@ -1250,7 +1248,7 @@ private fun ChannelQuickPanel(
                     event = event,
                     listState = listState,
                     scope = scope,
-                    canScroll = limited.isNotEmpty()
+                    canScroll = channels.isNotEmpty()
                 )
             }
     ) {
@@ -1262,7 +1260,7 @@ private fun ChannelQuickPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                "$title · ${limited.size}${if (channels.size > limited.size) " из ${channels.size}" else ""}",
+                "$title · ${channels.size}",
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -1272,22 +1270,22 @@ private fun ChannelQuickPanel(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedButton(onClick = ::scrollToStart, enabled = limited.isNotEmpty()) {
+                OutlinedButton(onClick = ::scrollToStart, enabled = channels.isNotEmpty()) {
                     Text("В начало")
                 }
-                OutlinedButton(onClick = { scrollQuick(-QUICK_PAGE_STEP) }, enabled = limited.isNotEmpty()) {
+                OutlinedButton(onClick = { scrollQuick(-QUICK_PAGE_STEP) }, enabled = channels.isNotEmpty()) {
                     Text("Pg -")
                 }
-                OutlinedButton(onClick = { scrollQuick(-QUICK_SCROLL_STEP) }, enabled = limited.isNotEmpty()) {
+                OutlinedButton(onClick = { scrollQuick(-QUICK_SCROLL_STEP) }, enabled = channels.isNotEmpty()) {
                     Text("▲")
                 }
-                OutlinedButton(onClick = { scrollQuick(QUICK_SCROLL_STEP) }, enabled = limited.isNotEmpty()) {
+                OutlinedButton(onClick = { scrollQuick(QUICK_SCROLL_STEP) }, enabled = channels.isNotEmpty()) {
                     Text("▼")
                 }
-                OutlinedButton(onClick = { scrollQuick(QUICK_PAGE_STEP) }, enabled = limited.isNotEmpty()) {
+                OutlinedButton(onClick = { scrollQuick(QUICK_PAGE_STEP) }, enabled = channels.isNotEmpty()) {
                     Text("Pg +")
                 }
-                OutlinedButton(onClick = ::scrollToEnd, enabled = limited.isNotEmpty()) {
+                OutlinedButton(onClick = ::scrollToEnd, enabled = channels.isNotEmpty()) {
                     Text("В конец")
                 }
             }
@@ -1304,7 +1302,7 @@ private fun ChannelQuickPanel(
                     state = listState,
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(limited, key = { it.id }) { channel ->
+                    items(channels, key = { it.id }) { channel ->
                         val programs = epgProgramsByChannel[channel.id].orEmpty()
                         val programExpanded = channel.id in expandedEpgChannelIds
                         val isFavorite = channel.id in favoriteChannelIds
@@ -1348,7 +1346,7 @@ private fun ChannelQuickPanel(
                 }
                 VerticalListScrollControls(
                     listState = listState,
-                    itemCount = limited.size,
+                    itemCount = channels.size,
                     modifier = Modifier.fillMaxHeight()
                 )
             }
@@ -2055,6 +2053,13 @@ private fun InternalPlayerHost(
         ) {
             Text(if (expanded) "Свернуть" else "Развернуть")
         }
+        if (!fullscreenMode) {
+            PlayerLocalTimeBadge(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+            )
+        }
         if (fullscreenMode) {
             OutlinedButton(
                 onClick = { fullscreenTrackPanelVisible = !fullscreenTrackPanelVisible },
@@ -2188,6 +2193,26 @@ private fun InternalPlayerHost(
             }
         )
     }
+}
+
+@Composable
+private fun PlayerLocalTimeBadge(modifier: Modifier = Modifier) {
+    var localTime by remember { mutableStateOf(formatPlayerLocalTime(System.currentTimeMillis())) }
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            localTime = formatPlayerLocalTime(System.currentTimeMillis())
+            delay(1_000L)
+        }
+    }
+    Text(
+        text = localTime,
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.58f), MaterialTheme.shapes.small)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        style = MaterialTheme.typography.titleSmall,
+        color = Color.White,
+        maxLines = 1
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)

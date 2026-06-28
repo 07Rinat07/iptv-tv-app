@@ -1470,7 +1470,7 @@ class ScannerViewModel @Inject constructor(
                         status = "scanner_step_error",
                         message = "attempt=$attemptId, step=$stepNumber, durationMs=$stepDurationMs, reason=$details"
                     )
-                    if (isFatalNetworkError(details) && merged.isEmpty() && stepNumber <= FAIL_FAST_MAX_STEP) {
+                    if (shouldFailFastSearch(step.request, details, merged.size, stepNumber)) {
                         safeLog(
                             status = "scanner_fail_fast",
                             message = "attempt=$attemptId, step=$stepNumber, reason=network dead-end, details=${details.take(500)}"
@@ -1517,6 +1517,18 @@ class ScannerViewModel @Inject constructor(
             errors = errors,
             successfulStepQueries = successfulStepQueries.toList()
         )
+    }
+
+    private fun shouldFailFastSearch(
+        request: ScannerSearchRequest,
+        details: String,
+        mergedCount: Int,
+        stepNumber: Int
+    ): Boolean {
+        if (mergedCount > 0 || stepNumber > FAIL_FAST_MAX_STEP) return false
+        if (!isFatalNetworkError(details)) return false
+        return request.searchMode == ScannerSearchMode.DIRECT_API &&
+            request.providerScope != ScannerProviderScope.ALL
     }
 
     private suspend fun executeStepSearch(

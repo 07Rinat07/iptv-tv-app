@@ -550,7 +550,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                     if (collected.containsKey(candidate.id)) continue
 
                     probes += 1
-                    if (isLikelyPlaylistUrl(candidate.downloadUrl)) {
+                    if (isLikelyPlaylistUrl(candidate.downloadUrl) || shouldKeepUnverifiedSearchCandidate(candidate)) {
                         collected[candidate.id] = candidate
                     }
                 }
@@ -567,7 +567,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                         if (collected.containsKey(candidate.id)) continue
 
                         probes += 1
-                        if (isLikelyPlaylistUrl(candidate.downloadUrl)) {
+                        if (isLikelyPlaylistUrl(candidate.downloadUrl) || shouldKeepUnverifiedSearchCandidate(candidate)) {
                             collected[candidate.id] = candidate
                         }
                     }
@@ -614,27 +614,20 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             .filterNot { candidate ->
                 candidate.id in existingIds || candidate.downloadUrl.lowercase() in existingUrls
             }
+            .distinctBy { it.downloadUrl.lowercase() }
             .take(request.limit)
             .toList()
 
         if (selected.isEmpty()) return emptyList()
 
-        return coroutineScope {
-            selected
-                .map { candidate ->
-                    async {
-                        if (isLikelyPlaylistUrl(candidate.downloadUrl)) candidate else null
-                    }
-                }
-                .awaitAll()
-                .filterNotNull()
-        }
+        return selected
     }
 
     private fun buildWebSearchQueries(request: ScannerSearchRequest): List<String> {
         val base = request.query.trim().ifBlank { return emptyList() }
         val keywordTail = request.keywords.take(3).joinToString(" ")
         val searchBase = listOf(base, keywordTail).filter { it.isNotBlank() }.joinToString(" ").trim()
+        val regionalTerms = buildRegionalWebSearchTerms(base, request.keywords)
 
         val hostQueries = when (request.providerScope) {
             ScannerProviderScope.GITHUB -> listOf("site:github.com")
@@ -694,6 +687,14 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             variations += "\"raw.githubusercontent.com\" \"$base\" \"#EXTM3U\""
             variations += "\"gist.githubusercontent.com\" \"$base\" \"#EXTM3U\""
             variations += "\"pastebin.com/raw\" \"$base\" \"#EXTM3U\""
+            regionalTerms.forEach { term ->
+                variations += "$term iptv m3u"
+                variations += "$term iptv m3u8"
+                variations += "$term \"#EXTM3U\""
+                variations += "$term site:raw.githubusercontent.com m3u"
+                variations += "$term site:github.com playlist"
+                variations += "$term site:iptv-org.github.io"
+            }
         }
 
         return variations
@@ -701,6 +702,49 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             .filter { it.length >= 4 }
             .distinct()
             .take(MAX_WEB_SEARCH_QUERIES)
+    }
+
+    private fun buildRegionalWebSearchTerms(
+        query: String,
+        keywords: List<String>
+    ): List<String> {
+        val haystack = (listOf(query) + keywords).joinToString(" ").lowercase()
+        val terms = mutableListOf<String>()
+
+        if (haystack.contains("kaz") || haystack.contains("kz") ||
+            haystack.contains("казах") || haystack.contains("казахстан") ||
+            haystack.contains("қазақ") || haystack.contains("қазақстан")
+        ) {
+            terms += "kazakhstan channels"
+            terms += "kazakhstan iptv playlist"
+            terms += "казахстанские каналы"
+            terms += "қазақстан телеарналары"
+        }
+        if (haystack.contains("russian") || haystack.contains("russia") ||
+            haystack.contains(" ru ") || haystack.startsWith("ru ") ||
+            haystack.contains("рус") || haystack.contains("росс")
+        ) {
+            terms += "russian channels"
+            terms += "russian iptv playlist"
+            terms += "русские каналы"
+            terms += "российские каналы"
+        }
+        if (haystack.contains("turkey") || haystack.contains("turkiye") ||
+            haystack.contains("turkish") || haystack.contains("турц")
+        ) {
+            terms += "turkey channels"
+            terms += "turkish iptv playlist"
+            terms += "турецкие каналы"
+        }
+        if (haystack.contains("world") || haystack.contains("global") ||
+            haystack.contains("international") || haystack.contains("мир")
+        ) {
+            terms += "world iptv channels"
+            terms += "international iptv playlist"
+            terms += "countries iptv m3u"
+        }
+
+        return terms.distinct()
     }
 
     private suspend fun searchLinksByEngine(
@@ -715,7 +759,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             SearchEngine.GOOGLE ->
                 "https://www.google.com/search?q=${urlEncode(query)}&num=30&hl=en"
             SearchEngine.YANDEX ->
-                "https://yandex.com/search/?text=${urlEncode(query)}&numdoc=30"
+                "https://yandex.ru/search/?text=${urlEncode(query)}&numdoc=30"
         }
 
         val html = executeRawWithRetry(
@@ -928,7 +972,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                 SearchEngine.DUCKDUCKGO -> "https://duckduckgo.com$rawLink"
                 SearchEngine.BING -> "https://www.bing.com$rawLink"
                 SearchEngine.GOOGLE -> "https://www.google.com$rawLink"
-                SearchEngine.YANDEX -> "https://yandex.com$rawLink"
+                SearchEngine.YANDEX -> "https://yandex.ru$rawLink"
             }
             else -> return null
         }
@@ -1147,6 +1191,15 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                 }
             }
         }.getOrDefault(false)
+    }
+
+    private fun shouldKeepUnverifiedSearchCandidate(candidate: PlaylistCandidate): Boolean {
+        val url = candidate.downloadUrl.toHttpUrlOrNull() ?: return false
+        val path = url.encodedPath.lowercase()
+        val host = url.host.lowercase()
+        if (isPlaylistPath(path)) return true
+        return canProbeExtensionlessPlaylist(host = host, path = path) &&
+            (host == "raw.githubusercontent.com" || host == "gist.githubusercontent.com" || host.endsWith(".github.io"))
     }
 
     private fun decodeHtmlEntities(raw: String): String {
@@ -1455,7 +1508,7 @@ class PublicRepositoryScannerDataSource @Inject constructor(
             keywords = keywords.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
             repoFilter = repoFilter?.trim()?.ifEmpty { null },
             pathFilter = pathFilter?.trim()?.ifEmpty { null },
-            limit = limit.coerceIn(1, 200)
+            limit = limit.coerceIn(1, MAX_SEARCH_RESULTS)
         )
     }
 
@@ -1619,10 +1672,11 @@ class PublicRepositoryScannerDataSource @Inject constructor(
         const val MAX_BITBUCKET_PAGES = 3
 
         const val WEB_FALLBACK_MIN_RESULTS = 8
-        const val MAX_WEB_SEARCH_QUERIES = 48
+        const val MAX_SEARCH_RESULTS = 1_000
+        const val MAX_WEB_SEARCH_QUERIES = 72
         const val MAX_WEB_LINKS_PER_QUERY = 36
-        const val MAX_WEB_PROBES = 48
-        const val MAX_WEB_PAGE_CRAWLS = 12
+        const val MAX_WEB_PROBES = 120
+        const val MAX_WEB_PAGE_CRAWLS = 20
         const val MAX_WEB_PAGE_LINKS = 80
         const val WEB_PAGE_FETCH_TIMEOUT_MS = 5_000L
         const val WEB_PAGE_HTML_MAX_CHARS = 256 * 1024
@@ -1694,6 +1748,22 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                 repository = "iptv-org.github.io",
                 path = "iptv/countries/ru.m3u",
                 tags = setOf("iptv", "ru", "russian", "russia", "россия", "рус", "каналы")
+            ),
+            KnownPlaylistSeed(
+                name = "iptv-org Kazakhstan",
+                url = "https://iptv-org.github.io/iptv/countries/kz.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv-org.github.io",
+                path = "iptv/countries/kz.m3u",
+                tags = setOf("iptv", "kz", "kazakhstan", "kazakh", "қазақстан", "қазақ", "казахстан", "казахские", "каналы")
+            ),
+            KnownPlaylistSeed(
+                name = "iptv-org Turkey",
+                url = "https://iptv-org.github.io/iptv/countries/tr.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv-org.github.io",
+                path = "iptv/countries/tr.m3u",
+                tags = setOf("iptv", "tr", "turkey", "turkiye", "turkish", "турция", "турецкие", "каналы")
             ),
             KnownPlaylistSeed(
                 name = "iptv-org Sports",

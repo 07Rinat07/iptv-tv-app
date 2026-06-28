@@ -11,10 +11,12 @@ The player module provides channel playback, playlist navigation, fallback playb
 - Playlists, groups, subgroups and channels are loaded from the repository.
 - Channel selection starts internal playback immediately.
 - The quick channel list and full channel catalog support TV remote navigation.
+- The quick channel list uses the full playlist; it is not capped at 200 channels.
 - Channel rows show logos when available.
 - EPG data is shown in channel lists when the selected playlist has an EPG source.
 - The `Program` action expands the current/next program list for a channel; `Hide program` collapses it.
 - EPG time is formatted for the player timezone: `Asia/Oral` / Uralsk / UTC+5.
+- Player local time is shown in the top-right corner of the inline player and in the fullscreen top bar.
 - Technical panels are collapsible to keep the player screen clean.
 - Duplicate fullscreen controls were removed from the top-right overlay.
 
