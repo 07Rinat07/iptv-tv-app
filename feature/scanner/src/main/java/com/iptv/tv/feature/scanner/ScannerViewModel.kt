@@ -2571,15 +2571,16 @@ class ScannerViewModel @Inject constructor(
             keep
         }
         var lowQualityDropped = 0
-        val qualityFiltered = filtered.filter { item ->
-            val keep = !isLowQualitySearchCandidate(item.candidate)
-            if (!keep) lowQualityDropped += 1
-            keep
+        val qualityRanked = filtered.map { item ->
+            val isLowQuality = isLowQualitySearchCandidate(item.candidate)
+            if (isLowQuality) lowQualityDropped += 1
+            CandidateWithQuality(item.candidate, item.updatedEpochMs, isLowQuality)
         }
-        val unknownUpdated = qualityFiltered.count { it.updatedEpochMs == null }
+        val unknownUpdated = qualityRanked.count { it.updatedEpochMs == null }
 
-        val sorted = qualityFiltered.sortedWith(
-            compareByDescending<CandidateWithEpoch> { it.updatedEpochMs != null }
+        val sorted = qualityRanked.sortedWith(
+            compareBy<CandidateWithQuality> { it.isLowQuality }
+                .thenByDescending { it.updatedEpochMs != null }
                 .thenByDescending { it.updatedEpochMs ?: 0L }
                 .thenByDescending { it.candidate.sizeBytes ?: -1L }
                 .thenBy { it.candidate.provider.lowercase() }
@@ -2589,7 +2590,7 @@ class ScannerViewModel @Inject constructor(
 
         safeLog(
             status = "scanner_result_refined",
-            message = "attempt=$attemptId, stage=$stage, in=${candidates.size}, out=${sorted.size}, invalidUrlDropped=$invalidUrlDropped, staleDropped=$staleDropped, lowQualityDropped=$lowQualityDropped, unknownUpdated=$unknownUpdated, daysBack=${state.updatedDaysBack.ifBlank { "-" }}"
+            message = "attempt=$attemptId, stage=$stage, in=${candidates.size}, out=${sorted.size}, invalidUrlDropped=$invalidUrlDropped, staleDropped=$staleDropped, lowQualityRankedLast=$lowQualityDropped, unknownUpdated=$unknownUpdated, daysBack=${state.updatedDaysBack.ifBlank { "-" }}"
         )
         return CandidateRefineOutcome(
             candidates = sorted.map { it.candidate },
@@ -2887,6 +2888,12 @@ class ScannerViewModel @Inject constructor(
         val updatedEpochMs: Long?
     )
 
+    private data class CandidateWithQuality(
+        val candidate: PlaylistCandidate,
+        val updatedEpochMs: Long?,
+        val isLowQuality: Boolean
+    )
+
     private data class ProviderHealthRuntime(
         val successCount: Int = 0,
         val timeoutCount: Int = 0,
@@ -2950,7 +2957,7 @@ class ScannerViewModel @Inject constructor(
 
     private companion object {
         const val SEARCH_DISPLAY_LIMIT = 120
-        const val SEARCH_SAVE_FETCH_TARGET = 200
+        const val SEARCH_SAVE_FETCH_TARGET = 1000
         const val SEARCH_MAX_RUNTIME_MINUTES = 8
         const val SEARCH_MAX_RUNTIME_MS = SEARCH_MAX_RUNTIME_MINUTES * 60 * 1000L
         const val SEARCH_WATCHDOG_MS = 8_000L
