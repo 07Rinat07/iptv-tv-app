@@ -1,8 +1,8 @@
 # Stage 11 Validation Report
 
-Дата локальной проверки: 2026-08-04.
+Дата проверки: 2026-08-04.
 
-## Выполнено
+## Локальные проверки
 
 - Проверена парность круглых, квадратных и фигурных скобок во всех изменённых Kotlin-файлах.
 - Реальная логика `PlayerContracts.kt` и `PlayerInteraction.kt` скомпилирована `kotlinc`
@@ -12,13 +12,9 @@
 - Результат локальной pure-Kotlin проверки: `PASS`.
 - SHA-256 всех защищённых source-файлов сканера и поиска совпадает с исходной копией.
 
-## Не выполнено в текущем контейнере
+## GitHub Actions
 
-Полный Gradle-прогон и сборка нового APK не завершены: Gradle Wrapper попытался скачать
-`gradle-8.7-bin.zip`, но окружение не имеет сетевого DNS-доступа. Поэтому APK в
-`build-artifacts` является ранее существовавшим артефактом и не подтверждает изменения Stage 11.
-
-## Команда для окончательной проверки в Android Studio/локальном SDK
+Workflow `Stage 11 Android CI` успешно выполнил:
 
 ```bash
 ./gradlew --no-daemon --stacktrace \
@@ -28,8 +24,22 @@
   :app:assembleDebug
 ```
 
-После успешной команды новый APK должен появиться в:
+Результат проверки подготовленного Stage 11 workspace: `PASS`.
+Debug APK сформирован и опубликован как workflow artifact.
+
+После фиксации исходных файлов ветка повторно проверяется стандартным workflow репозитория
+и Stage 11 workflow перед объединением с `main`.
+
+## Артефакт
+
+Основной путь APK:
 
 ```text
 build-artifacts/myscanerIPTV-tvbox-debug-latest.apk
+```
+
+Резервный путь Gradle:
+
+```text
+app/build/outputs/apk/debug/app-debug.apk
 ```
