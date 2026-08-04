@@ -8,58 +8,65 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.Button
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.media3.common.util.UnstableApi
+import androidx.navigation.NavHostController
 import androidx.navigation.NavType
-import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.media3.common.util.UnstableApi
+import androidx.navigation.navArgument
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
-import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.designsystem.theme.IptvTheme
+import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.AppStartDestination
-import com.iptv.tv.feature.editor.EDITOR_PLAYLIST_ID_ARG
 import com.iptv.tv.feature.diagnostics.DiagnosticsScreen
 import com.iptv.tv.feature.downloads.DownloadsScreen
+import com.iptv.tv.feature.editor.EDITOR_PLAYLIST_ID_ARG
 import com.iptv.tv.feature.editor.EditorScreen
 import com.iptv.tv.feature.epg.EpgGuideScreen
 import com.iptv.tv.feature.favorites.FavoritesScreen
@@ -81,10 +88,36 @@ import javax.inject.Inject
 
 const val TAG_ROUTE_LABEL = "top_route_label"
 private const val TAG_NAV_PREFIX = "nav_button_"
+private const val TAG_SIDEBAR_NAV_PREFIX = "sidebar_nav_button_"
 const val TAG_SECTIONS_BUTTON = "sections_button"
 const val TAG_SECTIONS_LIST = "sections_list"
+const val TAG_APP_SIDEBAR = "app_sidebar"
 
 fun navButtonTag(route: String): String = TAG_NAV_PREFIX + route
+
+private data class AppSection(
+    val route: String,
+    val label: String,
+    val compactLabel: String
+)
+
+private val APP_SECTIONS = listOf(
+    AppSection(Routes.HOME, "Главная", "Г"),
+    AppSection(Routes.SCANNER, "Сканер", "СК"),
+    AppSection(Routes.IMPORTER, "Импорт", "И"),
+    AppSection(Routes.READY_PLAYLISTS, "Готовые плейлисты", "ГП"),
+    AppSection(Routes.PLAYLISTS, "Мои плейлисты", "ПЛ"),
+    AppSection(Routes.EDITOR, "Редактор", "Р"),
+    AppSection(Routes.FAVORITES, "Избранное", "★"),
+    AppSection(Routes.HISTORY, "История", "ИС"),
+    AppSection(Routes.EPG, "Телепрограмма", "EPG"),
+    AppSection(Routes.PLAYER, "Плеер", "▶"),
+    AppSection(Routes.DOWNLOADS, "Загрузки", "З"),
+    AppSection(Routes.SETTINGS, "Настройки", "Н"),
+    AppSection(Routes.NETWORK_TEST, "Сетевой тест", "СТ"),
+    AppSection(Routes.DIAGNOSTICS, "Диагностика", "Д"),
+    AppSection(Routes.ABOUT, "О приложении", "i")
+)
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -113,6 +146,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 @androidx.annotation.OptIn(UnstableApi::class)
+@kotlin.OptIn(ExperimentalLayoutApi::class)
 private fun AppRoot(
     pendingDeepLinkRoute: MutableState<String?>,
     settingsRepository: SettingsRepository
@@ -120,10 +154,15 @@ private fun AppRoot(
     val navController = rememberNavController()
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route ?: Routes.HOME
     val activity = LocalContext.current as? ComponentActivity
+    val configuration = LocalConfiguration.current
+    val useSidebar = configuration.screenWidthDp >= 760
     val colorScheme = MaterialTheme.colorScheme
-    var showExitConfirm by remember { mutableStateOf(false) }
-    var showSectionsMenu by remember { mutableStateOf(false) }
-    var playerFullscreen by remember { mutableStateOf(false) }
+    var showExitConfirm by rememberSaveable { mutableStateOf(false) }
+    var showSectionsMenu by rememberSaveable { mutableStateOf(false) }
+    var playerFullscreen by rememberSaveable { mutableStateOf(false) }
+    var sidebarCollapsed by rememberSaveable(configuration.screenWidthDp) {
+        mutableStateOf(configuration.screenWidthDp < 1120)
+    }
     val configuredStartDestination by settingsRepository
         .observeAppStartDestination()
         .collectAsState(initial = null)
@@ -131,7 +170,21 @@ private fun AppRoot(
         mutableStateOf(pendingDeepLinkRoute.value != null)
     }
 
-    BackHandler {
+    fun navigateToSection(route: String) {
+        if (isCurrentSection(currentRoute, route)) return
+        navController.navigate(route) {
+            launchSingleTop = true
+            restoreState = true
+            popUpTo(Routes.HOME) {
+                saveState = true
+            }
+        }
+    }
+
+    BackHandler(enabled = showSectionsMenu) {
+        showSectionsMenu = false
+    }
+    BackHandler(enabled = !showSectionsMenu && !playerFullscreen) {
         if (!navController.navigateUp()) {
             showExitConfirm = true
         }
@@ -141,9 +194,7 @@ private fun AppRoot(
         val route = pendingDeepLinkRoute.value ?: return@LaunchedEffect
         pendingDeepLinkRoute.value = null
         startupNavigationApplied = true
-        navController.navigate(route) {
-            launchSingleTop = true
-        }
+        navController.navigate(route) { launchSingleTop = true }
     }
 
     LaunchedEffect(configuredStartDestination) {
@@ -152,9 +203,7 @@ private fun AppRoot(
         startupNavigationApplied = true
         val route = destination.toAppRoute()
         if (route != Routes.HOME) {
-            navController.navigate(route) {
-                launchSingleTop = true
-            }
+            navController.navigate(route) { launchSingleTop = true }
         }
     }
 
@@ -162,6 +211,10 @@ private fun AppRoot(
         if (!currentRoute.startsWith(Routes.PLAYER)) {
             playerFullscreen = false
         }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { playerFullscreen = false }
     }
 
     Box(
@@ -177,287 +230,273 @@ private fun AppRoot(
                 )
             )
     ) {
-        Scaffold(
-            containerColor = Color.Transparent,
-            topBar = {
-                if (!playerFullscreen) {
-                    Surface(
-                        color = colorScheme.surface.copy(alpha = 0.92f),
-                        tonalElevation = 8.dp,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.rinat_logo),
-                                contentDescription = "Rinat",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .padding(end = 10.dp)
-                            )
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(
-                                    text = "Rinat IPTV",
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "Раздел: ${routeTitle(currentRoute)}",
-                                    modifier = Modifier.testTag(TAG_ROUTE_LABEL),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            NavControlButtons(
-                                onBack = {
-                                    if (!navController.navigateUp()) {
-                                        showExitConfirm = true
-                                    }
-                                },
-                                onExit = { showExitConfirm = true },
-                                onSections = { showSectionsMenu = true }
-                            )
-                        }
-                    }
+        if (playerFullscreen) {
+            AppNavHost(
+                navController = navController,
+                modifier = Modifier.fillMaxSize(),
+                onFullscreenChanged = { playerFullscreen = it }
+            )
+        } else {
+            Row(modifier = Modifier.fillMaxSize()) {
+                if (useSidebar) {
+                    AppSidebar(
+                        currentRoute = currentRoute,
+                        collapsed = sidebarCollapsed,
+                        onToggleCollapsed = { sidebarCollapsed = !sidebarCollapsed },
+                        onNavigate = ::navigateToSection,
+                        onExit = { showExitConfirm = true }
+                    )
                 }
-            }
-        ) { paddingValues ->
-            Box(
-                modifier = if (playerFullscreen) {
-                    Modifier.fillMaxSize()
-                } else {
-                    Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues)
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                },
-                contentAlignment = Alignment.TopCenter
-            ) {
-                Surface(
-                    modifier = if (playerFullscreen) {
-                        Modifier.fillMaxSize()
-                    } else {
-                        Modifier
-                            .fillMaxSize()
-                            .widthIn(max = 1360.dp)
-                    },
-                    color = if (playerFullscreen) {
-                        Color.Transparent
-                    } else {
-                        colorScheme.surfaceVariant.copy(alpha = 0.58f)
-                    },
-                    tonalElevation = if (playerFullscreen) 0.dp else 4.dp
-                ) {
-                    NavHost(
-                        navController = navController,
-                        startDestination = Routes.HOME,
+                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    AppHeader(
+                        currentRoute = currentRoute,
+                        onBack = {
+                            if (!navController.navigateUp()) {
+                                showExitConfirm = true
+                            }
+                        },
+                        onSections = { showSectionsMenu = true },
+                        onExit = { showExitConfirm = true }
+                    )
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .padding(horizontal = if (configuration.screenWidthDp < 600) 6.dp else 12.dp)
+                            .padding(top = 8.dp, bottom = 10.dp),
+                        contentAlignment = Alignment.TopCenter
                     ) {
-                        composable(Routes.HOME) {
-                            HomeScreen(
-                                onOpenScanner = { navController.navigate(Routes.SCANNER) },
-                                onOpenImporter = { navController.navigate(Routes.IMPORTER) },
-                                onOpenReadyPlaylists = { navController.navigate(Routes.READY_PLAYLISTS) },
-                                onOpenPlaylists = { navController.navigate(Routes.PLAYLISTS) },
-                                onOpenEpg = { navController.navigate(Routes.EPG) },
-                                onOpenPlayer = { navController.navigate(Routes.PLAYER) },
-                                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                                onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
-                                onPrimaryAction = null
-                            )
-                        }
-                        composable(Routes.SCANNER) {
-                            ScannerScreen(
-                                onPrimaryAction = { navController.navigate(Routes.PLAYLISTS) },
-                                onImportCandidate = { downloadUrl, playlistName ->
-                                    ImportPrefillBus.push(
-                                        ImportPrefill(
-                                            url = downloadUrl,
-                                            playlistName = playlistName,
-                                            autoImport = true
-                                        )
-                                    )
-                                    navController.navigate(Routes.IMPORTER)
-                                },
-                                primaryLabel = "Мои плейлисты"
-                            )
-                        }
-                        composable(Routes.IMPORTER) {
-                            ImporterScreen(onPrimaryAction = { navController.navigate(Routes.PLAYLISTS) }, primaryLabel = "Сохранить")
-                        }
-                        composable(Routes.READY_PLAYLISTS) {
-                            ReadyPlaylistsScreen(
-                                onImportPlaylist = { url, name ->
-                                    ImportPrefillBus.push(
-                                        ImportPrefill(
-                                            url = url,
-                                            playlistName = name,
-                                            autoImport = true
-                                        )
-                                    )
-                                    navController.navigate(Routes.IMPORTER)
-                                }
-                            )
-                        }
-                        composable(Routes.PLAYLISTS) {
-                            PlaylistsScreen(
-                                onOpenEditor = { playlistId -> navController.navigate(Routes.editorRoute(playlistId)) },
-                                onOpenPlayer = { playlistId -> navController.navigate(Routes.playerRoute(playlistId)) }
-                            )
-                        }
-                        composable(Routes.EDITOR) {
-                            EditorScreen(onPrimaryAction = { _ -> navController.navigate(Routes.PLAYLISTS) })
-                        }
-                        composable(
-                            route = Routes.EDITOR_WITH_ARG,
-                            arguments = listOf(
-                                navArgument(EDITOR_PLAYLIST_ID_ARG) { type = NavType.LongType }
-                            )
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .widthIn(max = 1480.dp),
+                            color = colorScheme.surfaceVariant.copy(alpha = 0.58f),
+                            tonalElevation = 4.dp,
+                            shape = MaterialTheme.shapes.large
                         ) {
-                            EditorScreen(onPrimaryAction = { _ -> navController.navigate(Routes.PLAYLISTS) })
-                        }
-                        composable(Routes.FAVORITES) {
-                            FavoritesScreen(
-                                onOpenPlayer = { playlistId, channelId ->
-                                    navController.navigate(Routes.playerRoute(playlistId, channelId))
-                                }
-                            )
-                        }
-                        composable(Routes.HISTORY) {
-                            HistoryScreen(
-                                onOpenPlayer = { playlistId ->
-                                    navController.navigate(Routes.playerRoute(playlistId))
-                                }
-                            )
-                        }
-                        composable(Routes.EPG) {
-                            EpgGuideScreen(
-                                onOpenPlayer = { playlistId, channelId ->
-                                    navController.navigate(Routes.playerRoute(playlistId, channelId))
-                                },
-                                onOpenPlayerSettings = {
-                                    navController.navigate(Routes.PLAYER)
-                                }
-                            )
-                        }
-                        composable(Routes.PLAYER) {
-                            PlayerScreen(
-                                onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
-                                primaryLabel = "Сменить плеер",
+                            AppNavHost(
+                                navController = navController,
+                                modifier = Modifier.fillMaxSize(),
                                 onFullscreenChanged = { playerFullscreen = it }
                             )
-                        }
-                        composable(
-                            route = Routes.PLAYER_WITH_ARG,
-                            arguments = listOf(
-                                navArgument(PLAYER_PLAYLIST_ID_ARG) { type = NavType.LongType }
-                            )
-                        ) {
-                            PlayerScreen(
-                                onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
-                                primaryLabel = "Сменить плеер",
-                                onFullscreenChanged = { playerFullscreen = it }
-                            )
-                        }
-                        composable(
-                            route = Routes.PLAYER_WITH_CHANNEL_ARG,
-                            arguments = listOf(
-                                navArgument(PLAYER_PLAYLIST_ID_ARG) { type = NavType.LongType },
-                                navArgument(PLAYER_CHANNEL_ID_ARG) { type = NavType.LongType }
-                            )
-                        ) {
-                            PlayerScreen(
-                                onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
-                                primaryLabel = "Сменить плеер",
-                                onFullscreenChanged = { playerFullscreen = it }
-                            )
-                        }
-                        composable(Routes.DOWNLOADS) {
-                            DownloadsScreen()
-                        }
-                        composable(Routes.SETTINGS) {
-                            SettingsScreen(
-                                onOpenNetworkTest = { navController.navigate(Routes.NETWORK_TEST) },
-                                onPrimaryAction = { navController.navigate(Routes.DIAGNOSTICS) },
-                                primaryLabel = "Диагностика"
-                            )
-                        }
-                        composable(Routes.NETWORK_TEST) {
-                            NetworkTestScreen(
-                                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                                onPrimaryAction = { navController.navigate(Routes.SCANNER) },
-                                primaryLabel = "Открыть сканер"
-                            )
-                        }
-                        composable(Routes.DIAGNOSTICS) {
-                            DiagnosticsScreen(onPrimaryAction = { navController.navigate(Routes.HOME) }, primaryLabel = "На главную")
                         }
                     }
                 }
             }
         }
-            if (showExitConfirm) {
-                AlertDialog(
-                    onDismissRequest = { showExitConfirm = false },
-                    title = { Text("Выход из приложения") },
-                    text = { Text("Закрыть приложение?") },
-                    confirmButton = {
-                        Button(onClick = { activity?.finish() }) {
-                            Text("Да, закрыть")
-                        }
-                    },
-                    dismissButton = {
-                        Button(onClick = { showExitConfirm = false }) {
-                            Text("Отмена")
-                        }
-                    }
-                )
-            }
 
-            if (showSectionsMenu) {
-                SectionsMenuDialog(
-                    currentRoute = currentRoute,
-                    onDismiss = { showSectionsMenu = false },
-                    onNavigate = { route ->
-                        showSectionsMenu = false
-                        navController.navigate(route) {
-                            launchSingleTop = true
-                        }
+        if (showExitConfirm) {
+            AlertDialog(
+                onDismissRequest = { showExitConfirm = false },
+                title = { Text("Выход из приложения") },
+                text = { Text("Закрыть приложение?") },
+                confirmButton = {
+                    Button(onClick = { activity?.finish() }) {
+                        Text("Да, закрыть")
                     }
-                )
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { showExitConfirm = false }) {
+                        Text("Отмена")
+                    }
+                }
+            )
+        }
+
+        if (showSectionsMenu) {
+            SectionsMenuDialog(
+                currentRoute = currentRoute,
+                onDismiss = { showSectionsMenu = false },
+                onNavigate = { route ->
+                    showSectionsMenu = false
+                    navigateToSection(route)
+                }
+            )
+        }
+    }
+}
+
+@Composable
+@kotlin.OptIn(ExperimentalLayoutApi::class)
+private fun AppHeader(
+    currentRoute: String,
+    onBack: () -> Unit,
+    onSections: () -> Unit,
+    onExit: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        tonalElevation = 8.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val compact = maxWidth < 760.dp
+            if (compact) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AppBrand(currentRoute = currentRoute)
+                    NavControlButtons(
+                        onBack = onBack,
+                        onExit = onExit,
+                        onSections = onSections
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    AppBrand(currentRoute = currentRoute, modifier = Modifier.weight(1f))
+                    NavControlButtons(
+                        onBack = onBack,
+                        onExit = onExit,
+                        onSections = onSections
+                    )
+                }
             }
         }
     }
+}
 
 @Composable
+private fun AppBrand(
+    currentRoute: String,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Image(
+            painter = painterResource(id = R.drawable.rinat_logo),
+            contentDescription = "Rinat IPTV",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(42.dp)
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Rinat IPTV",
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1
+            )
+            Text(
+                text = "myscanerIPTV",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+            Text(
+                text = "${routeTitle(currentRoute)} · ${routeKey(currentRoute)}",
+                modifier = Modifier.testTag(TAG_ROUTE_LABEL),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+@kotlin.OptIn(ExperimentalLayoutApi::class)
 private fun NavControlButtons(
     onBack: () -> Unit,
     onExit: () -> Unit,
     onSections: () -> Unit
 ) {
-    val sectionsFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        sectionsFocusRequester.requestFocus()
-    }
-
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedButton(onClick = onBack) { Text("Назад") }
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OutlinedButton(onClick = onBack, modifier = Modifier.tvFocusOutline()) {
+            Text("Назад")
+        }
         OutlinedButton(
             onClick = onSections,
-            modifier = Modifier
-                .testTag(TAG_SECTIONS_BUTTON)
-                .focusRequester(sectionsFocusRequester)
-        ) { Text("Разделы") }
-        Button(onClick = onExit) { Text("Выход") }
+            modifier = Modifier.testTag(TAG_SECTIONS_BUTTON).tvFocusOutline()
+        ) {
+            Text("Разделы")
+        }
+        Button(onClick = onExit, modifier = Modifier.tvFocusOutline()) {
+            Text("Выход")
+        }
+    }
+}
+
+@Composable
+private fun AppSidebar(
+    currentRoute: String,
+    collapsed: Boolean,
+    onToggleCollapsed: () -> Unit,
+    onNavigate: (String) -> Unit,
+    onExit: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .width(if (collapsed) 88.dp else 248.dp)
+            .fillMaxHeight()
+            .testTag(TAG_APP_SIDEBAR),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        tonalElevation = 10.dp
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = if (collapsed) Arrangement.Center else Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (!collapsed) {
+                    Text("Разделы", style = MaterialTheme.typography.titleSmall)
+                }
+                OutlinedButton(onClick = onToggleCollapsed, modifier = Modifier.tvFocusOutline()) {
+                    Text(if (collapsed) ">" else "<")
+                }
+            }
+            TvScrollableLazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+                scrollbarMinScreenWidthDp = 900
+            ) {
+                items(APP_SECTIONS.size) { index ->
+                    val section = APP_SECTIONS[index]
+                    val selected = isCurrentSection(currentRoute, section.route)
+                    val label = if (collapsed) section.compactLabel else section.label
+                    if (selected) {
+                        Button(
+                            onClick = { onNavigate(section.route) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag(TAG_SIDEBAR_NAV_PREFIX + section.route)
+                                .tvFocusOutline()
+                        ) {
+                            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { onNavigate(section.route) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag(TAG_SIDEBAR_NAV_PREFIX + section.route)
+                                .tvFocusOutline()
+                        ) {
+                            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+            OutlinedButton(
+                onClick = onExit,
+                modifier = Modifier.fillMaxWidth().tvFocusOutline()
+            ) {
+                Text(if (collapsed) "×" else "Выход")
+            }
+        }
     }
 }
 
@@ -469,85 +508,226 @@ private fun SectionsMenuDialog(
 ) {
     val configuration = LocalConfiguration.current
     val dialogListMaxHeight = (configuration.screenHeightDp * 0.66f).dp
-    val routes = listOf(
-        Routes.HOME to "Главная",
-        Routes.SCANNER to "Сканер",
-        Routes.IMPORTER to "Импорт",
-        Routes.READY_PLAYLISTS to "Готовые плейлисты",
-        Routes.PLAYLISTS to "Плейлисты",
-        Routes.EDITOR to "Редактор",
-        Routes.FAVORITES to "Избранное",
-        Routes.HISTORY to "История",
-        Routes.EPG to "Телепрограмма",
-        Routes.PLAYER to "Плеер",
-        Routes.DOWNLOADS to "Загрузки",
-        Routes.SETTINGS to "Настройки",
-        Routes.NETWORK_TEST to "Сетевой тест",
-        Routes.DIAGNOSTICS to "Логи"
-    )
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Разделы") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Выберите экран. Список прокручивается вниз/вверх.")
+                Text("Выберите экран. Список прокручивается пультом, мышью и тачпадом.")
                 TvScrollableLazyColumn(
                     modifier = Modifier
                         .heightIn(max = dialogListMaxHeight)
                         .testTag(TAG_SECTIONS_LIST),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(routes.size) { index ->
-                        val (route, label) = routes[index]
+                    items(APP_SECTIONS.size) { index ->
+                        val section = APP_SECTIONS[index]
+                        val selected = isCurrentSection(currentRoute, section.route)
                         Button(
-                            onClick = { onNavigate(route) },
-                            enabled = route != currentRoute,
+                            onClick = { onNavigate(section.route) },
+                            enabled = !selected,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .testTag(navButtonTag(route))
+                                .testTag(navButtonTag(section.route))
+                                .tvFocusOutline()
                         ) {
-                            val suffix = if (route == currentRoute) " (текущий)" else ""
-                            Text("$label$suffix")
+                            Text(if (selected) "${section.label} (текущий)" else section.label)
                         }
                     }
                 }
             }
         },
         confirmButton = {
-            OutlinedButton(onClick = onDismiss) { Text("Закрыть") }
+            OutlinedButton(onClick = onDismiss) {
+                Text("Закрыть")
+            }
         }
     )
 }
 
-private fun routeTitle(route: String): String = when {
-    route.startsWith("editor") -> "Редактор"
-    route.startsWith("player") -> "Плеер"
-    else -> when (route) {
-        Routes.HOME -> "Главная"
-        Routes.SCANNER -> "Сканер"
-        Routes.IMPORTER -> "Импорт"
-        Routes.READY_PLAYLISTS -> "Готовые плейлисты"
-        Routes.PLAYLISTS -> "Мои плейлисты"
-        Routes.FAVORITES -> "Избранное"
-        Routes.HISTORY -> "История"
-        Routes.EPG -> "Телепрограмма"
-        Routes.DOWNLOADS -> "Загрузки"
-        Routes.SETTINGS -> "Настройки"
-        Routes.NETWORK_TEST -> "Сетевой тест"
-        Routes.DIAGNOSTICS -> "Диагностика"
-        else -> route
+@Composable
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun AppNavHost(
+    navController: NavHostController,
+    modifier: Modifier,
+    onFullscreenChanged: (Boolean) -> Unit
+) {
+    NavHost(
+        navController = navController,
+        startDestination = Routes.HOME,
+        modifier = modifier
+    ) {
+        composable(Routes.HOME) {
+            HomeScreen(
+                onOpenScanner = { navController.navigate(Routes.SCANNER) },
+                onOpenImporter = { navController.navigate(Routes.IMPORTER) },
+                onOpenReadyPlaylists = { navController.navigate(Routes.READY_PLAYLISTS) },
+                onOpenPlaylists = { navController.navigate(Routes.PLAYLISTS) },
+                onOpenEpg = { navController.navigate(Routes.EPG) },
+                onOpenPlayer = { navController.navigate(Routes.PLAYER) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
+                onPrimaryAction = null
+            )
+        }
+        composable(Routes.SCANNER) {
+            ScannerScreen(
+                onPrimaryAction = { navController.navigate(Routes.PLAYLISTS) },
+                onImportCandidate = { downloadUrl, playlistName ->
+                    ImportPrefillBus.push(
+                        ImportPrefill(
+                            url = downloadUrl,
+                            playlistName = playlistName,
+                            autoImport = true
+                        )
+                    )
+                    navController.navigate(Routes.IMPORTER)
+                },
+                primaryLabel = "Мои плейлисты"
+            )
+        }
+        composable(Routes.IMPORTER) {
+            ImporterScreen(
+                onPrimaryAction = { navController.navigate(Routes.PLAYLISTS) },
+                primaryLabel = "Сохранить"
+            )
+        }
+        composable(Routes.READY_PLAYLISTS) {
+            ReadyPlaylistsScreen(
+                onImportPlaylist = { url, name ->
+                    ImportPrefillBus.push(
+                        ImportPrefill(
+                            url = url,
+                            playlistName = name,
+                            autoImport = true
+                        )
+                    )
+                    navController.navigate(Routes.IMPORTER)
+                }
+            )
+        }
+        composable(Routes.PLAYLISTS) {
+            PlaylistsScreen(
+                onOpenEditor = { playlistId -> navController.navigate(Routes.editorRoute(playlistId)) },
+                onOpenPlayer = { playlistId -> navController.navigate(Routes.playerRoute(playlistId)) }
+            )
+        }
+        composable(Routes.EDITOR) {
+            EditorScreen(onPrimaryAction = { navController.navigate(Routes.PLAYLISTS) })
+        }
+        composable(
+            route = Routes.EDITOR_WITH_ARG,
+            arguments = listOf(navArgument(EDITOR_PLAYLIST_ID_ARG) { type = NavType.LongType })
+        ) {
+            EditorScreen(onPrimaryAction = { navController.navigate(Routes.PLAYLISTS) })
+        }
+        composable(Routes.FAVORITES) {
+            FavoritesScreen(
+                onOpenPlayer = { playlistId, channelId ->
+                    navController.navigate(Routes.playerRoute(playlistId, channelId))
+                }
+            )
+        }
+        composable(Routes.HISTORY) {
+            HistoryScreen(
+                onOpenPlayer = { playlistId -> navController.navigate(Routes.playerRoute(playlistId)) }
+            )
+        }
+        composable(Routes.EPG) {
+            EpgGuideScreen(
+                onOpenPlayer = { playlistId, channelId ->
+                    navController.navigate(Routes.playerRoute(playlistId, channelId))
+                },
+                onOpenPlayerSettings = { navController.navigate(Routes.PLAYER) }
+            )
+        }
+        composable(Routes.PLAYER) {
+            PlayerScreen(
+                onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
+                primaryLabel = "Сменить плеер",
+                onFullscreenChanged = onFullscreenChanged
+            )
+        }
+        composable(
+            route = Routes.PLAYER_WITH_ARG,
+            arguments = listOf(navArgument(PLAYER_PLAYLIST_ID_ARG) { type = NavType.LongType })
+        ) {
+            PlayerScreen(
+                onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
+                primaryLabel = "Сменить плеер",
+                onFullscreenChanged = onFullscreenChanged
+            )
+        }
+        composable(
+            route = Routes.PLAYER_WITH_CHANNEL_ARG,
+            arguments = listOf(
+                navArgument(PLAYER_PLAYLIST_ID_ARG) { type = NavType.LongType },
+                navArgument(PLAYER_CHANNEL_ID_ARG) { type = NavType.LongType }
+            )
+        ) {
+            PlayerScreen(
+                onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
+                primaryLabel = "Сменить плеер",
+                onFullscreenChanged = onFullscreenChanged
+            )
+        }
+        composable(Routes.DOWNLOADS) {
+            DownloadsScreen()
+        }
+        composable(Routes.SETTINGS) {
+            SettingsScreen(
+                onOpenNetworkTest = { navController.navigate(Routes.NETWORK_TEST) },
+                onPrimaryAction = { navController.navigate(Routes.DIAGNOSTICS) },
+                primaryLabel = "Диагностика"
+            )
+        }
+        composable(Routes.NETWORK_TEST) {
+            NetworkTestScreen(
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                onPrimaryAction = { navController.navigate(Routes.SCANNER) },
+                primaryLabel = "Открыть сканер"
+            )
+        }
+        composable(Routes.DIAGNOSTICS) {
+            DiagnosticsScreen(
+                onPrimaryAction = { navController.navigate(Routes.HOME) },
+                primaryLabel = "На главную"
+            )
+        }
+        composable(Routes.ABOUT) {
+            AboutScreen(
+                onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) }
+            )
+        }
     }
 }
 
-private fun AppStartDestination.toAppRoute(): String {
-    return when (this) {
-        AppStartDestination.HOME -> Routes.HOME
-        AppStartDestination.PLAYER -> Routes.PLAYER
-        AppStartDestination.SCANNER -> Routes.SCANNER
-        AppStartDestination.FAVORITES -> Routes.FAVORITES
-        AppStartDestination.PLAYLISTS -> Routes.PLAYLISTS
-    }
+private fun isCurrentSection(currentRoute: String, sectionRoute: String): Boolean = when (sectionRoute) {
+    Routes.EDITOR -> currentRoute.startsWith(Routes.EDITOR)
+    Routes.PLAYER -> currentRoute.startsWith(Routes.PLAYER)
+    else -> currentRoute == sectionRoute
+}
+
+private fun routeKey(route: String): String = when {
+    route.startsWith(Routes.EDITOR) -> Routes.EDITOR
+    route.startsWith(Routes.PLAYER) -> Routes.PLAYER
+    else -> route.substringBefore("/")
+}
+
+private fun routeTitle(route: String): String = when {
+    route.startsWith(Routes.EDITOR) -> "Редактор"
+    route.startsWith(Routes.PLAYER) -> "Плеер"
+    else -> APP_SECTIONS.firstOrNull { it.route == route }?.label ?: route
+}
+
+private fun AppStartDestination.toAppRoute(): String = when (this) {
+    AppStartDestination.HOME -> Routes.HOME
+    AppStartDestination.PLAYER -> Routes.PLAYER
+    AppStartDestination.SCANNER -> Routes.SCANNER
+    AppStartDestination.FAVORITES -> Routes.FAVORITES
+    AppStartDestination.PLAYLISTS -> Routes.PLAYLISTS
 }
 
 object Routes {
@@ -568,6 +748,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val NETWORK_TEST = "network_test"
     const val DIAGNOSTICS = "diagnostics"
+    const val ABOUT = "about"
 
     fun editorRoute(playlistId: Long): String = "editor/$playlistId"
     fun playerRoute(playlistId: Long): String = "player/$playlistId"
@@ -591,6 +772,7 @@ private fun Intent?.toAppRoute(): String? {
         "epg" -> Routes.EPG
         "favorites" -> Routes.FAVORITES
         "history" -> Routes.HISTORY
+        "about" -> Routes.ABOUT
         else -> Routes.HOME
     }
 }
