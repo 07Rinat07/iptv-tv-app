@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - hotfix/restore-stable-tv-ui
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -43,7 +46,7 @@ jobs:
             feature/player/src/main/java/com/iptv/tv/feature/player/PlayerScreen.kt
 
           cat "${parts[@]}" | base64 --decode | gzip --decompress > /tmp/player-ui-hotfix.patch
-          echo "340bfe1eb97036bec9140f21beaa82a6ab7c241c1045d971754201b0000114c8  /tmp/player-ui-hotfix.patch" | sha256sum --check -
+          echo "7945575b3c0a1c0ece16c14d64aa9f7f8ee424ad45b8e9823dae4f6753a0fa4b  /tmp/player-ui-hotfix.patch" | sha256sum --check -
           git apply --check /tmp/player-ui-hotfix.patch
           git apply /tmp/player-ui-hotfix.patch
           rm -f "${parts[@]}"
@@ -75,7 +78,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Run player tests, lint and debug build
+      - name: Run player tests, scanner tests, lint and debug build
         shell: bash
         run: |
           chmod +x ./gradlew
@@ -106,7 +109,7 @@ jobs:
           retention-days: 14
 
       - name: Commit verified hotfix
-        if: steps.patch.outputs.applied == 'true'
+        if: steps.patch.outputs.applied == 'true' && github.event_name == 'push'
         shell: bash
         run: |
           git config user.name "Rinat Sarmuldin"
