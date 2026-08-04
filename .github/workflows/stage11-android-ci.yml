@@ -44,9 +44,11 @@ jobs:
           git apply --check /tmp/stage11.patch
           git apply /tmp/stage11.patch
 
-          # Compose 1.6 exposes nativeKeyEvent as a KeyEvent member, not as an importable extension.
+          # Compose 1.6 exposes these APIs through their receiver scopes/members.
           sed -i '/^import androidx.compose.ui.input.key.nativeKeyEvent$/d' \
             feature/player/src/main/java/com/iptv/tv/feature/player/PlayerScreen.kt
+          sed -i '/^import androidx.compose.foundation.layout.weight$/d' \
+            app/src/main/java/com/iptv/tv/MainActivity.kt
 
           rm -f "${parts[@]}"
           echo "applied=true" >> "$GITHUB_OUTPUT"
