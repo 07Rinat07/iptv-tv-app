@@ -43,6 +43,11 @@ jobs:
           echo "1fc1126764d21d55f722f4c16870863a3e29ad1d9c6e9e65241710a5f7ff8387  /tmp/stage11.patch" | sha256sum --check -
           git apply --check /tmp/stage11.patch
           git apply /tmp/stage11.patch
+
+          # Compose 1.6 exposes nativeKeyEvent as a KeyEvent member, not as an importable extension.
+          sed -i '/^import androidx.compose.ui.input.key.nativeKeyEvent$/d' \
+            feature/player/src/main/java/com/iptv/tv/feature/player/PlayerScreen.kt
+
           rm -f "${parts[@]}"
           echo "applied=true" >> "$GITHUB_OUTPUT"
 
