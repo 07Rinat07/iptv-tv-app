@@ -19,8 +19,10 @@ import com.iptv.tv.core.model.ManualBufferSettings
 import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.player.BufferConfig
+import com.iptv.tv.core.player.BufferingRecoveryPolicy
 import com.iptv.tv.core.player.ExternalVlcLauncher
-import com.iptv.tv.core.player.bufferConfigForProfile
+import com.iptv.tv.core.player.PlaybackDeviceProfile
+import com.iptv.tv.core.player.adaptiveBufferPlan
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
@@ -59,7 +61,9 @@ data class InternalPlaybackSession(
     val channelName: String,
     val streamUrl: String,
     val requestHeaders: Map<String, String>,
-    val bufferConfig: BufferConfig
+    val bufferConfig: BufferConfig,
+    val recoveryPolicy: BufferingRecoveryPolicy,
+    val bufferPlanSummary: String
 )
 
 enum class MultiviewMode(val paneCount: Int) {
@@ -155,6 +159,7 @@ data class PlayerUiState(
     val selectedChannelAceCapable: Boolean = false,
     val bufferProfile: BufferProfile = BufferProfile.STANDARD,
     val manualBuffer: ManualBufferSettings = ManualBufferSettings(12_000, 2_000, 50_000),
+    val adaptiveBufferSummary: String = "Автобуфер: ожидание запуска",
     val engineEndpoint: String = "http://127.0.0.1:6878",
     val torEnabled: Boolean = false,
     val parentalControlEnabled: Boolean = false,
@@ -1943,9 +1948,14 @@ class PlayerViewModel @Inject constructor(
             return
         }
         val state = _uiState.value
-        val config = bufferConfigForProfile(
+        val plan = adaptiveBufferPlan(
             profile = state.bufferProfile,
-            manual = state.manualBuffer
+            manual = state.manualBuffer,
+            device = PlaybackDeviceProfile(
+                cpuCount = multiviewDeviceCapability.cpuCount,
+                maxMemoryBytes = multiviewDeviceCapability.maxMemoryBytes,
+                activePaneCount = state.multiviewMode.paneCount
+            )
         )
         val preparedStream = parseKodiStyleStream(channel.streamUrl)
         val nextSessionId = (state.internalSession?.sessionId ?: 0L) + 1L
@@ -1957,8 +1967,11 @@ class PlayerViewModel @Inject constructor(
                     channelName = channel.name,
                     streamUrl = preparedStream.streamUrl,
                     requestHeaders = preparedStream.headers,
-                    bufferConfig = config
+                    bufferConfig = plan.config,
+                    recoveryPolicy = plan.recoveryPolicy,
+                    bufferPlanSummary = plan.summary
                 ),
+                adaptiveBufferSummary = plan.summary,
                 isStartingPlayback = true,
                 retryAttempt = 0,
                 lastInfo = if (preparedStream.headers.isEmpty()) {
@@ -2031,9 +2044,15 @@ class PlayerViewModel @Inject constructor(
             }
             return
         }
-        val config = bufferConfigForProfile(
+        val plan = adaptiveBufferPlan(
             profile = BufferProfile.MINIMAL,
-            manual = state.manualBuffer
+            manual = state.manualBuffer,
+            device = PlaybackDeviceProfile(
+                cpuCount = multiviewDeviceCapability.cpuCount,
+                maxMemoryBytes = multiviewDeviceCapability.maxMemoryBytes,
+                activePaneCount = state.multiviewMode.paneCount.coerceAtLeast(paneIndex)
+            ),
+            isAdditionalPane = true
         )
         val nextSessionId = (sessionForPane(state, paneIndex)?.sessionId ?: 0L) + 1L
         _uiState.update {
@@ -2043,7 +2062,9 @@ class PlayerViewModel @Inject constructor(
                 channelName = channel.name,
                 streamUrl = preparedStream.streamUrl,
                 requestHeaders = preparedStream.headers,
-                bufferConfig = config
+                bufferConfig = plan.config,
+                recoveryPolicy = plan.recoveryPolicy,
+                bufferPlanSummary = plan.summary
             )
             val updated = when (paneIndex) {
                 2 -> it.copy(secondaryInternalSession = nextSession)
