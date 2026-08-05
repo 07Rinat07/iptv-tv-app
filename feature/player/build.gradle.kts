@@ -13,12 +13,6 @@ android {
         minSdk = 24
     }
 
-    sourceSets {
-        getByName("main") {
-            java.exclude("**/StablePlayerScreen.kt")
-        }
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
