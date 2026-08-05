@@ -25,7 +25,7 @@ import com.iptv.tv.core.playervlc.LibVlcPlaybackConfig
 import com.iptv.tv.core.playervlc.LibVlcPlaybackController
 import com.iptv.tv.core.playervlc.LibVlcPlaybackListener
 import com.iptv.tv.core.playervlc.LibVlcVideoScale
-import org.videolan.libvlc.util.VLCVideoLayout
+import com.iptv.tv.core.playervlc.LibVlcVideoView
 
 @Composable
 internal fun StableLibVlcVideoSurface(
@@ -103,7 +103,7 @@ internal fun StableLibVlcVideoSurface(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
-                VLCVideoLayout(viewContext).apply {
+                LibVlcVideoView(viewContext).apply {
                     keepScreenOn = true
                     isClickable = true
                     isFocusable = true
