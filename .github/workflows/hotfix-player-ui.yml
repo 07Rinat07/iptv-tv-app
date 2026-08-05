@@ -95,6 +95,8 @@ jobs:
         run: |
           set -euo pipefail
           rm -f .github/workflows/hotfix-player-ui.yml
+          rm -f .automation/player-ui.patch.gz.b64.part-*
+          rmdir .automation 2>/dev/null || true
           rmdir .hotfix 2>/dev/null || true
           git config user.name "Rinat Sarmuldin"
           git config user.email "ura07srr@gmail.com"
