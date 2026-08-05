@@ -71,7 +71,7 @@ import com.iptv.tv.feature.importer.ImportPrefillBus
 import com.iptv.tv.feature.importer.ImporterScreen
 import com.iptv.tv.feature.player.PLAYER_CHANNEL_ID_ARG
 import com.iptv.tv.feature.player.PLAYER_PLAYLIST_ID_ARG
-import com.iptv.tv.feature.player.PlayerScreen
+import com.iptv.tv.feature.player.StablePlayerScreen
 import com.iptv.tv.feature.playlists.PlaylistsScreen
 import com.iptv.tv.feature.scanner.ScannerScreen
 import com.iptv.tv.feature.settings.NetworkTestScreen
@@ -351,7 +351,7 @@ private fun AppRoot(
                             )
                         }
                         composable(Routes.PLAYER) {
-                            PlayerScreen(
+                            StablePlayerScreen(
                                 onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
                                 primaryLabel = "Сменить плеер",
                                 onBack = {
@@ -366,7 +366,7 @@ private fun AppRoot(
                                 navArgument(PLAYER_PLAYLIST_ID_ARG) { type = NavType.LongType }
                             )
                         ) {
-                            PlayerScreen(
+                            StablePlayerScreen(
                                 onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
                                 primaryLabel = "Сменить плеер",
                                 onBack = {
@@ -382,7 +382,7 @@ private fun AppRoot(
                                 navArgument(PLAYER_CHANNEL_ID_ARG) { type = NavType.LongType }
                             )
                         ) {
-                            PlayerScreen(
+                            StablePlayerScreen(
                                 onPrimaryAction = { navController.navigate(Routes.SETTINGS) },
                                 primaryLabel = "Сменить плеер",
                                 onBack = {
