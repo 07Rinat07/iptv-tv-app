@@ -1,0 +1,119 @@
+name: Player controls, lists and EPG fix
+
+on:
+  push:
+    branches:
+      - fix/player-controls-lists-favorites
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: player-controls-fix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-test-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply staged player implementation
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_file=.automation/player-controls-fix.patch.gz.b64
+          if [[ ! -f "$patch_file" ]]; then
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base64 --decode "$patch_file" | gzip --decompress > /tmp/player-controls-fix.patch
+          echo "9e626d1b8f2839cb06e8b81e2f2c67e00c4278d6bc7cb6ab64b959e15711ce3f  /tmp/player-controls-fix.patch" | sha256sum --check -
+          git apply --check /tmp/player-controls-fix.patch
+          git apply /tmp/player-controls-fix.patch
+          rm -f "$patch_file"
+          echo "applied=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify protected scanner and search sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check docs/stage11-protected-scanner.sha256
+          if git diff --name-only origin/main...HEAD | grep -E '^(feature/scanner/|core/network/|core/domain/.*/ScannerRepository\.kt$|core/domain/.*/SearchPlaylistsUseCase\.kt$|feature/scanner/.*/LocalAiQueryAssistant\.kt$)'; then
+            echo "Protected scanner/search path changed" >&2
+            exit 1
+          fi
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run focused unit tests
+        shell: bash
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace \
+            :core:player:testDebugUnitTest \
+            :feature:player:testDebugUnitTest \
+            :feature:favorites:testDebugUnitTest \
+            :feature:epg:testDebugUnitTest \
+            :feature:scanner:testDebugUnitTest
+
+      - name: Run Android lint
+        shell: bash
+        run: ./gradlew --no-daemon --stacktrace :app:lintDebug
+
+      - name: Build debug and release APKs
+        shell: bash
+        run: |
+          ./gradlew --no-daemon --stacktrace \
+            :app:assembleDebug \
+            :app:assembleRelease
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rinat-IPTV-player-controls-fix
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release-unsigned.apk
+            build-artifacts/myscanerIPTV-tvbox-debug-latest.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: player-controls-fix-reports
+          path: |
+            **/build/reports/tests/**
+            **/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Commit verified implementation
+        if: steps.patch.outputs.applied == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/fix/player-controls-lists-favorites'
+        shell: bash
+        run: |
+          git config user.name "Rinat Sarmuldin"
+          git config user.email "ura07srr@gmail.com"
+          git add -A
+          git commit -m "fix(player): unify fullscreen controls, stabilize channel lists, favorites and EPG"
+          git push
