@@ -14,17 +14,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -33,7 +36,9 @@ import coil.compose.AsyncImage
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.ChannelPreview
+import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistContentSummary
+import java.util.Locale
 
 const val TAG_PLAYLISTS_LIST = "playlists_list"
 const val TAG_PLAYLISTS_REFRESH = "playlists_refresh"
@@ -50,6 +55,27 @@ fun PlaylistsScreen(
     val state by viewModel.uiState.collectAsState()
     val totalChannels = state.playlists.sumOf { it.channelCount }
     var showDetails by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var sortModeName by rememberSaveable { mutableStateOf(PlaylistSortMode.CURRENT_FIRST.name) }
+    val sortMode = PlaylistSortMode.entries.firstOrNull { it.name == sortModeName }
+        ?: PlaylistSortMode.CURRENT_FIRST
+    val locale = Locale.getDefault()
+    val visiblePlaylists = remember(
+        state.playlists,
+        state.selectedPlaylistId,
+        query,
+        sortMode,
+        locale
+    ) {
+        filterAndSortPlaylists(
+            playlists = state.playlists,
+            selectedPlaylistId = state.selectedPlaylistId,
+            query = query,
+            sortMode = sortMode,
+            locale = locale
+        )
+    }
+
     TvScrollableLazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -90,7 +116,10 @@ fun PlaylistsScreen(
                                 overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodySmall
                             )
-                            Text("Последняя синхронизация: ${formatSyncTime(it.lastSyncedAt)}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Последняя синхронизация: ${formatSyncTime(it.lastSyncedAt)}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
                     if (state.isLoadingSummary) {
@@ -162,59 +191,108 @@ fun PlaylistsScreen(
             }
         }
 
-        if (state.playlists.isEmpty()) {
+        if (state.playlists.isNotEmpty()) {
             item {
-                Text("Плейлистов пока нет. Импортируйте список на экране Импорт.")
-            }
-        } else {
-            items(state.playlists, key = { it.id }) { playlist ->
-                val selected = state.selectedPlaylistId == playlist.id
-                Card(
-                    modifier = Modifier.fillMaxWidth().tvFocusOutline(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (selected) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surface
-                        }
-                    )
-                ) {
+                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                     Column(
                         modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(
-                            text = if (selected) "${playlist.name} (текущий)" else playlist.name,
-                            style = MaterialTheme.typography.titleMedium
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            label = { Text("Поиск плейлистов") },
+                            supportingText = {
+                                Text("Название, источник или тип · найдено ${visiblePlaylists.size}")
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
                         )
-                        Text(
-                            "${sourceTypeLabel(playlist.sourceType.name)} · ${playlist.channelCount} каналов",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        if (showDetails) {
-                            Text(
-                                "Источник: ${playlist.source}",
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            Text("Обновлено: ${formatSyncTime(playlist.lastSyncedAt)}", style = MaterialTheme.typography.bodySmall)
-                        }
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Button(onClick = { viewModel.selectPlaylist(playlist.id) }) {
-                                Text(if (selected) "Выбрано" else "Выбрать")
+                            PlaylistSortMode.entries.forEach { mode ->
+                                FilterChip(
+                                    selected = mode == sortMode,
+                                    onClick = { sortModeName = mode.name },
+                                    label = { Text(mode.label) }
+                                )
                             }
-                            onOpenEditor?.let { openEditor ->
-                                OutlinedButton(onClick = { openEditor(playlist.id) }) {
-                                    Text("Редактировать")
+                        }
+                    }
+                }
+            }
+        }
+
+        when {
+            state.playlists.isEmpty() -> {
+                item {
+                    Text("Плейлистов пока нет. Импортируйте список на экране Импорт.")
+                }
+            }
+
+            visiblePlaylists.isEmpty() -> {
+                item {
+                    Text("По заданному запросу плейлисты не найдены")
+                }
+            }
+
+            else -> {
+                items(visiblePlaylists, key = { it.id }) { playlist ->
+                    val selected = state.selectedPlaylistId == playlist.id
+                    Card(
+                        modifier = Modifier.fillMaxWidth().tvFocusOutline(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (selected) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            }
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = if (selected) "${playlist.name} (текущий)" else playlist.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                "${sourceTypeLabel(playlist.sourceType.name)} · ${playlist.channelCount} каналов",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            if (showDetails) {
+                                Text(
+                                    "Источник: ${playlist.source}",
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    "Обновлено: ${formatSyncTime(playlist.lastSyncedAt)}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(onClick = { viewModel.selectPlaylist(playlist.id) }) {
+                                    Text(if (selected) "Выбрано" else "Выбрать")
                                 }
-                            }
-                            onOpenPlayer?.let { openPlayer ->
-                                OutlinedButton(onClick = { openPlayer(playlist.id) }) {
-                                    Text("Воспроизвести")
+                                onOpenEditor?.let { openEditor ->
+                                    OutlinedButton(onClick = { openEditor(playlist.id) }) {
+                                        Text("Редактировать")
+                                    }
+                                }
+                                onOpenPlayer?.let { openPlayer ->
+                                    OutlinedButton(onClick = { openPlayer(playlist.id) }) {
+                                        Text("Воспроизвести")
+                                    }
                                 }
                             }
                         }
@@ -222,6 +300,51 @@ fun PlaylistsScreen(
                 }
             }
         }
+    }
+}
+
+private enum class PlaylistSortMode(val label: String) {
+    CURRENT_FIRST("Текущий сначала"),
+    NAME("По имени"),
+    RECENT("Недавно обновлённые"),
+    CHANNELS("Больше каналов")
+}
+
+private fun filterAndSortPlaylists(
+    playlists: List<Playlist>,
+    selectedPlaylistId: Long?,
+    query: String,
+    sortMode: PlaylistSortMode,
+    locale: Locale
+): List<Playlist> {
+    val normalizedQuery = query.trim().lowercase(locale)
+    val filtered = if (normalizedQuery.isBlank()) {
+        playlists
+    } else {
+        playlists.filter { playlist ->
+            playlist.name.lowercase(locale).contains(normalizedQuery) ||
+                playlist.source.lowercase(locale).contains(normalizedQuery) ||
+                sourceTypeLabel(playlist.sourceType.name).lowercase(locale).contains(normalizedQuery)
+        }
+    }
+
+    val nameComparator = compareBy<Playlist> { it.name.lowercase(locale) }
+    return when (sortMode) {
+        PlaylistSortMode.CURRENT_FIRST -> filtered.sortedWith(
+            compareBy<Playlist> { if (it.id == selectedPlaylistId) 0 else 1 }
+                .then(nameComparator)
+        )
+
+        PlaylistSortMode.NAME -> filtered.sortedWith(nameComparator)
+        PlaylistSortMode.RECENT -> filtered.sortedWith(
+            compareByDescending<Playlist> { it.lastSyncedAt ?: 0L }
+                .then(nameComparator)
+        )
+
+        PlaylistSortMode.CHANNELS -> filtered.sortedWith(
+            compareByDescending<Playlist> { it.channelCount }
+                .then(nameComparator)
+        )
     }
 }
 
@@ -329,6 +452,6 @@ private fun sourceTypeLabel(raw: String): String {
 
 private fun formatSyncTime(value: Long?): String {
     if (value == null || value <= 0L) return "нет данных"
-    val formatter = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault())
+    val formatter = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
     return formatter.format(java.util.Date(value))
 }

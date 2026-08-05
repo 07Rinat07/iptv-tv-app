@@ -6,17 +6,22 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -27,6 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
@@ -38,8 +45,13 @@ fun TvScrollableLazyColumn(
     horizontalAlignment: Alignment.Horizontal = Alignment.Start,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     scrollbarMinScreenWidthDp: Int = 600,
+    scrollControlsMinScreenWidthDp: Int = 360,
+    showPageControls: Boolean = true,
     content: LazyListScope.() -> Unit
 ) {
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    val showControls = showPageControls && screenWidthDp >= scrollControlsMinScreenWidthDp
+
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -54,11 +66,108 @@ fun TvScrollableLazyColumn(
             contentPadding = contentPadding,
             content = content
         )
-        TvLazyColumnScrollbar(
-            listState = state,
-            modifier = Modifier.fillMaxHeight(),
-            minScreenWidthDp = scrollbarMinScreenWidthDp
+
+        if (showControls) {
+            TvLazyColumnNavigationRail(
+                listState = state,
+                showScrollbar = screenWidthDp >= scrollbarMinScreenWidthDp,
+                modifier = Modifier.fillMaxHeight()
+            )
+        } else {
+            TvLazyColumnScrollbar(
+                listState = state,
+                modifier = Modifier.fillMaxHeight(),
+                minScreenWidthDp = scrollbarMinScreenWidthDp
+            )
+        }
+    }
+}
+
+@Composable
+private fun TvLazyColumnNavigationRail(
+    listState: LazyListState,
+    showScrollbar: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val scope = rememberCoroutineScope()
+    val totalItems by remember(listState) {
+        derivedStateOf { listState.layoutInfo.totalItemsCount }
+    }
+    val visibleItems by remember(listState) {
+        derivedStateOf { listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1) }
+    }
+    val firstVisible by remember(listState) {
+        derivedStateOf { listState.firstVisibleItemIndex }
+    }
+    val scrollable = totalItems > visibleItems
+
+    if (!scrollable) return
+
+    val pageSize = (visibleItems - 1).coerceAtLeast(1)
+    val lastIndex = (totalItems - 1).coerceAtLeast(0)
+    val canScrollUp = listState.canScrollBackward
+    val canScrollDown = listState.canScrollForward
+    val showHome = canScrollUp && firstVisible >= pageSize
+
+    Column(
+        modifier = modifier.width(52.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        TvScrollButton(
+            symbol = "⌂",
+            description = "Вернуться в начало списка",
+            enabled = showHome,
+            onClick = { scope.launch { listState.animateScrollToItem(0) } }
         )
+        TvScrollButton(
+            symbol = "⇞",
+            description = "Прокрутить на страницу вверх",
+            enabled = canScrollUp,
+            onClick = {
+                val target = (firstVisible - pageSize).coerceAtLeast(0)
+                scope.launch { listState.animateScrollToItem(target) }
+            }
+        )
+
+        if (showScrollbar) {
+            TvLazyColumnScrollbar(
+                listState = listState,
+                modifier = Modifier.weight(1f),
+                minScreenWidthDp = 0
+            )
+        } else {
+            Spacer(modifier = Modifier.weight(1f))
+        }
+
+        TvScrollButton(
+            symbol = "⇟",
+            description = "Прокрутить на страницу вниз",
+            enabled = canScrollDown,
+            onClick = {
+                val target = (firstVisible + pageSize).coerceAtMost(lastIndex)
+                scope.launch { listState.animateScrollToItem(target) }
+            }
+        )
+    }
+}
+
+@Composable
+private fun TvScrollButton(
+    symbol: String,
+    description: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .size(48.dp)
+            .semantics { contentDescription = description },
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Text(text = symbol, style = MaterialTheme.typography.titleLarge)
     }
 }
 

@@ -10,13 +10,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -25,6 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.EpgProgram
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -39,7 +45,35 @@ fun FavoritesScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     var showDetails by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var sortModeName by rememberSaveable { mutableStateOf(FavoritesSortMode.CURRENT_FIRST.name) }
     var expandedProgramChannelIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
+    val sortMode = FavoritesSortMode.entries.firstOrNull { it.name == sortModeName }
+        ?: FavoritesSortMode.CURRENT_FIRST
+    val locale = Locale.getDefault()
+    val visibleChannels = remember(
+        state.channels,
+        state.selectedChannelId,
+        query,
+        sortMode,
+        locale
+    ) {
+        filterAndSortFavorites(
+            channels = state.channels,
+            selectedChannelId = state.selectedChannelId,
+            query = query,
+            sortMode = sortMode,
+            locale = locale
+        )
+    }
+
+    LaunchedEffect(visibleChannels, state.selectedChannelId) {
+        val selectedIsVisible = visibleChannels.any { it.id == state.selectedChannelId }
+        if (!selectedIsVisible) {
+            visibleChannels.firstOrNull()?.let { viewModel.selectChannel(it.id) }
+        }
+    }
+
     fun toggleProgram(channelId: Long) {
         expandedProgramChannelIds = if (channelId in expandedProgramChannelIds) {
             expandedProgramChannelIds - channelId
@@ -47,6 +81,7 @@ fun FavoritesScreen(
             expandedProgramChannelIds + channelId
         }
     }
+
     TvScrollableLazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -74,7 +109,7 @@ fun FavoritesScreen(
                             onOpenPlayer?.invoke(playlistId, channelId)
                         }
                     },
-                    enabled = state.selectedChannelId != null
+                    enabled = state.selectedChannelId != null && onOpenPlayer != null
                 ) {
                     Text("Воспроизвести")
                 }
@@ -119,65 +154,103 @@ fun FavoritesScreen(
             }
         }
 
-        if (state.channels.isEmpty()) {
-            item { Text("Избранных каналов пока нет") }
-        } else {
-            items(state.channels, key = { it.id }) { channel ->
-                val selected = channel.id == state.selectedChannelId
-                val programs = state.epgProgramsByChannel[channel.id].orEmpty()
-                val programExpanded = channel.id in expandedProgramChannelIds
+        if (state.channels.isNotEmpty()) {
+            item {
                 Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                     Column(
                         modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(
-                            text = channel.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            label = { Text("Поиск в избранном") },
+                            supportingText = {
+                                Text("Название, группа или tvg-id · найдено ${visibleChannels.size}")
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
                         )
-                        Text(
-                            "${channel.group ?: "Без группы"} | ${channel.health}",
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        EpgCompactLine(programs = state.epgProgramsByChannel[channel.id].orEmpty())
-                        if (programExpanded) {
-                            EpgProgramList(programs = programs)
-                        }
-                        if (showDetails) {
-                            Text(
-                                "URL: ${channel.streamUrl}",
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Button(onClick = { viewModel.selectChannel(channel.id) }) {
-                                Text(if (selected) "Выбрано" else "Выбрать")
+                            FavoritesSortMode.entries.forEach { mode ->
+                                FilterChip(
+                                    selected = mode == sortMode,
+                                    onClick = { sortModeName = mode.name },
+                                    label = { Text(mode.label) }
+                                )
                             }
-                            OutlinedButton(
-                                onClick = { toggleProgram(channel.id) },
-                                enabled = programs.isNotEmpty()
+                        }
+                    }
+                }
+            }
+        }
+
+        when {
+            state.channels.isEmpty() -> {
+                item { Text("Избранных каналов пока нет") }
+            }
+
+            visibleChannels.isEmpty() -> {
+                item { Text("По заданному запросу избранные каналы не найдены") }
+            }
+
+            else -> {
+                items(visibleChannels, key = { it.id }) { channel ->
+                    val selected = channel.id == state.selectedChannelId
+                    val programs = state.epgProgramsByChannel[channel.id].orEmpty()
+                    val programExpanded = channel.id in expandedProgramChannelIds
+                    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = channel.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                "${channel.group ?: "Без группы"} | ${channel.health}",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            EpgCompactLine(programs = programs)
+                            if (programExpanded) {
+                                EpgProgramList(programs = programs)
+                            }
+                            if (showDetails) {
+                                Text(
+                                    "URL: ${channel.streamUrl}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(if (programExpanded) "Скрыть программу" else "Программа")
-                            }
-                            if (selected) {
+                                Button(onClick = { viewModel.selectChannel(channel.id) }) {
+                                    Text(if (selected) "Выбрано" else "Выбрать")
+                                }
                                 OutlinedButton(
-                                    onClick = {
-                                        val playlistId = channel.playlistId
-                                        val channelId = channel.id
-                                        onOpenPlayer?.invoke(playlistId, channelId)
-                                    },
-                                    enabled = onOpenPlayer != null
+                                    onClick = { toggleProgram(channel.id) },
+                                    enabled = programs.isNotEmpty()
                                 ) {
-                                    Text("Играть")
+                                    Text(if (programExpanded) "Скрыть программу" else "Программа")
+                                }
+                                if (selected) {
+                                    OutlinedButton(
+                                        onClick = { onOpenPlayer?.invoke(channel.playlistId, channel.id) },
+                                        enabled = onOpenPlayer != null
+                                    ) {
+                                        Text("Играть")
+                                    }
                                 }
                             }
                         }
@@ -186,6 +259,57 @@ fun FavoritesScreen(
             }
         }
     }
+}
+
+private enum class FavoritesSortMode(val label: String) {
+    CURRENT_FIRST("Выбранный сначала"),
+    NAME("По имени"),
+    GROUP("По группе"),
+    HEALTH("По доступности")
+}
+
+private fun filterAndSortFavorites(
+    channels: List<Channel>,
+    selectedChannelId: Long?,
+    query: String,
+    sortMode: FavoritesSortMode,
+    locale: Locale
+): List<Channel> {
+    val normalizedQuery = query.trim().lowercase(locale)
+    val filtered = if (normalizedQuery.isBlank()) {
+        channels
+    } else {
+        channels.filter { channel ->
+            channel.name.lowercase(locale).contains(normalizedQuery) ||
+                channel.group.orEmpty().lowercase(locale).contains(normalizedQuery) ||
+                channel.tvgId.orEmpty().lowercase(locale).contains(normalizedQuery)
+        }
+    }
+    val nameComparator = compareBy<Channel> { it.name.lowercase(locale) }
+    return when (sortMode) {
+        FavoritesSortMode.CURRENT_FIRST -> filtered.sortedWith(
+            compareBy<Channel> { if (it.id == selectedChannelId) 0 else 1 }
+                .then(nameComparator)
+        )
+
+        FavoritesSortMode.NAME -> filtered.sortedWith(nameComparator)
+        FavoritesSortMode.GROUP -> filtered.sortedWith(
+            compareBy<Channel> { it.group.orEmpty().lowercase(locale) }
+                .then(nameComparator)
+        )
+
+        FavoritesSortMode.HEALTH -> filtered.sortedWith(
+            compareBy<Channel> { healthRank(it.health) }
+                .then(nameComparator)
+        )
+    }
+}
+
+private fun healthRank(health: ChannelHealth): Int = when (health) {
+    ChannelHealth.AVAILABLE -> 0
+    ChannelHealth.UNSTABLE -> 1
+    ChannelHealth.UNKNOWN -> 2
+    ChannelHealth.UNAVAILABLE -> 3
 }
 
 @Composable
@@ -241,4 +365,4 @@ private fun formatEpgTime(epochMs: Long): String {
     }.format(Date(epochMs))
 }
 
-private val FAVORITES_EPG_TIME_ZONE: TimeZone = TimeZone.getTimeZone("Asia/Oral")
+private val FAVORITES_EPG_TIME_ZONE: TimeZone = TimeZone.getDefault()

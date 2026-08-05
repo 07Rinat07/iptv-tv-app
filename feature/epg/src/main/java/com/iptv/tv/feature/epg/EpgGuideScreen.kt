@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.iptv.tv.core.designsystem.components.TvHorizontalScrollControls
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.EpgProgram
@@ -188,11 +189,14 @@ fun EpgGuideScreen(
 
         if (state.rows.isNotEmpty()) {
             item {
-                EpgGridHeader(
-                    windowStartMs = state.windowStartMs,
-                    windowEndMs = state.windowEndMs,
-                    scrollState = gridScrollState
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TvHorizontalScrollControls(state = gridScrollState)
+                    EpgGridHeader(
+                        windowStartMs = state.windowStartMs,
+                        windowEndMs = state.windowEndMs,
+                        scrollState = gridScrollState
+                    )
+                }
             }
             items(state.rows, key = { "grid-${it.channel.id}" }) { row ->
                 EpgGridRow(
@@ -683,7 +687,7 @@ private fun formatWindow(startMs: Long, endMs: Long): String {
     return "${formatter.format(Date(startMs))} - ${formatter.format(Date(endMs))}"
 }
 
-private val EPG_GUIDE_TIME_ZONE: TimeZone = TimeZone.getTimeZone("Asia/Oral")
+private val EPG_GUIDE_TIME_ZONE: TimeZone = TimeZone.getDefault()
 
 private fun gridHourCount(startMs: Long, endMs: Long): Int {
     val durationMs = (endMs - startMs).coerceAtLeast(TimeUnit.HOURS.toMillis(1))
