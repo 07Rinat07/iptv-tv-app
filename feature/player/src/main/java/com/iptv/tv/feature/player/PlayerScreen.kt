@@ -2,8 +2,6 @@ package com.iptv.tv.feature.player
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
@@ -12,19 +10,23 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -47,7 +49,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
@@ -81,7 +82,6 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.iptv.tv.core.utils.FileLogger
 import android.content.Context
-import android.view.KeyEvent as AndroidKeyEvent
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.EpgProgram
@@ -110,140 +110,81 @@ private data class PlayerTrackOption(
     val supported: Boolean
 )
 
+private enum class PlayerOverlay {
+    NONE,
+    PLAYLISTS,
+    FILTERS,
+    SETTINGS,
+    INFO
+}
+
 @Composable
 @UnstableApi
 @OptIn(ExperimentalLayoutApi::class)
 fun PlayerScreen(
     onPrimaryAction: (() -> Unit)? = null,
     primaryLabel: String = "Настройки",
+    onBack: (() -> Unit)? = null,
     onFullscreenChanged: (Boolean) -> Unit = {},
     viewModel: PlayerViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
-    val configuration = LocalConfiguration.current
     val state by viewModel.uiState.collectAsState()
     var hideUnavailable by rememberSaveable { mutableStateOf(true) }
+    var favoritesOnly by rememberSaveable { mutableStateOf(false) }
+    var showChannelDrawer by remember { mutableStateOf(false) }
+    var overlay by remember { mutableStateOf(PlayerOverlay.NONE) }
+    var expandedEpgChannelIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
+
     val filteredChannels = remember(
         state.channels,
         state.channelQuery,
         state.selectedGroup,
         state.selectedSubGroup,
+        state.favoriteChannelIds,
+        favoritesOnly,
         hideUnavailable,
         state.parentalControlEnabled,
         state.parentalHideAdultChannels,
         state.parentalBlockedKeywords
     ) {
         val query = state.channelQuery.trim().lowercase()
-        val grouped = state.channels.filter { channel ->
-            channelMatchesGroup(
-                channel = channel,
-                selectedGroup = state.selectedGroup,
-                selectedSubGroup = state.selectedSubGroup
-            )
-        }
-        val searched = if (query.isBlank()) {
-            grouped
-        } else {
-            grouped.filter { channel ->
-                channel.name.lowercase().contains(query) ||
+        state.channels
+            .asSequence()
+            .filter { channel ->
+                channelMatchesGroup(
+                    channel = channel,
+                    selectedGroup = state.selectedGroup,
+                    selectedSubGroup = state.selectedSubGroup
+                )
+            }
+            .filter { channel ->
+                query.isBlank() ||
+                    channel.name.lowercase().contains(query) ||
                     channel.group?.lowercase()?.contains(query) == true ||
                     channel.streamUrl.lowercase().contains(query)
             }
-        }
-        val byHealth = if (hideUnavailable) {
-            searched.filter { it.health != ChannelHealth.UNAVAILABLE }
-        } else {
-            searched
-        }
-        val byParental = if (state.parentalControlEnabled && state.parentalHideAdultChannels) {
-            byHealth.filterNot { channel ->
-                channel.matchesParentalKeywords(state.parentalBlockedKeywords)
+            .filter { channel -> !hideUnavailable || channel.health != ChannelHealth.UNAVAILABLE }
+            .filter { channel -> !favoritesOnly || channel.id in state.favoriteChannelIds }
+            .filterNot { channel ->
+                state.parentalControlEnabled &&
+                    state.parentalHideAdultChannels &&
+                    channel.matchesParentalKeywords(state.parentalBlockedKeywords)
             }
-        } else {
-            byHealth
-        }
-        byParental.sortedWith(
-            compareBy<Channel> { healthPriority(it.health) }
-                .thenBy { it.name.lowercase() }
-        )
+            .sortedWith(
+                compareBy<Channel> { healthPriority(it.health) }
+                    .thenBy { it.name.lowercase() }
+            )
+            .toList()
     }
-    val parentalHiddenCount = remember(
-        state.channels,
-        state.parentalControlEnabled,
-        state.parentalHideAdultChannels,
-        state.parentalBlockedKeywords
-    ) {
-        if (state.parentalControlEnabled && state.parentalHideAdultChannels) {
-            state.channels.count { it.matchesParentalKeywords(state.parentalBlockedKeywords) }
-        } else {
-            0
-        }
-    }
-    val healthStats = remember(state.channels) {
-        val available = state.channels.count { it.health == ChannelHealth.AVAILABLE }
-        val unstable = state.channels.count { it.health == ChannelHealth.UNSTABLE }
-        val unknown = state.channels.count { it.health == ChannelHealth.UNKNOWN }
-        val unavailable = state.channels.count { it.health == ChannelHealth.UNAVAILABLE }
-        Triple(available + unstable, unknown, unavailable)
-    }
-    var showTechnicalInfo by rememberSaveable { mutableStateOf(false) }
-    var showPlaylists by rememberSaveable { mutableStateOf(false) }
-    var showQuickChannels by rememberSaveable { mutableStateOf(true) }
-    var showChannelCatalog by rememberSaveable { mutableStateOf(false) }
-    var showActions by rememberSaveable { mutableStateOf(false) }
-    var showStreamTools by rememberSaveable { mutableStateOf(false) }
-    var showEpgWizard by rememberSaveable { mutableStateOf(false) }
-    var showViewOptions by rememberSaveable { mutableStateOf(false) }
-    var expandedEpgChannelIds by rememberSaveable { mutableStateOf(emptySet<Long>()) }
-    var selectedMultiviewTargetPane by rememberSaveable { mutableIntStateOf(2) }
+
     val selectedChannelName = state.channels.firstOrNull { it.id == state.selectedChannelId }?.name
-    val multiviewLabel = when (state.multiviewMode) {
-        MultiviewMode.OFF -> "выкл"
-        MultiviewMode.TWO_UP -> "2-up"
-        MultiviewMode.FOUR_UP -> "4-up"
-    }
-    val configuredPaneIndices = when (state.multiviewMode) {
-        MultiviewMode.OFF -> emptyList()
-        MultiviewMode.TWO_UP -> listOf(2)
-        MultiviewMode.FOUR_UP -> listOf(2, 3, 4)
-    }
-    val availablePaneTargets = if (state.multiviewSupportedPaneCount >= 4) {
-        listOf(2, 3, 4)
-    } else {
-        listOf(2)
-    }
-    val multiviewSessions = listOf(
-        state.secondaryInternalSession,
-        state.tertiaryInternalSession,
-        state.quaternaryInternalSession
-    )
-    val multiviewTargetChannelId = when (selectedMultiviewTargetPane) {
-        2 -> state.secondaryInternalSession?.channelId
-        3 -> state.tertiaryInternalSession?.channelId
-        4 -> state.quaternaryInternalSession?.channelId
-        else -> null
-    }
+
     fun toggleChannelProgram(channelId: Long) {
         expandedEpgChannelIds = if (channelId in expandedEpgChannelIds) {
             expandedEpgChannelIds - channelId
         } else {
             expandedEpgChannelIds + channelId
-        }
-    }
-
-    fun playAdjacentChannel(step: Int) {
-        val channelId = adjacentChannelId(
-            channelIds = filteredChannels.map { it.id },
-            selectedChannelId = state.selectedChannelId,
-            step = step
-        ) ?: return
-        viewModel.playChannelInternal(channelId)
-    }
-
-    LaunchedEffect(configuredPaneIndices, availablePaneTargets) {
-        val validTargets = configuredPaneIndices.ifEmpty { availablePaneTargets }
-        if (validTargets.isNotEmpty() && selectedMultiviewTargetPane !in validTargets) {
-            selectedMultiviewTargetPane = validTargets.first()
         }
     }
 
@@ -255,41 +196,17 @@ fun PlayerScreen(
         onDispose { onFullscreenChanged(false) }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (
-                    playerRemoteActionForKeyCode(
-                        keyCode = event.nativeKeyEvent.keyCode,
-                        fullscreen = state.internalPlayerExpanded
-                    )
-                ) {
-                    PlayerRemoteAction.PREVIOUS_CHANNEL -> {
-                        playAdjacentChannel(-1)
-                        true
-                    }
-                    PlayerRemoteAction.NEXT_CHANNEL -> {
-                        playAdjacentChannel(1)
-                        true
-                    }
-                    PlayerRemoteAction.TOGGLE_FULLSCREEN -> {
-                        viewModel.toggleInternalPlayerSize()
-                        true
-                    }
-                    PlayerRemoteAction.SHOW_CHANNELS -> {
-                        if (state.internalPlayerExpanded) {
-                            viewModel.setInternalPlayerExpanded(false)
-                        }
-                        showQuickChannels = true
-                        true
-                    }
-                    null -> false
-                }
-            }
-            .focusable()
+    BackHandler(
+        enabled = state.internalPlayerExpanded || showChannelDrawer || overlay != PlayerOverlay.NONE
     ) {
+        when {
+            state.internalPlayerExpanded -> viewModel.setInternalPlayerExpanded(false)
+            showChannelDrawer -> showChannelDrawer = false
+            overlay != PlayerOverlay.NONE -> overlay = PlayerOverlay.NONE
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
         if (state.internalPlayerExpanded) {
             FullscreenInternalPlayerOverlay(
                 session = state.internalSession,
@@ -303,635 +220,647 @@ fun PlayerScreen(
                         sessionId = state.internalSession?.sessionId
                     )
                 },
-                onClose = { viewModel.setInternalPlayerExpanded(false) },
-                onPreviousChannel = { playAdjacentChannel(-1) },
-                onNextChannel = { playAdjacentChannel(1) },
-                onStop = viewModel::stopInternalPlayback
+                onClose = { viewModel.setInternalPlayerExpanded(false) }
             )
         } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(
-                        when {
-                            configuration.screenWidthDp < 600 -> 8.dp
-                            configuration.screenWidthDp < 960 -> 14.dp
-                            else -> 20.dp
-                        }
-                    ),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-            item {
-                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(text = "Плеер", style = MaterialTheme.typography.headlineSmall)
-                        Text(
-                            text = selectedChannelName?.let { "Выбран канал: $it" }
-                                ?: "Выберите канал из списка",
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(onClick = { viewModel.playSelected(context) }, enabled = state.selectedChannelId != null && !state.isStartingPlayback) {
-                                Text(if (state.isStartingPlayback) "Запуск..." else "Смотреть")
-                            }
-                            OutlinedButton(
-                                onClick = { playAdjacentChannel(-1) },
-                                enabled = filteredChannels.isNotEmpty()
-                            ) {
-                                Text("◀ Канал")
-                            }
-                            OutlinedButton(onClick = viewModel::stopInternalPlayback) {
-                                Text("Стоп")
-                            }
-                            OutlinedButton(
-                                onClick = { playAdjacentChannel(1) },
-                                enabled = filteredChannels.isNotEmpty()
-                            ) {
-                                Text("Канал ▶")
-                            }
-                            OutlinedButton(onClick = { showViewOptions = !showViewOptions }) {
-                                Text(if (showViewOptions) "Скрыть настройки вида" else "Вид")
-                            }
-                        }
-                        Text(
-                            text = "Двойной клик/двойное касание — полный экран. Пульт: Channel ±, стрелки в полном экране, Menu/Guide — список каналов.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (showViewOptions) {
-                            PlayerViewOptions(
-                                showQuickChannels = showQuickChannels,
-                                showChannelCatalog = showChannelCatalog,
-                                showPlaylists = showPlaylists,
-                                showActions = showActions,
-                                showStreamTools = showStreamTools,
-                                showEpgWizard = showEpgWizard,
-                                showTechnicalInfo = showTechnicalInfo,
-                                hideUnavailable = hideUnavailable,
-                                onToggleQuickChannels = { showQuickChannels = !showQuickChannels },
-                                onToggleChannelCatalog = { showChannelCatalog = !showChannelCatalog },
-                                onTogglePlaylists = { showPlaylists = !showPlaylists },
-                                onToggleActions = { showActions = !showActions },
-                                onToggleStreamTools = { showStreamTools = !showStreamTools },
-                                onToggleEpgWizard = { showEpgWizard = !showEpgWizard },
-                                onToggleTechnicalInfo = { showTechnicalInfo = !showTechnicalInfo },
-                                onToggleUnavailable = { hideUnavailable = !hideUnavailable },
-                                onExportLogs = { viewModel.exportLogs(context) }
-                            )
-                        }
-                        if (showTechnicalInfo) {
-                            Text(
-                                "Каналы: рабочих=${healthStats.first}, неизвестно=${healthStats.second}, недоступно=${healthStats.third}",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            Text("Поток: ${state.selectedStreamKind}", style = MaterialTheme.typography.bodySmall)
-                            Text(state.epgStatus, style = MaterialTheme.typography.bodySmall)
-                            Text(state.channelListEpgStatus, style = MaterialTheme.typography.bodySmall)
-                            if (state.parentalControlEnabled && state.parentalHideAdultChannels) {
-                                Text("Скрыто родительским фильтром: $parentalHiddenCount", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-                }
-            }
-            if (showTechnicalInfo) {
-                item {
-                    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                        Column(
-                            modifier = Modifier.padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text("Тех.информация", style = MaterialTheme.typography.titleSmall)
-                            Text("Effective player: ${state.effectivePlayer} | default: ${state.defaultPlayer} | override: ${state.channelPlayerOverride ?: "default"}")
-                            Text("Buffer: ${state.bufferProfile} | manual=${state.manualBuffer}")
-                            Text("Автобуфер: ${state.adaptiveBufferSummary}")
-                            Text("Engine: connected=${state.engineConnected}, peers=${state.enginePeers}, speed=${state.engineSpeedKbps} kbps")
-                            Text("Engine endpoint: ${state.engineEndpoint} | Tor=${state.torEnabled}")
-                            Text("Engine message: ${state.engineMessage}")
-                            Text("Режим плеера: ${if (state.internalPlayerExpanded) "fullscreen" else "обычный"} | Масштаб: ${state.playerVideoScale}")
-                            Text(
-                                "Multiview: $multiviewLabel | максимум=${state.multiviewSupportedPaneCount}-up | " +
-                                    "окна=${multiviewSessions.mapIndexed { index, session -> "${index + 2}=${session?.channelName ?: "-"}" }.joinToString()}"
-                            )
-                            Text("Multiview capability: ${state.multiviewCapabilitySummary}")
-                            if (state.multiviewCapabilityWarnings.isNotEmpty()) {
-                                Text("Multiview ограничения: ${state.multiviewCapabilityWarnings.joinToString("; ")}")
-                            }
-                            Text("Встроенный плеер: двойной клик по видео = fullscreen/обычный режим.")
-                            Text("VLC: сначала запускается прямой fullscreen, затем fallback совместимости.")
-                            val aceDescriptorLabel = state.selectedAceDescriptor?.let { descriptor ->
-                                if (descriptor.length > 110) "${descriptor.take(110)}..." else descriptor
-                            } ?: "не обнаружен"
-                            Text("Ace-дескриптор: $aceDescriptorLabel")
-                            state.channelEpgInfo?.let { epg ->
-                                val nowText = epg.now?.let { "Сейчас: ${it.title}" } ?: "Сейчас: нет данных"
-                                val nextText = epg.next?.let { "Далее: ${it.title}" } ?: "Далее: нет данных"
-                                Text(nowText)
-                                Text(nextText)
-                                Text("EPG source: ${epg.epgSourceUrl ?: "-"}")
-                                epg.upcoming.take(4).forEach { item ->
-                                    Text("• ${formatEpgTime(item.startEpochMs)} - ${formatEpgTime(item.endEpochMs)} | ${item.title}")
-                                }
-                            }
-                            state.resolvedStreamUrl?.let { resolved ->
-                                Text("Подготовленный URL: $resolved")
-                            }
-                        }
-                    }
-                }
-            }
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val wideLayout = maxWidth >= 960.dp
+                val outerPadding = if (wideLayout) 14.dp else 10.dp
 
-        if (showActions) {
-            item {
-                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("Действия плеера", style = MaterialTheme.typography.titleSmall)
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(onClick = { viewModel.playSelected(context) }, enabled = !state.isStartingPlayback) {
-                                Text(if (state.isStartingPlayback) "Запуск..." else "Воспроизвести (по настройке)")
-                            }
-                            Button(onClick = viewModel::playSelectedInternal, enabled = !state.isStartingPlayback) {
-                                Text("Воспроизвести встроенным")
-                            }
-                            Button(onClick = { viewModel.playSelectedVlc(context) }, enabled = !state.isStartingPlayback) {
-                                Text("Воспроизвести во VLC (fullscreen)")
-                            }
-                            Button(
-                                onClick = { viewModel.playSelectedViaAce(context) },
-                                enabled = !state.isStartingPlayback && state.selectedChannelAceCapable
-                            ) {
-                                Text("Воспроизвести через Ace Engine")
-                            }
-                            Button(onClick = viewModel::checkEngineNow, enabled = !state.isStartingPlayback) {
-                                Text("Проверить Ace Engine")
-                            }
-                            Button(onClick = viewModel::stopInternalPlayback) {
-                                Text("Остановить встроенный")
-                            }
-                            Button(onClick = viewModel::toggleMultiview) {
-                                Text(if (state.multiviewEnabled) "Multiview: выкл" else "Multiview: 2-up")
-                            }
-                            Button(onClick = viewModel::enableTwoUpMultiview) {
-                                Text("Multiview: 2-up")
-                            }
-                            Button(
-                                onClick = viewModel::enableFourUpMultiview,
-                                enabled = state.multiviewSupportedPaneCount >= 4
-                            ) {
-                                Text("Multiview: 4-up")
-                            }
-                            Text(
-                                state.multiviewCapabilitySummary,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            configuredPaneIndices.forEach { paneIndex ->
-                                Button(
-                                    onClick = { viewModel.stopPane(paneIndex) },
-                                    enabled = when (paneIndex) {
-                                        2 -> state.secondaryInternalSession != null
-                                        3 -> state.tertiaryInternalSession != null
-                                        4 -> state.quaternaryInternalSession != null
-                                        else -> false
-                                    }
-                                ) {
-                                    Text("Остановить окно $paneIndex")
-                                }
-                            }
-                            Button(onClick = { viewModel.setInternalPlayerExpanded(false) }) {
-                                Text("Обычный экран")
-                            }
-                            Button(onClick = { viewModel.setInternalPlayerExpanded(true) }) {
-                                Text("Fullscreen")
-                            }
-                            Button(onClick = viewModel::cycleVideoScale) {
-                                Text("Кадр: ${state.playerVideoScale}")
-                            }
-                            Button(onClick = { viewModel.setChannelOverride(PlayerType.INTERNAL) }) {
-                                Text("Override: Internal")
-                            }
-                            Button(onClick = { viewModel.setChannelOverride(PlayerType.VLC) }) {
-                                Text("Override: VLC")
-                            }
-                            Button(onClick = viewModel::clearChannelOverride) {
-                                Text("Override: Default")
-                            }
-                            Button(onClick = viewModel::toggleSelectedFavorite, enabled = state.selectedChannelId != null) {
-                                val isFavorite =
-                                    state.selectedChannelId?.let { id -> state.favoriteChannelIds.contains(id) } == true
-                                Text(if (isFavorite) "Убрать из избранного" else "В избранное")
-                            }
-                            Button(onClick = { viewModel.installVlc(context) }) {
-                                Text("Установить VLC")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (showStreamTools) {
-            item {
-                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                    Column(
+                if (wideLayout) {
+                    Row(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            .fillMaxSize()
+                            .padding(outerPadding),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("Тест потока URL", style = MaterialTheme.typography.titleSmall)
-                        OutlinedTextField(
-                            value = state.testStreamUrl,
-                            onValueChange = viewModel::updateTestStreamUrl,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("URL для проверки (http/https или с |headers)") },
-                            singleLine = true
+                        PlayerRail(
+                            modifier = Modifier
+                                .width(164.dp)
+                                .fillMaxHeight(),
+                            favoritesOnly = favoritesOnly,
+                            onBack = onBack,
+                            onLive = {
+                                favoritesOnly = false
+                                overlay = PlayerOverlay.NONE
+                            },
+                            onPlaylists = { overlay = PlayerOverlay.PLAYLISTS },
+                            onFilters = { overlay = PlayerOverlay.FILTERS },
+                            onFavorites = { favoritesOnly = !favoritesOnly },
+                            onInfo = { overlay = PlayerOverlay.INFO },
+                            onSettings = { overlay = PlayerOverlay.SETTINGS }
                         )
-                        Button(onClick = viewModel::fillTestStreamFromSelected) {
-                            Text("Взять URL выбранного канала")
-                        }
-                        Button(
-                            onClick = viewModel::probeTestStream,
-                            enabled = !state.isTestingStream
-                        ) {
-                            Text(if (state.isTestingStream) "Проверка..." else "Проверить URL потока")
-                        }
-                        state.testStreamResult?.let { probe ->
-                            Text("Результат теста: $probe")
-                        }
-                    }
-                }
-            }
-        }
 
-        if (showEpgWizard) {
-            item {
-                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("EPG мастер", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "Настройка EPG для выбранного плейлиста: URL -> проверить -> сохранить.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        OutlinedTextField(
-                            value = state.epgWizardUrl,
-                            onValueChange = viewModel::updateEpgWizardUrl,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("EPG URL (http/https)") },
-                            singleLine = true
-                        )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = viewModel::fillEpgWizardFromSelectedPlaylist,
-                                enabled = !state.isSavingEpgWizard
-                            ) {
-                                Text("Подставить из плейлиста")
-                            }
-                            Button(
-                                onClick = viewModel::saveEpgWizardAndTest,
-                                enabled = !state.isSavingEpgWizard
-                            ) {
-                                Text(if (state.isSavingEpgWizard) "Сохраняем..." else "Проверить и сохранить")
-                            }
-                        }
-                        Text(state.epgWizardStatus, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-        }
-
-        item {
-            val session = state.internalSession
-            Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        when {
-                            session != null -> "Сейчас играет: ${session.channelName}"
-                            selectedChannelName != null -> "Выбран канал: $selectedChannelName"
-                            else -> "Встроенный плеер готов к запуску"
-                        }
-                    )
-                    if (state.multiviewEnabled) {
-                        MultiviewPanel(
-                            multiviewMode = state.multiviewMode,
-                            primarySession = session,
-                            additionalSessions = multiviewSessions,
+                        PlayerCenterPane(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                            session = state.internalSession,
                             selectedChannelName = selectedChannelName,
-                            targetPaneIndex = selectedMultiviewTargetPane,
-                            targetPaneIndices = configuredPaneIndices,
-                            primaryExpanded = state.internalPlayerExpanded,
+                            isStartingPlayback = state.isStartingPlayback,
                             scale = state.playerVideoScale,
-                            onPrimaryReady = { sessionId -> viewModel.onInternalPlaybackReady(sessionId) },
-                            onPrimaryError = { sessionId, message ->
+                            channels = filteredChannels,
+                            selectedChannelId = state.selectedChannelId,
+                            favoriteChannelIds = state.favoriteChannelIds,
+                            epgProgramsByChannel = state.channelListEpgPrograms,
+                            onReady = viewModel::onInternalPlaybackReady,
+                            onError = { sessionId, message ->
                                 viewModel.onInternalPlaybackError(
                                     message = message,
                                     context = context,
                                     sessionId = sessionId
                                 )
                             },
-                            onPaneReady = viewModel::onAdditionalPlaybackReady,
-                            onPaneError = viewModel::onAdditionalPlaybackError,
-                            onTargetPaneSelected = { paneIndex -> selectedMultiviewTargetPane = paneIndex },
-                            onTogglePrimaryExpanded = viewModel::toggleInternalPlayerSize,
-                            onStopPane = viewModel::stopPane
+                            onPlaySelected = { viewModel.playSelected(context) },
+                            onStop = viewModel::stopInternalPlayback,
+                            onToggleExpanded = viewModel::toggleInternalPlayerSize,
+                            onCycleScale = viewModel::cycleVideoScale,
+                            onSelectChannel = viewModel::playChannelInternal,
+                            onToggleFavorite = viewModel::toggleChannelFavorite,
+                            onOpenChannels = { showChannelDrawer = true },
+                            showChannelsButton = false
                         )
-                        if (showQuickChannels) {
-                            ChannelQuickPanel(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 10.dp),
-                                channels = filteredChannels,
-                                selectedChannelId = multiviewTargetChannelId,
-                                favoriteChannelIds = state.favoriteChannelIds,
-                                epgProgramsByChannel = state.channelListEpgPrograms,
-                                expandedEpgChannelIds = expandedEpgChannelIds,
-                                title = "Быстрый выбор для окна $selectedMultiviewTargetPane",
-                                onToggleProgram = ::toggleChannelProgram,
-                                onToggleFavorite = viewModel::toggleChannelFavorite,
-                                onSelect = { channelId ->
-                                    viewModel.playChannelInPane(channelId, selectedMultiviewTargetPane)
-                                }
-                            )
-                        }
-                    } else {
-                        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                            val twoPane = maxWidth >= 900.dp && showQuickChannels
-                            if (twoPane) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 320.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    Column(modifier = Modifier.weight(1.15f)) {
-                                        if (session != null && !state.internalPlayerExpanded) {
-                                            InternalPlayerHost(
-                                                session = session,
-                                                onReady = { viewModel.onInternalPlaybackReady(session.sessionId) },
-                                                onError = { message ->
-                                                    viewModel.onInternalPlaybackError(
-                                                        message = message,
-                                                        context = context,
-                                                        sessionId = session.sessionId
-                                                    )
-                                                },
-                                                scale = state.playerVideoScale,
-                                                expanded = false,
-                                                onToggleExpanded = viewModel::toggleInternalPlayerSize,
-                                                forceFullWidth = true
-                                            )
-                                        } else {
-                                            InternalPlayerPlaceholder(
-                                                expanded = false,
-                                                onToggleExpanded = viewModel::toggleInternalPlayerSize,
-                                                forceFullWidth = true,
-                                                selectedChannelName = selectedChannelName
-                                            )
-                                        }
-                                    }
-                                    ChannelBrowserPanel(
-                                        modifier = Modifier
-                                            .weight(0.85f)
-                                            .fillMaxHeight(),
-                                        playlists = state.playlists,
-                                        selectedPlaylistId = state.selectedPlaylistId,
-                                        onSelectPlaylist = viewModel::selectPlaylist,
-                                        groups = state.availableGroups,
-                                        selectedGroup = state.selectedGroup,
-                                        onSelectGroup = viewModel::selectGroup,
-                                        subGroups = state.availableSubGroups,
-                                        selectedSubGroup = state.selectedSubGroup,
-                                        onSelectSubGroup = viewModel::selectSubGroup,
-                                        channelQuery = state.channelQuery,
-                                        onChannelQueryChange = viewModel::updateChannelQuery,
-                                        hideUnavailable = hideUnavailable,
-                                        onToggleUnavailable = { hideUnavailable = !hideUnavailable },
-                                        channels = filteredChannels,
-                                        selectedChannelId = state.selectedChannelId,
-                                        favoriteChannelIds = state.favoriteChannelIds,
-                                        epgProgramsByChannel = state.channelListEpgPrograms,
-                                        expandedEpgChannelIds = expandedEpgChannelIds,
-                                        onToggleProgram = ::toggleChannelProgram,
-                                        onToggleFavorite = viewModel::toggleChannelFavorite,
-                                        onSelect = viewModel::playChannelInternal
-                                    )
-                                }
-                            } else {
-                                if (session != null && !state.internalPlayerExpanded) {
-                                    InternalPlayerHost(
-                                        session = session,
-                                        onReady = { viewModel.onInternalPlaybackReady(session.sessionId) },
-                                        onError = { message ->
-                                            viewModel.onInternalPlaybackError(
-                                                message = message,
-                                                context = context,
-                                                sessionId = session.sessionId
-                                            )
-                                        },
-                                        scale = state.playerVideoScale,
-                                        expanded = false,
-                                        onToggleExpanded = viewModel::toggleInternalPlayerSize
-                                    )
-                                } else {
-                                    InternalPlayerPlaceholder(
-                                        expanded = false,
-                                        onToggleExpanded = viewModel::toggleInternalPlayerSize,
-                                        selectedChannelName = selectedChannelName
-                                    )
-                                }
-                                if (showQuickChannels) {
-                                    ChannelBrowserPanel(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(top = 10.dp),
-                                        playlists = state.playlists,
-                                        selectedPlaylistId = state.selectedPlaylistId,
-                                        onSelectPlaylist = viewModel::selectPlaylist,
-                                        groups = state.availableGroups,
-                                        selectedGroup = state.selectedGroup,
-                                        onSelectGroup = viewModel::selectGroup,
-                                        subGroups = state.availableSubGroups,
-                                        selectedSubGroup = state.selectedSubGroup,
-                                        onSelectSubGroup = viewModel::selectSubGroup,
-                                        channelQuery = state.channelQuery,
-                                        onChannelQueryChange = viewModel::updateChannelQuery,
-                                        hideUnavailable = hideUnavailable,
-                                        onToggleUnavailable = { hideUnavailable = !hideUnavailable },
-                                        channels = filteredChannels,
-                                        selectedChannelId = state.selectedChannelId,
-                                        favoriteChannelIds = state.favoriteChannelIds,
-                                        epgProgramsByChannel = state.channelListEpgPrograms,
-                                        expandedEpgChannelIds = expandedEpgChannelIds,
-                                        onToggleProgram = ::toggleChannelProgram,
-                                        onToggleFavorite = viewModel::toggleChannelFavorite,
-                                        onSelect = viewModel::playChannelInternal
-                                    )
-                                }
-                            }
-                        }
+
+                        PlayerChannelBrowser(
+                            modifier = Modifier
+                                .width(310.dp)
+                                .fillMaxHeight(),
+                            query = state.channelQuery,
+                            onQueryChange = viewModel::updateChannelQuery,
+                            channels = filteredChannels,
+                            selectedChannelId = state.selectedChannelId,
+                            favoriteChannelIds = state.favoriteChannelIds,
+                            epgProgramsByChannel = state.channelListEpgPrograms,
+                            expandedEpgChannelIds = expandedEpgChannelIds,
+                            onToggleProgram = ::toggleChannelProgram,
+                            onToggleFavorite = viewModel::toggleChannelFavorite,
+                            onSelect = viewModel::playChannelInternal,
+                            onOpenFilters = { overlay = PlayerOverlay.FILTERS }
+                        )
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(outerPadding),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        PlayerCompactHeader(
+                            selectedChannelName = selectedChannelName,
+                            onBack = onBack,
+                            onOpenChannels = { showChannelDrawer = true },
+                            onOpenSettings = { overlay = PlayerOverlay.SETTINGS }
+                        )
+                        PlayerCenterPane(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            session = state.internalSession,
+                            selectedChannelName = selectedChannelName,
+                            isStartingPlayback = state.isStartingPlayback,
+                            scale = state.playerVideoScale,
+                            channels = filteredChannels,
+                            selectedChannelId = state.selectedChannelId,
+                            favoriteChannelIds = state.favoriteChannelIds,
+                            epgProgramsByChannel = state.channelListEpgPrograms,
+                            onReady = viewModel::onInternalPlaybackReady,
+                            onError = { sessionId, message ->
+                                viewModel.onInternalPlaybackError(
+                                    message = message,
+                                    context = context,
+                                    sessionId = sessionId
+                                )
+                            },
+                            onPlaySelected = { viewModel.playSelected(context) },
+                            onStop = viewModel::stopInternalPlayback,
+                            onToggleExpanded = viewModel::toggleInternalPlayerSize,
+                            onCycleScale = viewModel::cycleVideoScale,
+                            onSelectChannel = viewModel::playChannelInternal,
+                            onToggleFavorite = viewModel::toggleChannelFavorite,
+                            onOpenChannels = { showChannelDrawer = true },
+                            showChannelsButton = true
+                        )
                     }
                 }
             }
         }
 
-        state.lastError?.let { error ->
-            item {
-                Text(text = error, color = MaterialTheme.colorScheme.error)
-            }
-        }
-        state.lastInfo?.let { info ->
-            item {
-                Text(text = info)
-            }
-        }
-
-        if (showPlaylists) {
-            item {
-                PlaylistScrollPanel(
-                    playlists = state.playlists,
-                    selectedPlaylistId = state.selectedPlaylistId,
-                    onSelectPlaylist = viewModel::selectPlaylist
-                )
-            }
-        }
-
-        if (showChannelCatalog) {
-            item {
-                Text("Каналы (${filteredChannels.size}/${state.channels.size})", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Подсказка: выбор канала сразу запускает воспроизведение во встроенном плеере.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-            item {
-                OutlinedTextField(
-                    value = state.channelQuery,
-                    onValueChange = viewModel::updateChannelQuery,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Поиск каналов") },
-                    singleLine = true
-                )
-            }
-            if (state.availableGroups.isNotEmpty()) {
-                item {
-                    Text("Группы каналов (${state.availableGroups.size})", style = MaterialTheme.typography.titleSmall)
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        if (showChannelDrawer && !state.internalPlayerExpanded) {
+            AlertDialog(
+                onDismissRequest = { showChannelDrawer = false },
+                title = { Text("Каналы") },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 360.dp, max = 620.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (state.selectedGroup == null) {
-                            Button(onClick = { viewModel.selectGroup(null) }) {
-                                Text("Все группы")
+                        OutlinedTextField(
+                            value = state.channelQuery,
+                            onValueChange = viewModel::updateChannelQuery,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Поиск") },
+                            singleLine = true
+                        )
+                        ChannelQuickPanel(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            channels = filteredChannels,
+                            selectedChannelId = state.selectedChannelId,
+                            favoriteChannelIds = state.favoriteChannelIds,
+                            epgProgramsByChannel = state.channelListEpgPrograms,
+                            expandedEpgChannelIds = expandedEpgChannelIds,
+                            onToggleProgram = ::toggleChannelProgram,
+                            onToggleFavorite = viewModel::toggleChannelFavorite,
+                            onSelect = {
+                                showChannelDrawer = false
+                                viewModel.playChannelInternal(it)
                             }
-                        } else {
-                            OutlinedButton(onClick = { viewModel.selectGroup(null) }) {
-                                Text("Все группы")
-                            }
-                        }
-                        state.availableGroups.forEach { group ->
-                            if (state.selectedGroup == group) {
-                                Button(onClick = { viewModel.selectGroup(group) }) {
-                                    Text(group)
-                                }
-                            } else {
-                                OutlinedButton(onClick = { viewModel.selectGroup(group) }) {
-                                    Text(group)
-                                }
-                            }
-                        }
+                        )
                     }
+                },
+                confirmButton = {
+                    Button(onClick = { showChannelDrawer = false }) { Text("Закрыть") }
                 }
-            }
-            if (state.selectedGroup != null && state.availableSubGroups.isNotEmpty()) {
-                item {
-                    Text("Подгруппы (${state.availableSubGroups.size})", style = MaterialTheme.typography.titleSmall)
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        if (state.selectedSubGroup == null) {
-                            Button(onClick = { viewModel.selectSubGroup(null) }) {
-                                Text("Все подгруппы")
-                            }
-                        } else {
-                            OutlinedButton(onClick = { viewModel.selectSubGroup(null) }) {
-                                Text("Все подгруппы")
-                            }
-                        }
-                        state.availableSubGroups.forEach { subGroup ->
-                            if (state.selectedSubGroup == subGroup) {
-                                Button(onClick = { viewModel.selectSubGroup(subGroup) }) {
-                                    Text(subGroup)
-                                }
-                            } else {
-                                OutlinedButton(onClick = { viewModel.selectSubGroup(subGroup) }) {
-                                    Text(subGroup)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if (filteredChannels.isEmpty()) {
-                item {
-                    Text("Нет каналов по текущему фильтру")
-                }
-            } else {
-                item {
-                    ChannelCatalogScrollPanel(
-                        channels = filteredChannels,
-                        selectedChannelId = state.selectedChannelId,
-                        favoriteChannelIds = state.favoriteChannelIds,
-                        epgProgramsByChannel = state.channelListEpgPrograms,
-                        expandedEpgChannelIds = expandedEpgChannelIds,
-                        availablePaneTargets = availablePaneTargets,
-                        showTechnicalInfo = showTechnicalInfo,
-                        onToggleProgram = ::toggleChannelProgram,
-                        onToggleFavorite = viewModel::toggleChannelFavorite,
-                        onPlayChannel = viewModel::playChannelInternal,
-                        onPlayInPane = viewModel::playChannelInPane
-                    )
-                }
-            }
+            )
         }
 
-        onPrimaryAction?.let { action ->
-            item {
-                Button(onClick = action) {
-                    Text(primaryLabel)
-                }
-            }
-        }
+        if (overlay != PlayerOverlay.NONE && !state.internalPlayerExpanded) {
+            PlayerOverlayDialog(
+                overlay = overlay,
+                state = state,
+                hideUnavailable = hideUnavailable,
+                favoritesOnly = favoritesOnly,
+                onDismiss = { overlay = PlayerOverlay.NONE },
+                onSelectPlaylist = {
+                    viewModel.selectPlaylist(it)
+                    overlay = PlayerOverlay.NONE
+                },
+                onSelectGroup = viewModel::selectGroup,
+                onSelectSubGroup = viewModel::selectSubGroup,
+                onToggleUnavailable = { hideUnavailable = !hideUnavailable },
+                onToggleFavoritesOnly = { favoritesOnly = !favoritesOnly },
+                onCycleScale = viewModel::cycleVideoScale,
+                onPlayInternal = viewModel::playSelectedInternal,
+                onPlayVlc = { viewModel.playSelectedVlc(context) },
+                onExportLogs = { viewModel.exportLogs(context) },
+                onOpenAppSettings = onPrimaryAction,
+                primaryLabel = primaryLabel
+            )
         }
     }
 }
+
+@Composable
+private fun PlayerRail(
+    modifier: Modifier,
+    favoritesOnly: Boolean,
+    onBack: (() -> Unit)?,
+    onLive: () -> Unit,
+    onPlaylists: () -> Unit,
+    onFilters: () -> Unit,
+    onFavorites: () -> Unit,
+    onInfo: () -> Unit,
+    onSettings: () -> Unit
+) {
+    Card(modifier = modifier.tvFocusOutline()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Rinat IPTV", style = MaterialTheme.typography.titleMedium)
+            Text("Плеер", style = MaterialTheme.typography.bodySmall)
+            Spacer(modifier = Modifier.height(4.dp))
+            Button(onClick = onLive, modifier = Modifier.fillMaxWidth()) { Text("Эфир") }
+            OutlinedButton(onClick = onPlaylists, modifier = Modifier.fillMaxWidth()) { Text("Плейлисты") }
+            OutlinedButton(onClick = onFilters, modifier = Modifier.fillMaxWidth()) { Text("Группы") }
+            if (favoritesOnly) {
+                Button(onClick = onFavorites, modifier = Modifier.fillMaxWidth()) { Text("Избранное") }
+            } else {
+                OutlinedButton(onClick = onFavorites, modifier = Modifier.fillMaxWidth()) { Text("Избранное") }
+            }
+            OutlinedButton(onClick = onInfo, modifier = Modifier.fillMaxWidth()) { Text("Информация") }
+            OutlinedButton(onClick = onSettings, modifier = Modifier.fillMaxWidth()) { Text("Настройки") }
+            Spacer(modifier = Modifier.weight(1f))
+            onBack?.let {
+                OutlinedButton(onClick = it, modifier = Modifier.fillMaxWidth()) { Text("Назад") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerCompactHeader(
+    selectedChannelName: String?,
+    onBack: (() -> Unit)?,
+    onOpenChannels: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                selectedChannelName ?: "Rinat IPTV",
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            OutlinedButton(onClick = onOpenChannels) { Text("Каналы") }
+            OutlinedButton(onClick = onOpenSettings) { Text("Опции") }
+            onBack?.let { OutlinedButton(onClick = it) { Text("Назад") } }
+        }
+    }
+}
+
+@Composable
+@UnstableApi
+@OptIn(ExperimentalLayoutApi::class)
+private fun PlayerCenterPane(
+    modifier: Modifier,
+    session: InternalPlaybackSession?,
+    selectedChannelName: String?,
+    isStartingPlayback: Boolean,
+    scale: PlayerVideoScale,
+    channels: List<Channel>,
+    selectedChannelId: Long?,
+    favoriteChannelIds: Set<Long>,
+    epgProgramsByChannel: Map<Long, List<EpgProgram>>,
+    onReady: (Long) -> Unit,
+    onError: (Long, String) -> Unit,
+    onPlaySelected: () -> Unit,
+    onStop: () -> Unit,
+    onToggleExpanded: () -> Unit,
+    onCycleScale: () -> Unit,
+    onSelectChannel: (Long) -> Unit,
+    onToggleFavorite: (Long) -> Unit,
+    onOpenChannels: () -> Unit,
+    showChannelsButton: Boolean
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            selectedChannelName ?: "Выберите канал",
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            if (session == null) "Плеер готов" else "LIVE",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (showChannelsButton) {
+                        OutlinedButton(onClick = onOpenChannels) { Text("Список") }
+                    }
+                }
+
+                if (session != null) {
+                    InternalPlayerHost(
+                        session = session,
+                        onReady = { onReady(session.sessionId) },
+                        onError = { onError(session.sessionId, it) },
+                        scale = scale,
+                        expanded = false,
+                        onToggleExpanded = onToggleExpanded,
+                        forceFullWidth = true
+                    )
+                } else {
+                    InternalPlayerPlaceholder(
+                        expanded = false,
+                        onToggleExpanded = onToggleExpanded,
+                        forceFullWidth = true,
+                        selectedChannelName = selectedChannelName
+                    )
+                }
+
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = onPlaySelected,
+                        enabled = selectedChannelId != null && !isStartingPlayback
+                    ) {
+                        Text(if (isStartingPlayback) "Запуск..." else "Смотреть")
+                    }
+                    OutlinedButton(onClick = onStop) { Text("Стоп") }
+                    OutlinedButton(onClick = onToggleExpanded) { Text("На весь экран") }
+                    OutlinedButton(onClick = onCycleScale) { Text("Кадр: $scale") }
+                }
+            }
+        }
+
+        Text("Последние каналы", style = MaterialTheme.typography.titleSmall)
+        PlayerChannelStrip(
+            modifier = Modifier.fillMaxWidth(),
+            channels = channels,
+            selectedChannelId = selectedChannelId,
+            favoriteChannelIds = favoriteChannelIds,
+            epgProgramsByChannel = epgProgramsByChannel,
+            onSelect = onSelectChannel,
+            onToggleFavorite = onToggleFavorite
+        )
+    }
+}
+
+@Composable
+private fun PlayerChannelStrip(
+    modifier: Modifier,
+    channels: List<Channel>,
+    selectedChannelId: Long?,
+    favoriteChannelIds: Set<Long>,
+    epgProgramsByChannel: Map<Long, List<EpgProgram>>,
+    onSelect: (Long) -> Unit,
+    onToggleFavorite: (Long) -> Unit
+) {
+    val ordered = remember(channels, selectedChannelId) {
+        val selected = channels.firstOrNull { it.id == selectedChannelId }
+        buildList {
+            if (selected != null) add(selected)
+            addAll(channels.filterNot { it.id == selectedChannelId }.take(19))
+        }
+    }
+    if (ordered.isEmpty()) {
+        Card(modifier = modifier.tvFocusOutline()) {
+            Text("Нет каналов по текущему фильтру", modifier = Modifier.padding(14.dp))
+        }
+        return
+    }
+    LazyRow(
+        modifier = modifier.heightIn(min = 118.dp, max = 148.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(ordered, key = { it.id }) { channel ->
+            val selected = channel.id == selectedChannelId
+            Card(
+                modifier = Modifier
+                    .width(156.dp)
+                    .fillMaxHeight()
+                    .tvFocusOutline()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        ChannelLogo(channel.logo, Modifier.size(28.dp))
+                        Text(
+                            channel.name,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    ChannelEpgCompactLine(epgProgramsByChannel[channel.id].orEmpty())
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (selected) {
+                            Button(onClick = { onSelect(channel.id) }) { Text("Играет") }
+                        } else {
+                            OutlinedButton(onClick = { onSelect(channel.id) }) { Text("Открыть") }
+                        }
+                        OutlinedButton(onClick = { onToggleFavorite(channel.id) }) {
+                            Text(if (channel.id in favoriteChannelIds) "★" else "☆")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerChannelBrowser(
+    modifier: Modifier,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    channels: List<Channel>,
+    selectedChannelId: Long?,
+    favoriteChannelIds: Set<Long>,
+    epgProgramsByChannel: Map<Long, List<EpgProgram>>,
+    expandedEpgChannelIds: Set<Long>,
+    onToggleProgram: (Long) -> Unit,
+    onToggleFavorite: (Long) -> Unit,
+    onSelect: (Long) -> Unit,
+    onOpenFilters: () -> Unit
+) {
+    Card(modifier = modifier.tvFocusOutline()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Каналы", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                OutlinedButton(onClick = onOpenFilters) { Text("Фильтр") }
+            }
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Поиск") },
+                singleLine = true
+            )
+            ChannelQuickPanel(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                channels = channels,
+                selectedChannelId = selectedChannelId,
+                favoriteChannelIds = favoriteChannelIds,
+                epgProgramsByChannel = epgProgramsByChannel,
+                expandedEpgChannelIds = expandedEpgChannelIds,
+                onToggleProgram = onToggleProgram,
+                onToggleFavorite = onToggleFavorite,
+                onSelect = onSelect
+            )
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun PlayerOverlayDialog(
+    overlay: PlayerOverlay,
+    state: PlayerUiState,
+    hideUnavailable: Boolean,
+    favoritesOnly: Boolean,
+    onDismiss: () -> Unit,
+    onSelectPlaylist: (Long) -> Unit,
+    onSelectGroup: (String?) -> Unit,
+    onSelectSubGroup: (String?) -> Unit,
+    onToggleUnavailable: () -> Unit,
+    onToggleFavoritesOnly: () -> Unit,
+    onCycleScale: () -> Unit,
+    onPlayInternal: () -> Unit,
+    onPlayVlc: () -> Unit,
+    onExportLogs: () -> Unit,
+    onOpenAppSettings: (() -> Unit)?,
+    primaryLabel: String
+) {
+    val title = when (overlay) {
+        PlayerOverlay.PLAYLISTS -> "Плейлисты"
+        PlayerOverlay.FILTERS -> "Группы и фильтры"
+        PlayerOverlay.SETTINGS -> "Настройки плеера"
+        PlayerOverlay.INFO -> "Информация"
+        PlayerOverlay.NONE -> ""
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            when (overlay) {
+                PlayerOverlay.PLAYLISTS -> {
+                    Box(modifier = Modifier.fillMaxWidth().heightIn(min = 240.dp, max = 560.dp)) {
+                        PlaylistScrollPanel(
+                            playlists = state.playlists,
+                            selectedPlaylistId = state.selectedPlaylistId,
+                            onSelectPlaylist = onSelectPlaylist
+                        )
+                    }
+                }
+                PlayerOverlay.FILTERS -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (hideUnavailable) {
+                                    Button(onClick = onToggleUnavailable) { Text("Недоступные скрыты") }
+                                } else {
+                                    OutlinedButton(onClick = onToggleUnavailable) { Text("Скрыть недоступные") }
+                                }
+                                if (favoritesOnly) {
+                                    Button(onClick = onToggleFavoritesOnly) { Text("Только избранное") }
+                                } else {
+                                    OutlinedButton(onClick = onToggleFavoritesOnly) { Text("Только избранное") }
+                                }
+                            }
+                        }
+                        item { Text("Группы", style = MaterialTheme.typography.titleSmall) }
+                        item {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (state.selectedGroup == null) {
+                                    Button(onClick = { onSelectGroup(null) }) { Text("Все") }
+                                } else {
+                                    OutlinedButton(onClick = { onSelectGroup(null) }) { Text("Все") }
+                                }
+                                state.availableGroups.forEach { group ->
+                                    if (state.selectedGroup == group) {
+                                        Button(onClick = { onSelectGroup(group) }) { Text(group) }
+                                    } else {
+                                        OutlinedButton(onClick = { onSelectGroup(group) }) { Text(group) }
+                                    }
+                                }
+                            }
+                        }
+                        if (state.selectedGroup != null && state.availableSubGroups.isNotEmpty()) {
+                            item { Text("Подгруппы", style = MaterialTheme.typography.titleSmall) }
+                            item {
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (state.selectedSubGroup == null) {
+                                        Button(onClick = { onSelectSubGroup(null) }) { Text("Все") }
+                                    } else {
+                                        OutlinedButton(onClick = { onSelectSubGroup(null) }) { Text("Все") }
+                                    }
+                                    state.availableSubGroups.forEach { subgroup ->
+                                        if (state.selectedSubGroup == subgroup) {
+                                            Button(onClick = { onSelectSubGroup(subgroup) }) { Text(subgroup) }
+                                        } else {
+                                            OutlinedButton(onClick = { onSelectSubGroup(subgroup) }) { Text(subgroup) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                PlayerOverlay.SETTINGS -> {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("Масштаб видео: ${state.playerVideoScale}")
+                        Text("Плеер: ${state.effectivePlayer}")
+                        Text("Буфер: ${state.bufferProfile}")
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(onClick = onCycleScale) { Text("Сменить масштаб") }
+                            Button(onClick = onPlayInternal, enabled = state.selectedChannelId != null) { Text("Встроенный") }
+                            OutlinedButton(onClick = onPlayVlc, enabled = state.selectedChannelId != null) { Text("VLC") }
+                            OutlinedButton(onClick = onExportLogs) { Text("Экспорт логов") }
+                            onOpenAppSettings?.let {
+                                OutlinedButton(onClick = it) { Text(primaryLabel) }
+                            }
+                        }
+                    }
+                }
+                PlayerOverlay.INFO -> {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("Каналов: ${state.channels.size}")
+                        Text("Поток: ${state.selectedStreamKind}")
+                        Text("EPG: ${state.epgStatus}")
+                        Text("Engine: ${state.engineMessage}")
+                        state.lastError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        state.lastInfo?.let { Text(it) }
+                    }
+                }
+                PlayerOverlay.NONE -> Unit
+            }
+        },
+        confirmButton = { Button(onClick = onDismiss) { Text("Закрыть") } }
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -1234,10 +1163,7 @@ private fun FullscreenInternalPlayerOverlay(
     scale: PlayerVideoScale,
     onReady: (Long) -> Unit,
     onError: (String) -> Unit,
-    onClose: () -> Unit,
-    onPreviousChannel: () -> Unit,
-    onNextChannel: () -> Unit,
-    onStop: () -> Unit
+    onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
     Box(
@@ -1296,170 +1222,6 @@ private fun FullscreenInternalPlayerOverlay(
                 maxLines = 1
             )
         }
-
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .background(Color.Black.copy(alpha = 0.58f), MaterialTheme.shapes.medium)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedButton(onClick = onPreviousChannel) { Text("◀ Канал") }
-            OutlinedButton(onClick = onStop) { Text("Стоп") }
-            OutlinedButton(onClick = onNextChannel) { Text("Канал ▶") }
-            Button(onClick = onClose) { Text("Свернуть") }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ChannelBrowserPanel(
-    modifier: Modifier = Modifier,
-    playlists: List<Playlist>,
-    selectedPlaylistId: Long?,
-    onSelectPlaylist: (Long) -> Unit,
-    groups: List<String>,
-    selectedGroup: String?,
-    onSelectGroup: (String?) -> Unit,
-    subGroups: List<String>,
-    selectedSubGroup: String?,
-    onSelectSubGroup: (String?) -> Unit,
-    channelQuery: String,
-    onChannelQueryChange: (String) -> Unit,
-    hideUnavailable: Boolean,
-    onToggleUnavailable: () -> Unit,
-    channels: List<Channel>,
-    selectedChannelId: Long?,
-    favoriteChannelIds: Set<Long>,
-    epgProgramsByChannel: Map<Long, List<EpgProgram>>,
-    expandedEpgChannelIds: Set<Long>,
-    onToggleProgram: (Long) -> Unit,
-    onToggleFavorite: (Long) -> Unit,
-    onSelect: (Long) -> Unit
-) {
-    var showSources by rememberSaveable { mutableStateOf(false) }
-    var showFilters by rememberSaveable { mutableStateOf(false) }
-    val selectedPlaylistName = playlists.firstOrNull { it.id == selectedPlaylistId }?.name ?: "Плейлист"
-    val path = buildString {
-        append(selectedPlaylistName)
-        selectedGroup?.let { append(" / ").append(it) }
-        selectedSubGroup?.let { append(" / ").append(it) }
-    }
-
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = path,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(onClick = { showSources = !showSources }) {
-                        Text(if (showSources) "Скрыть плейлисты" else "Плейлисты")
-                    }
-                    OutlinedButton(onClick = { showFilters = !showFilters }) {
-                        Text(if (showFilters) "Скрыть группы" else "Группы")
-                    }
-                    OutlinedButton(onClick = onToggleUnavailable) {
-                        Text(if (hideUnavailable) "Недоступные скрыты" else "Показаны все")
-                    }
-                }
-                if (showSources && playlists.isNotEmpty()) {
-                    LazyRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(playlists, key = { it.id }) { playlist ->
-                            if (playlist.id == selectedPlaylistId) {
-                                Button(onClick = { onSelectPlaylist(playlist.id) }) {
-                                    Text(playlist.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            } else {
-                                OutlinedButton(onClick = { onSelectPlaylist(playlist.id) }) {
-                                    Text(playlist.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            }
-                        }
-                    }
-                }
-                if (showFilters && groups.isNotEmpty()) {
-                    Text("Группа", style = MaterialTheme.typography.bodySmall)
-                    LazyRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        item {
-                            if (selectedGroup == null) {
-                                Button(onClick = { onSelectGroup(null) }) { Text("Все") }
-                            } else {
-                                OutlinedButton(onClick = { onSelectGroup(null) }) { Text("Все") }
-                            }
-                        }
-                        items(groups) { group ->
-                            if (group == selectedGroup) {
-                                Button(onClick = { onSelectGroup(group) }) { Text(group, maxLines = 1) }
-                            } else {
-                                OutlinedButton(onClick = { onSelectGroup(group) }) { Text(group, maxLines = 1) }
-                            }
-                        }
-                    }
-                    if (selectedGroup != null && subGroups.isNotEmpty()) {
-                        Text("Подгруппа", style = MaterialTheme.typography.bodySmall)
-                        LazyRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            item {
-                                if (selectedSubGroup == null) {
-                                    Button(onClick = { onSelectSubGroup(null) }) { Text("Все") }
-                                } else {
-                                    OutlinedButton(onClick = { onSelectSubGroup(null) }) { Text("Все") }
-                                }
-                            }
-                            items(subGroups) { subGroup ->
-                                if (subGroup == selectedSubGroup) {
-                                    Button(onClick = { onSelectSubGroup(subGroup) }) { Text(subGroup, maxLines = 1) }
-                                } else {
-                                    OutlinedButton(onClick = { onSelectSubGroup(subGroup) }) { Text(subGroup, maxLines = 1) }
-                                }
-                            }
-                        }
-                    }
-                }
-                OutlinedTextField(
-                    value = channelQuery,
-                    onValueChange = onChannelQueryChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Поиск внутри плейлиста") },
-                    singleLine = true
-                )
-            }
-        }
-        ChannelQuickPanel(
-            modifier = Modifier.fillMaxWidth(),
-            channels = channels,
-            selectedChannelId = selectedChannelId,
-            favoriteChannelIds = favoriteChannelIds,
-            epgProgramsByChannel = epgProgramsByChannel,
-            expandedEpgChannelIds = expandedEpgChannelIds,
-            title = "Каналы",
-            onToggleProgram = onToggleProgram,
-            onToggleFavorite = onToggleFavorite,
-            onSelect = onSelect
-        )
     }
 }
 
@@ -1479,38 +1241,10 @@ private fun ChannelQuickPanel(
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val configuration = LocalConfiguration.current
-    val channelListMaxHeight = when {
-        configuration.screenHeightDp < 600 -> 260.dp
-        configuration.screenHeightDp < 800 -> 380.dp
-        else -> 520.dp
-    }
-
-    fun scrollQuick(delta: Int) {
-        if (channels.isEmpty()) return
-        val current = listState.firstVisibleItemIndex
-        val last = (channels.lastIndex).coerceAtLeast(0)
-        val target = wrappedIndex(current + delta, last)
-        scope.launch {
-            listState.animateScrollToItem(target)
-        }
-    }
-
-    fun scrollToStart() {
-        if (channels.isEmpty()) return
-        scope.launch { listState.animateScrollToItem(0) }
-    }
-
-    fun scrollToEnd() {
-        if (channels.isEmpty()) return
-        scope.launch { listState.animateScrollToItem(channels.lastIndex.coerceAtLeast(0)) }
-    }
 
     LaunchedEffect(selectedChannelId, channels) {
         val index = channels.indexOfFirst { it.id == selectedChannelId }
-        if (index >= 0) {
-            listState.scrollToItem(index)
-        }
+        if (index >= 0) listState.scrollToItem(index)
     }
 
     Card(
@@ -1527,10 +1261,10 @@ private fun ChannelQuickPanel(
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp)
+                .fillMaxSize()
+                .padding(6.dp)
                 .focusGroup(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
                 "$title · ${channels.size}",
@@ -1538,120 +1272,66 @@ private fun ChannelQuickPanel(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(onClick = ::scrollToStart, enabled = channels.isNotEmpty()) {
-                    Text("В начало")
-                }
-                OutlinedButton(onClick = { scrollQuick(-QUICK_PAGE_STEP) }, enabled = channels.isNotEmpty()) {
-                    Text("Pg -")
-                }
-                OutlinedButton(onClick = { scrollQuick(-QUICK_SCROLL_STEP) }, enabled = channels.isNotEmpty()) {
-                    Text("▲")
-                }
-                OutlinedButton(onClick = { scrollQuick(QUICK_SCROLL_STEP) }, enabled = channels.isNotEmpty()) {
-                    Text("▼")
-                }
-                OutlinedButton(onClick = { scrollQuick(QUICK_PAGE_STEP) }, enabled = channels.isNotEmpty()) {
-                    Text("Pg +")
-                }
-                OutlinedButton(onClick = ::scrollToEnd, enabled = channels.isNotEmpty()) {
-                    Text("В конец")
-                }
-            }
             if (channels.isEmpty()) {
-                Text(
-                    text = "В выбранном плейлисте, группе или поиске каналы не найдены.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 16.dp)
-                )
-                return@Column
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 180.dp, max = channelListMaxHeight),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Нет каналов")
+                }
+            } else {
                 LazyColumn(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
+                        .fillMaxWidth()
+                        .weight(1f),
                     state = listState,
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(channels, key = { it.id }) { channel ->
                         val programs = epgProgramsByChannel[channel.id].orEmpty()
-                        val programExpanded = channel.id in expandedEpgChannelIds
-                        val isFavorite = channel.id in favoriteChannelIds
+                        val expanded = channel.id in expandedEpgChannelIds
                         val selected = channel.id == selectedChannelId
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .tvFocusOutline()
-                                .clickable { onSelect(channel.id) }
-                                .onPreviewKeyEvent { event ->
-                                    if (
-                                        event.type == KeyEventType.KeyDown &&
-                                        (event.key == Key.Enter || event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER)
-                                    ) {
-                                        onSelect(channel.id)
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                        ) {
+                        Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
                             Column(
-                                modifier = Modifier.fillMaxWidth().padding(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(7.dp),
                                 verticalArrangement = Arrangement.spacedBy(5.dp)
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(7.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    ChannelLogo(channel.logo, Modifier.size(40.dp))
+                                    ChannelLogo(channel.logo, Modifier.size(30.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = if (selected) "● ${channel.name}" else channel.name,
-                                            style = MaterialTheme.typography.titleSmall,
+                                            if (selected) "● ${channel.name}" else channel.name,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                        Text(
-                                            text = channel.group ?: "Без группы",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        ChannelEpgCompactLine(programs = programs)
+                                        ChannelEpgCompactLine(programs)
                                     }
                                     OutlinedButton(onClick = { onToggleFavorite(channel.id) }) {
-                                        Text(if (isFavorite) "★" else "☆")
+                                        Text(if (channel.id in favoriteChannelIds) "★" else "☆")
                                     }
                                 }
-                                if (programExpanded) {
-                                    ChannelProgramList(programs = programs)
-                                }
-                                if (programs.isNotEmpty()) {
-                                    OutlinedButton(onClick = { onToggleProgram(channel.id) }) {
-                                        Text(if (programExpanded) "Скрыть EPG" else "EPG")
+                                if (expanded) ChannelProgramList(programs)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    if (selected) {
+                                        Button(onClick = { onSelect(channel.id) }, modifier = Modifier.weight(1f)) { Text("Играет") }
+                                    } else {
+                                        OutlinedButton(onClick = { onSelect(channel.id) }, modifier = Modifier.weight(1f)) { Text("Смотреть") }
                                     }
+                                    OutlinedButton(
+                                        onClick = { onToggleProgram(channel.id) },
+                                        enabled = programs.isNotEmpty()
+                                    ) { Text(if (expanded) "−" else "+") }
                                 }
                             }
                         }
                     }
                 }
-                VerticalListScrollControls(
-                    listState = listState,
-                    itemCount = channels.size,
-                    modifier = Modifier.fillMaxHeight()
-                )
             }
         }
     }
@@ -2073,7 +1753,7 @@ private fun InternalPlayerPlaceholder(
         )
             .tvFocusOutline()
             .pointerInput(expanded) {
-                detectTapGestures(onDoubleTap = { onToggleExpanded() })
+                detectTapGestures(onTap = { onToggleExpanded() }, onDoubleTap = { onToggleExpanded() })
             }
     ) {
         Column(
@@ -2116,8 +1796,8 @@ private fun Modifier.playerViewportModifier(
         fillMaxWidth()
             .aspectRatio(16f / 9f)
     } else {
-        fillMaxWidth()
-            .aspectRatio(16f / 9f)
+        fillMaxWidth(0.56f)
+            .aspectRatio(4f / 3f)
     }
 }
 
@@ -2249,8 +1929,7 @@ private fun InternalPlayerHost(
         val recoveryJob = kotlinx.coroutines.Job()
         val recoveryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate + recoveryJob)
         var bufferingSince = 0L
-        var recoveryAttempts = 0
-        val recoveryPolicy = session.recoveryPolicy
+        var recoveryAttempted = false
 
         val stateListener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -2272,15 +1951,12 @@ private fun InternalPlayerHost(
         recoveryScope.launch {
             try {
                 while (isActive) {
-                    kotlinx.coroutines.delay(recoveryPolicy.checkIntervalMs)
+                    kotlinx.coroutines.delay(3000)
                     val since = bufferingSince
                     if (since != 0L) {
                         val elapsed = System.currentTimeMillis() - since
-                        if (
-                            elapsed > recoveryPolicy.retryAfterMs &&
-                            recoveryAttempts < recoveryPolicy.maxRecoveryAttempts
-                        ) {
-                            recoveryAttempts += 1
+                        if (elapsed > 12_000 && !recoveryAttempted) {
+                            recoveryAttempted = true
                             bufferingSince = 0L
                             runCatching {
                                 exoPlayer.playWhenReady = false
@@ -2288,10 +1964,7 @@ private fun InternalPlayerHost(
                                 exoPlayer.prepare()
                                 exoPlayer.playWhenReady = true
                             }
-                        } else if (
-                            elapsed > recoveryPolicy.failAfterMs &&
-                            recoveryAttempts >= recoveryPolicy.maxRecoveryAttempts
-                        ) {
+                        } else if (elapsed > 24_000 && recoveryAttempted) {
                             onError("Buffering timeout after recovery attempt")
                             break
                         }
