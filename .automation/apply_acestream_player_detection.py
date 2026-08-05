@@ -1,18 +1,18 @@
 from pathlib import Path
 
-path = Path("feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt")
-text = path.read_text(encoding="utf-8")
 
-
-def replace_once(old: str, new: str, label: str) -> None:
-    global text
+def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
     if count != 1:
         raise SystemExit(f"{label}: expected one match, found {count}")
-    text = text.replace(old, new, 1)
+    return text.replace(old, new, 1)
 
 
-replace_once(
+player_path = Path("feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt")
+player_text = player_path.read_text(encoding="utf-8")
+
+player_text = replace_once(
+    player_text,
     '''    private fun isTorrentDescriptor(raw: String): Boolean {
         val normalized = raw.trim().lowercase()
         return normalized.startsWith("magnet:") ||
@@ -38,7 +38,8 @@ replace_once(
     "Ace descriptor extensions",
 )
 
-replace_once(
+player_text = replace_once(
+    player_text,
     '''        if (trimmed.startsWith("infohash:", ignoreCase = true)) {
             val hash = trimmed.substringAfter(':').trim()
             return if (HASH40_REGEX.matches(hash)) "magnet:?xt=urn:btih:$hash" else trimmed
@@ -74,7 +75,8 @@ replace_once(
     "Ace descriptor normalization",
 )
 
-replace_once(
+player_text = replace_once(
+    player_text,
     '''                value.startsWith("infohash:", ignoreCase = true) ||
                 value.endsWith(".torrent", ignoreCase = true)
 ''',
@@ -85,4 +87,31 @@ replace_once(
     "Ace query descriptor extensions",
 )
 
-path.write_text(text, encoding="utf-8")
+player_path.write_text(player_text, encoding="utf-8")
+
+engine_path = Path("core/engine/src/main/java/com/iptv/tv/core/engine/data/EngineStreamClient.kt")
+engine_text = engine_path.read_text(encoding="utf-8")
+engine_text = replace_once(
+    engine_text,
+    '''@Singleton
+class EngineStreamClient private constructor(
+    private val api: EngineStreamApi,
+    private val serviceBridge: AceStreamServiceBridge?
+) {
+    @Inject
+    constructor(
+        api: EngineStreamApi,
+        serviceBridge: AceStreamServiceBridge
+    ) : this(api = api, serviceBridge = serviceBridge as AceStreamServiceBridge?)
+
+    internal constructor(api: EngineStreamApi) : this(api = api, serviceBridge = null)
+''',
+    '''@Singleton
+class EngineStreamClient @Inject constructor(
+    private val api: EngineStreamApi,
+    private val serviceBridge: AceStreamServiceBridge? = null
+) {
+''',
+    "EngineStreamClient constructor",
+)
+engine_path.write_text(engine_text, encoding="utf-8")
