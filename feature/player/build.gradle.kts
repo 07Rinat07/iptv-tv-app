@@ -37,6 +37,7 @@ dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:model"))
     implementation(project(":core:player"))
+    implementation(project(":core:player-vlc"))
     implementation(project(":core:utils"))
 
     implementation(libs.androidx.core.ktx)
