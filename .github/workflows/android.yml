@@ -105,6 +105,9 @@ jobs:
       - name: Unit tests core player
         run: ./gradlew --no-daemon --stacktrace :core:player:testDebugUnitTest
 
+      - name: Unit tests core player VLC
+        run: ./gradlew --no-daemon --stacktrace :core:player-vlc:testDebugUnitTest
+
       - name: Unit tests feature epg
         run: ./gradlew --no-daemon --stacktrace :feature:epg:testDebugUnitTest
 
