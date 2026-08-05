@@ -1,5 +1,6 @@
 package com.iptv.tv.core.engine.di
 
+import com.iptv.tv.core.engine.acestream.AceStreamServiceBridge
 import com.iptv.tv.core.engine.api.EngineStreamApi
 import com.iptv.tv.core.engine.data.EngineStreamClient
 import dagger.Module
@@ -42,5 +43,8 @@ object EngineModule {
 
     @Provides
     @Singleton
-    fun provideEngineStreamClient(api: EngineStreamApi): EngineStreamClient = EngineStreamClient(api)
+    fun provideEngineStreamClient(
+        api: EngineStreamApi,
+        serviceBridge: AceStreamServiceBridge
+    ): EngineStreamClient = EngineStreamClient(api, serviceBridge)
 }
