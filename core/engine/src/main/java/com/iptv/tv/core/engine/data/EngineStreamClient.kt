@@ -2,20 +2,30 @@ package com.iptv.tv.core.engine.data
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.common.toLogSummary
+import com.iptv.tv.core.engine.acestream.AceStreamDescriptorParser
+import com.iptv.tv.core.engine.acestream.AceStreamServiceBridge
 import com.iptv.tv.core.engine.api.EngineStreamApi
 import com.iptv.tv.core.model.EngineStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class EngineStreamClient @Inject constructor(
-    private val api: EngineStreamApi
+class EngineStreamClient private constructor(
+    private val api: EngineStreamApi,
+    private val serviceBridge: AceStreamServiceBridge?
 ) {
+    @Inject
+    constructor(
+        api: EngineStreamApi,
+        serviceBridge: AceStreamServiceBridge
+    ) : this(api = api, serviceBridge = serviceBridge as AceStreamServiceBridge?)
+
+    internal constructor(api: EngineStreamApi) : this(api = api, serviceBridge = null)
+
     private val status = MutableStateFlow(
         EngineStatus(
             connected = false,
@@ -24,7 +34,9 @@ class EngineStreamClient @Inject constructor(
             message = "Engine not connected"
         )
     )
+
     private var connectedEndpoint: String? = null
+    private var serviceManagedEndpoint = false
 
     fun observeStatus(): StateFlow<EngineStatus> = status.asStateFlow()
 
@@ -32,15 +44,46 @@ class EngineStreamClient @Inject constructor(
         val normalized = normalizeEndpoint(endpoint)
             ?: return AppResult.Error("Engine endpoint is empty")
 
+        if (isLocalEngineEndpoint(normalized) && serviceBridge != null) {
+            when (val serviceResult = serviceBridge.startEngine()) {
+                is AppResult.Success -> {
+                    connectedEndpoint = serviceResult.data.endpointUrl
+                    serviceManagedEndpoint = true
+                    status.value = EngineStatus(
+                        connected = true,
+                        peers = 0,
+                        speedKbps = 0,
+                        message = buildString {
+                            append("Ace Stream Android service connected: ")
+                            append(serviceResult.data.endpointUrl)
+                            if (serviceResult.data.httpApiPort <= 0) {
+                                append(" (HTTP port fallback to Engine API)")
+                            }
+                        }
+                    )
+                    return AppResult.Success(Unit)
+                }
+
+                is AppResult.Error -> {
+                    // A manually started localhost engine remains supported when the
+                    // official Android service package is not installed or cannot bind.
+                }
+
+                AppResult.Loading -> Unit
+            }
+        }
+
         return when (val result = fetchStatus(normalized)) {
             is AppResult.Success -> {
                 connectedEndpoint = normalized
+                serviceManagedEndpoint = false
                 status.value = result.data.copy(
                     connected = true,
                     message = "Connected: $normalized"
                 )
                 AppResult.Success(Unit)
             }
+
             is AppResult.Error -> {
                 status.value = status.value.copy(
                     connected = false,
@@ -50,12 +93,23 @@ class EngineStreamClient @Inject constructor(
                 )
                 result
             }
+
             AppResult.Loading -> AppResult.Loading
         }
     }
 
     suspend fun refreshStatus(): AppResult<EngineStatus> {
         val endpoint = connectedEndpoint ?: return AppResult.Error("Engine not connected")
+
+        if (serviceManagedEndpoint && serviceBridge?.currentEndpoint() != null) {
+            val current = status.value.copy(
+                connected = true,
+                message = "Ace Stream Android service connected: $endpoint"
+            )
+            status.value = current
+            return AppResult.Success(current)
+        }
+
         return when (val result = fetchStatus(endpoint)) {
             is AppResult.Success -> {
                 status.value = result.data.copy(
@@ -64,6 +118,7 @@ class EngineStreamClient @Inject constructor(
                 )
                 AppResult.Success(status.value)
             }
+
             is AppResult.Error -> {
                 status.value = status.value.copy(
                     connected = false,
@@ -73,40 +128,89 @@ class EngineStreamClient @Inject constructor(
                 )
                 result
             }
+
             AppResult.Loading -> AppResult.Loading
         }
     }
 
-    suspend fun resolveStream(magnetOrAce: String): AppResult<String> {
-        val descriptor = normalizeTorrentDescriptor(magnetOrAce)
-        if (descriptor.isBlank()) return AppResult.Error("Empty torrent descriptor")
-        if (!isTorrentDescriptor(descriptor)) return AppResult.Success(descriptor)
+    suspend fun resolveStream(rawDescriptor: String): AppResult<String> {
+        val input = rawDescriptor.trim()
+        if (input.isBlank()) return AppResult.Error("Empty torrent descriptor")
 
-        val endpoint = connectedEndpoint ?: return AppResult.Error("Engine not connected")
+        val descriptor = AceStreamDescriptorParser.parse(input)
+            ?: return AppResult.Success(input)
+
+        val endpointResult = ensureConnectedEndpoint()
+        val endpoint = when (endpointResult) {
+            is AppResult.Success -> endpointResult.data
+            is AppResult.Error -> return endpointResult
+            AppResult.Loading -> return AppResult.Loading
+        }
+
+        if (serviceManagedEndpoint) {
+            return resolvedDirectly(endpoint, descriptor)
+        }
+
         val serviceUrl = buildServiceUrl(endpoint)
         return runCatching {
             val response = api.resolve(
                 url = serviceUrl,
                 options = mapOf(
                     "method" to "open_torrent",
-                    "url" to descriptor
+                    "url" to input
                 )
             )
             val streamUrl = extractPlayableUrl(response)
-                ?: buildFallbackStreamUrl(endpoint, descriptor)
+                ?: AceStreamDescriptorParser.buildPlaybackUrl(endpoint, descriptor)
 
             status.value = status.value.copy(
                 connected = true,
                 message = "Torrent stream resolved"
             )
             AppResult.Success(streamUrl)
-        }.getOrElse { throwable ->
-            status.value = status.value.copy(
-                connected = false,
-                message = "Torrent resolve failed: ${throwable.message}"
-            )
-            AppResult.Error("Engine resolve failed: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
+        }.getOrElse {
+            // The official HTTP API can start playback directly through
+            // /ace/getstream even when the optional WebUI resolver is absent.
+            resolvedDirectly(endpoint, descriptor)
         }
+    }
+
+    private suspend fun ensureConnectedEndpoint(): AppResult<String> {
+        connectedEndpoint?.let { return AppResult.Success(it) }
+
+        val bridge = serviceBridge
+        if (bridge != null) {
+            when (val serviceResult = bridge.startEngine()) {
+                is AppResult.Success -> {
+                    connectedEndpoint = serviceResult.data.endpointUrl
+                    serviceManagedEndpoint = true
+                    status.value = EngineStatus(
+                        connected = true,
+                        peers = 0,
+                        speedKbps = 0,
+                        message = "Ace Stream Android service connected: ${serviceResult.data.endpointUrl}"
+                    )
+                    return AppResult.Success(serviceResult.data.endpointUrl)
+                }
+
+                is AppResult.Error -> return AppResult.Error(serviceResult.message, serviceResult.cause)
+                AppResult.Loading -> return AppResult.Loading
+            }
+        }
+
+        return AppResult.Error("Engine not connected")
+    }
+
+    private fun resolvedDirectly(
+        endpoint: String,
+        descriptor: com.iptv.tv.core.engine.acestream.AceStreamDescriptor
+    ): AppResult<String> {
+        val streamUrl = AceStreamDescriptorParser.buildPlaybackUrl(endpoint, descriptor)
+        status.value = status.value.copy(
+            connected = true,
+            message = "Ace Stream playback URL prepared"
+        )
+        return AppResult.Success(streamUrl)
     }
 
     private suspend fun fetchStatus(endpoint: String): AppResult<EngineStatus> {
@@ -143,11 +247,6 @@ class EngineStreamClient @Inject constructor(
         return "${endpoint.removeSuffix("/")}/webui/api/service"
     }
 
-    private fun buildFallbackStreamUrl(endpoint: String, descriptor: String): String {
-        val encoded = URLEncoder.encode(descriptor, StandardCharsets.UTF_8.toString())
-        return "${endpoint.removeSuffix("/")}/ace/getstream?url=$encoded"
-    }
-
     private fun normalizeEndpoint(raw: String): String? {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return null
@@ -160,37 +259,12 @@ class EngineStreamClient @Inject constructor(
         }
     }
 
-    private fun isTorrentDescriptor(input: String): Boolean {
-        val normalized = input.trim().lowercase()
-        return normalized.startsWith("magnet:") ||
-            normalized.startsWith("acestream://") ||
-            normalized.startsWith("ace://") ||
-            normalized.startsWith("infohash:") ||
-            normalized.endsWith(".torrent") ||
-            HASH40_REGEX.matches(normalized)
-    }
-
-    private fun normalizeTorrentDescriptor(raw: String): String {
-        val trimmed = raw.trim()
-        if (trimmed.isBlank()) return trimmed
-
-        val acePrefix = "ace://"
-        if (trimmed.startsWith(acePrefix, ignoreCase = true)) {
-            val tail = trimmed.substring(acePrefix.length).trimStart('/')
-            return if (tail.isNotBlank()) "acestream://$tail" else trimmed
-        }
-
-        val infoHashPrefix = "infohash:"
-        if (trimmed.startsWith(infoHashPrefix, ignoreCase = true)) {
-            val hash = trimmed.substring(infoHashPrefix.length).trim()
-            return if (HASH40_REGEX.matches(hash)) "magnet:?xt=urn:btih:$hash" else trimmed
-        }
-
-        return if (HASH40_REGEX.matches(trimmed)) {
-            "magnet:?xt=urn:btih:$trimmed"
-        } else {
-            trimmed
-        }
+    private fun isLocalEngineEndpoint(endpoint: String): Boolean {
+        val lowercase = endpoint.lowercase(Locale.US)
+        return lowercase.startsWith("http://127.0.0.1") ||
+            lowercase.startsWith("http://localhost") ||
+            lowercase.startsWith("https://127.0.0.1") ||
+            lowercase.startsWith("https://localhost")
     }
 
     private fun extractRootMap(map: Map<String, Any?>): Map<String, Any?> {
@@ -218,6 +292,7 @@ class EngineStreamClient @Inject constructor(
                     if (nested > 0) return nested
                 }
             }
+
             is Iterable<*> -> {
                 data.forEach { value ->
                     val nested = extractInt(value, preferredKeys)
@@ -233,14 +308,15 @@ class EngineStreamClient @Inject constructor(
             is String -> return data.takeIf { it.isNotBlank() }
             is Map<*, *> -> {
                 preferredKeys.forEach { key ->
-                    val v = data[key]
-                    if (v is String && v.isNotBlank()) return v
+                    val value = data[key]
+                    if (value is String && value.isNotBlank()) return value
                 }
                 data.values.forEach { value ->
                     val nested = extractString(value, preferredKeys)
                     if (!nested.isNullOrBlank()) return nested
                 }
             }
+
             is Iterable<*> -> {
                 data.forEach { value ->
                     val nested = extractString(value, preferredKeys)
@@ -270,12 +346,9 @@ class EngineStreamClient @Inject constructor(
                     extractPlayableUrl(value)
                 }
             }
+
             is Iterable<*> -> payload.firstNotNullOfOrNull { value -> extractPlayableUrl(value) }
             else -> null
         }
-    }
-
-    private companion object {
-        val HASH40_REGEX = Regex("^[a-fA-F0-9]{40}$")
     }
 }
