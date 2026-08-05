@@ -39,10 +39,16 @@ sealed interface AceStreamDescriptor {
 
 object AceStreamDescriptorParser {
     private val contentIdRegex = Regex("^[a-fA-F0-9]{40}$")
+    private const val INFO_HASH_PREFIX = "infohash:"
 
     fun parse(raw: String): AceStreamDescriptor {
         val value = raw.trim()
         if (value.isBlank()) return AceStreamDescriptor.Direct(raw, value)
+
+        extractInfoHash(value)?.let { infoHash ->
+            val magnet = "magnet:?xt=urn:btih:$infoHash"
+            return AceStreamDescriptor.Magnet(raw, magnet)
+        }
 
         extractContentId(value)?.let { contentId ->
             return AceStreamDescriptor.ContentId(raw, contentId.lowercase())
@@ -69,6 +75,12 @@ object AceStreamDescriptorParser {
         is AceStreamDescriptor.TransportFile -> mapOf("url" to descriptor.value)
         is AceStreamDescriptor.LocalEngineUrl -> mapOf("url" to descriptor.value)
         is AceStreamDescriptor.Direct -> emptyMap()
+    }
+
+    private fun extractInfoHash(value: String): String? {
+        if (!value.startsWith(INFO_HASH_PREFIX, ignoreCase = true)) return null
+        val candidate = value.substring(INFO_HASH_PREFIX.length).trim()
+        return candidate.takeIf(contentIdRegex::matches)
     }
 
     private fun extractContentId(value: String): String? {
