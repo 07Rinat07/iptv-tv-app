@@ -9,13 +9,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class EngineStreamClient @Inject constructor(
+class EngineStreamClient(
     private val api: EngineStreamApi,
-    private val serviceConnector: AceStreamServiceConnector
+    private val serviceConnector: AceStreamServiceConnector? = null
 ) {
     private val status = MutableStateFlow(
         EngineStatus(
@@ -59,7 +58,9 @@ class EngineStreamClient @Inject constructor(
     }
 
     suspend fun connectInstalledEngine(): AppResult<Unit> {
-        return when (val result = serviceConnector.ensureStarted()) {
+        val connector = serviceConnector
+            ?: return AppResult.Error("Ace Stream service connector is not configured")
+        return when (val result = connector.ensureStarted()) {
             is AppResult.Success -> connect(result.data.endpoint)
             is AppResult.Error -> {
                 status.value = status.value.copy(
@@ -151,7 +152,7 @@ class EngineStreamClient @Inject constructor(
     }
 
     fun closeInstalledEngineConnection() {
-        serviceConnector.close()
+        serviceConnector?.close()
         connectedEndpoint = null
         status.value = status.value.copy(
             connected = false,
@@ -163,7 +164,9 @@ class EngineStreamClient @Inject constructor(
 
     private suspend fun ensureEndpoint(): AppResult<String> {
         connectedEndpoint?.let { return AppResult.Success(it) }
-        return when (val result = serviceConnector.ensureStarted()) {
+        val connector = serviceConnector
+            ?: return AppResult.Error("Ace Stream Engine is not connected")
+        return when (val result = connector.ensureStarted()) {
             is AppResult.Success -> {
                 connectedEndpoint = result.data.endpoint
                 status.value = status.value.copy(
@@ -277,7 +280,15 @@ class EngineStreamClient @Inject constructor(
     private fun extractPlayableUrl(payload: Any?): String? = when (payload) {
         is String -> payload.takeIf { it.startsWith("http://") || it.startsWith("https://") }
         is Map<*, *> -> {
-            val preferred = listOf("url", "stream", "stream_url", "streamUrl", "play_url", "playback_url", "link")
+            val preferred = listOf(
+                "url",
+                "stream",
+                "stream_url",
+                "streamUrl",
+                "play_url",
+                "playback_url",
+                "link"
+            )
             preferred.firstNotNullOfOrNull { key -> extractPlayableUrl(payload[key]) }
                 ?: payload.values.firstNotNullOfOrNull(::extractPlayableUrl)
         }
