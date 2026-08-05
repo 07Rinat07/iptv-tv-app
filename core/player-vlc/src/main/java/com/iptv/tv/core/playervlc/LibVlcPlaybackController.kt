@@ -109,9 +109,7 @@ class LibVlcPlaybackController(
         } finally {
             media.release()
         }
-        if (!mediaPlayer.play()) {
-            listener.onError("LibVLC отклонил запуск потока")
-        }
+        mediaPlayer.play()
     }
 
     fun setVolume(volume: Float) {
