@@ -1,0 +1,942 @@
+name: Apply player input patch
+
+on:
+  push:
+    branches:
+      - feat/libvlc-fallback
+    paths:
+      - .github/workflows/apply-player-input.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-player-input-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      ANDROID_HOME: ${{ github.workspace }}/.android-sdk
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/.android-sdk
+      ANDROID_API_LEVEL: "35"
+      ANDROID_BUILD_TOOLS: "35.0.0"
+      GRADLE_OPTS: -Dorg.gradle.workers.max=2
+      TZ: UTC
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v6
+        with:
+          ref: feat/libvlc-fallback
+          fetch-depth: 0
+
+      - name: Apply focused player input patch
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          ROOT = Path.cwd()
+
+          def replace_exact(relative, old, new, expected=1):
+              path = ROOT / relative
+              text = path.read_text(encoding="utf-8")
+              actual = text.count(old)
+              if actual != expected:
+                  raise SystemExit(
+                      f"{relative}: expected {expected} occurrence(s), found {actual}: {old[:120]!r}"
+                  )
+              path.write_text(text.replace(old, new, expected), encoding="utf-8")
+
+          input_helper = r'''package com.iptv.tv.feature.player
+
+          import android.annotation.SuppressLint
+          import android.content.Context
+          import android.os.SystemClock
+          import android.view.GestureDetector
+          import android.view.InputDevice
+          import android.view.KeyEvent
+          import android.view.MotionEvent
+          import android.view.View
+          import kotlin.math.abs
+
+          private const val HORIZONTAL_SCROLL_COOLDOWN_MS = 350L
+          private const val MIN_GENERIC_SCROLL = 0.01f
+
+          internal data class StablePlayerInputCallbacks(
+              val onToggleControls: () -> Unit,
+              val onToggleFullscreen: () -> Unit,
+              val onPreviousChannel: () -> Unit,
+              val onNextChannel: () -> Unit,
+              val onVolumeUp: () -> Unit,
+              val onVolumeDown: () -> Unit,
+              val onToggleMute: () -> Unit
+          )
+
+          internal fun stableScrollAction(
+              horizontal: Float,
+              vertical: Float
+          ): StableRemoteAction = when {
+              abs(horizontal) > abs(vertical) && horizontal > 0f -> StableRemoteAction.PREVIOUS_CHANNEL
+              abs(horizontal) > abs(vertical) && horizontal < 0f -> StableRemoteAction.NEXT_CHANNEL
+              vertical > 0f -> StableRemoteAction.VOLUME_UP
+              vertical < 0f -> StableRemoteAction.VOLUME_DOWN
+              else -> StableRemoteAction.NONE
+          }
+
+          internal class StablePlayerInputHandler(context: Context) :
+              View.OnTouchListener,
+              View.OnGenericMotionListener,
+              View.OnKeyListener {
+
+              private val movementThresholdPx = 48f * context.resources.displayMetrics.density
+              private var expanded = false
+              private var callbacks = StablePlayerInputCallbacks(
+                  onToggleControls = {},
+                  onToggleFullscreen = {},
+                  onPreviousChannel = {},
+                  onNextChannel = {},
+                  onVolumeUp = {},
+                  onVolumeDown = {},
+                  onToggleMute = {}
+              )
+              private var downX = 0f
+              private var downY = 0f
+              private var verticalDistance = 0f
+              private var lastHorizontalScrollAtMs = 0L
+
+              private val detector = GestureDetector(
+                  context,
+                  object : GestureDetector.SimpleOnGestureListener() {
+                      override fun onDown(event: MotionEvent): Boolean = true
+
+                      override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
+                          callbacks.onToggleControls()
+                          return true
+                      }
+
+                      override fun onDoubleTap(event: MotionEvent): Boolean {
+                          callbacks.onToggleFullscreen()
+                          return true
+                      }
+
+                      override fun onScroll(
+                          first: MotionEvent?,
+                          current: MotionEvent,
+                          distanceX: Float,
+                          distanceY: Float
+                      ): Boolean {
+                          if (abs(distanceY) <= abs(distanceX)) return true
+                          verticalDistance += distanceY
+                          while (abs(verticalDistance) >= movementThresholdPx) {
+                              if (verticalDistance > 0f) {
+                                  callbacks.onVolumeUp()
+                                  verticalDistance -= movementThresholdPx
+                              } else {
+                                  callbacks.onVolumeDown()
+                                  verticalDistance += movementThresholdPx
+                              }
+                          }
+                          return true
+                      }
+                  }
+              )
+
+              fun update(
+                  expanded: Boolean,
+                  callbacks: StablePlayerInputCallbacks
+              ) {
+                  this.expanded = expanded
+                  this.callbacks = callbacks
+              }
+
+              @SuppressLint("ClickableViewAccessibility")
+              fun attachTo(view: View) {
+                  view.setOnTouchListener(this)
+                  view.setOnGenericMotionListener(this)
+                  view.setOnKeyListener(this)
+              }
+
+              fun detachFrom(view: View) {
+                  view.setOnTouchListener(null)
+                  view.setOnGenericMotionListener(null)
+                  view.setOnKeyListener(null)
+              }
+
+              override fun onTouch(view: View, event: MotionEvent): Boolean {
+                  when (event.actionMasked) {
+                      MotionEvent.ACTION_DOWN -> {
+                          downX = event.x
+                          downY = event.y
+                          verticalDistance = 0f
+                      }
+
+                      MotionEvent.ACTION_UP -> {
+                          val deltaX = event.x - downX
+                          val deltaY = event.y - downY
+                          if (abs(deltaX) >= movementThresholdPx && abs(deltaX) > abs(deltaY)) {
+                              if (deltaX > 0f) callbacks.onPreviousChannel() else callbacks.onNextChannel()
+                          }
+                          verticalDistance = 0f
+                      }
+
+                      MotionEvent.ACTION_CANCEL -> verticalDistance = 0f
+                  }
+                  detector.onTouchEvent(event)
+                  return true
+              }
+
+              override fun onGenericMotion(view: View, event: MotionEvent): Boolean {
+                  if (event.action != MotionEvent.ACTION_SCROLL ||
+                      !event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)
+                  ) {
+                      return false
+                  }
+
+                  val horizontal = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
+                  val vertical = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+                  if (abs(horizontal) < MIN_GENERIC_SCROLL && abs(vertical) < MIN_GENERIC_SCROLL) {
+                      return false
+                  }
+
+                  val action = stableScrollAction(horizontal, vertical)
+                  if (action == StableRemoteAction.NEXT_CHANNEL ||
+                      action == StableRemoteAction.PREVIOUS_CHANNEL
+                  ) {
+                      val now = SystemClock.uptimeMillis()
+                      if (now - lastHorizontalScrollAtMs < HORIZONTAL_SCROLL_COOLDOWN_MS) return true
+                      lastHorizontalScrollAtMs = now
+                  }
+                  return dispatch(action)
+              }
+
+              override fun onKey(view: View, keyCode: Int, event: KeyEvent): Boolean {
+                  if (event.action != KeyEvent.ACTION_UP) return false
+                  return dispatch(stableRemoteActionForKey(keyCode, expanded))
+              }
+
+              private fun dispatch(action: StableRemoteAction): Boolean = when (action) {
+                  StableRemoteAction.TOGGLE_CONTROLS -> {
+                      callbacks.onToggleControls()
+                      true
+                  }
+
+                  StableRemoteAction.TOGGLE_FULLSCREEN -> {
+                      callbacks.onToggleFullscreen()
+                      true
+                  }
+
+                  StableRemoteAction.NEXT_CHANNEL -> {
+                      callbacks.onNextChannel()
+                      true
+                  }
+
+                  StableRemoteAction.PREVIOUS_CHANNEL -> {
+                      callbacks.onPreviousChannel()
+                      true
+                  }
+
+                  StableRemoteAction.VOLUME_UP -> {
+                      callbacks.onVolumeUp()
+                      true
+                  }
+
+                  StableRemoteAction.VOLUME_DOWN -> {
+                      callbacks.onVolumeDown()
+                      true
+                  }
+
+                  StableRemoteAction.TOGGLE_MUTE -> {
+                      callbacks.onToggleMute()
+                      true
+                  }
+
+                  StableRemoteAction.NONE -> false
+              }
+          }
+          '''
+          input_helper = "\n".join(line[10:] if line.startswith("          ") else line for line in input_helper.splitlines()) + "\n"
+          (ROOT / "feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerInput.kt").write_text(
+              input_helper,
+              encoding="utf-8"
+          )
+
+          screen = "feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt"
+          replace_exact(
+              screen,
+              "import androidx.activity.compose.BackHandler\nimport androidx.compose.foundation.background\nimport androidx.compose.foundation.clickable\n",
+              "import androidx.activity.compose.BackHandler\nimport androidx.compose.foundation.ExperimentalFoundationApi\nimport androidx.compose.foundation.background\nimport androidx.compose.foundation.clickable\nimport androidx.compose.foundation.combinedClickable\n"
+          )
+          replace_exact(
+              screen,
+              '''internal enum class StableRemoteAction {
+              TOGGLE_FULLSCREEN,
+              NEXT_CHANNEL,
+              PREVIOUS_CHANNEL,
+              VOLUME_UP,
+              VOLUME_DOWN,
+              TOGGLE_MUTE,
+              NONE
+          }
+
+          internal fun stableRemoteActionForKey(keyCode: Int): StableRemoteAction = when (keyCode) {
+              KeyEvent.KEYCODE_DPAD_CENTER,
+              KeyEvent.KEYCODE_ENTER,
+              KeyEvent.KEYCODE_NUMPAD_ENTER -> StableRemoteAction.TOGGLE_FULLSCREEN
+
+              KeyEvent.KEYCODE_CHANNEL_UP,
+              KeyEvent.KEYCODE_MEDIA_NEXT -> StableRemoteAction.NEXT_CHANNEL
+
+              KeyEvent.KEYCODE_CHANNEL_DOWN,
+              KeyEvent.KEYCODE_MEDIA_PREVIOUS -> StableRemoteAction.PREVIOUS_CHANNEL
+
+              KeyEvent.KEYCODE_VOLUME_UP -> StableRemoteAction.VOLUME_UP
+              KeyEvent.KEYCODE_VOLUME_DOWN -> StableRemoteAction.VOLUME_DOWN
+              KeyEvent.KEYCODE_VOLUME_MUTE,
+              KeyEvent.KEYCODE_MUTE -> StableRemoteAction.TOGGLE_MUTE
+
+              else -> StableRemoteAction.NONE
+          }'''.replace("          ", ""),
+              '''internal enum class StableRemoteAction {
+              TOGGLE_CONTROLS,
+              TOGGLE_FULLSCREEN,
+              NEXT_CHANNEL,
+              PREVIOUS_CHANNEL,
+              VOLUME_UP,
+              VOLUME_DOWN,
+              TOGGLE_MUTE,
+              NONE
+          }
+
+          internal fun stableRemoteActionForKey(
+              keyCode: Int,
+              fullscreen: Boolean = false
+          ): StableRemoteAction = when (keyCode) {
+              KeyEvent.KEYCODE_DPAD_CENTER,
+              KeyEvent.KEYCODE_ENTER,
+              KeyEvent.KEYCODE_NUMPAD_ENTER,
+              KeyEvent.KEYCODE_MENU,
+              KeyEvent.KEYCODE_GUIDE -> StableRemoteAction.TOGGLE_CONTROLS
+
+              KeyEvent.KEYCODE_F -> StableRemoteAction.TOGGLE_FULLSCREEN
+
+              KeyEvent.KEYCODE_CHANNEL_UP,
+              KeyEvent.KEYCODE_MEDIA_NEXT -> StableRemoteAction.NEXT_CHANNEL
+
+              KeyEvent.KEYCODE_CHANNEL_DOWN,
+              KeyEvent.KEYCODE_MEDIA_PREVIOUS -> StableRemoteAction.PREVIOUS_CHANNEL
+
+              KeyEvent.KEYCODE_DPAD_LEFT -> if (fullscreen) StableRemoteAction.PREVIOUS_CHANNEL else StableRemoteAction.NONE
+              KeyEvent.KEYCODE_DPAD_RIGHT -> if (fullscreen) StableRemoteAction.NEXT_CHANNEL else StableRemoteAction.NONE
+              KeyEvent.KEYCODE_DPAD_UP -> if (fullscreen) StableRemoteAction.VOLUME_UP else StableRemoteAction.NONE
+              KeyEvent.KEYCODE_DPAD_DOWN -> if (fullscreen) StableRemoteAction.VOLUME_DOWN else StableRemoteAction.NONE
+
+              KeyEvent.KEYCODE_VOLUME_UP -> StableRemoteAction.VOLUME_UP
+              KeyEvent.KEYCODE_VOLUME_DOWN -> StableRemoteAction.VOLUME_DOWN
+              KeyEvent.KEYCODE_VOLUME_MUTE,
+              KeyEvent.KEYCODE_MUTE -> StableRemoteAction.TOGGLE_MUTE
+
+              else -> StableRemoteAction.NONE
+          }'''.replace("          ", "")
+          )
+          replace_exact(
+              screen,
+              "@Composable\n@UnstableApi\nprivate fun StableCenterPaneReplacement(",
+              "@OptIn(ExperimentalFoundationApi::class)\n@Composable\n@UnstableApi\nprivate fun StableCenterPaneReplacement("
+          )
+          replace_exact(
+              screen,
+              '''    onToggleFavorite: (Long) -> Unit,
+              onOpenChannels: () -> Unit
+          ) {
+              Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {'''.replace("          ", ""),
+              '''    onToggleFavorite: (Long) -> Unit,
+              onOpenChannels: () -> Unit
+          ) {
+              var controlsVisible by rememberSaveable { mutableStateOf(true) }
+              Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {'''.replace("          ", "")
+          )
+          replace_exact(
+              screen,
+              '''                volume = volume,
+                          onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },'''.replace("          ", ""),
+              '''                volume = volume,
+                          showControls = controlsVisible,
+                          onToggleControls = { controlsVisible = !controlsVisible },
+                          onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },'''.replace("          ", ""),
+              expected=2
+          )
+          replace_exact(
+              screen,
+              '''                    modifier = Modifier
+                                  .fillMaxWidth()
+                                  .aspectRatio(16f / 9f)
+                                  .background(Color.Black)
+                                  .clickable(onClick = onToggleFullscreen),'''.replace("          ", ""),
+              '''                    modifier = Modifier
+                                  .fillMaxWidth()
+                                  .aspectRatio(16f / 9f)
+                                  .background(Color.Black)
+                                  .combinedClickable(
+                                      onClick = { controlsVisible = !controlsVisible },
+                                      onDoubleClick = onToggleFullscreen
+                                  ),'''.replace("          ", "")
+          )
+          replace_exact(
+              screen,
+              '''                StableFullscreenButton(
+                          expanded = false,
+                          onClick = onToggleFullscreen,
+                          modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                      )'''.replace("          ", ""),
+              '''                if (controlsVisible) {
+                          StableFullscreenButton(
+                              expanded = false,
+                              onClick = onToggleFullscreen,
+                              modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                          )
+                      }'''.replace("          ", "")
+          )
+          replace_exact(
+              screen,
+              "@Composable\n@UnstableApi\nprivate fun StableFullscreenPlayerReplacement(",
+              "@OptIn(ExperimentalFoundationApi::class)\n@Composable\n@UnstableApi\nprivate fun StableFullscreenPlayerReplacement("
+          )
+          replace_exact(
+              screen,
+              '''    onNextChannel: () -> Unit,
+              onStop: () -> Unit
+          ) {
+              BackHandler(onBack = onToggleFullscreen)'''.replace("          ", ""),
+              '''    onNextChannel: () -> Unit,
+              onStop: () -> Unit
+          ) {
+              var controlsVisible by rememberSaveable { mutableStateOf(true) }
+              BackHandler(onBack = onToggleFullscreen)'''.replace("          ", "")
+          )
+          replace_exact(
+              screen,
+              '''            Box(
+                      modifier = Modifier.fillMaxSize().clickable(onClick = onToggleFullscreen),
+                      contentAlignment = Alignment.Center
+                  ) {'''.replace("          ", ""),
+              '''            Box(
+                      modifier = Modifier
+                          .fillMaxSize()
+                          .combinedClickable(
+                              onClick = { controlsVisible = !controlsVisible },
+                              onDoubleClick = onToggleFullscreen
+                          ),
+                      contentAlignment = Alignment.Center
+                  ) {'''.replace("          ", "")
+          )
+          old_controls = '''        Column(
+              modifier = Modifier
+                  .align(Alignment.BottomCenter)
+                  .fillMaxWidth()
+                  .background(Color.Black.copy(alpha = 0.68f))
+                  .windowInsetsPadding(WindowInsets.safeDrawing)
+                  .padding(10.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp)
+          ) {
+              Row(
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  verticalAlignment = Alignment.CenterVertically
+              ) {
+                  OutlinedButton(onClick = onPreviousChannel) { Text("◀") }
+                  Column(Modifier.weight(1f)) {
+                      Text(
+                          channel?.name ?: "Плеер",
+                          color = Color.White,
+                          fontWeight = FontWeight.Bold,
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis
+                      )
+                      val current = stableCurrentProgram(programs, System.currentTimeMillis())
+                      Text(
+                          current?.let { "${stableRange(it)} · ${it.title}" } ?: "Программа не найдена",
+                          color = Color.White.copy(alpha = 0.9f),
+                          style = MaterialTheme.typography.bodySmall,
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis
+                      )
+                  }
+                  OutlinedButton(onClick = onStop) { Text("■") }
+                  OutlinedButton(onClick = onNextChannel) { Text("▶") }
+                  StableFullscreenButton(expanded = true, onClick = onToggleFullscreen)
+              }
+              VolumeControl(
+                  volume = volume,
+                  onVolumeChange = onVolumeChange,
+                  onToggleMute = onToggleMute,
+                  dark = true
+              )
+          }'''
+          new_controls = '''        if (controlsVisible) {
+              Column(
+                  modifier = Modifier
+                      .align(Alignment.BottomCenter)
+                      .fillMaxWidth()
+                      .background(Color.Black.copy(alpha = 0.68f))
+                      .windowInsetsPadding(WindowInsets.safeDrawing)
+                      .padding(10.dp),
+                  verticalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                  Row(
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
+                      verticalAlignment = Alignment.CenterVertically
+                  ) {
+                      OutlinedButton(onClick = onPreviousChannel) { Text("◀") }
+                      Column(Modifier.weight(1f)) {
+                          Text(
+                              channel?.name ?: "Плеер",
+                              color = Color.White,
+                              fontWeight = FontWeight.Bold,
+                              maxLines = 1,
+                              overflow = TextOverflow.Ellipsis
+                          )
+                          val current = stableCurrentProgram(programs, System.currentTimeMillis())
+                          Text(
+                              current?.let { "${stableRange(it)} · ${it.title}" } ?: "Программа не найдена",
+                              color = Color.White.copy(alpha = 0.9f),
+                              style = MaterialTheme.typography.bodySmall,
+                              maxLines = 1,
+                              overflow = TextOverflow.Ellipsis
+                          )
+                      }
+                      OutlinedButton(onClick = onStop) { Text("■") }
+                      OutlinedButton(onClick = onNextChannel) { Text("▶") }
+                      StableFullscreenButton(expanded = true, onClick = onToggleFullscreen)
+                  }
+                  VolumeControl(
+                      volume = volume,
+                      onVolumeChange = onVolumeChange,
+                      onToggleMute = onToggleMute,
+                      dark = true
+                  )
+              }
+          }'''
+          replace_exact(screen, old_controls, new_controls)
+
+          media3 = "feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerVideoSurface.kt"
+          replace_exact(media3, "import android.view.KeyEvent as AndroidKeyEvent\nimport android.view.View\n", "")
+          replace_exact(
+              media3,
+              "    volume: Float,\n    onVolumeUp: () -> Unit,",
+              "    volume: Float,\n    showControls: Boolean,\n    onToggleControls: () -> Unit,\n    onVolumeUp: () -> Unit,",
+              expected=2
+          )
+          replace_exact(
+              media3,
+              "            volume = volume,\n            onVolumeUp = onVolumeUp,",
+              "            volume = volume,\n            showControls = showControls,\n            onToggleControls = onToggleControls,\n            onVolumeUp = onVolumeUp,",
+              expected=2
+          )
+          replace_exact(
+              media3,
+              "    val context = LocalContext.current\n    val playerResult = remember(session.sessionId, session.streamUrl, session.requestHeaders) {",
+              '''    val context = LocalContext.current
+              val inputHandler = remember(context) { StablePlayerInputHandler(context) }
+              inputHandler.update(
+                  expanded = expanded,
+                  callbacks = StablePlayerInputCallbacks(
+                      onToggleControls = onToggleControls,
+                      onToggleFullscreen = onToggleFullscreen,
+                      onPreviousChannel = onPreviousChannel,
+                      onNextChannel = onNextChannel,
+                      onVolumeUp = onVolumeUp,
+                      onVolumeDown = onVolumeDown,
+                      onToggleMute = onToggleMute
+                  )
+              )
+              val playerResult = remember(session.sessionId, session.streamUrl, session.requestHeaders) {'''.replace("          ", "")
+          )
+          old_media3_listeners = '''                isClickable = true
+                          isFocusable = true
+                          isFocusableInTouchMode = true
+                          setOnClickListener { onToggleFullscreen() }
+                          setOnKeyListener { _: View, keyCode: Int, event: AndroidKeyEvent ->
+                              if (event.action != AndroidKeyEvent.ACTION_UP) return@setOnKeyListener false
+                              when (stableRemoteActionForKey(keyCode)) {
+                                  StableRemoteAction.TOGGLE_FULLSCREEN -> {
+                                      onToggleFullscreen()
+                                      true
+                                  }
+
+                                  StableRemoteAction.NEXT_CHANNEL -> {
+                                      onNextChannel()
+                                      true
+                                  }
+
+                                  StableRemoteAction.PREVIOUS_CHANNEL -> {
+                                      onPreviousChannel()
+                                      true
+                                  }
+
+                                  StableRemoteAction.VOLUME_UP -> {
+                                      onVolumeUp()
+                                      true
+                                  }
+
+                                  StableRemoteAction.VOLUME_DOWN -> {
+                                      onVolumeDown()
+                                      true
+                                  }
+
+                                  StableRemoteAction.TOGGLE_MUTE -> {
+                                      onToggleMute()
+                                      true
+                                  }
+
+                                  StableRemoteAction.NONE -> false
+                              }
+                          }'''.replace("          ", "")
+          new_media3_listeners = '''                isClickable = true
+                          isFocusable = true
+                          isFocusableInTouchMode = true
+                          inputHandler.attachTo(this)'''.replace("          ", "")
+          replace_exact(media3, old_media3_listeners, new_media3_listeners)
+          replace_exact(
+              media3,
+              "                view.setOnClickListener { onToggleFullscreen() }\n                if (expanded && !view.hasFocus()) view.post { view.requestFocus() }",
+              "                inputHandler.attachTo(view)\n                if (expanded && !view.hasFocus()) view.post { view.requestFocus() }"
+          )
+          replace_exact(
+              media3,
+              "                view.setOnClickListener(null)\n                view.setOnKeyListener(null)\n                view.player = null",
+              "                inputHandler.detachFrom(view)\n                view.player = null"
+          )
+          replace_exact(
+              media3,
+              '''        StableFullscreenButton(
+                      expanded = expanded,
+                      onClick = onToggleFullscreen,
+                      modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                  )'''.replace("          ", ""),
+              '''        if (showControls && !expanded) {
+                      StableFullscreenButton(
+                          expanded = false,
+                          onClick = onToggleFullscreen,
+                          modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                      )
+                  }'''.replace("          ", "")
+          )
+
+          vlc = "feature/player/src/main/java/com/iptv/tv/feature/player/StableLibVlcVideoSurface.kt"
+          replace_exact(vlc, "import android.view.KeyEvent as AndroidKeyEvent\nimport android.view.View\n", "")
+          replace_exact(
+              vlc,
+              "    volume: Float,\n    onVolumeUp: () -> Unit,",
+              "    volume: Float,\n    showControls: Boolean,\n    onToggleControls: () -> Unit,\n    onVolumeUp: () -> Unit,"
+          )
+          replace_exact(
+              vlc,
+              "    val currentToggleFullscreen by rememberUpdatedState(onToggleFullscreen)\n",
+              "    val currentToggleControls by rememberUpdatedState(onToggleControls)\n    val currentToggleFullscreen by rememberUpdatedState(onToggleFullscreen)\n"
+          )
+          replace_exact(
+              vlc,
+              "    val currentToggleMute by rememberUpdatedState(onToggleMute)\n\n    val controllerResult",
+              '''    val currentToggleMute by rememberUpdatedState(onToggleMute)
+              val inputHandler = remember(context) { StablePlayerInputHandler(context) }
+              inputHandler.update(
+                  expanded = expanded,
+                  callbacks = StablePlayerInputCallbacks(
+                      onToggleControls = { currentToggleControls() },
+                      onToggleFullscreen = { currentToggleFullscreen() },
+                      onPreviousChannel = { currentPreviousChannel() },
+                      onNextChannel = { currentNextChannel() },
+                      onVolumeUp = { currentVolumeUp() },
+                      onVolumeDown = { currentVolumeDown() },
+                      onToggleMute = { currentToggleMute() }
+                  )
+              )
+
+              val controllerResult'''.replace("          ", "")
+          )
+          old_vlc_listeners = '''                isClickable = true
+                          isFocusable = true
+                          isFocusableInTouchMode = true
+                          setOnClickListener { currentToggleFullscreen() }
+                          setOnKeyListener { _: View, keyCode: Int, event: AndroidKeyEvent ->
+                              if (event.action != AndroidKeyEvent.ACTION_UP) return@setOnKeyListener false
+                              when (stableRemoteActionForKey(keyCode)) {
+                                  StableRemoteAction.TOGGLE_FULLSCREEN -> {
+                                      currentToggleFullscreen()
+                                      true
+                                  }
+
+                                  StableRemoteAction.NEXT_CHANNEL -> {
+                                      currentNextChannel()
+                                      true
+                                  }
+
+                                  StableRemoteAction.PREVIOUS_CHANNEL -> {
+                                      currentPreviousChannel()
+                                      true
+                                  }
+
+                                  StableRemoteAction.VOLUME_UP -> {
+                                      currentVolumeUp()
+                                      true
+                                  }
+
+                                  StableRemoteAction.VOLUME_DOWN -> {
+                                      currentVolumeDown()
+                                      true
+                                  }
+
+                                  StableRemoteAction.TOGGLE_MUTE -> {
+                                      currentToggleMute()
+                                      true
+                                  }
+
+                                  StableRemoteAction.NONE -> false
+                              }
+                          }'''.replace("          ", "")
+          new_vlc_listeners = '''                isClickable = true
+                          isFocusable = true
+                          isFocusableInTouchMode = true
+                          inputHandler.attachTo(this)'''.replace("          ", "")
+          replace_exact(vlc, old_vlc_listeners, new_vlc_listeners)
+          replace_exact(
+              vlc,
+              "                view.setOnClickListener { currentToggleFullscreen() }\n                controller.setVolume(volume)",
+              "                inputHandler.attachTo(view)\n                controller.setVolume(volume)"
+          )
+          replace_exact(
+              vlc,
+              "                view.setOnClickListener(null)\n                view.setOnKeyListener(null)\n                controller.detach()",
+              "                inputHandler.detachFrom(view)\n                controller.detach()"
+          )
+          replace_exact(
+              vlc,
+              '''        StableFullscreenButton(
+                      expanded = expanded,
+                      onClick = currentToggleFullscreen,
+                      modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                  )'''.replace("          ", ""),
+              '''        if (showControls && !expanded) {
+                      StableFullscreenButton(
+                          expanded = false,
+                          onClick = currentToggleFullscreen,
+                          modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                      )
+                  }'''.replace("          ", "")
+          )
+
+          test_file = ROOT / "feature/player/src/test/java/com/iptv/tv/feature/player/StablePlayerScreenTest.kt"
+          test_file.write_text(r'''package com.iptv.tv.feature.player
+
+          import android.view.KeyEvent
+          import com.iptv.tv.core.model.EpgProgram
+          import org.junit.Assert.assertEquals
+          import org.junit.Assert.assertNull
+          import org.junit.Test
+
+          class StablePlayerScreenTest {
+
+              @Test
+              fun `current and next EPG are selected by epoch time`() {
+                  val first = program("Новости", 1_000L, 2_000L)
+                  val second = program("Фильм", 2_000L, 3_000L)
+                  val third = program("Спорт", 3_000L, 4_000L)
+                  val programs = listOf(first, second, third)
+
+                  val current = stableCurrentProgram(programs, 2_500L)
+                  val next = stableNextProgram(programs, current, 2_500L)
+
+                  assertEquals(second, current)
+                  assertEquals(third, next)
+              }
+
+              @Test
+              fun `EPG is empty when source has no matching program`() {
+                  assertNull(stableCurrentProgram(emptyList(), 5_000L))
+                  assertNull(stableNextProgram(emptyList(), null, 5_000L))
+              }
+
+              @Test
+              fun `remote center and enter toggle controls`() {
+                  assertEquals(
+                      StableRemoteAction.TOGGLE_CONTROLS,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_CENTER)
+                  )
+                  assertEquals(
+                      StableRemoteAction.TOGGLE_CONTROLS,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_ENTER)
+                  )
+              }
+
+              @Test
+              fun `keyboard F toggles fullscreen`() {
+                  assertEquals(
+                      StableRemoteAction.TOGGLE_FULLSCREEN,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_F)
+                  )
+              }
+
+              @Test
+              fun `fullscreen arrows control channels and volume`() {
+                  assertEquals(
+                      StableRemoteAction.PREVIOUS_CHANNEL,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_LEFT, fullscreen = true)
+                  )
+                  assertEquals(
+                      StableRemoteAction.NEXT_CHANNEL,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_RIGHT, fullscreen = true)
+                  )
+                  assertEquals(
+                      StableRemoteAction.VOLUME_UP,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_UP, fullscreen = true)
+                  )
+                  assertEquals(
+                      StableRemoteAction.VOLUME_DOWN,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_DOWN, fullscreen = true)
+                  )
+                  assertEquals(
+                      StableRemoteAction.NONE,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_LEFT, fullscreen = false)
+                  )
+              }
+
+              @Test
+              fun `remote channel and media keys change channel`() {
+                  assertEquals(
+                      StableRemoteAction.NEXT_CHANNEL,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_CHANNEL_UP)
+                  )
+                  assertEquals(
+                      StableRemoteAction.PREVIOUS_CHANNEL,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_CHANNEL_DOWN)
+                  )
+                  assertEquals(
+                      StableRemoteAction.NEXT_CHANNEL,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+                  )
+                  assertEquals(
+                      StableRemoteAction.PREVIOUS_CHANNEL,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+                  )
+              }
+
+              @Test
+              fun `remote volume keys control player volume`() {
+                  assertEquals(
+                      StableRemoteAction.VOLUME_UP,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_VOLUME_UP)
+                  )
+                  assertEquals(
+                      StableRemoteAction.VOLUME_DOWN,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_VOLUME_DOWN)
+                  )
+                  assertEquals(
+                      StableRemoteAction.TOGGLE_MUTE,
+                      stableRemoteActionForKey(KeyEvent.KEYCODE_VOLUME_MUTE)
+                  )
+              }
+
+              @Test
+              fun `mouse and touchpad scroll maps to channels and volume`() {
+                  assertEquals(StableRemoteAction.PREVIOUS_CHANNEL, stableScrollAction(1f, 0f))
+                  assertEquals(StableRemoteAction.NEXT_CHANNEL, stableScrollAction(-1f, 0f))
+                  assertEquals(StableRemoteAction.VOLUME_UP, stableScrollAction(0f, 1f))
+                  assertEquals(StableRemoteAction.VOLUME_DOWN, stableScrollAction(0f, -1f))
+              }
+
+              @Test
+              fun `adjacent channel wraps in both directions`() {
+                  val ids = listOf(10L, 20L, 30L)
+
+                  assertEquals(20L, stableAdjacentChannelId(ids, 10L, 1))
+                  assertEquals(30L, stableAdjacentChannelId(ids, 10L, -1))
+                  assertEquals(10L, stableAdjacentChannelId(ids, 30L, 1))
+                  assertNull(stableAdjacentChannelId(emptyList(), null, 1))
+              }
+
+              private fun program(title: String, start: Long, end: Long): EpgProgram = EpgProgram(
+                  title = title,
+                  description = null,
+                  category = null,
+                  startEpochMs = start,
+                  endEpochMs = end
+              )
+          }
+          '''.replace("          ", ""), encoding="utf-8")
+
+          workflow = ROOT / ".github/workflows/apply-player-input.yml"
+          workflow.unlink()
+
+          protected_prefixes = (
+              "feature/scanner/",
+              "core/network/",
+              "feature/search/"
+          )
+          import subprocess
+          changed = subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines()
+          touched_protected = [name for name in changed if name.startswith(protected_prefixes)]
+          if touched_protected:
+              raise SystemExit(f"Protected files changed: {touched_protected}")
+          print("Changed files:")
+          print("\n".join(changed))
+          PY
+
+          git diff --check
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          java-package: jdk
+          check-latest: true
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      - name: Prepare Android SDK
+        shell: bash
+        run: |
+          mkdir -p "$ANDROID_SDK_ROOT"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API_LEVEL}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}"
+          printf "sdk.dir=%s\n" "$ANDROID_SDK_ROOT" > local.properties
+          chmod +x ./gradlew
+
+      - name: Test and build all variants
+        run: >-
+          ./gradlew --no-daemon --stacktrace
+          :feature:player:testDebugUnitTest
+          lintDebug
+          assembleDebug
+          assembleRelease
+
+      - name: Commit validated patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerInput.kt \
+            feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt \
+            feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerVideoSurface.kt \
+            feature/player/src/main/java/com/iptv/tv/feature/player/StableLibVlcVideoSurface.kt \
+            feature/player/src/test/java/com/iptv/tv/feature/player/StablePlayerScreenTest.kt \
+            .github/workflows/apply-player-input.yml
+          git commit -m "feat(player): unify mouse touchpad and remote controls"
+          git push origin HEAD:feat/libvlc-fallback
