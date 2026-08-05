@@ -53,6 +53,22 @@ class StablePlayerScreenTest {
     }
 
     @Test
+    fun `remote volume keys control player volume`() {
+        assertEquals(
+            StableRemoteAction.VOLUME_UP,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_VOLUME_UP)
+        )
+        assertEquals(
+            StableRemoteAction.VOLUME_DOWN,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_VOLUME_DOWN)
+        )
+        assertEquals(
+            StableRemoteAction.TOGGLE_MUTE,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_VOLUME_MUTE)
+        )
+    }
+
+    @Test
     fun `adjacent channel wraps in both directions`() {
         val ids = listOf(10L, 20L, 30L)
 
