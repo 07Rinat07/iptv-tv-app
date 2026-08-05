@@ -78,7 +78,7 @@ class EngineStreamClientTest {
     }
 
     @Test
-    fun resolve_infohashNormalizesToMagnetForFallback() = runTest {
+    fun resolve_infohashUsesOfficialContentIdParameter() = runTest {
         val api = FakeApi(
             statusPayload = mapOf("response" to mapOf("peers" to 2, "speed" to 20)),
             resolvePayload = mapOf("response" to mapOf("id" to "123"))
@@ -86,15 +86,17 @@ class EngineStreamClientTest {
         val client = EngineStreamClient(api)
         client.connect("127.0.0.1:6878")
 
-        val result = client.resolveStream("infohash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        val contentId = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        val result = client.resolveStream("infohash:$contentId")
         assertTrue(result is AppResult.Success)
-        val stream = (result as AppResult.Success).data
-        assertTrue(stream.contains("magnet%3A%3Fxt%3Durn%3Abtih%3A"))
-        assertTrue(stream.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+        assertEquals(
+            "http://127.0.0.1:6878/ace/getstream?id=$contentId",
+            (result as AppResult.Success).data
+        )
     }
 
     @Test
-    fun resolve_aceSchemeNormalizesToAcestream() = runTest {
+    fun resolve_aceSchemeUsesOfficialContentIdParameter() = runTest {
         val api = FakeApi(
             statusPayload = mapOf("response" to mapOf("peers" to 2, "speed" to 20)),
             resolvePayload = mapOf("response" to mapOf("id" to "123"))
@@ -102,10 +104,29 @@ class EngineStreamClientTest {
         val client = EngineStreamClient(api)
         client.connect("127.0.0.1:6878")
 
-        val result = client.resolveStream("ace://11223344556677889900AABBCCDDEEFF00112233")
+        val contentId = "11223344556677889900AABBCCDDEEFF00112233"
+        val result = client.resolveStream("ace://$contentId")
+        assertTrue(result is AppResult.Success)
+        assertEquals(
+            "http://127.0.0.1:6878/ace/getstream?id=$contentId",
+            (result as AppResult.Success).data
+        )
+    }
+
+    @Test
+    fun resolve_aceliveTransportFileUsesUrlParameter() = runTest {
+        val api = FakeApi(
+            statusPayload = mapOf("response" to mapOf("peers" to 2, "speed" to 20)),
+            resolvePayload = mapOf("response" to mapOf("id" to "123"))
+        )
+        val client = EngineStreamClient(api)
+        client.connect("127.0.0.1:6878")
+
+        val result = client.resolveStream("https://example.org/channel.acelive")
         assertTrue(result is AppResult.Success)
         val stream = (result as AppResult.Success).data
-        assertTrue(stream.contains("acestream%3A%2F%2F11223344556677889900AABBCCDDEEFF00112233"))
+        assertTrue(stream.startsWith("http://127.0.0.1:6878/ace/getstream?url="))
+        assertTrue(stream.contains("channel.acelive"))
     }
 
     private class FakeApi(
