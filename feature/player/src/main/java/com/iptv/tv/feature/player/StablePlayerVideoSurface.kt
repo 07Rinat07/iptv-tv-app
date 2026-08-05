@@ -41,6 +41,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.iptv.tv.core.player.toLoadControl
+import com.iptv.tv.core.playervlc.LibVlcFallbackPolicy
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -49,9 +50,80 @@ private const val STABLE_IPTV_USER_AGENT = "Rinat-IPTV/1.0 (Android TV; Media3)"
 private const val FIRST_VIDEO_FRAME_TIMEOUT_MS = 12_000L
 private const val VIDEO_RECOVERY_TIMEOUT_MS = 14_000L
 
+private enum class StablePlaybackBackend {
+    MEDIA3,
+    LIBVLC
+}
+
 @Composable
 @UnstableApi
 internal fun StableVideoSurface(
+    session: InternalPlaybackSession,
+    scale: PlayerVideoScale,
+    expanded: Boolean,
+    volume: Float,
+    onVolumeUp: () -> Unit,
+    onVolumeDown: () -> Unit,
+    onToggleMute: () -> Unit,
+    onReady: () -> Unit,
+    onError: (String) -> Unit,
+    onToggleFullscreen: () -> Unit,
+    onPreviousChannel: () -> Unit,
+    onNextChannel: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var backend by remember(session.sessionId) { mutableStateOf(StablePlaybackBackend.MEDIA3) }
+    var media3Failure by remember(session.sessionId) { mutableStateOf<String?>(null) }
+
+    when (backend) {
+        StablePlaybackBackend.MEDIA3 -> StableMedia3VideoSurface(
+            session = session,
+            scale = scale,
+            expanded = expanded,
+            volume = volume,
+            onVolumeUp = onVolumeUp,
+            onVolumeDown = onVolumeDown,
+            onToggleMute = onToggleMute,
+            onReady = onReady,
+            onError = { message ->
+                val decision = LibVlcFallbackPolicy.evaluate(message)
+                if (decision.shouldFallback) {
+                    media3Failure = "$message (${decision.diagnostic})"
+                    backend = StablePlaybackBackend.LIBVLC
+                } else {
+                    onError(message)
+                }
+            },
+            onToggleFullscreen = onToggleFullscreen,
+            onPreviousChannel = onPreviousChannel,
+            onNextChannel = onNextChannel,
+            modifier = modifier
+        )
+
+        StablePlaybackBackend.LIBVLC -> StableLibVlcVideoSurface(
+            session = session,
+            scale = scale,
+            expanded = expanded,
+            volume = volume,
+            onVolumeUp = onVolumeUp,
+            onVolumeDown = onVolumeDown,
+            onToggleMute = onToggleMute,
+            onReady = onReady,
+            onError = { vlcMessage ->
+                val original = media3Failure ?: "неизвестная ошибка Media3"
+                onError("Media3: $original; LibVLC: $vlcMessage")
+            },
+            onToggleFullscreen = onToggleFullscreen,
+            onPreviousChannel = onPreviousChannel,
+            onNextChannel = onNextChannel,
+            modifier = modifier
+        )
+    }
+}
+
+@Composable
+@UnstableApi
+private fun StableMedia3VideoSurface(
     session: InternalPlaybackSession,
     scale: PlayerVideoScale,
     expanded: Boolean,
