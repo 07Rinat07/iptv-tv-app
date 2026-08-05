@@ -25,6 +25,21 @@ class AceStreamDescriptorParserTest {
     }
 
     @Test
+    fun normalizesInfoHashToMagnet() {
+        val uppercaseInfoHash = contentId.uppercase()
+        val source = "infohash:$uppercaseInfoHash"
+        val expectedMagnet = "magnet:?xt=urn:btih:$uppercaseInfoHash"
+
+        val result = AceStreamDescriptorParser.parse(source)
+
+        assertEquals(AceStreamDescriptor.Magnet(source, expectedMagnet), result)
+        assertEquals(
+            mapOf("url" to expectedMagnet),
+            AceStreamDescriptorParser.toEngineRequest(result)
+        )
+    }
+
+    @Test
     fun extractsContentIdFromLocalEngineUrl() {
         val result = AceStreamDescriptorParser.parse(
             "http://127.0.0.1:6878/ace/getstream?id=$contentId"
