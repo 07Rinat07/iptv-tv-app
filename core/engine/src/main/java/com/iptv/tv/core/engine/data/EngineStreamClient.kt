@@ -120,7 +120,7 @@ class EngineStreamClient(
             return AppResult.Success(descriptor.value)
         }
 
-        val request = AceStreamDescriptorParser.toEngineRequest(descriptor)
+        val request = buildEngineRequest(descriptor)
         val options = buildMap {
             put("method", "open_torrent")
             putAll(request)
@@ -209,6 +209,25 @@ class EngineStreamClient(
 
     private fun buildServiceUrl(endpoint: String): String =
         "${endpoint.removeSuffix("/")}/webui/api/service"
+
+    private fun buildEngineRequest(descriptor: AceStreamDescriptor): Map<String, String> {
+        if (descriptor is AceStreamDescriptor.ContentId) {
+            val original = descriptor.original.trim()
+            if (original.startsWith("ace://", ignoreCase = true)) {
+                val legacyContentId = original
+                    .substringAfter("://")
+                    .trimStart('/')
+                    .substringBefore('?')
+                    .trim()
+
+                if (legacyContentId.isNotBlank()) {
+                    return mapOf("url" to "acestream://$legacyContentId")
+                }
+            }
+        }
+
+        return AceStreamDescriptorParser.toEngineRequest(descriptor)
+    }
 
     private fun buildFallbackStreamUrl(endpoint: String, request: Map<String, String>): String {
         val key = if (request.containsKey("id")) "id" else "url"
