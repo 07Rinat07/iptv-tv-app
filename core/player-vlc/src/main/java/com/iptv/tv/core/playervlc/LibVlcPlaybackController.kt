@@ -111,6 +111,11 @@ class LibVlcPlaybackController(
         mediaPlayer.play()
     }
 
+    fun togglePlayPause() {
+        if (released) return
+        if (mediaPlayer.isPlaying) mediaPlayer.pause() else mediaPlayer.play()
+    }
+
     fun setVolume(volume: Float) {
         if (released) return
         mediaPlayer.volume = (volume.coerceIn(0f, 1f) * 100f).toInt()

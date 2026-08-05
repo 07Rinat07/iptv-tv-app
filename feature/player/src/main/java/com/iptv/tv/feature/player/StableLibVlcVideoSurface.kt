@@ -1,7 +1,5 @@
 package com.iptv.tv.feature.player
 
-import android.view.KeyEvent as AndroidKeyEvent
-import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,6 +31,8 @@ internal fun StableLibVlcVideoSurface(
     scale: PlayerVideoScale,
     expanded: Boolean,
     volume: Float,
+    showControls: Boolean,
+    onToggleControls: () -> Unit,
     onVolumeUp: () -> Unit,
     onVolumeDown: () -> Unit,
     onToggleMute: () -> Unit,
@@ -46,6 +46,7 @@ internal fun StableLibVlcVideoSurface(
     val context = LocalContext.current
     val currentOnReady by rememberUpdatedState(onReady)
     val currentOnError by rememberUpdatedState(onError)
+    val currentToggleControls by rememberUpdatedState(onToggleControls)
     val currentToggleFullscreen by rememberUpdatedState(onToggleFullscreen)
     val currentPreviousChannel by rememberUpdatedState(onPreviousChannel)
     val currentNextChannel by rememberUpdatedState(onNextChannel)
@@ -87,6 +88,21 @@ internal fun StableLibVlcVideoSurface(
         return
     }
 
+    val inputHandler = remember(context) { StablePlayerInputHandler(context) }
+    inputHandler.update(
+        expanded = expanded,
+        callbacks = StablePlayerInputCallbacks(
+            onToggleControls = { currentToggleControls() },
+            onToggleFullscreen = { currentToggleFullscreen() },
+            onPreviousChannel = { currentPreviousChannel() },
+            onNextChannel = { currentNextChannel() },
+            onVolumeUp = { currentVolumeUp() },
+            onVolumeDown = { currentVolumeDown() },
+            onToggleMute = { currentToggleMute() },
+            onTogglePlayback = controller::togglePlayPause
+        )
+    )
+
     LaunchedEffect(controller, volume) {
         controller.setVolume(volume)
     }
@@ -108,43 +124,7 @@ internal fun StableLibVlcVideoSurface(
                     isClickable = true
                     isFocusable = true
                     isFocusableInTouchMode = true
-                    setOnClickListener { currentToggleFullscreen() }
-                    setOnKeyListener { _: View, keyCode: Int, event: AndroidKeyEvent ->
-                        if (event.action != AndroidKeyEvent.ACTION_UP) return@setOnKeyListener false
-                        when (stableRemoteActionForKey(keyCode)) {
-                            StableRemoteAction.TOGGLE_FULLSCREEN -> {
-                                currentToggleFullscreen()
-                                true
-                            }
-
-                            StableRemoteAction.NEXT_CHANNEL -> {
-                                currentNextChannel()
-                                true
-                            }
-
-                            StableRemoteAction.PREVIOUS_CHANNEL -> {
-                                currentPreviousChannel()
-                                true
-                            }
-
-                            StableRemoteAction.VOLUME_UP -> {
-                                currentVolumeUp()
-                                true
-                            }
-
-                            StableRemoteAction.VOLUME_DOWN -> {
-                                currentVolumeDown()
-                                true
-                            }
-
-                            StableRemoteAction.TOGGLE_MUTE -> {
-                                currentToggleMute()
-                                true
-                            }
-
-                            StableRemoteAction.NONE -> false
-                        }
-                    }
+                    inputHandler.attachTo(this)
                     runCatching {
                         controller.attach(this)
                         controller.setVolume(volume)
@@ -157,14 +137,13 @@ internal fun StableLibVlcVideoSurface(
                 }
             },
             update = { view ->
-                view.setOnClickListener { currentToggleFullscreen() }
+                inputHandler.attachTo(view)
                 controller.setVolume(volume)
                 controller.setScale(scale.toLibVlcScale())
                 if (expanded && !view.hasFocus()) view.post { view.requestFocus() }
             },
             onRelease = { view ->
-                view.setOnClickListener(null)
-                view.setOnKeyListener(null)
+                inputHandler.detachFrom(view)
                 controller.detach()
             }
         )
@@ -177,11 +156,13 @@ internal fun StableLibVlcVideoSurface(
             )
         }
 
-        StableFullscreenButton(
-            expanded = expanded,
-            onClick = currentToggleFullscreen,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
-        )
+        if (showControls && !expanded) {
+            StableFullscreenButton(
+                expanded = false,
+                onClick = currentToggleFullscreen,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+            )
+        }
     }
 }
 

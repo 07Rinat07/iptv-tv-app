@@ -2,8 +2,10 @@ package com.iptv.tv.feature.player
 
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -73,19 +75,28 @@ private const val CHANNEL_BANNER_DURATION_MS = 5_000L
 private const val VOLUME_STEP = 0.05f
 
 internal enum class StableRemoteAction {
+    TOGGLE_CONTROLS,
     TOGGLE_FULLSCREEN,
     NEXT_CHANNEL,
     PREVIOUS_CHANNEL,
     VOLUME_UP,
     VOLUME_DOWN,
     TOGGLE_MUTE,
+    TOGGLE_PLAYBACK,
     NONE
 }
 
-internal fun stableRemoteActionForKey(keyCode: Int): StableRemoteAction = when (keyCode) {
+internal fun stableRemoteActionForKey(
+    keyCode: Int,
+    fullscreen: Boolean = false
+): StableRemoteAction = when (keyCode) {
     KeyEvent.KEYCODE_DPAD_CENTER,
     KeyEvent.KEYCODE_ENTER,
-    KeyEvent.KEYCODE_NUMPAD_ENTER -> StableRemoteAction.TOGGLE_FULLSCREEN
+    KeyEvent.KEYCODE_NUMPAD_ENTER,
+    KeyEvent.KEYCODE_MENU,
+    KeyEvent.KEYCODE_GUIDE -> StableRemoteAction.TOGGLE_CONTROLS
+
+    KeyEvent.KEYCODE_F -> StableRemoteAction.TOGGLE_FULLSCREEN
 
     KeyEvent.KEYCODE_CHANNEL_UP,
     KeyEvent.KEYCODE_MEDIA_NEXT -> StableRemoteAction.NEXT_CHANNEL
@@ -93,13 +104,26 @@ internal fun stableRemoteActionForKey(keyCode: Int): StableRemoteAction = when (
     KeyEvent.KEYCODE_CHANNEL_DOWN,
     KeyEvent.KEYCODE_MEDIA_PREVIOUS -> StableRemoteAction.PREVIOUS_CHANNEL
 
+    KeyEvent.KEYCODE_DPAD_LEFT ->
+        if (fullscreen) StableRemoteAction.PREVIOUS_CHANNEL else StableRemoteAction.NONE
+    KeyEvent.KEYCODE_DPAD_RIGHT ->
+        if (fullscreen) StableRemoteAction.NEXT_CHANNEL else StableRemoteAction.NONE
+    KeyEvent.KEYCODE_DPAD_UP ->
+        if (fullscreen) StableRemoteAction.VOLUME_UP else StableRemoteAction.NONE
+    KeyEvent.KEYCODE_DPAD_DOWN ->
+        if (fullscreen) StableRemoteAction.VOLUME_DOWN else StableRemoteAction.NONE
+
     KeyEvent.KEYCODE_VOLUME_UP -> StableRemoteAction.VOLUME_UP
     KeyEvent.KEYCODE_VOLUME_DOWN -> StableRemoteAction.VOLUME_DOWN
     KeyEvent.KEYCODE_VOLUME_MUTE,
     KeyEvent.KEYCODE_MUTE -> StableRemoteAction.TOGGLE_MUTE
 
+    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+    KeyEvent.KEYCODE_HEADSETHOOK -> StableRemoteAction.TOGGLE_PLAYBACK
+
     else -> StableRemoteAction.NONE
 }
+
 
 internal fun stableAdjacentChannelId(
     channelIds: List<Long>,
@@ -476,6 +500,7 @@ private fun StablePlayerRailReplacement(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 @UnstableApi
 private fun StableCenterPaneReplacement(
@@ -501,6 +526,7 @@ private fun StableCenterPaneReplacement(
     onToggleFavorite: (Long) -> Unit,
     onOpenChannels: () -> Unit
 ) {
+    var controlsVisible by rememberSaveable { mutableStateOf(true) }
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
             if (session != null) {
@@ -509,6 +535,8 @@ private fun StableCenterPaneReplacement(
                     scale = scale,
                     expanded = false,
                     volume = volume,
+                    showControls = controlsVisible,
+                    onToggleControls = { controlsVisible = !controlsVisible },
                     onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },
                     onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
                     onToggleMute = onToggleMute,
@@ -525,7 +553,10 @@ private fun StableCenterPaneReplacement(
                         .fillMaxWidth()
                         .aspectRatio(16f / 9f)
                         .background(Color.Black)
-                        .clickable(onClick = onToggleFullscreen),
+                        .combinedClickable(
+                            onClick = { controlsVisible = !controlsVisible },
+                            onDoubleClick = onToggleFullscreen
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -538,11 +569,13 @@ private fun StableCenterPaneReplacement(
                             Text(if (isStartingPlayback) "Подключение…" else "Смотреть")
                         }
                     }
-                    StableFullscreenButton(
-                        expanded = false,
-                        onClick = onToggleFullscreen,
-                        modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
-                    )
+                    if (controlsVisible) {
+                        StableFullscreenButton(
+                            expanded = false,
+                            onClick = onToggleFullscreen,
+                            modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                        )
+                    }
                 }
             }
         }
@@ -861,6 +894,7 @@ private fun StableChannelDrawerReplacement(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 @UnstableApi
 private fun StableFullscreenPlayerReplacement(
@@ -879,6 +913,7 @@ private fun StableFullscreenPlayerReplacement(
     onNextChannel: () -> Unit,
     onStop: () -> Unit
 ) {
+    var controlsVisible by rememberSaveable { mutableStateOf(true) }
     BackHandler(onBack = onToggleFullscreen)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         if (session != null) {
@@ -887,6 +922,8 @@ private fun StableFullscreenPlayerReplacement(
                 scale = scale,
                 expanded = true,
                 volume = volume,
+                showControls = controlsVisible,
+                onToggleControls = { controlsVisible = !controlsVisible },
                 onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },
                 onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
                 onToggleMute = onToggleMute,
@@ -899,16 +936,20 @@ private fun StableFullscreenPlayerReplacement(
             )
         } else {
             Box(
-                modifier = Modifier.fillMaxSize().clickable(onClick = onToggleFullscreen),
+                modifier = Modifier.fillMaxSize().combinedClickable(
+                            onClick = { controlsVisible = !controlsVisible },
+                            onDoubleClick = onToggleFullscreen
+                        ),
                 contentAlignment = Alignment.Center
             ) {
                 Text(channel?.name ?: "Канал не выбран", color = Color.White)
             }
         }
 
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
+        if (controlsVisible) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .background(Color.Black.copy(alpha = 0.68f))
                 .windowInsetsPadding(WindowInsets.safeDrawing)
@@ -945,8 +986,9 @@ private fun StableFullscreenPlayerReplacement(
                 volume = volume,
                 onVolumeChange = onVolumeChange,
                 onToggleMute = onToggleMute,
-                dark = true
-            )
+                    dark = true
+                )
+            }
         }
 
         if (showChannelBanner) {
