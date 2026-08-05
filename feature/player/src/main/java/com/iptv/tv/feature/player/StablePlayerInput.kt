@@ -11,6 +11,7 @@ import android.view.View
 import kotlin.math.abs
 
 private const val HORIZONTAL_SCROLL_COOLDOWN_MS = 350L
+private const val CONTROLS_AUTO_HIDE_MS = 4_000L
 private const val MIN_GENERIC_SCROLL = 0.01f
 
 internal data class StablePlayerInputCallbacks(
@@ -35,6 +36,19 @@ internal fun stableScrollAction(
     else -> StableRemoteAction.NONE
 }
 
+internal fun stableActionRevealsControls(action: StableRemoteAction): Boolean = when (action) {
+    StableRemoteAction.NEXT_CHANNEL,
+    StableRemoteAction.PREVIOUS_CHANNEL,
+    StableRemoteAction.VOLUME_UP,
+    StableRemoteAction.VOLUME_DOWN,
+    StableRemoteAction.TOGGLE_MUTE,
+    StableRemoteAction.TOGGLE_PLAYBACK -> true
+
+    StableRemoteAction.TOGGLE_CONTROLS,
+    StableRemoteAction.TOGGLE_FULLSCREEN,
+    StableRemoteAction.NONE -> false
+}
+
 internal class StablePlayerInputHandler(context: Context) :
     View.OnTouchListener,
     View.OnGenericMotionListener,
@@ -42,6 +56,7 @@ internal class StablePlayerInputHandler(context: Context) :
 
     private val movementThresholdPx = 48f * context.resources.displayMetrics.density
     private var expanded = false
+    private var controlsVisible = true
     private var callbacks = StablePlayerInputCallbacks(
         onToggleControls = {},
         onToggleFullscreen = {},
@@ -52,10 +67,18 @@ internal class StablePlayerInputHandler(context: Context) :
         onToggleMute = {},
         onTogglePlayback = {}
     )
+    private var attachedView: View? = null
     private var downX = 0f
     private var downY = 0f
     private var verticalDistance = 0f
     private var lastHorizontalScrollAtMs = 0L
+
+    private val hideControlsRunnable = Runnable {
+        if (expanded && controlsVisible) {
+            controlsVisible = false
+            callbacks.onToggleControls()
+        }
+    }
 
     private val detector = GestureDetector(
         context,
@@ -63,11 +86,12 @@ internal class StablePlayerInputHandler(context: Context) :
             override fun onDown(event: MotionEvent): Boolean = true
 
             override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
-                callbacks.onToggleControls()
+                toggleControls()
                 return true
             }
 
             override fun onDoubleTap(event: MotionEvent): Boolean {
+                cancelAutoHide()
                 callbacks.onToggleFullscreen()
                 return true
             }
@@ -79,6 +103,7 @@ internal class StablePlayerInputHandler(context: Context) :
                 distanceY: Float
             ): Boolean {
                 if (abs(distanceY) <= abs(distanceX)) return true
+                revealControlsForInput()
                 verticalDistance += distanceY
                 while (abs(verticalDistance) >= movementThresholdPx) {
                     if (verticalDistance > 0f) {
@@ -98,21 +123,32 @@ internal class StablePlayerInputHandler(context: Context) :
         expanded: Boolean,
         callbacks: StablePlayerInputCallbacks
     ) {
+        val enteringFullscreen = expanded && !this.expanded
         this.expanded = expanded
         this.callbacks = callbacks
+
+        if (enteringFullscreen) controlsVisible = true
+        if (expanded && controlsVisible) scheduleAutoHide() else cancelAutoHide()
     }
 
     @SuppressLint("ClickableViewAccessibility")
     fun attachTo(view: View) {
+        if (attachedView !== view) {
+            attachedView?.removeCallbacks(hideControlsRunnable)
+            attachedView = view
+        }
         view.setOnTouchListener(this)
         view.setOnGenericMotionListener(this)
         view.setOnKeyListener(this)
+        if (expanded && controlsVisible) scheduleAutoHide()
     }
 
     fun detachFrom(view: View) {
         view.setOnTouchListener(null)
         view.setOnGenericMotionListener(null)
         view.setOnKeyListener(null)
+        view.removeCallbacks(hideControlsRunnable)
+        if (attachedView === view) attachedView = null
     }
 
     override fun onTouch(view: View, event: MotionEvent): Boolean {
@@ -127,6 +163,7 @@ internal class StablePlayerInputHandler(context: Context) :
                 val deltaX = event.x - downX
                 val deltaY = event.y - downY
                 if (abs(deltaX) >= movementThresholdPx && abs(deltaX) > abs(deltaY)) {
+                    revealControlsForInput()
                     if (deltaX > 0f) callbacks.onPreviousChannel() else callbacks.onNextChannel()
                 }
                 verticalDistance = 0f
@@ -167,47 +204,75 @@ internal class StablePlayerInputHandler(context: Context) :
         return dispatch(stableRemoteActionForKey(keyCode, expanded))
     }
 
-    private fun dispatch(action: StableRemoteAction): Boolean = when (action) {
-        StableRemoteAction.TOGGLE_CONTROLS -> {
+    private fun toggleControls() {
+        controlsVisible = !controlsVisible
+        callbacks.onToggleControls()
+        if (controlsVisible) scheduleAutoHide() else cancelAutoHide()
+    }
+
+    private fun revealControlsForInput() {
+        if (!controlsVisible) {
+            controlsVisible = true
             callbacks.onToggleControls()
-            true
         }
+        if (expanded) scheduleAutoHide()
+    }
 
-        StableRemoteAction.TOGGLE_FULLSCREEN -> {
-            callbacks.onToggleFullscreen()
-            true
+    private fun scheduleAutoHide() {
+        val view = attachedView ?: return
+        view.removeCallbacks(hideControlsRunnable)
+        view.postDelayed(hideControlsRunnable, CONTROLS_AUTO_HIDE_MS)
+    }
+
+    private fun cancelAutoHide() {
+        attachedView?.removeCallbacks(hideControlsRunnable)
+    }
+
+    private fun dispatch(action: StableRemoteAction): Boolean {
+        if (stableActionRevealsControls(action)) revealControlsForInput()
+        return when (action) {
+            StableRemoteAction.TOGGLE_CONTROLS -> {
+                toggleControls()
+                true
+            }
+
+            StableRemoteAction.TOGGLE_FULLSCREEN -> {
+                cancelAutoHide()
+                callbacks.onToggleFullscreen()
+                true
+            }
+
+            StableRemoteAction.NEXT_CHANNEL -> {
+                callbacks.onNextChannel()
+                true
+            }
+
+            StableRemoteAction.PREVIOUS_CHANNEL -> {
+                callbacks.onPreviousChannel()
+                true
+            }
+
+            StableRemoteAction.VOLUME_UP -> {
+                callbacks.onVolumeUp()
+                true
+            }
+
+            StableRemoteAction.VOLUME_DOWN -> {
+                callbacks.onVolumeDown()
+                true
+            }
+
+            StableRemoteAction.TOGGLE_MUTE -> {
+                callbacks.onToggleMute()
+                true
+            }
+
+            StableRemoteAction.TOGGLE_PLAYBACK -> {
+                callbacks.onTogglePlayback()
+                true
+            }
+
+            StableRemoteAction.NONE -> false
         }
-
-        StableRemoteAction.NEXT_CHANNEL -> {
-            callbacks.onNextChannel()
-            true
-        }
-
-        StableRemoteAction.PREVIOUS_CHANNEL -> {
-            callbacks.onPreviousChannel()
-            true
-        }
-
-        StableRemoteAction.VOLUME_UP -> {
-            callbacks.onVolumeUp()
-            true
-        }
-
-        StableRemoteAction.VOLUME_DOWN -> {
-            callbacks.onVolumeDown()
-            true
-        }
-
-        StableRemoteAction.TOGGLE_MUTE -> {
-            callbacks.onToggleMute()
-            true
-        }
-
-        StableRemoteAction.TOGGLE_PLAYBACK -> {
-            callbacks.onTogglePlayback()
-            true
-        }
-
-        StableRemoteAction.NONE -> false
     }
 }
