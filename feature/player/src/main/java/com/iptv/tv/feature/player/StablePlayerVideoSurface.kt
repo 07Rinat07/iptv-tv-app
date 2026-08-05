@@ -55,6 +55,10 @@ internal fun StableVideoSurface(
     session: InternalPlaybackSession,
     scale: PlayerVideoScale,
     expanded: Boolean,
+    volume: Float,
+    onVolumeUp: () -> Unit,
+    onVolumeDown: () -> Unit,
+    onToggleMute: () -> Unit,
     onReady: () -> Unit,
     onError: (String) -> Unit,
     onToggleFullscreen: () -> Unit,
@@ -114,6 +118,10 @@ internal fun StableVideoSurface(
             Text("Ошибка инициализации видеоплеера", color = Color.White)
         }
         return
+    }
+
+    LaunchedEffect(player, volume) {
+        player.volume = volume.coerceIn(0f, 1f)
     }
 
     var readyReported by remember(session.sessionId) { mutableStateOf(false) }
@@ -290,6 +298,21 @@ internal fun StableVideoSurface(
                                 true
                             }
 
+                            StableRemoteAction.VOLUME_UP -> {
+                                onVolumeUp()
+                                true
+                            }
+
+                            StableRemoteAction.VOLUME_DOWN -> {
+                                onVolumeDown()
+                                true
+                            }
+
+                            StableRemoteAction.TOGGLE_MUTE -> {
+                                onToggleMute()
+                                true
+                            }
+
                             StableRemoteAction.NONE -> false
                         }
                     }
@@ -315,11 +338,7 @@ internal fun StableVideoSurface(
         )
 
         diagnosticMessage?.let { message ->
-            Card(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(12.dp)
-            ) {
+            Card(modifier = Modifier.align(Alignment.TopCenter).padding(12.dp)) {
                 Text(
                     text = message,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
