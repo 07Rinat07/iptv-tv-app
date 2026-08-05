@@ -411,6 +411,12 @@ private fun AppRoot(
                         composable(Routes.DIAGNOSTICS) {
                             DiagnosticsScreen(onPrimaryAction = { navController.navigate(Routes.HOME) }, primaryLabel = "На главную")
                         }
+                        composable(Routes.ABOUT) {
+                            AboutScreen(
+                                onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
+                                onOpenSettings = { navController.navigate(Routes.SETTINGS) }
+                            )
+                        }
                     }
                 }
             }
@@ -493,7 +499,8 @@ private fun SectionsMenuDialog(
         Routes.DOWNLOADS to "Загрузки",
         Routes.SETTINGS to "Настройки",
         Routes.NETWORK_TEST to "Сетевой тест",
-        Routes.DIAGNOSTICS to "Логи"
+        Routes.DIAGNOSTICS to "Логи",
+        Routes.ABOUT to "О приложении"
     )
 
     AlertDialog(
@@ -546,6 +553,7 @@ private fun routeTitle(route: String): String = when {
         Routes.SETTINGS -> "Настройки"
         Routes.NETWORK_TEST -> "Сетевой тест"
         Routes.DIAGNOSTICS -> "Диагностика"
+        Routes.ABOUT -> "О приложении"
         else -> route
     }
 }
@@ -578,6 +586,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val NETWORK_TEST = "network_test"
     const val DIAGNOSTICS = "diagnostics"
+    const val ABOUT = "about"
 
     fun editorRoute(playlistId: Long): String = "editor/$playlistId"
     fun playerRoute(playlistId: Long): String = "player/$playlistId"
@@ -601,6 +610,7 @@ private fun Intent?.toAppRoute(): String? {
         "epg" -> Routes.EPG
         "favorites" -> Routes.FAVORITES
         "history" -> Routes.HISTORY
+        "about" -> Routes.ABOUT
         else -> Routes.HOME
     }
 }

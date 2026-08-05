@@ -188,6 +188,15 @@ fun PlayerScreen(
         }
     }
 
+    fun playAdjacentChannel(step: Int) {
+        val channelId = adjacentChannelId(
+            channelIds = filteredChannels.map { it.id },
+            selectedChannelId = state.selectedChannelId,
+            step = step
+        ) ?: return
+        viewModel.playChannelInternal(channelId)
+    }
+
     LaunchedEffect(state.internalPlayerExpanded) {
         onFullscreenChanged(state.internalPlayerExpanded)
     }
@@ -220,7 +229,10 @@ fun PlayerScreen(
                         sessionId = state.internalSession?.sessionId
                     )
                 },
-                onClose = { viewModel.setInternalPlayerExpanded(false) }
+                onClose = { viewModel.setInternalPlayerExpanded(false) },
+                onPreviousChannel = { playAdjacentChannel(-1) },
+                onNextChannel = { playAdjacentChannel(1) },
+                onStop = viewModel::stopInternalPlayback
             )
         } else {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -1163,7 +1175,10 @@ private fun FullscreenInternalPlayerOverlay(
     scale: PlayerVideoScale,
     onReady: (Long) -> Unit,
     onError: (String) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onPreviousChannel: () -> Unit,
+    onNextChannel: () -> Unit,
+    onStop: () -> Unit
 ) {
     BackHandler(onBack = onClose)
     Box(
@@ -1221,6 +1236,20 @@ private fun FullscreenInternalPlayerOverlay(
                 color = Color.White,
                 maxLines = 1
             )
+        }
+
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .background(Color.Black.copy(alpha = 0.58f), MaterialTheme.shapes.medium)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(onClick = onPreviousChannel) { Text("◀ Канал") }
+            OutlinedButton(onClick = onStop) { Text("Стоп") }
+            OutlinedButton(onClick = onNextChannel) { Text("Канал ▶") }
+            Button(onClick = onClose) { Text("Свернуть") }
         }
     }
 }
@@ -1753,7 +1782,7 @@ private fun InternalPlayerPlaceholder(
         )
             .tvFocusOutline()
             .pointerInput(expanded) {
-                detectTapGestures(onTap = { onToggleExpanded() }, onDoubleTap = { onToggleExpanded() })
+                detectTapGestures(onDoubleTap = { onToggleExpanded() })
             }
     ) {
         Column(
@@ -1796,8 +1825,8 @@ private fun Modifier.playerViewportModifier(
         fillMaxWidth()
             .aspectRatio(16f / 9f)
     } else {
-        fillMaxWidth(0.56f)
-            .aspectRatio(4f / 3f)
+        fillMaxWidth()
+            .aspectRatio(16f / 9f)
     }
 }
 
@@ -1929,7 +1958,8 @@ private fun InternalPlayerHost(
         val recoveryJob = kotlinx.coroutines.Job()
         val recoveryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate + recoveryJob)
         var bufferingSince = 0L
-        var recoveryAttempted = false
+        var recoveryAttempts = 0
+        val recoveryPolicy = session.recoveryPolicy
 
         val stateListener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1951,12 +1981,15 @@ private fun InternalPlayerHost(
         recoveryScope.launch {
             try {
                 while (isActive) {
-                    kotlinx.coroutines.delay(3000)
+                    kotlinx.coroutines.delay(recoveryPolicy.checkIntervalMs)
                     val since = bufferingSince
                     if (since != 0L) {
                         val elapsed = System.currentTimeMillis() - since
-                        if (elapsed > 12_000 && !recoveryAttempted) {
-                            recoveryAttempted = true
+                        if (
+                            elapsed > recoveryPolicy.retryAfterMs &&
+                            recoveryAttempts < recoveryPolicy.maxRecoveryAttempts
+                        ) {
+                            recoveryAttempts += 1
                             bufferingSince = 0L
                             runCatching {
                                 exoPlayer.playWhenReady = false
@@ -1964,7 +1997,10 @@ private fun InternalPlayerHost(
                                 exoPlayer.prepare()
                                 exoPlayer.playWhenReady = true
                             }
-                        } else if (elapsed > 24_000 && recoveryAttempted) {
+                        } else if (
+                            elapsed > recoveryPolicy.failAfterMs &&
+                            recoveryAttempts >= recoveryPolicy.maxRecoveryAttempts
+                        ) {
                             onError("Buffering timeout after recovery attempt")
                             break
                         }
