@@ -14,7 +14,8 @@ import javax.inject.Singleton
 
 @Singleton
 class EngineStreamClient @Inject constructor(
-    private val api: EngineStreamApi
+    private val api: EngineStreamApi,
+    private val serviceConnector: AceStreamServiceConnector
 ) {
     private val status = MutableStateFlow(
         EngineStatus(
@@ -24,6 +25,7 @@ class EngineStreamClient @Inject constructor(
             message = "Engine not connected"
         )
     )
+
     private var connectedEndpoint: String? = null
 
     fun observeStatus(): StateFlow<EngineStatus> = status.asStateFlow()
@@ -41,12 +43,30 @@ class EngineStreamClient @Inject constructor(
                 )
                 AppResult.Success(Unit)
             }
+
             is AppResult.Error -> {
                 status.value = status.value.copy(
                     connected = false,
-                    message = "Engine connect failed: ${result.message}",
                     peers = 0,
-                    speedKbps = 0
+                    speedKbps = 0,
+                    message = "Engine connect failed: ${result.message}"
+                )
+                result
+            }
+
+            AppResult.Loading -> AppResult.Loading
+        }
+    }
+
+    suspend fun connectInstalledEngine(): AppResult<Unit> {
+        return when (val result = serviceConnector.ensureStarted()) {
+            is AppResult.Success -> connect(result.data.endpoint)
+            is AppResult.Error -> {
+                status.value = status.value.copy(
+                    connected = false,
+                    peers = 0,
+                    speedKbps = 0,
+                    message = result.message
                 )
                 result
             }
@@ -64,6 +84,7 @@ class EngineStreamClient @Inject constructor(
                 )
                 AppResult.Success(status.value)
             }
+
             is AppResult.Error -> {
                 status.value = status.value.copy(
                     connected = false,
@@ -73,132 +94,140 @@ class EngineStreamClient @Inject constructor(
                 )
                 result
             }
+
             AppResult.Loading -> AppResult.Loading
         }
     }
 
-    suspend fun resolveStream(magnetOrAce: String): AppResult<String> {
-        val descriptor = normalizeTorrentDescriptor(magnetOrAce)
-        if (descriptor.isBlank()) return AppResult.Error("Empty torrent descriptor")
-        if (!isTorrentDescriptor(descriptor)) return AppResult.Success(descriptor)
+    suspend fun resolveStream(rawSource: String): AppResult<String> {
+        val descriptor = AceStreamDescriptorParser.parse(rawSource)
+        if (descriptor is AceStreamDescriptor.Direct) {
+            return if (descriptor.value.isBlank()) {
+                AppResult.Error("Empty stream source")
+            } else {
+                AppResult.Success(descriptor.value)
+            }
+        }
 
-        val endpoint = connectedEndpoint ?: return AppResult.Error("Engine not connected")
-        val serviceUrl = buildServiceUrl(endpoint)
+        val endpoint = when (val local = ensureEndpoint()) {
+            is AppResult.Success -> local.data
+            is AppResult.Error -> return local
+            AppResult.Loading -> return AppResult.Loading
+        }
+
+        if (descriptor is AceStreamDescriptor.LocalEngineUrl) {
+            return AppResult.Success(descriptor.value)
+        }
+
+        val request = AceStreamDescriptorParser.toEngineRequest(descriptor)
+        val options = buildMap {
+            put("method", "open_torrent")
+            putAll(request)
+        }
+
         return runCatching {
             val response = api.resolve(
-                url = serviceUrl,
-                options = mapOf(
-                    "method" to "open_torrent",
-                    "url" to descriptor
-                )
+                url = buildServiceUrl(endpoint),
+                options = options
             )
-            val streamUrl = extractPlayableUrl(response)
-                ?: buildFallbackStreamUrl(endpoint, descriptor)
+            val playable = extractPlayableUrl(response)
+                ?: buildFallbackStreamUrl(endpoint, request)
 
             status.value = status.value.copy(
                 connected = true,
-                message = "Torrent stream resolved"
+                message = "Ace Stream source resolved"
             )
-            AppResult.Success(streamUrl)
+            AppResult.Success(playable)
         }.getOrElse { throwable ->
             status.value = status.value.copy(
                 connected = false,
-                message = "Torrent resolve failed: ${throwable.message}"
+                message = "Ace Stream resolve failed: ${throwable.message}"
             )
-            AppResult.Error("Engine resolve failed: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
+            AppResult.Error(
+                "Engine resolve failed: ${throwable.toLogSummary(maxDepth = 4)}",
+                throwable
+            )
+        }
+    }
+
+    fun closeInstalledEngineConnection() {
+        serviceConnector.close()
+        connectedEndpoint = null
+        status.value = status.value.copy(
+            connected = false,
+            peers = 0,
+            speedKbps = 0,
+            message = "Engine disconnected"
+        )
+    }
+
+    private suspend fun ensureEndpoint(): AppResult<String> {
+        connectedEndpoint?.let { return AppResult.Success(it) }
+        return when (val result = serviceConnector.ensureStarted()) {
+            is AppResult.Success -> {
+                connectedEndpoint = result.data.endpoint
+                status.value = status.value.copy(
+                    connected = true,
+                    message = "Ace Stream Engine ready: ${result.data.packageName}"
+                )
+                AppResult.Success(result.data.endpoint)
+            }
+            is AppResult.Error -> result
+            AppResult.Loading -> AppResult.Loading
         }
     }
 
     private suspend fun fetchStatus(endpoint: String): AppResult<EngineStatus> {
-        val serviceUrl = buildServiceUrl(endpoint)
         return runCatching {
+            val serviceUrl = buildServiceUrl(endpoint)
             val response = runCatching {
-                api.status(
-                    url = serviceUrl,
-                    options = mapOf("method" to "get_status")
-                )
+                api.status(serviceUrl, mapOf("method" to "get_status"))
             }.getOrElse {
-                api.status(url = serviceUrl)
+                api.status(serviceUrl)
             }
 
             val root = extractRootMap(response)
-            val peers = extractInt(root, setOf("peers", "active_peers", "num_peers", "downloaders"))
-            val speed = extractInt(root, setOf("speed", "download_speed", "speed_down", "dl_speed"))
-            val message = extractString(root, setOf("message", "status", "result")) ?: "Engine is online"
-
             AppResult.Success(
                 EngineStatus(
                     connected = true,
-                    peers = peers,
-                    speedKbps = speed,
-                    message = message
+                    peers = extractInt(root, setOf("peers", "active_peers", "num_peers", "downloaders")),
+                    speedKbps = extractInt(root, setOf("speed", "download_speed", "speed_down", "dl_speed")),
+                    message = extractString(root, setOf("message", "status", "result"))
+                        ?: "Engine is online"
                 )
             )
         }.getOrElse { throwable ->
-            AppResult.Error("Engine status request failed: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
+            AppResult.Error(
+                "Engine status request failed: ${throwable.toLogSummary(maxDepth = 4)}",
+                throwable
+            )
         }
     }
 
-    private fun buildServiceUrl(endpoint: String): String {
-        return "${endpoint.removeSuffix("/")}/webui/api/service"
-    }
+    private fun buildServiceUrl(endpoint: String): String =
+        "${endpoint.removeSuffix("/")}/webui/api/service"
 
-    private fun buildFallbackStreamUrl(endpoint: String, descriptor: String): String {
-        val encoded = URLEncoder.encode(descriptor, StandardCharsets.UTF_8.toString())
-        return "${endpoint.removeSuffix("/")}/ace/getstream?url=$encoded"
+    private fun buildFallbackStreamUrl(endpoint: String, request: Map<String, String>): String {
+        val key = if (request.containsKey("id")) "id" else "url"
+        val value = request[key].orEmpty()
+        val encoded = URLEncoder.encode(value, StandardCharsets.UTF_8.toString())
+        return "${endpoint.removeSuffix("/")}/ace/getstream?$key=$encoded"
     }
 
     private fun normalizeEndpoint(raw: String): String? {
-        val trimmed = raw.trim()
-        if (trimmed.isBlank()) return null
-        return if (trimmed.startsWith("http://", ignoreCase = true) ||
-            trimmed.startsWith("https://", ignoreCase = true)
-        ) {
-            trimmed.removeSuffix("/")
+        val value = raw.trim()
+        if (value.isBlank()) return null
+        return if (value.startsWith("http://", true) || value.startsWith("https://", true)) {
+            value.removeSuffix("/")
         } else {
-            "http://${trimmed.removeSuffix("/")}"
-        }
-    }
-
-    private fun isTorrentDescriptor(input: String): Boolean {
-        val normalized = input.trim().lowercase()
-        return normalized.startsWith("magnet:") ||
-            normalized.startsWith("acestream://") ||
-            normalized.startsWith("ace://") ||
-            normalized.startsWith("infohash:") ||
-            normalized.endsWith(".torrent") ||
-            HASH40_REGEX.matches(normalized)
-    }
-
-    private fun normalizeTorrentDescriptor(raw: String): String {
-        val trimmed = raw.trim()
-        if (trimmed.isBlank()) return trimmed
-
-        val acePrefix = "ace://"
-        if (trimmed.startsWith(acePrefix, ignoreCase = true)) {
-            val tail = trimmed.substring(acePrefix.length).trimStart('/')
-            return if (tail.isNotBlank()) "acestream://$tail" else trimmed
-        }
-
-        val infoHashPrefix = "infohash:"
-        if (trimmed.startsWith(infoHashPrefix, ignoreCase = true)) {
-            val hash = trimmed.substring(infoHashPrefix.length).trim()
-            return if (HASH40_REGEX.matches(hash)) "magnet:?xt=urn:btih:$hash" else trimmed
-        }
-
-        return if (HASH40_REGEX.matches(trimmed)) {
-            "magnet:?xt=urn:btih:$trimmed"
-        } else {
-            trimmed
+            "http://${value.removeSuffix("/")}"
         }
     }
 
     private fun extractRootMap(map: Map<String, Any?>): Map<String, Any?> {
         val nested = map["response"]
         return if (nested is Map<*, *>) {
-            nested.entries
-                .filter { it.key is String }
-                .associate { it.key as String to it.value }
+            nested.entries.filter { it.key is String }.associate { it.key as String to it.value }
         } else {
             map
         }
@@ -209,20 +238,18 @@ class EngineStreamClient @Inject constructor(
             is Number -> return data.toInt()
             is String -> return data.toIntOrNull() ?: 0
             is Map<*, *> -> {
-                val preferred = preferredKeys.firstNotNullOfOrNull { key ->
-                    extractInt(data[key], emptySet()).takeIf { it > 0 }
+                preferredKeys.forEach { key ->
+                    val number = extractInt(data[key], emptySet())
+                    if (number > 0) return number
                 }
-                if (preferred != null) return preferred
                 data.values.forEach { value ->
-                    val nested = extractInt(value, preferredKeys)
-                    if (nested > 0) return nested
+                    val number = extractInt(value, preferredKeys)
+                    if (number > 0) return number
                 }
             }
-            is Iterable<*> -> {
-                data.forEach { value ->
-                    val nested = extractInt(value, preferredKeys)
-                    if (nested > 0) return nested
-                }
+            is Iterable<*> -> data.forEach { value ->
+                val number = extractInt(value, preferredKeys)
+                if (number > 0) return number
             }
         }
         return 0
@@ -233,49 +260,28 @@ class EngineStreamClient @Inject constructor(
             is String -> return data.takeIf { it.isNotBlank() }
             is Map<*, *> -> {
                 preferredKeys.forEach { key ->
-                    val v = data[key]
-                    if (v is String && v.isNotBlank()) return v
+                    val value = data[key]
+                    if (value is String && value.isNotBlank()) return value
                 }
                 data.values.forEach { value ->
-                    val nested = extractString(value, preferredKeys)
-                    if (!nested.isNullOrBlank()) return nested
+                    extractString(value, preferredKeys)?.let { return it }
                 }
             }
-            is Iterable<*> -> {
-                data.forEach { value ->
-                    val nested = extractString(value, preferredKeys)
-                    if (!nested.isNullOrBlank()) return nested
-                }
+            is Iterable<*> -> data.forEach { value ->
+                extractString(value, preferredKeys)?.let { return it }
             }
         }
         return null
     }
 
-    private fun extractPlayableUrl(payload: Any?): String? {
-        return when (payload) {
-            is String -> payload.takeIf { it.startsWith("http://") || it.startsWith("https://") }
-            is Map<*, *> -> {
-                val keys = listOf(
-                    "url",
-                    "stream",
-                    "stream_url",
-                    "streamUrl",
-                    "play_url",
-                    "playback_url",
-                    "link"
-                )
-                keys.firstNotNullOfOrNull { key ->
-                    extractPlayableUrl(payload[key])
-                } ?: payload.values.firstNotNullOfOrNull { value ->
-                    extractPlayableUrl(value)
-                }
-            }
-            is Iterable<*> -> payload.firstNotNullOfOrNull { value -> extractPlayableUrl(value) }
-            else -> null
+    private fun extractPlayableUrl(payload: Any?): String? = when (payload) {
+        is String -> payload.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+        is Map<*, *> -> {
+            val preferred = listOf("url", "stream", "stream_url", "streamUrl", "play_url", "playback_url", "link")
+            preferred.firstNotNullOfOrNull { key -> extractPlayableUrl(payload[key]) }
+                ?: payload.values.firstNotNullOfOrNull(::extractPlayableUrl)
         }
-    }
-
-    private companion object {
-        val HASH40_REGEX = Regex("^[a-fA-F0-9]{40}$")
+        is Iterable<*> -> payload.firstNotNullOfOrNull(::extractPlayableUrl)
+        else -> null
     }
 }
