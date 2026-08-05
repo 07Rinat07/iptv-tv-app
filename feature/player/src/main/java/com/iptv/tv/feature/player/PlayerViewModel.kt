@@ -2127,11 +2127,13 @@ class PlayerViewModel @Inject constructor(
 
     private fun isTorrentDescriptor(raw: String): Boolean {
         val normalized = raw.trim().lowercase()
+        val path = normalized.substringBefore('?').substringBefore('#')
         return normalized.startsWith("magnet:") ||
             normalized.startsWith("acestream://") ||
             normalized.startsWith("ace://") ||
             normalized.startsWith("infohash:") ||
-            normalized.endsWith(".torrent") ||
+            path.endsWith(".torrent") ||
+            path.endsWith(".acelive") ||
             HASH40_REGEX.matches(normalized)
     }
 
@@ -2164,16 +2166,20 @@ class PlayerViewModel @Inject constructor(
 
         if (trimmed.startsWith("infohash:", ignoreCase = true)) {
             val hash = trimmed.substringAfter(':').trim()
-            return if (HASH40_REGEX.matches(hash)) "magnet:?xt=urn:btih:$hash" else trimmed
+            return if (HASH40_REGEX.matches(hash)) "acestream://$hash" else trimmed
         }
 
         val lowered = trimmed.lowercase()
-        if (lowered.startsWith("magnet:") || lowered.endsWith(".torrent")) {
+        val path = lowered.substringBefore('?').substringBefore('#')
+        if (lowered.startsWith("magnet:") ||
+            path.endsWith(".torrent") ||
+            path.endsWith(".acelive")
+        ) {
             return trimmed
         }
 
         if (HASH40_REGEX.matches(trimmed)) {
-            return "magnet:?xt=urn:btih:$trimmed"
+            return "acestream://$trimmed"
         }
 
         return trimmed
@@ -2196,7 +2202,8 @@ class PlayerViewModel @Inject constructor(
                 value.startsWith("ace://", ignoreCase = true) ||
                 value.startsWith("magnet:", ignoreCase = true) ||
                 value.startsWith("infohash:", ignoreCase = true) ||
-                value.endsWith(".torrent", ignoreCase = true)
+                value.substringBefore('?').substringBefore('#').endsWith(".torrent", ignoreCase = true) ||
+                value.substringBefore('?').substringBefore('#').endsWith(".acelive", ignoreCase = true)
             ) {
                 return value
             }

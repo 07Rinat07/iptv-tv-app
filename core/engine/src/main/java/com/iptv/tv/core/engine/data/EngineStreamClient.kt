@@ -14,17 +14,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class EngineStreamClient private constructor(
+class EngineStreamClient @Inject constructor(
     private val api: EngineStreamApi,
-    private val serviceBridge: AceStreamServiceBridge?
+    private val serviceBridge: AceStreamServiceBridge? = null
 ) {
-    @Inject
-    constructor(
-        api: EngineStreamApi,
-        serviceBridge: AceStreamServiceBridge
-    ) : this(api = api, serviceBridge = serviceBridge as AceStreamServiceBridge?)
-
-    internal constructor(api: EngineStreamApi) : this(api = api, serviceBridge = null)
 
     private val status = MutableStateFlow(
         EngineStatus(
