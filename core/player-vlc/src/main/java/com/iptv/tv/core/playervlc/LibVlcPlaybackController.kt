@@ -5,7 +5,6 @@ import android.net.Uri
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
-import org.videolan.libvlc.util.VLCVideoLayout
 
 private const val DEFAULT_NETWORK_CACHING_MS = 1_500
 private const val MIN_CACHING_MS = 500
@@ -56,7 +55,7 @@ class LibVlcPlaybackController(
     )
     private val mediaPlayer = MediaPlayer(libVlc)
     private val hardwareDecodingEnabled = config.enableHardwareDecoding
-    private var attachedLayout: VLCVideoLayout? = null
+    private var attachedView: LibVlcVideoView? = null
     private var released = false
 
     init {
@@ -71,12 +70,12 @@ class LibVlcPlaybackController(
         )
     }
 
-    fun attach(layout: VLCVideoLayout) {
+    fun attach(view: LibVlcVideoView) {
         check(!released) { "LibVLC controller is released" }
-        if (attachedLayout === layout) return
+        if (attachedView === view) return
         detach()
-        mediaPlayer.attachViews(layout, null, false, false)
-        attachedLayout = layout
+        mediaPlayer.attachViews(view.videoLayout, null, false, false)
+        attachedView = view
     }
 
     fun play(
@@ -127,9 +126,9 @@ class LibVlcPlaybackController(
     }
 
     fun detach() {
-        if (attachedLayout == null || released) return
+        if (attachedView == null || released) return
         runCatching { mediaPlayer.detachViews() }
-        attachedLayout = null
+        attachedView = null
     }
 
     fun release() {
@@ -137,7 +136,7 @@ class LibVlcPlaybackController(
         released = true
         runCatching { mediaPlayer.stop() }
         runCatching { mediaPlayer.detachViews() }
-        attachedLayout = null
+        attachedView = null
         runCatching { mediaPlayer.release() }
         runCatching { libVlc.release() }
     }
