@@ -39,19 +39,26 @@ jobs:
         with:
           packages: ''
 
-      - name: Prepare Android SDK
-        shell: bash
+      - name: Prepare Android SDK directory
         run: |
           mkdir -p "$ANDROID_SDK_ROOT"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null
+
+      - name: Install Android SDK packages
+        run: |
           sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
             "platform-tools" \
             "platforms;android-${ANDROID_API_LEVEL}" \
             "build-tools;${ANDROID_BUILD_TOOLS}"
-          printf "sdk.dir=%s\n" "$ANDROID_SDK_ROOT" > local.properties
-          chmod +x ./gradlew
+
+      - name: Write local.properties
+        run: printf "sdk.dir=%s\n" "$ANDROID_SDK_ROOT" > local.properties
+
+      - name: Ensure Gradle executable
+        run: chmod +x ./gradlew
 
       - name: Assemble release with diagnostics
         shell: bash
