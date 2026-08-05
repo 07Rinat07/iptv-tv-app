@@ -18,6 +18,7 @@ import javax.inject.Singleton
 object EngineModule {
     @Provides
     @Singleton
+    @EngineHttpClient
     fun provideEngineOkHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(2, TimeUnit.SECONDS)
@@ -29,7 +30,9 @@ object EngineModule {
 
     @Provides
     @Singleton
-    fun provideEngineRetrofit(client: OkHttpClient): Retrofit {
+    fun provideEngineRetrofit(
+        @EngineHttpClient client: OkHttpClient
+    ): Retrofit {
         return Retrofit.Builder()
             .baseUrl("http://127.0.0.1/")
             .addConverterFactory(MoshiConverterFactory.create())
