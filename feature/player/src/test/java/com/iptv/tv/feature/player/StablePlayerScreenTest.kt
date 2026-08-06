@@ -29,19 +29,51 @@ class StablePlayerScreenTest {
     }
 
     @Test
-    fun `remote center and enter toggle fullscreen`() {
+    fun `remote center and enter toggle controls`() {
         assertEquals(
-            StableRemoteAction.TOGGLE_FULLSCREEN,
+            StableRemoteAction.TOGGLE_CONTROLS,
             stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_CENTER)
         )
         assertEquals(
-            StableRemoteAction.TOGGLE_FULLSCREEN,
+            StableRemoteAction.TOGGLE_CONTROLS,
             stableRemoteActionForKey(KeyEvent.KEYCODE_ENTER)
         )
     }
 
     @Test
-    fun `remote channel keys change channel`() {
+    fun `keyboard F toggles fullscreen`() {
+        assertEquals(
+            StableRemoteAction.TOGGLE_FULLSCREEN,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_F)
+        )
+    }
+
+    @Test
+    fun `fullscreen arrows control channels and volume`() {
+        assertEquals(
+            StableRemoteAction.PREVIOUS_CHANNEL,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_LEFT, fullscreen = true)
+        )
+        assertEquals(
+            StableRemoteAction.NEXT_CHANNEL,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_RIGHT, fullscreen = true)
+        )
+        assertEquals(
+            StableRemoteAction.VOLUME_UP,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_UP, fullscreen = true)
+        )
+        assertEquals(
+            StableRemoteAction.VOLUME_DOWN,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_DOWN, fullscreen = true)
+        )
+        assertEquals(
+            StableRemoteAction.NONE,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_DPAD_LEFT, fullscreen = false)
+        )
+    }
+
+    @Test
+    fun `remote channel and media keys change channel`() {
         assertEquals(
             StableRemoteAction.NEXT_CHANNEL,
             stableRemoteActionForKey(KeyEvent.KEYCODE_CHANNEL_UP)
@@ -50,6 +82,42 @@ class StablePlayerScreenTest {
             StableRemoteAction.PREVIOUS_CHANNEL,
             stableRemoteActionForKey(KeyEvent.KEYCODE_CHANNEL_DOWN)
         )
+        assertEquals(
+            StableRemoteAction.NEXT_CHANNEL,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+        )
+        assertEquals(
+            StableRemoteAction.PREVIOUS_CHANNEL,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+        )
+        assertEquals(
+            StableRemoteAction.TOGGLE_PLAYBACK,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+        )
+    }
+
+    @Test
+    fun `remote volume keys control player volume`() {
+        assertEquals(
+            StableRemoteAction.VOLUME_UP,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_VOLUME_UP)
+        )
+        assertEquals(
+            StableRemoteAction.VOLUME_DOWN,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_VOLUME_DOWN)
+        )
+        assertEquals(
+            StableRemoteAction.TOGGLE_MUTE,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_VOLUME_MUTE)
+        )
+    }
+
+    @Test
+    fun `mouse and touchpad scroll maps to channels and volume`() {
+        assertEquals(StableRemoteAction.PREVIOUS_CHANNEL, stableScrollAction(1f, 0f))
+        assertEquals(StableRemoteAction.NEXT_CHANNEL, stableScrollAction(-1f, 0f))
+        assertEquals(StableRemoteAction.VOLUME_UP, stableScrollAction(0f, 1f))
+        assertEquals(StableRemoteAction.VOLUME_DOWN, stableScrollAction(0f, -1f))
     }
 
     @Test

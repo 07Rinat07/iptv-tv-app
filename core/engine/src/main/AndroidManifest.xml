@@ -1,2 +1,11 @@
-<manifest />
-
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <intent>
+            <action android:name="org.acestream.engine.service.v0.IAceStreamEngine" />
+        </intent>
+        <package android:name="org.acestream.media" />
+        <package android:name="org.acestream.media.atv" />
+        <package android:name="org.acestream.core" />
+        <package android:name="org.acestream.core.atv" />
+    </queries>
+</manifest>

@@ -1,6 +1,7 @@
 package com.iptv.tv.core.engine.di
 
 import com.iptv.tv.core.engine.api.EngineStreamApi
+import com.iptv.tv.core.engine.data.AceStreamServiceConnector
 import com.iptv.tv.core.engine.data.EngineStreamClient
 import dagger.Module
 import dagger.Provides
@@ -15,6 +16,9 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object EngineModule {
+    @Provides
+    @Singleton
+    @EngineHttpClient
     fun provideEngineOkHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(2, TimeUnit.SECONDS)
@@ -26,7 +30,9 @@ object EngineModule {
 
     @Provides
     @Singleton
-    fun provideEngineRetrofit(client: OkHttpClient): Retrofit {
+    fun provideEngineRetrofit(
+        @EngineHttpClient client: OkHttpClient
+    ): Retrofit {
         return Retrofit.Builder()
             .baseUrl("http://127.0.0.1/")
             .addConverterFactory(MoshiConverterFactory.create())
@@ -42,5 +48,8 @@ object EngineModule {
 
     @Provides
     @Singleton
-    fun provideEngineStreamClient(api: EngineStreamApi): EngineStreamClient = EngineStreamClient(api)
+    fun provideEngineStreamClient(
+        api: EngineStreamApi,
+        serviceConnector: AceStreamServiceConnector
+    ): EngineStreamClient = EngineStreamClient(api, serviceConnector)
 }
