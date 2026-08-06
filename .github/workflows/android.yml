@@ -14,7 +14,7 @@ concurrency:
 jobs:
   build-and-unit:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       ANDROID_HOME: ${{ github.workspace }}/.android-sdk
@@ -108,8 +108,14 @@ jobs:
       - name: Unit tests core player VLC
         run: ./gradlew --no-daemon --stacktrace :core:player-vlc:testDebugUnitTest
 
-      - name: Unit tests feature epg
+      - name: Unit tests feature diagnostics
+        run: ./gradlew --no-daemon --stacktrace :feature:diagnostics:testDebugUnitTest
+
+      - name: Unit tests feature EPG
         run: ./gradlew --no-daemon --stacktrace :feature:epg:testDebugUnitTest
+
+      - name: Unit tests feature home
+        run: ./gradlew --no-daemon --stacktrace :feature:home:testDebugUnitTest
 
       - name: Unit tests feature importer
         run: ./gradlew --no-daemon --stacktrace :feature:importer:testDebugUnitTest
@@ -147,6 +153,16 @@ jobs:
         run: |
           set -o pipefail
           ./gradlew --no-daemon --stacktrace --info assembleRelease 2>&1 | tee assemble-release.log
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apks
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload unit/lint/release reports
         if: always()
