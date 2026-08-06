@@ -23,6 +23,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt')
           text = path.read_text(encoding='utf-8')
@@ -33,6 +34,12 @@ jobs:
               if count != 1:
                   raise SystemExit(f'{label}: expected exactly one match, found {count}')
               text = text.replace(old, new, 1)
+
+          def regex_once(pattern: str, new: str, label: str) -> None:
+              global text
+              text, count = re.subn(pattern, lambda _: new, text, count=1, flags=re.MULTILINE)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
 
           replace_once(
               '''internal fun stableAdjacentChannelId(
@@ -87,7 +94,7 @@ jobs:
           )
 
           replace_once(
-              '''                        listState.animateScrollToItem((listState.firstVisibleItemIndex - 3).coerceAtLeast(0))''',
+              '                        listState.animateScrollToItem((listState.firstVisibleItemIndex - 3).coerceAtLeast(0))',
               '''                        listState.animateScrollToItem(
                               StableChannelNavigation.pageTargetIndex(
                                   currentIndex = listState.firstVisibleItemIndex,
@@ -99,9 +106,8 @@ jobs:
               'nearby previous page'
           )
 
-          replace_once(
-              '''                        val last = (channels.size - 1).coerceAtLeast(0)
-                          listState.animateScrollToItem((listState.firstVisibleItemIndex + 3).coerceAtMost(last))''',
+          regex_once(
+              r'^[ \t]*val last = \(channels\.size - 1\)\.coerceAtLeast\(0\)\n[ \t]*listState\.animateScrollToItem\(\(listState\.firstVisibleItemIndex \+ 3\)\.coerceAtMost\(last\)\)$',
               '''                        listState.animateScrollToItem(
                               StableChannelNavigation.pageTargetIndex(
                                   currentIndex = listState.firstVisibleItemIndex,
@@ -152,8 +158,8 @@ jobs:
           )
 
           replace_once(
-              '''                val selected = channel.id == selectedChannelId''',
-              '''                val selected = channel.id == visibleSelectedChannelId''',
+              '                val selected = channel.id == selectedChannelId',
+              '                val selected = channel.id == visibleSelectedChannelId',
               'visible selected row'
           )
 
@@ -173,12 +179,12 @@ jobs:
           replace_once(
               '''    val pageSize = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
               val lastIndex = (itemCount - 1).coerceAtLeast(0)''',
-              '''    val pageSize = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)''',
+              '    val pageSize = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)',
               'remove local last index'
           )
 
           replace_once(
-              '''                    state.animateScrollToItem((state.firstVisibleItemIndex - pageSize).coerceAtLeast(0))''',
+              '                    state.animateScrollToItem((state.firstVisibleItemIndex - pageSize).coerceAtLeast(0))',
               '''                    state.animateScrollToItem(
                           StableChannelNavigation.pageTargetIndex(
                               currentIndex = state.firstVisibleItemIndex,
@@ -191,7 +197,7 @@ jobs:
           )
 
           replace_once(
-              '''                    state.animateScrollToItem((state.firstVisibleItemIndex + pageSize).coerceAtMost(lastIndex))''',
+              '                    state.animateScrollToItem((state.firstVisibleItemIndex + pageSize).coerceAtMost(lastIndex))',
               '''                    state.animateScrollToItem(
                           StableChannelNavigation.pageTargetIndex(
                               currentIndex = state.firstVisibleItemIndex,
@@ -235,21 +241,12 @@ jobs:
           )
 
           replace_once(
-              '''                    Button(onClick = { onClick(index) }, modifier = Modifier.fillMaxWidth()) {''',
+              '                    Button(onClick = { onClick(index) }, modifier = Modifier.fillMaxWidth()) {',
               '''                    Button(
                           onClick = { onClick(index) },
                           modifier = Modifier.fillMaxWidth().stableSelectedFocus(true)
                       ) {''',
               'selected group focus'
-          )
-
-          replace_once(
-              '''                    OutlinedButton(onClick = { onClick(index) }, modifier = Modifier.fillMaxWidth()) {''',
-              '''                    OutlinedButton(
-                          onClick = { onClick(index) },
-                          modifier = Modifier.fillMaxWidth().stableSelectedFocus(false)
-                      ) {''',
-              'unselected group focus modifier'
           )
 
           path.write_text(text, encoding='utf-8')
