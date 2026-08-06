@@ -1,19 +1,17 @@
-name: Apply device acceptance fixes
+name: Cleanup device fix automation
 
 on:
   push:
     branches:
       - fix/player-device-acceptance-blockers
     paths:
-      - .automation/apply_device_fixes.py
-      - .automation/device-fixes.part-*
       - .github/workflows/apply-device-fixes.yml
 
 permissions:
   contents: write
 
 jobs:
-  apply:
+  cleanup:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -28,19 +26,16 @@ jobs:
           git fetch --depth=1 origin "${GITHUB_REF_NAME}"
           git checkout -B "${GITHUB_REF_NAME}" FETCH_HEAD
 
-      - name: Apply verified patch
-        run: python3 .automation/apply_device_fixes.py
-
-      - name: Commit functional fixes
+      - name: Remove temporary automation
         shell: bash
         run: |
           set -euo pipefail
+          rm -f .automation/apply_device_fixes.py
+          rm -f .automation/device-fixes.part-*
+          rm -f .github/workflows/apply-device-fixes.yml
+          rmdir .automation 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-          git commit -m "fix(player): resolve device acceptance blockers"
+          git commit -m "ci: remove device fix applicator"
           git push origin "HEAD:${GITHUB_REF_NAME}"
