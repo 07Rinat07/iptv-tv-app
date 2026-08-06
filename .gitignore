@@ -13,9 +13,5 @@
 __pycache__/
 *.pyc
 
-# Build packages are published through GitHub Actions/Releases, not committed.
-*.apk
-*.aab
-/artifacts/
-/build-artifacts/
-/Rinat-IPTV-final-build/
+# Gradle intermediate build directories remain ignored.
+# Finished APK/AAB files copied outside */build may be tracked through Git LFS.
