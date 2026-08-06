@@ -138,26 +138,3 @@ kapt {
     correctErrorTypes = true
 }
 
-val tvBoxDebugApkName = "myscanerIPTV-tvbox-debug-latest.apk"
-val copyLatestTvBoxDebugApk = tasks.register("copyLatestTvBoxDebugApk") {
-    group = "build"
-    description = "Keeps a single latest debug APK for TV Box testing in build-artifacts."
-
-    doLast {
-        val sourceApk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile
-        if (!sourceApk.exists()) {
-            return@doLast
-        }
-
-        val artifactDir = rootProject.layout.projectDirectory.dir("build-artifacts").asFile
-        artifactDir.mkdirs()
-        artifactDir.listFiles { file -> file.isFile && file.extension.equals("apk", ignoreCase = true) && file.name != tvBoxDebugApkName }
-            ?.forEach { file -> file.delete() }
-
-        sourceApk.copyTo(artifactDir.resolve(tvBoxDebugApkName), overwrite = true)
-    }
-}
-
-tasks.matching { it.name == "assembleDebug" }.configureEach {
-    finalizedBy(copyLatestTvBoxDebugApk)
-}

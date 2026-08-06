@@ -1,7 +1,5 @@
 package com.iptv.tv
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,7 +8,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -67,17 +64,6 @@ fun AboutScreen(
                     Text("Автор", style = MaterialTheme.typography.titleMedium)
                     Text(AUTHOR_NAME)
                     Text(AUTHOR_EMAIL)
-                    Button(
-                        onClick = {
-                            val intent = Intent(
-                                Intent.ACTION_SENDTO,
-                                Uri.parse("mailto:$AUTHOR_EMAIL?subject=Rinat%20IPTV")
-                            )
-                            runCatching { context.startActivity(intent) }
-                        }
-                    ) {
-                        Text("Написать автору")
-                    }
                 }
             }
         }
