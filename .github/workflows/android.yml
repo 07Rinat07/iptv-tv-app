@@ -145,24 +145,40 @@ jobs:
             echo "No failed JUnit XML report was produced. The Gradle test JVM may have crashed before writing results."
           fi
 
-      - name: Assemble debug
+      - name: Assemble debug ARM TV APKs
         run: ./gradlew --no-daemon --stacktrace assembleDebug
 
-      - name: Assemble release
+      - name: Assemble release for validation
         shell: bash
         run: |
           set -o pipefail
           ./gradlew --no-daemon --stacktrace --info assembleRelease 2>&1 | tee assemble-release.log
 
-      - name: Upload APKs
+      - name: Prepare installable TV APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts/tv
+          cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk \
+            build-artifacts/tv/Rinat-IPTV-TV-arm64-v8a-debug.apk
+          cp app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk \
+            build-artifacts/tv/Rinat-IPTV-TV-armeabi-v7a-debug.apk
+          cd build-artifacts/tv
+          sha256sum *.apk > SHA256SUMS.txt
+          ls -lh
+          cat SHA256SUMS.txt
+
+      - name: Upload TV Box APKs only
         uses: actions/upload-artifact@v4
         with:
-          name: android-apks
+          name: tv-box-debug-apks
           path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/release/*.apk
+            build-artifacts/tv/Rinat-IPTV-TV-arm64-v8a-debug.apk
+            build-artifacts/tv/Rinat-IPTV-TV-armeabi-v7a-debug.apk
+            build-artifacts/tv/SHA256SUMS.txt
           if-no-files-found: error
-          retention-days: 14
+          compression-level: 0
+          retention-days: 30
 
       - name: Upload unit/lint/release reports
         if: always()
