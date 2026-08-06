@@ -818,6 +818,55 @@ class PlaylistRepositoryImpl @Inject constructor(
         AppResult.Success(emptyMap())
     }
 
+    private fun observeParentalChannelGate(): Flow<ParentalChannelGate> {
+        return context.settingsDataStore.data.map { prefs ->
+            ParentalChannelGate(
+                enabled = prefs[SettingsKeys.parentalEnabled] ?: false,
+                hideAdultChannels = prefs[SettingsKeys.parentalHideAdultChannels] ?: true,
+                blockedKeywords = ParentalChannelFilter.decodeKeywords(
+                    prefs[SettingsKeys.parentalBlockedKeywords]
+                )
+            )
+        }
+    }
+
+    private suspend fun currentParentalChannelGate(): ParentalChannelGate {
+        return observeParentalChannelGate().first()
+    }
+
+    private fun ChannelEntity.isBlockedByParental(gate: ParentalChannelGate): Boolean {
+        return ParentalChannelFilter.isBlocked(
+            name = name,
+            groupName = groupName,
+            tvgId = tvgId,
+            gate = gate
+        )
+    }
+
+    private suspend fun inheritGlobalFavorites(channels: List<ChannelEntity>) {
+        if (channels.isEmpty()) return
+
+        val favoriteChannelIds = favoriteDao.getFavorites()
+            .map { it.channelId }
+        if (favoriteChannelIds.isEmpty()) return
+
+        val favoriteIdentities = channelDao.findByIds(favoriteChannelIds)
+            .mapTo(mutableSetOf()) { channel ->
+                GlobalFavoriteIdentity.key(channel.tvgId, channel.name, channel.streamUrl)
+            }
+        if (favoriteIdentities.isEmpty()) return
+
+        val inherited = channels
+            .filter { channel ->
+                GlobalFavoriteIdentity.key(channel.tvgId, channel.name, channel.streamUrl) in
+                    favoriteIdentities
+            }
+            .map { channel ->
+                FavoriteEntity(channelId = channel.id, addedAt = System.currentTimeMillis())
+            }
+        if (inherited.isNotEmpty()) favoriteDao.upsertAll(inherited)
+    }
+
     private suspend fun importParsedPlaylist(
         playlistName: String,
         rawPlaylist: String,
