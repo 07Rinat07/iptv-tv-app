@@ -1,6 +1,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!--
+        Android 11+ filters PackageManager results unless external packages and
+        service intents are declared here. Ace Stream is a separately installed
+        application whose bound service is discovered at runtime.
+    -->
+    <queries>
+        <package android:name="org.acestream.media" />
+        <package android:name="org.acestream.media.atv" />
+        <package android:name="org.acestream.core" />
+        <package android:name="org.acestream.core.atv" />
+
+        <intent>
+            <action android:name="org.acestream.engine.service.v0.IAceStreamEngine" />
+        </intent>
+    </queries>
+
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
