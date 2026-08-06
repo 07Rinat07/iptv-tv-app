@@ -17,18 +17,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
+      - name: Checkout without external actions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_REF_NAME}"
+          git checkout -B "${GITHUB_REF_NAME}" FETCH_HEAD
 
       - name: Apply verified patch
-        run: python .automation/apply_device_fixes.py
+        run: python3 .automation/apply_device_fixes.py
 
       - name: Commit functional fixes
         shell: bash
@@ -42,4 +43,4 @@ jobs:
             exit 0
           fi
           git commit -m "fix(player): resolve device acceptance blockers"
-          git push
+          git push origin "HEAD:${GITHUB_REF_NAME}"
