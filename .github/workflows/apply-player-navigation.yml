@@ -140,20 +140,12 @@ jobs:
           )
 
           replace_once(
-              '''            modifier = Modifier.weight(1f).fillMaxHeight().focusGroup(),
-                  state = listState,
-                  verticalArrangement = Arrangement.spacedBy(6.dp)
-              ) {
-                  items(channels, key = { it.id })''',
+              '            modifier = Modifier.weight(1f).fillMaxHeight().focusGroup(),',
               '''            modifier = Modifier
                       .weight(1f)
                       .fillMaxHeight()
                       .focusGroup()
-                      .stablePagedListNavigation(state = listState, itemCount = channels.size),
-                  state = listState,
-                  verticalArrangement = Arrangement.spacedBy(6.dp)
-              ) {
-                  items(channels, key = { it.id })''',
+                      .stablePagedListNavigation(state = listState, itemCount = channels.size),''',
               'channel list key paging'
           )
 
@@ -164,22 +156,17 @@ jobs:
           )
 
           replace_once(
-              '''                    modifier = Modifier
-                              .fillMaxWidth()
-                              .tvFocusOutline()
+              '''                        .tvFocusOutline()
                               .clickable { onSelect(channel.id) },''',
-              '''                    modifier = Modifier
-                              .fillMaxWidth()
-                              .tvFocusOutline()
+              '''                        .tvFocusOutline()
                               .stableSelectedFocus(selected)
                               .clickable { onSelect(channel.id) },''',
               'selected channel focus'
           )
 
           replace_once(
-              '''    val pageSize = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-              val lastIndex = (itemCount - 1).coerceAtLeast(0)''',
-              '    val pageSize = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)',
+              '    val lastIndex = (itemCount - 1).coerceAtLeast(0)\n',
+              '',
               'remove local last index'
           )
 
@@ -223,20 +210,16 @@ jobs:
           )
 
           replace_once(
-              '''            modifier = Modifier.weight(1f).fillMaxHeight(),
-                  state = state,
-                  verticalArrangement = Arrangement.spacedBy(6.dp)
-              ) {
-                  items(labels.size, key = { it })''',
-              '''            modifier = Modifier
+              '''        LazyColumn(
+                  modifier = Modifier.weight(1f).fillMaxHeight(),
+                  state = state,''',
+              '''        LazyColumn(
+                  modifier = Modifier
                       .weight(1f)
                       .fillMaxHeight()
                       .focusGroup()
                       .stablePagedListNavigation(state = state, itemCount = labels.size),
-                  state = state,
-                  verticalArrangement = Arrangement.spacedBy(6.dp)
-              ) {
-                  items(labels.size, key = { it })''',
+                  state = state,''',
               'group list key paging'
           )
 
