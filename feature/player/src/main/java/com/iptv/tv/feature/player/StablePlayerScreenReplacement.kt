@@ -694,19 +694,25 @@ private fun StableNearbyChannelsReplacement(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("Каналы рядом", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-            OutlinedButton(onClick = { scope.launch { listState.animateScrollToItem(0) } }) { Text("В начало") }
+            Text(
+                "Каналы рядом",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleSmall
+            )
+            OutlinedButton(
+                onClick = { scope.launch { listState.animateScrollToItem(0) } }
+            ) { Text("В начало") }
             OutlinedButton(
                 onClick = {
                     scope.launch {
                         listState.animateScrollToItem(
-                    StableChannelNavigation.pageTargetIndex(
-                        currentIndex = listState.firstVisibleItemIndex,
-                        itemCount = channels.size,
-                        pageSize = 3,
-                        direction = -1
-                    )
-                )
+                            StableChannelNavigation.pageTargetIndex(
+                                currentIndex = listState.firstVisibleItemIndex,
+                                itemCount = channels.size,
+                                pageSize = 3,
+                                direction = -1
+                            )
+                        )
                     }
                 }
             ) { Text("◀") }
@@ -714,13 +720,13 @@ private fun StableNearbyChannelsReplacement(
                 onClick = {
                     scope.launch {
                         listState.animateScrollToItem(
-                    StableChannelNavigation.pageTargetIndex(
-                        currentIndex = listState.firstVisibleItemIndex,
-                        itemCount = channels.size,
-                        pageSize = 3,
-                        direction = 1
-                    )
-                )
+                            StableChannelNavigation.pageTargetIndex(
+                                currentIndex = listState.firstVisibleItemIndex,
+                                itemCount = channels.size,
+                                pageSize = 3,
+                                direction = 1
+                            )
+                        )
                     }
                 }
             ) { Text("▶") }
@@ -741,7 +747,10 @@ private fun StableNearbyChannelsReplacement(
                         .tvFocusOutline()
                         .clickable { onSelectChannel(channel.id) }
                 ) {
-                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(
+                        Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
                             channel.name,
                             maxLines = 1,
@@ -749,7 +758,8 @@ private fun StableNearbyChannelsReplacement(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            current?.let { "${stableTime(it.startEpochMs)} ${it.title}" } ?: "EPG нет",
+                            current?.let { "${stableTime(it.startEpochMs)} ${it.title}" }
+                                ?: "EPG нет",
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
@@ -815,14 +825,14 @@ private fun StableChannelListReplacement(
     onToggleFavorite: (Long) -> Unit
 ) {
     val listState = rememberLazyListState()
-    val visibleSelectedChannelId = remember(channels, selectedChannelId) {
+    val focusChannelId = remember(channels, selectedChannelId) {
         StableChannelNavigation.selectionAfterFilter(
             visibleChannelIds = channels.map { it.id },
             previousSelectedChannelId = selectedChannelId
         )
     }
-    LaunchedEffect(visibleSelectedChannelId, channels) {
-        val index = channels.indexOfFirst { it.id == visibleSelectedChannelId }
+    LaunchedEffect(focusChannelId, channels) {
+        val index = channels.indexOfFirst { it.id == focusChannelId }
         if (index >= 0) listState.animateScrollToItem(index)
     }
     Row(modifier) {
@@ -831,7 +841,10 @@ private fun StableChannelListReplacement(
                 .weight(1f)
                 .fillMaxHeight()
                 .focusGroup()
-                .stablePagedListNavigation(state = listState, itemCount = channels.size),
+                .stablePagedListNavigation(
+                    state = listState,
+                    itemCount = channels.size
+                ),
             state = listState,
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -840,13 +853,13 @@ private fun StableChannelListReplacement(
                     epgByChannel[channel.id].orEmpty(),
                     System.currentTimeMillis()
                 )
-                val selected = channel.id == visibleSelectedChannelId
+                val selected = channel.id == selectedChannelId
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .tvFocusOutline()
-                        .stableSelectedFocus(selected)
-                    .clickable { onSelect(channel.id) },
+                        .stableSelectedFocus(channel.id == focusChannelId)
+                        .clickable { onSelect(channel.id) },
                     tonalElevation = if (selected) 8.dp else 1.dp,
                     color = if (selected) {
                         MaterialTheme.colorScheme.primaryContainer
@@ -865,12 +878,19 @@ private fun StableChannelListReplacement(
                             contentDescription = channel.name,
                             modifier = Modifier.size(38.dp)
                         )
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Column(
+                            Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
                             Text(
                                 channel.name,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                fontWeight = if (selected) {
+                                    FontWeight.Bold
+                                } else {
+                                    FontWeight.Normal
+                                }
                             )
                             Text(
                                 current?.let {
@@ -1116,13 +1136,13 @@ private fun VerticalScrollControls(
             onClick = {
                 scope.launch {
                     state.animateScrollToItem(
-                StableChannelNavigation.pageTargetIndex(
-                    currentIndex = state.firstVisibleItemIndex,
-                    itemCount = itemCount,
-                    pageSize = pageSize,
-                    direction = -1
-                )
-            )
+                        StableChannelNavigation.pageTargetIndex(
+                            currentIndex = state.firstVisibleItemIndex,
+                            itemCount = itemCount,
+                            pageSize = pageSize,
+                            direction = -1
+                        )
+                    )
                 }
             },
             enabled = state.canScrollBackward
@@ -1134,13 +1154,13 @@ private fun VerticalScrollControls(
             onClick = {
                 scope.launch {
                     state.animateScrollToItem(
-                StableChannelNavigation.pageTargetIndex(
-                    currentIndex = state.firstVisibleItemIndex,
-                    itemCount = itemCount,
-                    pageSize = pageSize,
-                    direction = 1
-                )
-            )
+                        StableChannelNavigation.pageTargetIndex(
+                            currentIndex = state.firstVisibleItemIndex,
+                            itemCount = itemCount,
+                            pageSize = pageSize,
+                            direction = 1
+                        )
+                    )
                 }
             },
             enabled = state.canScrollForward
@@ -1269,25 +1289,38 @@ private fun ScrollableButtonList(
     }
     Row(modifier.fillMaxWidth().heightIn(min = 180.dp, max = 520.dp)) {
         LazyColumn(
-        modifier = Modifier
-            .weight(1f)
-            .fillMaxHeight()
-            .focusGroup()
-            .stablePagedListNavigation(state = state, itemCount = labels.size),
-        state = state,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .focusGroup()
+                .stablePagedListNavigation(state = state, itemCount = labels.size),
+            state = state,
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             items(labels.size, key = { it }) { index ->
                 if (index == selectedIndex) {
                     Button(
-                onClick = { onClick(index) },
-                modifier = Modifier.fillMaxWidth().stableSelectedFocus(true)
-            ) {
-                        Text(labels[index], maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        onClick = { onClick(index) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .stableSelectedFocus(true)
+                    ) {
+                        Text(
+                            labels[index],
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 } else {
-                    OutlinedButton(onClick = { onClick(index) }, modifier = Modifier.fillMaxWidth()) {
-                        Text(labels[index], maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    OutlinedButton(
+                        onClick = { onClick(index) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            labels[index],
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
