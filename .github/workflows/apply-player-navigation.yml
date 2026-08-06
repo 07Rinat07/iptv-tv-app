@@ -213,10 +213,8 @@ jobs:
               'selected group visibility'
           )
 
-          replace_once(
-              '''        LazyColumn(
-                  modifier = Modifier.weight(1f).fillMaxHeight(),
-                  state = state,''',
+          regex_once(
+              r'^[ \t]*LazyColumn\(\n[ \t]*modifier = Modifier\.weight\(1f\)\.fillMaxHeight\(\),\n[ \t]*state = state,',
               '''        LazyColumn(
                   modifier = Modifier
                       .weight(1f)
