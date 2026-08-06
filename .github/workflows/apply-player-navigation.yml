@@ -140,12 +140,18 @@ jobs:
           )
 
           replace_once(
-              '            modifier = Modifier.weight(1f).fillMaxHeight().focusGroup(),',
-              '''            modifier = Modifier
-                      .weight(1f)
-                      .fillMaxHeight()
-                      .focusGroup()
-                      .stablePagedListNavigation(state = listState, itemCount = channels.size),''',
+              '''    Row(modifier) {
+                  LazyColumn(
+                      modifier = Modifier.weight(1f).fillMaxHeight().focusGroup(),
+                      state = listState,''',
+              '''    Row(modifier) {
+                  LazyColumn(
+                      modifier = Modifier
+                          .weight(1f)
+                          .fillMaxHeight()
+                          .focusGroup()
+                          .stablePagedListNavigation(state = listState, itemCount = channels.size),
+                      state = listState,''',
               'channel list key paging'
           )
 
