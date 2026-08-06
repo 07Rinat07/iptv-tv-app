@@ -1,0 +1,45 @@
+name: Apply device acceptance fixes
+
+on:
+  push:
+    branches:
+      - fix/player-device-acceptance-blockers
+    paths:
+      - .automation/apply_device_fixes.py
+      - .automation/device-fixes.part-*
+      - .github/workflows/apply-device-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Apply verified patch
+        run: python .automation/apply_device_fixes.py
+
+      - name: Commit functional fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "fix(player): resolve device acceptance blockers"
+          git push
