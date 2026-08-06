@@ -9,8 +9,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.key.nativeKeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import kotlinx.coroutines.launch
 
 internal enum class StableListRemoteAction {
@@ -35,12 +38,11 @@ internal fun Modifier.stablePagedListNavigation(
 ): Modifier = composed {
     val scope = rememberCoroutineScope()
     this.onPreviewKeyEvent { event ->
-        val nativeEvent = event.nativeKeyEvent
-        if (nativeEvent.action != KeyEvent.ACTION_DOWN || nativeEvent.repeatCount > 0) {
+        if (event.type != KeyEventType.KeyDown) {
             return@onPreviewKeyEvent false
         }
 
-        val targetIndex = when (stableListRemoteActionForKey(nativeEvent.keyCode)) {
+        val targetIndex = when (stableListRemoteActionForKey(event.key.nativeKeyCode)) {
             StableListRemoteAction.FIRST -> 0
             StableListRemoteAction.PAGE_UP -> StableChannelNavigation.pageTargetIndex(
                 currentIndex = state.firstVisibleItemIndex,
