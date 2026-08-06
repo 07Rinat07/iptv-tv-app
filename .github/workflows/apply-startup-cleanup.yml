@@ -1,0 +1,1287 @@
+name: Apply startup player and repository cleanup
+
+on:
+  push:
+    branches:
+      - feat/startup-player-diagnostics-cleanup
+
+permissions:
+  contents: write
+
+concurrency:
+  group: startup-player-cleanup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply-test-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source and repository cleanup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import shutil
+          import textwrap
+
+          def write(path: str, content: str) -> None:
+              target = Path(path)
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(textwrap.dedent(content).lstrip("\n"), encoding="utf-8")
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise RuntimeError(f"Required fragment not found in {path}: {old[:100]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # --- Startup screen: player-first flow with saved and built-in playlists. ---
+          write("feature/home/build.gradle.kts", r'''
+          plugins {
+              alias(libs.plugins.android.library)
+              alias(libs.plugins.kotlin.android)
+              alias(libs.plugins.hilt)
+              alias(libs.plugins.kotlin.kapt)
+          }
+
+          android {
+              namespace = "com.iptv.tv.feature.home"
+              compileSdk = 35
+
+              defaultConfig {
+                  minSdk = 24
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              buildFeatures {
+                  compose = true
+              }
+
+              composeOptions {
+                  kotlinCompilerExtensionVersion = libs.versions.composeCompiler.get()
+              }
+          }
+
+          dependencies {
+              implementation(project(":core:common"))
+              implementation(project(":core:designsystem"))
+              implementation(project(":core:domain"))
+              implementation(project(":core:model"))
+
+              implementation(libs.androidx.core.ktx)
+              implementation(libs.kotlinx.coroutines.android)
+              implementation(libs.androidx.lifecycle.viewmodel.ktx)
+              implementation(libs.androidx.lifecycle.viewmodel.compose)
+              implementation(libs.androidx.lifecycle.runtime.compose)
+              implementation(platform(libs.androidx.compose.bom))
+              implementation(libs.androidx.compose.ui)
+              implementation(libs.androidx.compose.foundation)
+              implementation(libs.androidx.compose.ui.tooling.preview)
+              implementation(libs.androidx.compose.material3)
+
+              implementation(libs.hilt.android)
+              kapt(libs.hilt.compiler)
+              implementation(libs.androidx.hilt.navigation.compose)
+
+              debugImplementation(libs.androidx.compose.ui.tooling)
+              testImplementation(libs.junit4)
+          }
+
+          kapt {
+              correctErrorTypes = true
+          }
+          ''')
+
+          write("feature/home/src/main/java/com/iptv/tv/feature/home/HomeStartupPolicy.kt", r'''
+          package com.iptv.tv.feature.home
+
+          import com.iptv.tv.core.model.Playlist
+
+          internal fun findImportedReadyPlaylist(
+              playlists: List<Playlist>,
+              sourceUrl: String
+          ): Playlist? = playlists.firstOrNull { playlist ->
+              playlist.source.trim() == sourceUrl.trim()
+          }
+          ''')
+
+          write("feature/home/src/main/java/com/iptv/tv/feature/home/HomeViewModel.kt", r'''
+          package com.iptv.tv.feature.home
+
+          import androidx.lifecycle.ViewModel
+          import androidx.lifecycle.viewModelScope
+          import com.iptv.tv.core.common.AppResult
+          import com.iptv.tv.core.domain.repository.PlaylistRepository
+          import com.iptv.tv.core.model.Playlist
+          import dagger.hilt.android.lifecycle.HiltViewModel
+          import javax.inject.Inject
+          import kotlinx.coroutines.flow.MutableStateFlow
+          import kotlinx.coroutines.flow.StateFlow
+          import kotlinx.coroutines.flow.asStateFlow
+          import kotlinx.coroutines.flow.update
+          import kotlinx.coroutines.launch
+
+          data class HomeUiState(
+              val title: String = "Смотреть ТВ",
+              val description: String = "Выберите сохранённый или готовый список каналов — после загрузки сразу откроется плеер.",
+              val playlists: List<Playlist> = emptyList(),
+              val isImporting: Boolean = false,
+              val importingUrl: String? = null,
+              val lastError: String? = null,
+              val lastInfo: String? = null,
+              val pendingOpenPlaylistId: Long? = null
+          )
+
+          @HiltViewModel
+          class HomeViewModel @Inject constructor(
+              private val playlistRepository: PlaylistRepository
+          ) : ViewModel() {
+              private val _uiState = MutableStateFlow(HomeUiState())
+              val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+
+              init {
+                  viewModelScope.launch {
+                      playlistRepository.observePlaylists().collect { playlists ->
+                          _uiState.update { state -> state.copy(playlists = playlists) }
+                      }
+                  }
+              }
+
+              fun watchReadyPlaylist(preset: ReadyPlaylistPreset) {
+                  val existing = findImportedReadyPlaylist(
+                      playlists = _uiState.value.playlists,
+                      sourceUrl = preset.url
+                  )
+                  if (existing != null) {
+                      requestOpenPlaylist(existing.id, "Открывается сохранённый список: ${existing.name}")
+                      return
+                  }
+                  if (_uiState.value.isImporting) return
+
+                  viewModelScope.launch {
+                      _uiState.update {
+                          it.copy(
+                              isImporting = true,
+                              importingUrl = preset.url,
+                              lastError = null,
+                              lastInfo = "Загрузка списка «${preset.name}»…"
+                          )
+                      }
+                      when (val result = playlistRepository.importFromUrl(preset.url, preset.name)) {
+                          is AppResult.Success -> {
+                              _uiState.update {
+                                  it.copy(
+                                      isImporting = false,
+                                      importingUrl = null,
+                                      lastInfo = "Список добавлен. Открывается плеер.",
+                                      pendingOpenPlaylistId = result.data.playlistId
+                                  )
+                              }
+                          }
+                          is AppResult.Error -> {
+                              _uiState.update {
+                                  it.copy(
+                                      isImporting = false,
+                                      importingUrl = null,
+                                      lastError = "Не удалось загрузить «${preset.name}»: ${result.message}",
+                                      lastInfo = null
+                                  )
+                              }
+                          }
+                          AppResult.Loading -> {
+                              _uiState.update { it.copy(isImporting = false, importingUrl = null) }
+                          }
+                      }
+                  }
+              }
+
+              fun requestOpenPlaylist(playlistId: Long, message: String? = null) {
+                  _uiState.update {
+                      it.copy(
+                          pendingOpenPlaylistId = playlistId,
+                          lastInfo = message,
+                          lastError = null
+                      )
+                  }
+              }
+
+              fun consumeOpenPlaylistRequest() {
+                  _uiState.update { it.copy(pendingOpenPlaylistId = null) }
+              }
+          }
+          ''')
+
+          write("feature/home/src/main/java/com/iptv/tv/feature/home/HomeScreen.kt", r'''
+          package com.iptv.tv.feature.home
+
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Box
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.ExperimentalLayoutApi
+          import androidx.compose.foundation.layout.FlowRow
+          import androidx.compose.foundation.layout.aspectRatio
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.foundation.lazy.items
+          import androidx.compose.material3.Button
+          import androidx.compose.material3.Card
+          import androidx.compose.material3.LinearProgressIndicator
+          import androidx.compose.material3.MaterialTheme
+          import androidx.compose.material3.OutlinedButton
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.Composable
+          import androidx.compose.runtime.LaunchedEffect
+          import androidx.compose.runtime.collectAsState
+          import androidx.compose.runtime.getValue
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.text.style.TextOverflow
+          import androidx.compose.ui.unit.dp
+          import androidx.hilt.navigation.compose.hiltViewModel
+          import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
+          import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+          import com.iptv.tv.core.model.Playlist
+
+          @OptIn(ExperimentalLayoutApi::class)
+          @Composable
+          fun HomeScreen(
+              onOpenScanner: (() -> Unit)? = null,
+              onOpenImporter: (() -> Unit)? = null,
+              onOpenReadyPlaylists: (() -> Unit)? = null,
+              onOpenPlaylists: (() -> Unit)? = null,
+              onOpenPlaylist: ((Long) -> Unit)? = null,
+              onOpenEpg: (() -> Unit)? = null,
+              onOpenPlayer: (() -> Unit)? = null,
+              onOpenSettings: (() -> Unit)? = null,
+              onOpenDiagnostics: (() -> Unit)? = null,
+              onPrimaryAction: (() -> Unit)? = null,
+              primaryLabel: String = "Открыть",
+              viewModel: HomeViewModel = hiltViewModel()
+          ) {
+              val state by viewModel.uiState.collectAsState()
+
+              LaunchedEffect(state.pendingOpenPlaylistId) {
+                  val playlistId = state.pendingOpenPlaylistId ?: return@LaunchedEffect
+                  if (onOpenPlaylist != null) {
+                      onOpenPlaylist(playlistId)
+                  } else {
+                      onOpenPlayer?.invoke()
+                  }
+                  viewModel.consumeOpenPlaylistRequest()
+              }
+
+              TvScrollableLazyColumn(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .padding(20.dp),
+                  verticalArrangement = Arrangement.spacedBy(14.dp)
+              ) {
+                  item {
+                      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                          Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
+                          Text(text = state.description, style = MaterialTheme.typography.bodyLarge)
+                      }
+                  }
+
+                  item {
+                      Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                          Box(
+                              modifier = Modifier
+                                  .fillMaxWidth()
+                                  .aspectRatio(16f / 9f)
+                                  .background(Color.Black),
+                              contentAlignment = Alignment.Center
+                          ) {
+                              Text(
+                                  text = if (state.isImporting) "Загрузка списка каналов…" else "Выберите список каналов для просмотра",
+                                  color = Color.White,
+                                  style = MaterialTheme.typography.titleLarge
+                              )
+                          }
+                      }
+                  }
+
+                  if (state.isImporting) {
+                      item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
+                  }
+                  state.lastError?.let { error ->
+                      item { Text(error, color = MaterialTheme.colorScheme.error) }
+                  }
+                  state.lastInfo?.let { info ->
+                      item { Text(info, color = MaterialTheme.colorScheme.primary) }
+                  }
+
+                  if (state.playlists.isNotEmpty()) {
+                      item {
+                          Text("Мои списки каналов", style = MaterialTheme.typography.titleLarge)
+                      }
+                      items(state.playlists.take(8), key = { it.id }) { playlist ->
+                          SavedPlaylistCard(
+                              playlist = playlist,
+                              enabled = !state.isImporting,
+                              onWatch = { viewModel.requestOpenPlaylist(playlist.id) }
+                          )
+                      }
+                      if (state.playlists.size > 8) {
+                          item {
+                              onOpenPlaylists?.let { action ->
+                                  OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth()) {
+                                      Text("Показать все мои списки (${state.playlists.size})")
+                                  }
+                              }
+                          }
+                      }
+                  }
+
+                  item {
+                      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                          Text("Готовые списки", style = MaterialTheme.typography.titleLarge)
+                          Text(
+                              "Они уже добавлены в приложение как быстрые источники. Нажмите «Смотреть» — список загрузится и откроется в плеере.",
+                              style = MaterialTheme.typography.bodyMedium
+                          )
+                      }
+                  }
+
+                  items(READY_PLAYLIST_PRESETS, key = { it.url }) { preset ->
+                      ReadyPlaylistCard(
+                          preset = preset,
+                          importing = state.importingUrl == preset.url,
+                          enabled = !state.isImporting,
+                          onWatch = { viewModel.watchReadyPlaylist(preset) }
+                      )
+                  }
+
+                  item {
+                      onOpenScanner?.let { action ->
+                          Button(onClick = action, modifier = Modifier.fillMaxWidth()) {
+                              Text("Найти новые списки в сканере")
+                          }
+                      }
+                  }
+
+                  item {
+                      Text("Другие разделы", style = MaterialTheme.typography.titleMedium)
+                      FlowRow(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalArrangement = Arrangement.spacedBy(10.dp),
+                          verticalArrangement = Arrangement.spacedBy(10.dp),
+                          maxItemsInEachRow = 2
+                      ) {
+                          onOpenPlaylists?.let { HomeActionCard("Мои плейлисты", "Полный список и редактор", it) }
+                          onOpenReadyPlaylists?.let { HomeActionCard("Каталог готовых", "Отдельный каталог источников", it) }
+                          onOpenImporter?.let { HomeActionCard("Ручной импорт", "URL, файл или текст M3U", it) }
+                          onOpenEpg?.let { HomeActionCard("Телепрограмма", "EPG по сохранённым каналам", it) }
+                          onOpenPlayer?.let { HomeActionCard("Плеер", "Открыть без выбора списка", it) }
+                          onOpenSettings?.let { HomeActionCard("Настройки", "Плеер, буфер и сеть", it) }
+                          onOpenDiagnostics?.let { HomeActionCard("Логи", "Ошибки и диагностика", it) }
+                      }
+                  }
+
+                  onPrimaryAction?.let { action ->
+                      item {
+                          OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth()) {
+                              Text(primaryLabel)
+                          }
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          private fun SavedPlaylistCard(
+              playlist: Playlist,
+              enabled: Boolean,
+              onWatch: () -> Unit
+          ) {
+              Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                  Column(
+                      modifier = Modifier.fillMaxWidth().padding(14.dp),
+                      verticalArrangement = Arrangement.spacedBy(7.dp)
+                  ) {
+                      Text(playlist.name, style = MaterialTheme.typography.titleMedium)
+                      Text(
+                          "Каналов: ${playlist.channelCount}",
+                          style = MaterialTheme.typography.bodySmall
+                      )
+                      Button(onClick = onWatch, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+                          Text("Смотреть")
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          private fun ReadyPlaylistCard(
+              preset: ReadyPlaylistPreset,
+              importing: Boolean,
+              enabled: Boolean,
+              onWatch: () -> Unit
+          ) {
+              Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                  Column(
+                      modifier = Modifier.fillMaxWidth().padding(14.dp),
+                      verticalArrangement = Arrangement.spacedBy(7.dp)
+                  ) {
+                      Text(preset.name, style = MaterialTheme.typography.titleMedium)
+                      Text(preset.note, style = MaterialTheme.typography.bodySmall)
+                      Text(
+                          preset.url,
+                          maxLines = 2,
+                          overflow = TextOverflow.Ellipsis,
+                          style = MaterialTheme.typography.bodySmall
+                      )
+                      Button(onClick = onWatch, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+                          Text(if (importing) "Загрузка…" else "Смотреть")
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          private fun HomeActionCard(
+              title: String,
+              subtitle: String,
+              onClick: () -> Unit
+          ) {
+              Card(
+                  modifier = Modifier
+                      .fillMaxWidth(0.49f)
+                      .tvFocusOutline()
+              ) {
+                  Column(
+                      modifier = Modifier.fillMaxWidth().padding(12.dp),
+                      verticalArrangement = Arrangement.spacedBy(7.dp)
+                  ) {
+                      Text(title, style = MaterialTheme.typography.titleSmall)
+                      Text(
+                          subtitle,
+                          maxLines = 2,
+                          overflow = TextOverflow.Ellipsis,
+                          style = MaterialTheme.typography.bodySmall
+                      )
+                      OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+                          Text("Открыть")
+                      }
+                  }
+              }
+          }
+          ''')
+
+          write("feature/home/src/test/java/com/iptv/tv/feature/home/HomeStartupPolicyTest.kt", r'''
+          package com.iptv.tv.feature.home
+
+          import com.iptv.tv.core.model.Playlist
+          import com.iptv.tv.core.model.PlaylistSourceType
+          import org.junit.Assert.assertEquals
+          import org.junit.Assert.assertNull
+          import org.junit.Test
+
+          class HomeStartupPolicyTest {
+              @Test
+              fun findsPreviouslyImportedReadyPlaylistByExactSource() {
+                  val playlists = listOf(
+                      playlist(id = 7L, source = "https://example.org/one.m3u"),
+                      playlist(id = 9L, source = "https://example.org/two.m3u")
+                  )
+
+                  assertEquals(
+                      9L,
+                      findImportedReadyPlaylist(playlists, "https://example.org/two.m3u")?.id
+                  )
+              }
+
+              @Test
+              fun returnsNullWhenReadyPlaylistWasNotImported() {
+                  assertNull(
+                      findImportedReadyPlaylist(
+                          playlists = listOf(playlist(id = 1L, source = "https://example.org/one.m3u")),
+                          sourceUrl = "https://example.org/missing.m3u"
+                      )
+                  )
+              }
+
+              private fun playlist(id: Long, source: String) = Playlist(
+                  id = id,
+                  name = "Playlist $id",
+                  sourceType = PlaylistSourceType.URL,
+                  source = source,
+                  scheduleHours = 12,
+                  lastSyncedAt = null,
+                  channelCount = 10,
+                  isCustom = false
+              )
+          }
+          ''')
+
+          replace_once(
+              "app/src/main/java/com/iptv/tv/MainActivity.kt",
+              '                                onOpenPlaylists = { navController.navigate(Routes.PLAYLISTS) },\n                                onOpenEpg = { navController.navigate(Routes.EPG) },',
+              '                                onOpenPlaylists = { navController.navigate(Routes.PLAYLISTS) },\n                                onOpenPlaylist = { playlistId -> navController.navigate(Routes.playerRoute(playlistId)) },\n                                onOpenEpg = { navController.navigate(Routes.EPG) },'
+          )
+
+          # --- About: keep author information, remove external mail action. ---
+          write("app/src/main/java/com/iptv/tv/AboutScreen.kt", r'''
+          package com.iptv.tv
+
+          import android.os.Build
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.ExperimentalLayoutApi
+          import androidx.compose.foundation.layout.FlowRow
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.material3.Card
+          import androidx.compose.material3.MaterialTheme
+          import androidx.compose.material3.OutlinedButton
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.Composable
+          import androidx.compose.runtime.remember
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.unit.dp
+          import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
+          import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+
+          private const val AUTHOR_NAME = "Rinat Sarmuldin"
+          private const val AUTHOR_EMAIL = "ura07srr@gmail.com"
+
+          @Composable
+          @kotlin.OptIn(ExperimentalLayoutApi::class)
+          fun AboutScreen(
+              onOpenDiagnostics: () -> Unit,
+              onOpenSettings: () -> Unit
+          ) {
+              val context = LocalContext.current
+              val versionName = remember(context) {
+                  runCatching {
+                      @Suppress("DEPRECATION")
+                      context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                  }.getOrNull().orEmpty().ifBlank { "не определена" }
+              }
+
+              TvScrollableLazyColumn(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .padding(16.dp),
+                  verticalArrangement = Arrangement.spacedBy(12.dp)
+              ) {
+                  item {
+                      Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                          Column(
+                              modifier = Modifier.padding(18.dp),
+                              verticalArrangement = Arrangement.spacedBy(8.dp)
+                          ) {
+                              Text("О приложении", style = MaterialTheme.typography.headlineSmall)
+                              Text("Rinat IPTV", style = MaterialTheme.typography.titleMedium)
+                              Text("IPTV-плеер и менеджер плейлистов для Android TV и TV Box.")
+                          }
+                      }
+                  }
+                  item {
+                      Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                          Column(
+                              modifier = Modifier.padding(18.dp),
+                              verticalArrangement = Arrangement.spacedBy(8.dp)
+                          ) {
+                              Text("Автор", style = MaterialTheme.typography.titleMedium)
+                              Text(AUTHOR_NAME)
+                              Text(AUTHOR_EMAIL)
+                          }
+                      }
+                  }
+                  item {
+                      Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                          Column(
+                              modifier = Modifier.padding(18.dp),
+                              verticalArrangement = Arrangement.spacedBy(6.dp)
+                          ) {
+                              Text("Система", style = MaterialTheme.typography.titleMedium)
+                              Text("Версия приложения: $versionName")
+                              Text("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                              Text("Устройство: ${Build.MANUFACTURER} ${Build.MODEL}")
+                              Text("Процессоров: ${Runtime.getRuntime().availableProcessors()}")
+                              Text("Heap: ${Runtime.getRuntime().maxMemory() / (1024L * 1024L)} МБ")
+                          }
+                      }
+                  }
+                  item {
+                      FlowRow(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalArrangement = Arrangement.spacedBy(10.dp),
+                          verticalArrangement = Arrangement.spacedBy(10.dp)
+                      ) {
+                          OutlinedButton(onClick = onOpenDiagnostics) {
+                              Text("Диагностика")
+                          }
+                          OutlinedButton(onClick = onOpenSettings) {
+                              Text("Настройки")
+                          }
+                      }
+                  }
+              }
+          }
+          ''')
+
+          # --- Diagnostics: persistent reset baseline for old errors/logs. ---
+          write("feature/diagnostics/src/main/java/com/iptv/tv/feature/diagnostics/DiagnosticsLogResetPolicy.kt", r'''
+          package com.iptv.tv.feature.diagnostics
+
+          import com.iptv.tv.core.model.SyncLog
+
+          internal fun activeDiagnosticsLogs(
+              logs: List<SyncLog>,
+              resetAt: Long
+          ): List<SyncLog> = logs.filter { log -> log.createdAt > resetAt }
+
+          internal fun DiagnosticsUiState.afterLogReset(resetAt: Long): DiagnosticsUiState = copy(
+              logResetAt = resetAt,
+              logs = emptyList(),
+              logSearchQuery = "",
+              playerStartupAvgMs = 0L,
+              playerErrorCount = 0,
+              playerRebufferCount = 0,
+              exportedLogPath = null,
+              lastError = null,
+              lastInfo = "Старые ошибки сброшены. Новые записи собираются с этого момента."
+          )
+          ''')
+
+          vm_path = "feature/diagnostics/src/main/java/com/iptv/tv/feature/diagnostics/DiagnosticsViewModel.kt"
+          replace_once(
+              vm_path,
+              '    val playlistOnlyOk: Boolean = false,\n    val logSearchQuery: String = ""\n)',
+              '    val playlistOnlyOk: Boolean = false,\n    val logSearchQuery: String = "",\n    val logResetAt: Long = 0L\n)'
+          )
+          replace_once(
+              vm_path,
+              '    private val _uiState = MutableStateFlow(DiagnosticsUiState())\n    val uiState: StateFlow<DiagnosticsUiState> = _uiState.asStateFlow()\n\n    private val connectivityManager =',
+              '    private val diagnosticsPreferences = appContext.getSharedPreferences(DIAGNOSTICS_PREFS, Context.MODE_PRIVATE)\n    private val _uiState = MutableStateFlow(\n        DiagnosticsUiState(\n            logResetAt = diagnosticsPreferences.getLong(KEY_LOG_RESET_AT, 0L)\n        )\n    )\n    val uiState: StateFlow<DiagnosticsUiState> = _uiState.asStateFlow()\n\n    private val connectivityManager ='
+          )
+          replace_once(
+              vm_path,
+              '    fun updateLogSearchQuery(value: String) {\n        _uiState.update { it.copy(logSearchQuery = value) }\n    }\n\n    fun updateScanQuery(value: String) {',
+              '    fun updateLogSearchQuery(value: String) {\n        _uiState.update { it.copy(logSearchQuery = value) }\n    }\n\n    fun resetLogs() {\n        val resetAt = System.currentTimeMillis()\n        diagnosticsPreferences.edit().putLong(KEY_LOG_RESET_AT, resetAt).apply()\n        _uiState.update { state -> state.afterLogReset(resetAt) }\n    }\n\n    fun updateScanQuery(value: String) {'
+          )
+          replace_once(
+              vm_path,
+              '            diagnosticsRepository.observeLogs(limit = 120).collect { logs ->\n                val readyStartupSamples = logs\n                    .filter { it.status == "player_ready" }',
+              '            diagnosticsRepository.observeLogs(limit = 120).collect { logs ->\n                val activeLogs = activeDiagnosticsLogs(logs, _uiState.value.logResetAt)\n                val readyStartupSamples = activeLogs\n                    .filter { it.status == "player_ready" }'
+          )
+          replace_once(
+              vm_path,
+              '                        logs = logs,\n                        playerStartupAvgMs = startupAvg,\n                        playerErrorCount = logs.count { log -> log.status == "player_error" },\n                        playerRebufferCount = logs.count { log -> log.status == "player_rebuffer" }',
+              '                        logs = activeLogs,\n                        playerStartupAvgMs = startupAvg,\n                        playerErrorCount = activeLogs.count { log -> log.status == "player_error" },\n                        playerRebufferCount = activeLogs.count { log -> log.status == "player_rebuffer" }'
+          )
+          replace_once(
+              vm_path,
+              '    private companion object {\n        const val MB = 1024L * 1024L\n    }',
+              '    private companion object {\n        const val MB = 1024L * 1024L\n        const val DIAGNOSTICS_PREFS = "diagnostics_view"\n        const val KEY_LOG_RESET_AT = "log_reset_at"\n    }'
+          )
+
+          screen_path = "feature/diagnostics/src/main/java/com/iptv/tv/feature/diagnostics/DiagnosticsScreen.kt"
+          replace_once(
+              screen_path,
+              'import androidx.compose.material3.Button\nimport androidx.compose.material3.Card',
+              'import androidx.compose.material3.AlertDialog\nimport androidx.compose.material3.Button\nimport androidx.compose.material3.Card'
+          )
+          replace_once(
+              screen_path,
+              '    var selectedTab by rememberSaveable { mutableStateOf(DiagnosticsTab.OVERVIEW) }\n',
+              '    var selectedTab by rememberSaveable { mutableStateOf(DiagnosticsTab.OVERVIEW) }\n    var showLogResetConfirm by rememberSaveable { mutableStateOf(false) }\n'
+          )
+          replace_once(
+              screen_path,
+              '                            OutlinedButton(\n                                onClick = {\n                                    saveDocumentLauncher.launch("myscanerIPTV-logs-${System.currentTimeMillis()}.txt")\n                                }\n                            ) {\n                                Text("Экспорт как...")\n                            }',
+              '                            OutlinedButton(\n                                onClick = {\n                                    saveDocumentLauncher.launch("myscanerIPTV-logs-${System.currentTimeMillis()}.txt")\n                                }\n                            ) {\n                                Text("Экспорт как...")\n                            }\n                            OutlinedButton(\n                                onClick = { showLogResetConfirm = true },\n                                enabled = state.logs.isNotEmpty()\n                            ) {\n                                Text("Сбросить старые ошибки")\n                            }'
+          )
+          replace_once(
+              screen_path,
+              '        onPrimaryAction?.let { action ->\n            item {\n                OutlinedButton(onClick = action) {\n                    Text(primaryLabel)\n                }\n            }\n        }\n    }\n}',
+              '        onPrimaryAction?.let { action ->\n            item {\n                OutlinedButton(onClick = action) {\n                    Text(primaryLabel)\n                }\n            }\n        }\n    }\n\n    if (showLogResetConfirm) {\n        AlertDialog(\n            onDismissRequest = { showLogResetConfirm = false },\n            title = { Text("Сбросить старые ошибки?") },\n            text = {\n                Text("Старые записи перестанут отображаться. Новые ошибки и события будут собираться с момента сброса.")\n            },\n            confirmButton = {\n                Button(\n                    onClick = {\n                        showLogResetConfirm = false\n                        viewModel.resetLogs()\n                    }\n                ) {\n                    Text("Сбросить")\n                }\n            },\n            dismissButton = {\n                OutlinedButton(onClick = { showLogResetConfirm = false }) {\n                    Text("Отмена")\n                }\n            }\n        )\n    }\n}'
+          )
+
+          write("feature/diagnostics/src/test/java/com/iptv/tv/feature/diagnostics/DiagnosticsLogResetPolicyTest.kt", r'''
+          package com.iptv.tv.feature.diagnostics
+
+          import com.iptv.tv.core.model.SyncLog
+          import org.junit.Assert.assertEquals
+          import org.junit.Assert.assertTrue
+          import org.junit.Test
+
+          class DiagnosticsLogResetPolicyTest {
+              @Test
+              fun keepsOnlyLogsCreatedAfterResetPoint() {
+                  val logs = listOf(
+                      log(id = 1L, createdAt = 99L),
+                      log(id = 2L, createdAt = 100L),
+                      log(id = 3L, createdAt = 101L)
+                  )
+
+                  assertEquals(listOf(3L), activeDiagnosticsLogs(logs, resetAt = 100L).map { it.id })
+              }
+
+              @Test
+              fun resetStateClearsVisibleCountersAndSearch() {
+                  val state = DiagnosticsUiState(
+                      logs = listOf(log(id = 1L, createdAt = 10L)),
+                      logSearchQuery = "error",
+                      playerStartupAvgMs = 500L,
+                      playerErrorCount = 3,
+                      playerRebufferCount = 2
+                  ).afterLogReset(resetAt = 20L)
+
+                  assertTrue(state.logs.isEmpty())
+                  assertEquals("", state.logSearchQuery)
+                  assertEquals(0, state.playerErrorCount)
+                  assertEquals(0, state.playerRebufferCount)
+                  assertEquals(20L, state.logResetAt)
+              }
+
+              private fun log(id: Long, createdAt: Long) = SyncLog(
+                  id = id,
+                  playlistId = null,
+                  status = "player_error",
+                  message = "error",
+                  createdAt = createdAt
+              )
+          }
+          ''')
+
+          # --- Build output: keep APKs in Gradle/GitHub Actions, not in source control. ---
+          app_gradle = Path("app/build.gradle.kts")
+          app_gradle_text = app_gradle.read_text(encoding="utf-8")
+          app_gradle_text, count = re.subn(
+              r'\nval tvBoxDebugApkName = "myscanerIPTV-tvbox-debug-latest\\.apk".*\Z',
+              '\n',
+              app_gradle_text,
+              flags=re.S
+          )
+          if count != 1:
+              raise RuntimeError("Unable to remove tracked APK copy task from app/build.gradle.kts")
+          app_gradle.write_text(app_gradle_text, encoding="utf-8")
+
+          android_ci = Path(".github/workflows/android.yml")
+          ci_text = android_ci.read_text(encoding="utf-8")
+          upload_marker = "      - name: Upload unit/lint/release reports\n"
+          if upload_marker not in ci_text:
+              raise RuntimeError("Android CI upload marker not found")
+          apk_upload = '''      - name: Upload APKs\n        uses: actions/upload-artifact@v4\n        with:\n          name: android-apks\n          path: |\n            app/build/outputs/apk/debug/*.apk\n            app/build/outputs/apk/release/*.apk\n          if-no-files-found: error\n          retention-days: 14\n\n'''
+          android_ci.write_text(ci_text.replace(upload_marker, apk_upload + upload_marker, 1), encoding="utf-8")
+
+          write(".gitignore", r'''
+          *.iml
+          .gradle/
+          /local.properties
+          /.idea/
+          .DS_Store
+          /build/
+          **/build/
+          /captures/
+          .externalNativeBuild/
+          .cxx/
+          /.tools/
+          /.android-sdk/
+          __pycache__/
+          *.pyc
+
+          # Build packages are published through GitHub Actions/Releases, not committed.
+          *.apk
+          *.aab
+          /artifacts/
+          /build-artifacts/
+          /Rinat-IPTV-final-build/
+          ''')
+
+          for obsolete in [
+              ".github/workflows/player-controls-fix-ci.yml",
+              ".github/workflows/stage11-android-ci.yml",
+              "CHANGELOG_LOCAL.md"
+          ]:
+              path = Path(obsolete)
+              if path.exists():
+                  path.unlink()
+          for obsolete_dir in ["Rinat-IPTV-final-build", "build-artifacts"]:
+              path = Path(obsolete_dir)
+              if path.exists():
+                  shutil.rmtree(path)
+
+          # --- Clean project-level documentation. ---
+          old_notice_path = Path("docs/third-party/acestream-engine-client-LICENSE.txt")
+          old_notice = old_notice_path.read_text(encoding="utf-8") if old_notice_path.exists() else ""
+          if Path("docs").exists():
+              shutil.rmtree("docs")
+
+          write("README.md", r'''
+          # Rinat IPTV
+
+          Android TV/TV Box приложение для просмотра IPTV, управления плейлистами и работы с EPG.
+
+          ## Быстрый старт
+
+          После запуска открывается экран **«Смотреть ТВ»**:
+
+          1. выберите один из сохранённых списков каналов; или
+          2. нажмите **«Смотреть»** у готового списка — приложение загрузит его и сразу откроет плеер;
+          3. когда готовых источников станет мало, используйте кнопку **«Найти новые списки в сканере»**.
+
+          Сканер и поиск плейлистов остаются отдельным инструментом и не изменяются текущим этапом.
+
+          ## Возможности
+
+          - готовые и пользовательские M3U/M3U8-плейлисты;
+          - сканирование публичных источников и ручной импорт;
+          - редактор каналов и безопасные рабочие копии;
+          - Media3/ExoPlayer с изолированным LibVLC fallback;
+          - Ace Stream Android Service/AIDL;
+          - группы, подгруппы, избранное, история и EPG;
+          - управление D-pad, пультом, мышью, тачпадом и сенсорным экраном;
+          - полноэкранный режим, автоскрытие панели и постраничная навигация;
+          - адаптивный буфер для слабых TV Box;
+          - диагностика, экспорт и сброс старых ошибок.
+
+          ## Требования
+
+          - JDK 17;
+          - Android SDK 35;
+          - Android 7.0+ (`minSdk 24`).
+
+          ## Сборка
+
+          Windows PowerShell:
+
+          ```powershell
+          $env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"
+          .\gradlew.bat --no-daemon assembleDebug
+          ```
+
+          Linux:
+
+          ```bash
+          JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew --no-daemon assembleDebug
+          ```
+
+          APK создаётся стандартно:
+
+          ```text
+          app/build/outputs/apk/debug/app-debug.apk
+          app/build/outputs/apk/release/
+          ```
+
+          APK/AAB не хранятся в Git. GitHub Actions прикладывает их к успешным запускам workflow.
+
+          ## Проверка
+
+          Основной workflow `.github/workflows/android.yml` выполняет:
+
+          - Android lint;
+          - unit-тесты модулей;
+          - `assembleDebug`;
+          - `assembleRelease`;
+          - публикацию APK и отчётов как временных GitHub Actions artifacts.
+
+          ## Документация
+
+          Актуальная документация находится в [`docs/README.md`](docs/README.md).
+          План развития и оставшиеся проверки: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+          ## Автор
+
+          **Rinat Sarmuldin**  
+          `ura07srr@gmail.com`
+
+          ## Лицензия
+
+          Проект распространяется на условиях файла [`LICENSE`](LICENSE). Лицензии сторонних компонентов сохранены в `docs/legal/`.
+          ''')
+
+          write("CHANGELOG.md", r'''
+          # Changelog
+
+          Все значимые изменения проекта фиксируются в этом файле.
+
+          ## Unreleased
+
+          ### Added
+          - Стартовый экран просмотра с сохранёнными и готовыми списками каналов.
+          - Быстрый переход из готового списка непосредственно в плеер.
+          - Сброс старых ошибок и начало нового диагностического журнала.
+
+          ### Changed
+          - Главный сценарий приложения теперь начинается с просмотра ТВ, а сканер остаётся дополнительным разделом.
+          - Документация объединена по назначению вместо набора файлов `stage*` и `hotfix*`.
+          - APK публикуются через GitHub Actions и больше не хранятся в репозитории.
+
+          ### Removed
+          - Кнопка внешней отправки письма из раздела «О приложении».
+          - Временные CI workflow завершённых этапов.
+          - Дублирующие каталоги с debug APK.
+
+          ## 0.1.0 — 2026-08-06
+
+          - Ace Stream Android Service/AIDL.
+          - Media3 с LibVLC fallback.
+          - Адаптивный TV-интерфейс и полноэкранный плеер.
+          - Навигация каналов, групп и подгрупп с фокусом и Page Up/Page Down.
+          - Адаптивная буферизация для слабых TV Box.
+          - Автоматические lint, unit, debug и release проверки.
+          ''')
+
+          write("LICENSE", r'''
+          Copyright (c) 2026 Rinat Sarmuldin. All rights reserved.
+
+          This source code and its accompanying documentation are provided for review,
+          education, testing, and personal use only. Redistribution, commercial use,
+          sublicensing, or publication of modified builds requires prior written permission
+          from the copyright holder.
+
+          Third-party libraries and components remain subject to their own licenses. Their
+          notices are preserved in the repository documentation.
+          ''')
+
+          write("docs/README.md", r'''
+          # Документация Rinat IPTV
+
+          Здесь находятся только актуальные документы проекта.
+
+          ## Основное
+
+          - [`ROADMAP.md`](ROADMAP.md) — выполненные и следующие этапы.
+          - [`architecture.md`](architecture.md) — структура модулей и границы ответственности.
+          - [`features/player.md`](features/player.md) — стартовый сценарий и плеер.
+          - [`features/scanner-import-editor.md`](features/scanner-import-editor.md) — сканер, импорт и редактор.
+          - [`features/diagnostics.md`](features/diagnostics.md) — логи, экспорт и сброс ошибок.
+          - [`integrations/acestream.md`](integrations/acestream.md) — интеграция Ace Stream.
+          - [`testing/device-acceptance.md`](testing/device-acceptance.md) — проверка на TV Box.
+          - [`release/release-process.md`](release/release-process.md) — подготовка релиза.
+
+          ## Служебное
+
+          - [`development/ai-tools.md`](development/ai-tools.md) — офлайн-инструменты индексации.
+          - [`archive/development-stages.md`](archive/development-stages.md) — краткая история завершённых этапов.
+          - [`legal/`](legal/) — уведомления сторонних компонентов.
+          ''')
+
+          write("docs/ROADMAP.md", r'''
+          # План проекта
+
+          ## Завершено
+
+          - сканирование и поиск публичных плейлистов;
+          - импорт URL, файла, текста и провайдеров;
+          - редактор, избранное, история и EPG;
+          - стартовый экран просмотра с готовыми списками;
+          - Media3 и LibVLC fallback;
+          - Ace Stream Android Service/AIDL;
+          - TV-интерфейс, пульт, мышь, тачпад и полноэкранный режим;
+          - группы, подгруппы, восстановление фокуса и постраничная прокрутка;
+          - адаптивный буфер для слабых устройств;
+          - автоматические lint, unit, debug и release сборки;
+          - очистка документации, workflow и бинарных артефактов.
+
+          ## Следующий обязательный этап: проверка на устройствах
+
+          1. Проверить D-pad, оптическую мышь и тачпад на слабом и среднем TV Box.
+          2. Проверить готовые списки, Media3 → LibVLC fallback и Ace Stream на реальных потоках.
+          3. Выполнить минимум двухчасовой тест непрерывного просмотра.
+          4. Выполнить восьмичасовой soak-тест перед стабильным релизом.
+          5. Проверить слабую сеть: 2–5 Мбит/с, задержка 120–250 мс, потеря 1–3%.
+          6. Подготовить keystore, собрать подписанный APK и проверить подпись.
+          7. Заполнить отчёт приёмки и создать GitHub Release.
+
+          ## После релиза
+
+          - сбор обратной связи по конкретным моделям TV Box;
+          - оптимизация проблемных кодеков и потоков по реальным логам;
+          - улучшение каталога готовых источников без изменения работающего сканера.
+          ''')
+
+          write("docs/architecture.md", r'''
+          # Архитектура
+
+          Проект разделён на Android-модули:
+
+          - `app` — навигация и сборка приложения;
+          - `core/model` — модели данных;
+          - `core/domain` — интерфейсы репозиториев;
+          - `core/data` и `core/database` — хранение и реализация репозиториев;
+          - `core/network` — сетевые источники;
+          - `core/player` и `core/player-vlc` — Media3 и LibVLC;
+          - `core/engine` — Ace Stream;
+          - `feature/*` — независимые экраны и сценарии;
+          - `sync` — фоновые обновления.
+
+          Главный экран `feature/home` отвечает за быстрый выбор сохранённого или готового списка. После выбора навигация передаёт `playlistId` в `feature/player`.
+
+          Защищённые области при UI/плеерных изменениях:
+
+          - `feature/scanner/**`;
+          - `core/network/**`;
+          - `ScannerRepository`;
+          - `SearchPlaylistsUseCase`;
+          - логика ранжирования и фильтрации результатов поиска.
+          ''')
+
+          write("docs/features/player.md", r'''
+          # Плеер и стартовый сценарий
+
+          ## Запуск
+
+          Приложение открывает экран «Смотреть ТВ». На нём доступны:
+
+          - сохранённые плейлисты;
+          - встроенный каталог готовых URL;
+          - переход в сканер для поиска дополнительных источников.
+
+          Готовый источник импортируется только после выбора пользователя. После успешного импорта открывается плеер с конкретным `playlistId`.
+
+          ## Воспроизведение
+
+          - Media3 используется как основной движок.
+          - LibVLC запускается один раз как fallback для неподдерживаемого контейнера, demux или кодека.
+          - Сетевые и HTTP-ошибки не запускают бессмысленный повтор через другой движок.
+          - Ace Stream descriptor передаётся установленному Android Engine.
+
+          ## Управление
+
+          - одиночное нажатие показывает или скрывает панель;
+          - двойное нажатие переключает полноэкранный режим;
+          - Channel ± и media previous/next меняют канал;
+          - Home, End, Page Up и Page Down управляют длинными списками;
+          - выбранные канал, группа и подгруппа сохраняют фокус после фильтрации.
+          ''')
+
+          write("docs/features/scanner-import-editor.md", r'''
+          # Сканер, импорт и редактор
+
+          Сканер ищет публичные M3U/M3U8 источники через поддерживаемые API и поисковые провайдеры. Его рабочая логика не изменяется этапами интерфейса и плеера.
+
+          Импорт поддерживает URL, файл, текст, Xtream Codes, Stalker Portal и другие подключённые провайдеры. Перед сохранением выполняется разбор M3U и удаление дубликатов.
+
+          Редактор работает с пользовательской копией, позволяет скрывать, удалять, переименовывать и перегруппировывать каналы, а также экспортировать M3U/M3U8/TXT.
+
+          Для расширения каталога сначала используйте готовые списки на стартовом экране, затем — сканер или ручной импорт.
+          ''')
+
+          write("docs/features/diagnostics.md", r'''
+          # Диагностика
+
+          Раздел отображает состояние сети, runtime, плеера, Ace Stream и последние журналы приложения.
+
+          ## Работа с логами
+
+          - фильтр по статусу, сообщению и `playlistId`;
+          - экспорт в Downloads или выбранный документ;
+          - кнопка «Сбросить старые ошибки» устанавливает новую временную точку журнала;
+          - записи до этой точки скрываются, а новые ошибки собираются отдельно;
+          - в базе хранится ограниченная выборка последних событий, поэтому старые записи постепенно вытесняются.
+
+          Сброс предназначен для воспроизведения новой проблемы без шума от предыдущих запусков.
+          ''')
+
+          write("docs/integrations/acestream.md", r'''
+          # Ace Stream
+
+          Приложение распознаёт `acestream://`, `ace://`, Content ID, magnet, `.torrent`, `.acelive` и локальные Engine URL.
+
+          Интеграция использует официальный Android Service/AIDL контракт:
+
+          1. обнаружение установленного Ace Stream Media/Engine;
+          2. `bindService`;
+          3. запуск и ожидание готовности движка;
+          4. получение локального HTTP endpoint;
+          5. передача разрешённого потока в основной плеер.
+
+          Если движок отсутствует или не отвечает, пользователь получает диагностируемую ошибку без бесконечного цикла повторов.
+          ''')
+
+          write("docs/testing/device-acceptance.md", r'''
+          # Приёмка на TV Box
+
+          ## Матрица
+
+          - Android 7/API 24, Android 9/10 и Android 12+;
+          - 2 ГБ и 4 ГБ RAM;
+          - D-pad, оптическая мышь, тачпад;
+          - стабильная и ограниченная сеть.
+
+          ## Обязательные сценарии
+
+          1. Запуск → готовый список → импорт → выбор канала → воспроизведение.
+          2. Сохранённый список → прямой переход в плеер.
+          3. Сканер → импорт → редактор → плеер.
+          4. Переключение каналов и полноэкранного режима всеми типами ввода.
+          5. Media3 → LibVLC fallback на проблемном потоке.
+          6. Ace Stream через установленный Android Engine.
+          7. Сброс логов → повтор ошибки → экспорт нового журнала.
+
+          ## Длительные тесты
+
+          - быстрый этап: не менее 2 часов непрерывного HLS;
+          - релизный этап: 8 часов, смена канала каждые 3–5 минут;
+          - критерии: без crash/ANR, память стабилизируется, восстановление не зацикливается.
+
+          ## Слабая сеть
+
+          - 2–5 Мбит/с;
+          - 120–250 мс задержки;
+          - 1–3% потери пакетов.
+          ''')
+
+          write("docs/release/release-process.md", r'''
+          # Процесс релиза
+
+          ## Автоматическая проверка
+
+          Ветка должна пройти основной Android CI: lint, unit-тесты, debug и release сборки.
+
+          ## Подписанная сборка
+
+          Настройте переменные окружения:
+
+          ```text
+          IPTV_RELEASE_STORE_FILE
+          IPTV_RELEASE_STORE_PASSWORD
+          IPTV_RELEASE_KEY_ALIAS
+          IPTV_RELEASE_KEY_PASSWORD
+          ```
+
+          Затем выполните:
+
+          ```bash
+          ./gradlew --no-daemon :app:assembleRelease
+          ```
+
+          Проверьте подпись и SHA-256. APK хранится в GitHub Release, а не в Git-репозитории.
+
+          ## Release gate
+
+          - [ ] Android CI зелёный;
+          - [ ] тест на слабом и среднем TV Box;
+          - [ ] двухчасовой тест;
+          - [ ] восьмичасовой soak-тест;
+          - [ ] слабая сеть;
+          - [ ] подпись APK;
+          - [ ] заполненный отчёт приёмки.
+          ''')
+
+          write("docs/release/device-acceptance-report-template.md", r'''
+          # Отчёт приёмки устройства
+
+          - Модель TV Box:
+          - Android/API:
+          - RAM/CPU:
+          - Тип управления:
+          - Версия приложения/commit:
+          - Использованный плейлист:
+          - Длительность теста:
+          - Результат Media3:
+          - Результат LibVLC fallback:
+          - Результат Ace Stream:
+          - Среднее время старта:
+          - Rebuffer/ошибки:
+          - Crash/ANR:
+          - Итог: PASS / FAIL
+          - Примечания:
+          ''')
+
+          write("docs/development/ai-tools.md", r'''
+          # Инструменты индексации
+
+          Каталог `tools/ai` используется для офлайн-подготовки индекса публичных плейлистов. Результат можно импортировать в диагностику как JSONL, отфильтровать по HTTP-статусу и числу `EXTINF`, затем вручную добавить выбранный URL.
+
+          Эти инструменты не заменяют встроенный сканер и не должны автоматически публиковать или импортировать непроверенные источники.
+          ''')
+
+          write("docs/archive/development-stages.md", r'''
+          # Архив этапов
+
+          Ранее проект документировался отдельными файлами `stage1`–`stage11`, `hotfix*` и отчётами отдельных веток. После завершения интеграции их актуальное содержание объединено в тематические документы.
+
+          Краткая последовательность:
+
+          1. архитектура и базовые модели;
+          2. сканер;
+          3. импорт;
+          4. редактор;
+          5. плеер;
+          6. Engine и диагностика;
+          7. стабилизация;
+          8. подготовка релиза;
+          9. план приёмки устройств;
+          10. навигация длинных списков;
+          11. TV-интерфейс, адаптивный буфер, LibVLC и Ace Stream.
+
+          Детальная история изменений сохраняется в Git и `CHANGELOG.md`; дублирующие stage-файлы удалены.
+          ''')
+
+          write("docs/legal/acestream-engine-client-LICENSE.txt", old_notice or r'''
+          Ace Stream Engine client components retain the license supplied by their original authors.
+          See the upstream project for the complete license terms.
+          ''')
+          PY
+
+      - name: Verify protected scanner and search sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only)"
+          echo "$changed"
+          if echo "$changed" | grep -E '^(feature/scanner/|core/network/|core/domain/.*/ScannerRepository\.kt$|core/domain/.*/SearchPlaylistsUseCase\.kt$)'; then
+            echo "Protected scanner/search source changed" >&2
+            exit 1
+          fi
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run focused tests, lint and builds
+        shell: bash
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace \
+            :feature:home:testDebugUnitTest \
+            :feature:diagnostics:testDebugUnitTest \
+            :feature:player:testDebugUnitTest \
+            :app:lintDebug \
+            :app:assembleDebug \
+            :app:assembleRelease
+
+      - name: Commit verified cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-startup-cleanup.yml
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(app): player-first startup, log reset and repository cleanup"
+          git push origin HEAD:feat/startup-player-diagnostics-cleanup
