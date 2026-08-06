@@ -93,18 +93,27 @@ class M3uParser {
     }
 
     private fun parseHeaderEpgUrls(lines: List<String>): List<String> {
-        val attrNames = listOf("url-tvg", "x-tvg-url", "tvg-url")
+        val attributeRegex = Regex(
+            pattern = """\b(?:url-tvg|x-tvg-url|tvg-url)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+))""",
+            option = RegexOption.IGNORE_CASE
+        )
+        val httpUrlRegex = Regex("""https?://[^,;\s"']+""", RegexOption.IGNORE_CASE)
         return lines
             .asSequence()
             .filter { it.startsWith("#EXTM3U", ignoreCase = true) }
             .flatMap { line ->
-                attrNames.asSequence().mapNotNull { attr ->
-                    Regex("$attr=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
-                        .find(line)
-                        ?.groupValues
-                        ?.getOrNull(1)
-                        ?.trim()
-                        ?.takeIf { it.isNotEmpty() }
+                attributeRegex.findAll(line).flatMap { match ->
+                    val rawValue = match.groupValues
+                        .drop(1)
+                        .firstOrNull { it.isNotBlank() }
+                        .orEmpty()
+                        .trim()
+                    val urls = httpUrlRegex.findAll(rawValue).map { it.value.trim() }.toList()
+                    if (urls.isNotEmpty()) urls.asSequence() else rawValue
+                        .split(',', ';')
+                        .asSequence()
+                        .map(String::trim)
+                        .filter { value -> value.startsWith("http://", true) || value.startsWith("https://", true) }
                 }
             }
             .distinct()

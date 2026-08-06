@@ -82,4 +82,25 @@ class M3uParserTest {
         val valid = result as ParseResult.Valid
         assertEquals(channels, valid.channels.size)
     }
+    @Test
+    fun parsesQuotedUnquotedAndMultipleEpgUrls() {
+        val parser = M3uParser()
+        val raw = """
+            #EXTM3U url-tvg='https://epg.example/a.xml,https://epg.example/b.xml' x-tvg-url=https://epg.example/c.xml
+            #EXTINF:-1 tvg-id="id1",Channel
+            https://example.com/live
+        """.trimIndent()
+
+        val result = parser.parse(playlistId = 1, raw = raw) as ParseResult.Valid
+
+        assertEquals(
+            listOf(
+                "https://epg.example/a.xml",
+                "https://epg.example/b.xml",
+                "https://epg.example/c.xml"
+            ),
+            result.epgUrls
+        )
+    }
+
 }

@@ -130,6 +130,32 @@ class StablePlayerScreenTest {
         assertNull(stableAdjacentChannelId(emptyList(), null, 1))
     }
 
+    @Test
+    fun `720p TV layout uses compact controls without leaving the screen`() {
+        assertEquals(true, stableUseWidePlayerLayout(widthDp = 1280f, heightDp = 720f))
+        assertEquals(true, stableUseCompactPlayerControls(heightDp = 720f))
+    }
+
+    @Test
+    fun `small screens avoid three-column player layout`() {
+        assertEquals(false, stableUseWidePlayerLayout(widthDp = 960f, heightDp = 540f))
+        assertEquals(true, stableUseCompactPlayerControls(heightDp = 540f))
+    }
+
+    @Test
+    fun `default local Ace endpoint is resolved through Android service`() {
+        assertEquals(true, isDefaultLocalAceEndpoint("http://127.0.0.1:6878"))
+        assertEquals(true, isDefaultLocalAceEndpoint("localhost:6878/"))
+        assertEquals(false, isDefaultLocalAceEndpoint("http://192.168.1.50:6878"))
+    }
+
+    @Test
+    fun `audio without a confirmed video size is not treated as a visible picture`() {
+        assertEquals(false, stablePictureConfirmed(firstFrameRendered = true, videoWidth = 0, videoHeight = 0))
+        assertEquals(false, stablePictureConfirmed(firstFrameRendered = false, videoWidth = 1920, videoHeight = 1080))
+        assertEquals(true, stablePictureConfirmed(firstFrameRendered = true, videoWidth = 1920, videoHeight = 1080))
+    }
+
     private fun program(title: String, start: Long, end: Long): EpgProgram = EpgProgram(
         title = title,
         description = null,

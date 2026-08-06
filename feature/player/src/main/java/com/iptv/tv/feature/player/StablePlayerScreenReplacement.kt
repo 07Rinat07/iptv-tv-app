@@ -7,10 +7,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -18,6 +21,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -73,6 +77,12 @@ import kotlinx.coroutines.launch
 
 private const val CHANNEL_BANNER_DURATION_MS = 5_000L
 private const val VOLUME_STEP = 0.05f
+
+
+internal fun stableUseWidePlayerLayout(widthDp: Float, heightDp: Float): Boolean =
+    widthDp >= 1_080f && heightDp >= 560f
+
+internal fun stableUseCompactPlayerControls(heightDp: Float): Boolean = heightDp < 760f
 
 internal enum class StableRemoteAction {
     TOGGLE_CONTROLS,
@@ -316,14 +326,15 @@ fun StablePlayerScreen(
             )
         } else {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val wide = maxWidth >= 920.dp
+                val compactHeight = stableUseCompactPlayerControls(maxHeight.value)
+                val wide = stableUseWidePlayerLayout(maxWidth.value, maxHeight.value)
                 if (wide) {
                     Row(
                         modifier = Modifier.fillMaxSize().padding(12.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         StablePlayerRailReplacement(
-                            modifier = Modifier.width(170.dp).fillMaxHeight(),
+                            modifier = Modifier.width(if (compactHeight) 148.dp else 170.dp).fillMaxHeight(),
                             favoritesOnly = favoritesOnly,
                             onBack = onBack,
                             onLive = { favoritesOnly = false },
@@ -334,6 +345,7 @@ fun StablePlayerScreen(
                         )
                         StableCenterPaneReplacement(
                             modifier = Modifier.weight(1f).fillMaxHeight(),
+                            compact = compactHeight,
                             session = state.internalSession,
                             selectedChannel = selectedChannel,
                             programs = selectedPrograms,
@@ -358,7 +370,7 @@ fun StablePlayerScreen(
                             onOpenChannels = { showChannelDrawer = true }
                         )
                         StableChannelBrowserReplacement(
-                            modifier = Modifier.width(350.dp).fillMaxHeight(),
+                            modifier = Modifier.width(if (compactHeight) 300.dp else 350.dp).fillMaxHeight(),
                             query = state.channelQuery,
                             onQueryChange = viewModel::updateChannelQuery,
                             channels = filteredChannels,
@@ -393,6 +405,7 @@ fun StablePlayerScreen(
                         }
                         StableCenterPaneReplacement(
                             modifier = Modifier.fillMaxWidth().weight(1f),
+                            compact = true,
                             session = state.internalSession,
                             selectedChannel = selectedChannel,
                             programs = selectedPrograms,
@@ -523,6 +536,7 @@ private fun StablePlayerRailReplacement(
 @UnstableApi
 private fun StableCenterPaneReplacement(
     modifier: Modifier,
+    compact: Boolean,
     session: InternalPlaybackSession?,
     selectedChannel: Channel?,
     programs: List<EpgProgram>,
@@ -545,78 +559,165 @@ private fun StableCenterPaneReplacement(
     onOpenChannels: () -> Unit
 ) {
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-            if (session != null) {
-                StableVideoSurface(
-                    session = session,
-                    scale = scale,
-                    expanded = false,
-                    volume = volume,
-                    showControls = controlsVisible,
-                    onToggleControls = { controlsVisible = !controlsVisible },
-                    onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },
-                    onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
-                    onToggleMute = onToggleMute,
-                    onReady = { onReady(session.sessionId) },
-                    onError = { onError(session.sessionId, it) },
-                    onToggleFullscreen = onToggleFullscreen,
-                    onPreviousChannel = onPreviousChannel,
-                    onNextChannel = onNextChannel,
-                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .background(Color.Black)
-                        .combinedClickable(
-                            onClick = { controlsVisible = !controlsVisible },
-                            onDoubleClick = onToggleFullscreen
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(selectedChannel?.name ?: "Выберите канал", color = Color.White)
-                        Button(
-                            onClick = onPlaySelected,
-                            enabled = selectedChannel != null && !isStartingPlayback,
-                            modifier = Modifier.padding(top = 10.dp)
-                        ) {
-                            Text(if (isStartingPlayback) "Подключение…" else "Смотреть")
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 10.dp)) {
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val targetVideoHeight = (maxWidth * 9f / 16f)
+                .coerceAtMost(if (compact) 320.dp else 480.dp)
+                .coerceAtLeast(180.dp)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(targetVideoHeight)
+                    .tvFocusOutline()
+            ) {
+                if (session != null) {
+                    StableVideoSurface(
+                        session = session,
+                        scale = scale,
+                        expanded = false,
+                        volume = volume,
+                        showControls = controlsVisible,
+                        onToggleControls = { controlsVisible = !controlsVisible },
+                        onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },
+                        onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
+                        onToggleMute = onToggleMute,
+                        onReady = { onReady(session.sessionId) },
+                        onError = { onError(session.sessionId, it) },
+                        onToggleFullscreen = onToggleFullscreen,
+                        onPreviousChannel = onPreviousChannel,
+                        onNextChannel = onNextChannel,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black)
+                            .combinedClickable(
+                                onClick = { controlsVisible = !controlsVisible },
+                                onDoubleClick = onToggleFullscreen
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(selectedChannel?.name ?: "Выберите канал", color = Color.White)
+                            Button(
+                                onClick = onPlaySelected,
+                                enabled = selectedChannel != null && !isStartingPlayback,
+                                modifier = Modifier.padding(top = 8.dp)
+                            ) {
+                                Text(if (isStartingPlayback) "Подключение…" else "Смотреть")
+                            }
                         }
-                    }
-                    if (controlsVisible) {
-                        StableFullscreenButton(
-                            expanded = false,
-                            onClick = onToggleFullscreen,
-                            modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
-                        )
+                        if (controlsVisible) {
+                            StableFullscreenButton(
+                                expanded = false,
+                                onClick = onToggleFullscreen,
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                            )
+                        }
                     }
                 }
             }
         }
 
-        StableNowNextCardReplacement(
-            channel = selectedChannel,
-            programs = programs,
-            isFavorite = selectedChannel?.id?.let { it in favoriteIds } == true,
-            volume = volume,
-            onVolumeChange = onVolumeChange,
-            onToggleMute = onToggleMute,
-            onToggleFavorite = { selectedChannel?.id?.let(onToggleFavorite) },
-            onPrevious = onPreviousChannel,
-            onNext = onNextChannel,
-            onOpenChannels = onOpenChannels
-        )
+        if (compact) {
+            StableCompactControlsReplacement(
+                channel = selectedChannel,
+                programs = programs,
+                isFavorite = selectedChannel?.id?.let { it in favoriteIds } == true,
+                volume = volume,
+                onVolumeChange = onVolumeChange,
+                onToggleMute = onToggleMute,
+                onToggleFavorite = { selectedChannel?.id?.let(onToggleFavorite) },
+                onPrevious = onPreviousChannel,
+                onNext = onNextChannel,
+                onOpenChannels = onOpenChannels
+            )
+        } else {
+            StableNowNextCardReplacement(
+                channel = selectedChannel,
+                programs = programs,
+                isFavorite = selectedChannel?.id?.let { it in favoriteIds } == true,
+                volume = volume,
+                onVolumeChange = onVolumeChange,
+                onToggleMute = onToggleMute,
+                onToggleFavorite = { selectedChannel?.id?.let(onToggleFavorite) },
+                onPrevious = onPreviousChannel,
+                onNext = onNextChannel,
+                onOpenChannels = onOpenChannels
+            )
 
-        StableNearbyChannelsReplacement(
-            channels = channels,
-            epgByChannel = epgByChannel,
-            onSelectChannel = onSelectChannel,
-            modifier = Modifier.fillMaxWidth().weight(1f)
-        )
+            StableNearbyChannelsReplacement(
+                channels = channels,
+                epgByChannel = epgByChannel,
+                onSelectChannel = onSelectChannel,
+                modifier = Modifier.fillMaxWidth().weight(1f)
+            )
+        }
+    }
+
+}
+
+@Composable
+private fun StableCompactControlsReplacement(
+    channel: Channel?,
+    programs: List<EpgProgram>,
+    isFavorite: Boolean,
+    volume: Float,
+    onVolumeChange: (Float) -> Unit,
+    onToggleMute: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onOpenChannels: () -> Unit
+) {
+    val current = stableCurrentProgram(programs, System.currentTimeMillis())
+    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    channel?.name ?: "Канал не выбран",
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    current?.let { "${stableRange(it)} · ${it.title}" } ?: "EPG нет",
+                    modifier = Modifier.weight(1.4f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedButton(
+                    onClick = onToggleFavorite,
+                    enabled = channel != null,
+                    modifier = Modifier.size(42.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) { Text(if (isFavorite) "★" else "☆") }
+            }
+            VolumeControl(
+                volume = volume,
+                onVolumeChange = onVolumeChange,
+                onToggleMute = onToggleMute
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OutlinedButton(onClick = onPrevious, modifier = Modifier.weight(1f)) { Text("◀") }
+                OutlinedButton(onClick = onOpenChannels, modifier = Modifier.weight(1.4f)) { Text("Каналы") }
+                OutlinedButton(onClick = onNext, modifier = Modifier.weight(1f)) { Text("▶") }
+            }
+        }
     }
 }
 
@@ -1095,24 +1196,51 @@ private fun VolumeControl(
     dark: Boolean = false
 ) {
     val labelColor = if (dark) Color.White else MaterialTheme.colorScheme.onSurface
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        OutlinedButton(onClick = onToggleMute) { Text(if (volume <= 0f) "🔇" else "🔊") }
-        OutlinedButton(onClick = { onVolumeChange(volume - VOLUME_STEP) }) { Text("−") }
-        Slider(
-            value = volume,
-            onValueChange = { onVolumeChange(it.coerceIn(0f, 1f)) },
-            modifier = Modifier.weight(1f),
-            steps = 19,
-            valueRange = 0f..1f
-        )
-        OutlinedButton(onClick = { onVolumeChange(volume + VOLUME_STEP) }) { Text("+") }
-        Text("${(volume * 100).toInt()}%", color = labelColor)
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 460.dp
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp)
+        ) {
+            OutlinedButton(
+                onClick = onToggleMute,
+                modifier = Modifier.size(42.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) { Text(if (volume <= 0f) "🔇" else "🔊") }
+            OutlinedButton(
+                onClick = { onVolumeChange(volume - VOLUME_STEP) },
+                modifier = Modifier.size(42.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) { Text("−") }
+            if (!compact) {
+                Slider(
+                    value = volume,
+                    onValueChange = { onVolumeChange(it.coerceIn(0f, 1f)) },
+                    modifier = Modifier.weight(1f),
+                    steps = 19,
+                    valueRange = 0f..1f
+                )
+            } else {
+                Text(
+                    "${(volume * 100).toInt()}%",
+                    modifier = Modifier.weight(1f),
+                    color = labelColor,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            OutlinedButton(
+                onClick = { onVolumeChange(volume + VOLUME_STEP) },
+                modifier = Modifier.size(42.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) { Text("+") }
+            if (!compact) {
+                Text("${(volume * 100).toInt()}%", color = labelColor)
+            }
+        }
     }
 }
+
 
 @Composable
 private fun VerticalScrollControls(
@@ -1216,7 +1344,7 @@ private fun StablePanelDialogReplacement(
                 )
 
                 StablePlayerPanel.GROUPS -> Column(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 620.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 260.dp, max = 520.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     ScrollableButtonList(
@@ -1244,7 +1372,10 @@ private fun StablePanelDialogReplacement(
                 }
 
                 StablePlayerPanel.SETTINGS -> Column(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 520.dp)
+                        .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text("Режим кадра: $scale")
