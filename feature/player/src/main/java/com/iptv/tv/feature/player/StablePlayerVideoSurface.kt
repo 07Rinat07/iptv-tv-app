@@ -1,7 +1,5 @@
 package com.iptv.tv.feature.player
 
-import android.view.KeyEvent as AndroidKeyEvent
-import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,6 +39,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.iptv.tv.core.player.toLoadControl
+import com.iptv.tv.core.playervlc.LibVlcFallbackPolicy
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -49,6 +48,11 @@ private const val STABLE_IPTV_USER_AGENT = "Rinat-IPTV/1.0 (Android TV; Media3)"
 private const val FIRST_VIDEO_FRAME_TIMEOUT_MS = 12_000L
 private const val VIDEO_RECOVERY_TIMEOUT_MS = 14_000L
 
+private enum class StablePlaybackBackend {
+    MEDIA3,
+    LIBVLC
+}
+
 @Composable
 @UnstableApi
 internal fun StableVideoSurface(
@@ -56,6 +60,80 @@ internal fun StableVideoSurface(
     scale: PlayerVideoScale,
     expanded: Boolean,
     volume: Float,
+    showControls: Boolean,
+    onToggleControls: () -> Unit,
+    onVolumeUp: () -> Unit,
+    onVolumeDown: () -> Unit,
+    onToggleMute: () -> Unit,
+    onReady: () -> Unit,
+    onError: (String) -> Unit,
+    onToggleFullscreen: () -> Unit,
+    onPreviousChannel: () -> Unit,
+    onNextChannel: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var backend by remember(session.sessionId) { mutableStateOf(StablePlaybackBackend.MEDIA3) }
+    var media3Failure by remember(session.sessionId) { mutableStateOf<String?>(null) }
+
+    when (backend) {
+        StablePlaybackBackend.MEDIA3 -> StableMedia3VideoSurface(
+            session = session,
+            scale = scale,
+            expanded = expanded,
+            volume = volume,
+            showControls = showControls,
+            onToggleControls = onToggleControls,
+            onVolumeUp = onVolumeUp,
+            onVolumeDown = onVolumeDown,
+            onToggleMute = onToggleMute,
+            onReady = onReady,
+            onError = { message ->
+                val decision = LibVlcFallbackPolicy.evaluate(message)
+                if (decision.shouldFallback) {
+                    media3Failure = "$message (${decision.diagnostic})"
+                    backend = StablePlaybackBackend.LIBVLC
+                } else {
+                    onError(message)
+                }
+            },
+            onToggleFullscreen = onToggleFullscreen,
+            onPreviousChannel = onPreviousChannel,
+            onNextChannel = onNextChannel,
+            modifier = modifier
+        )
+
+        StablePlaybackBackend.LIBVLC -> StableLibVlcVideoSurface(
+            session = session,
+            scale = scale,
+            expanded = expanded,
+            volume = volume,
+            showControls = showControls,
+            onToggleControls = onToggleControls,
+            onVolumeUp = onVolumeUp,
+            onVolumeDown = onVolumeDown,
+            onToggleMute = onToggleMute,
+            onReady = onReady,
+            onError = { vlcMessage ->
+                val original = media3Failure ?: "неизвестная ошибка Media3"
+                onError("Media3: $original; LibVLC: $vlcMessage")
+            },
+            onToggleFullscreen = onToggleFullscreen,
+            onPreviousChannel = onPreviousChannel,
+            onNextChannel = onNextChannel,
+            modifier = modifier
+        )
+    }
+}
+
+@Composable
+@UnstableApi
+private fun StableMedia3VideoSurface(
+    session: InternalPlaybackSession,
+    scale: PlayerVideoScale,
+    expanded: Boolean,
+    volume: Float,
+    showControls: Boolean,
+    onToggleControls: () -> Unit,
     onVolumeUp: () -> Unit,
     onVolumeDown: () -> Unit,
     onToggleMute: () -> Unit,
@@ -119,6 +197,23 @@ internal fun StableVideoSurface(
         }
         return
     }
+
+    val inputHandler = remember(context) { StablePlayerInputHandler(context) }
+    inputHandler.update(
+        expanded = expanded,
+        callbacks = StablePlayerInputCallbacks(
+            onToggleControls = onToggleControls,
+            onToggleFullscreen = onToggleFullscreen,
+            onPreviousChannel = onPreviousChannel,
+            onNextChannel = onNextChannel,
+            onVolumeUp = onVolumeUp,
+            onVolumeDown = onVolumeDown,
+            onToggleMute = onToggleMute,
+            onTogglePlayback = {
+                if (player.isPlaying) player.pause() else player.play()
+            }
+        )
+    )
 
     LaunchedEffect(player, volume) {
         player.volume = volume.coerceIn(0f, 1f)
@@ -279,43 +374,7 @@ internal fun StableVideoSurface(
                     isClickable = true
                     isFocusable = true
                     isFocusableInTouchMode = true
-                    setOnClickListener { onToggleFullscreen() }
-                    setOnKeyListener { _: View, keyCode: Int, event: AndroidKeyEvent ->
-                        if (event.action != AndroidKeyEvent.ACTION_UP) return@setOnKeyListener false
-                        when (stableRemoteActionForKey(keyCode)) {
-                            StableRemoteAction.TOGGLE_FULLSCREEN -> {
-                                onToggleFullscreen()
-                                true
-                            }
-
-                            StableRemoteAction.NEXT_CHANNEL -> {
-                                onNextChannel()
-                                true
-                            }
-
-                            StableRemoteAction.PREVIOUS_CHANNEL -> {
-                                onPreviousChannel()
-                                true
-                            }
-
-                            StableRemoteAction.VOLUME_UP -> {
-                                onVolumeUp()
-                                true
-                            }
-
-                            StableRemoteAction.VOLUME_DOWN -> {
-                                onVolumeDown()
-                                true
-                            }
-
-                            StableRemoteAction.TOGGLE_MUTE -> {
-                                onToggleMute()
-                                true
-                            }
-
-                            StableRemoteAction.NONE -> false
-                        }
-                    }
+                    inputHandler.attachTo(this)
                     this.player = player
                     if (expanded) post { requestFocus() }
                 }
@@ -327,12 +386,11 @@ internal fun StableVideoSurface(
                     PlayerVideoScale.FILL -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                     PlayerVideoScale.ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 }
-                view.setOnClickListener { onToggleFullscreen() }
+                inputHandler.attachTo(view)
                 if (expanded && !view.hasFocus()) view.post { view.requestFocus() }
             },
             onRelease = { view ->
-                view.setOnClickListener(null)
-                view.setOnKeyListener(null)
+                inputHandler.detachFrom(view)
                 view.player = null
             }
         )
@@ -347,11 +405,13 @@ internal fun StableVideoSurface(
             }
         }
 
-        StableFullscreenButton(
-            expanded = expanded,
-            onClick = onToggleFullscreen,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
-        )
+        if (showControls && !expanded) {
+            StableFullscreenButton(
+                expanded = false,
+                onClick = onToggleFullscreen,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+            )
+        }
     }
 }
 

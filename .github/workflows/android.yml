@@ -105,6 +105,9 @@ jobs:
       - name: Unit tests core player
         run: ./gradlew --no-daemon --stacktrace :core:player:testDebugUnitTest
 
+      - name: Unit tests core player VLC
+        run: ./gradlew --no-daemon --stacktrace :core:player-vlc:testDebugUnitTest
+
       - name: Unit tests feature epg
         run: ./gradlew --no-daemon --stacktrace :feature:epg:testDebugUnitTest
 
@@ -140,15 +143,20 @@ jobs:
         run: ./gradlew --no-daemon --stacktrace assembleDebug
 
       - name: Assemble release
-        run: ./gradlew --no-daemon --stacktrace assembleRelease
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace --info assembleRelease 2>&1 | tee assemble-release.log
 
-      - name: Upload unit/lint reports
+      - name: Upload unit/lint/release reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-lint-reports
+          name: unit-lint-release-reports
           path: |
+            assemble-release.log
             **/build/reports/tests/**
             **/build/test-results/**
             **/build/reports/lint-results*.html
             **/build/reports/lint-results*.xml
+            **/build/outputs/mapping/**

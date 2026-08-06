@@ -2,8 +2,10 @@ package com.iptv.tv.feature.player
 
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -73,19 +75,28 @@ private const val CHANNEL_BANNER_DURATION_MS = 5_000L
 private const val VOLUME_STEP = 0.05f
 
 internal enum class StableRemoteAction {
+    TOGGLE_CONTROLS,
     TOGGLE_FULLSCREEN,
     NEXT_CHANNEL,
     PREVIOUS_CHANNEL,
     VOLUME_UP,
     VOLUME_DOWN,
     TOGGLE_MUTE,
+    TOGGLE_PLAYBACK,
     NONE
 }
 
-internal fun stableRemoteActionForKey(keyCode: Int): StableRemoteAction = when (keyCode) {
+internal fun stableRemoteActionForKey(
+    keyCode: Int,
+    fullscreen: Boolean = false
+): StableRemoteAction = when (keyCode) {
     KeyEvent.KEYCODE_DPAD_CENTER,
     KeyEvent.KEYCODE_ENTER,
-    KeyEvent.KEYCODE_NUMPAD_ENTER -> StableRemoteAction.TOGGLE_FULLSCREEN
+    KeyEvent.KEYCODE_NUMPAD_ENTER,
+    KeyEvent.KEYCODE_MENU,
+    KeyEvent.KEYCODE_GUIDE -> StableRemoteAction.TOGGLE_CONTROLS
+
+    KeyEvent.KEYCODE_F -> StableRemoteAction.TOGGLE_FULLSCREEN
 
     KeyEvent.KEYCODE_CHANNEL_UP,
     KeyEvent.KEYCODE_MEDIA_NEXT -> StableRemoteAction.NEXT_CHANNEL
@@ -93,23 +104,36 @@ internal fun stableRemoteActionForKey(keyCode: Int): StableRemoteAction = when (
     KeyEvent.KEYCODE_CHANNEL_DOWN,
     KeyEvent.KEYCODE_MEDIA_PREVIOUS -> StableRemoteAction.PREVIOUS_CHANNEL
 
+    KeyEvent.KEYCODE_DPAD_LEFT ->
+        if (fullscreen) StableRemoteAction.PREVIOUS_CHANNEL else StableRemoteAction.NONE
+    KeyEvent.KEYCODE_DPAD_RIGHT ->
+        if (fullscreen) StableRemoteAction.NEXT_CHANNEL else StableRemoteAction.NONE
+    KeyEvent.KEYCODE_DPAD_UP ->
+        if (fullscreen) StableRemoteAction.VOLUME_UP else StableRemoteAction.NONE
+    KeyEvent.KEYCODE_DPAD_DOWN ->
+        if (fullscreen) StableRemoteAction.VOLUME_DOWN else StableRemoteAction.NONE
+
     KeyEvent.KEYCODE_VOLUME_UP -> StableRemoteAction.VOLUME_UP
     KeyEvent.KEYCODE_VOLUME_DOWN -> StableRemoteAction.VOLUME_DOWN
     KeyEvent.KEYCODE_VOLUME_MUTE,
     KeyEvent.KEYCODE_MUTE -> StableRemoteAction.TOGGLE_MUTE
 
+    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+    KeyEvent.KEYCODE_HEADSETHOOK -> StableRemoteAction.TOGGLE_PLAYBACK
+
     else -> StableRemoteAction.NONE
 }
+
 
 internal fun stableAdjacentChannelId(
     channelIds: List<Long>,
     selectedChannelId: Long?,
     step: Int
-): Long? {
-    if (channelIds.isEmpty()) return null
-    val currentIndex = channelIds.indexOf(selectedChannelId).takeIf { it >= 0 } ?: 0
-    return channelIds[Math.floorMod(currentIndex + step, channelIds.size)]
-}
+): Long? = StableChannelNavigation.adjacentId(
+    channelIds = channelIds,
+    selectedChannelId = selectedChannelId,
+    step = step
+)
 
 private enum class StablePlayerPanel {
     NONE,
@@ -187,6 +211,24 @@ fun StablePlayerScreen(
                     .thenBy { it.name }
             )
             .toList()
+    }
+
+    LaunchedEffect(
+        state.availableGroups,
+        state.availableSubGroups,
+        state.selectedGroup,
+        state.selectedSubGroup
+    ) {
+        val normalized = StableChannelNavigation.normalizeGroupSelection(
+            selectedGroup = state.selectedGroup,
+            selectedSubGroup = state.selectedSubGroup,
+            availableGroups = state.availableGroups,
+            availableSubGroups = state.availableSubGroups
+        )
+        when {
+            normalized.first != state.selectedGroup -> viewModel.selectGroup(normalized.first)
+            normalized.second != state.selectedSubGroup -> viewModel.selectSubGroup(normalized.second)
+        }
     }
 
     val selectedChannel = state.channels.firstOrNull { it.id == state.selectedChannelId }
@@ -476,6 +518,7 @@ private fun StablePlayerRailReplacement(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 @UnstableApi
 private fun StableCenterPaneReplacement(
@@ -501,6 +544,7 @@ private fun StableCenterPaneReplacement(
     onToggleFavorite: (Long) -> Unit,
     onOpenChannels: () -> Unit
 ) {
+    var controlsVisible by rememberSaveable { mutableStateOf(true) }
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
             if (session != null) {
@@ -509,6 +553,8 @@ private fun StableCenterPaneReplacement(
                     scale = scale,
                     expanded = false,
                     volume = volume,
+                    showControls = controlsVisible,
+                    onToggleControls = { controlsVisible = !controlsVisible },
                     onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },
                     onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
                     onToggleMute = onToggleMute,
@@ -525,7 +571,10 @@ private fun StableCenterPaneReplacement(
                         .fillMaxWidth()
                         .aspectRatio(16f / 9f)
                         .background(Color.Black)
-                        .clickable(onClick = onToggleFullscreen),
+                        .combinedClickable(
+                            onClick = { controlsVisible = !controlsVisible },
+                            onDoubleClick = onToggleFullscreen
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -538,11 +587,13 @@ private fun StableCenterPaneReplacement(
                             Text(if (isStartingPlayback) "Подключение…" else "Смотреть")
                         }
                     }
-                    StableFullscreenButton(
-                        expanded = false,
-                        onClick = onToggleFullscreen,
-                        modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
-                    )
+                    if (controlsVisible) {
+                        StableFullscreenButton(
+                            expanded = false,
+                            onClick = onToggleFullscreen,
+                            modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                        )
+                    }
                 }
             }
         }
@@ -643,20 +694,39 @@ private fun StableNearbyChannelsReplacement(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("Каналы рядом", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-            OutlinedButton(onClick = { scope.launch { listState.animateScrollToItem(0) } }) { Text("В начало") }
+            Text(
+                "Каналы рядом",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleSmall
+            )
+            OutlinedButton(
+                onClick = { scope.launch { listState.animateScrollToItem(0) } }
+            ) { Text("В начало") }
             OutlinedButton(
                 onClick = {
                     scope.launch {
-                        listState.animateScrollToItem((listState.firstVisibleItemIndex - 3).coerceAtLeast(0))
+                        listState.animateScrollToItem(
+                            StableChannelNavigation.pageTargetIndex(
+                                currentIndex = listState.firstVisibleItemIndex,
+                                itemCount = channels.size,
+                                pageSize = 3,
+                                direction = -1
+                            )
+                        )
                     }
                 }
             ) { Text("◀") }
             OutlinedButton(
                 onClick = {
                     scope.launch {
-                        val last = (channels.size - 1).coerceAtLeast(0)
-                        listState.animateScrollToItem((listState.firstVisibleItemIndex + 3).coerceAtMost(last))
+                        listState.animateScrollToItem(
+                            StableChannelNavigation.pageTargetIndex(
+                                currentIndex = listState.firstVisibleItemIndex,
+                                itemCount = channels.size,
+                                pageSize = 3,
+                                direction = 1
+                            )
+                        )
                     }
                 }
             ) { Text("▶") }
@@ -677,7 +747,10 @@ private fun StableNearbyChannelsReplacement(
                         .tvFocusOutline()
                         .clickable { onSelectChannel(channel.id) }
                 ) {
-                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(
+                        Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
                             channel.name,
                             maxLines = 1,
@@ -685,7 +758,8 @@ private fun StableNearbyChannelsReplacement(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            current?.let { "${stableTime(it.startEpochMs)} ${it.title}" } ?: "EPG нет",
+                            current?.let { "${stableTime(it.startEpochMs)} ${it.title}" }
+                                ?: "EPG нет",
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
@@ -751,13 +825,26 @@ private fun StableChannelListReplacement(
     onToggleFavorite: (Long) -> Unit
 ) {
     val listState = rememberLazyListState()
-    LaunchedEffect(selectedChannelId, channels) {
-        val index = channels.indexOfFirst { it.id == selectedChannelId }
+    val focusChannelId = remember(channels, selectedChannelId) {
+        StableChannelNavigation.selectionAfterFilter(
+            visibleChannelIds = channels.map { it.id },
+            previousSelectedChannelId = selectedChannelId
+        )
+    }
+    LaunchedEffect(focusChannelId, channels) {
+        val index = channels.indexOfFirst { it.id == focusChannelId }
         if (index >= 0) listState.animateScrollToItem(index)
     }
     Row(modifier) {
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxHeight().focusGroup(),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .focusGroup()
+                .stablePagedListNavigation(
+                    state = listState,
+                    itemCount = channels.size
+                ),
             state = listState,
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -771,6 +858,7 @@ private fun StableChannelListReplacement(
                     modifier = Modifier
                         .fillMaxWidth()
                         .tvFocusOutline()
+                        .stableSelectedFocus(channel.id == focusChannelId)
                         .clickable { onSelect(channel.id) },
                     tonalElevation = if (selected) 8.dp else 1.dp,
                     color = if (selected) {
@@ -790,12 +878,19 @@ private fun StableChannelListReplacement(
                             contentDescription = channel.name,
                             modifier = Modifier.size(38.dp)
                         )
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Column(
+                            Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
                             Text(
                                 channel.name,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                fontWeight = if (selected) {
+                                    FontWeight.Bold
+                                } else {
+                                    FontWeight.Normal
+                                }
                             )
                             Text(
                                 current?.let {
@@ -861,6 +956,7 @@ private fun StableChannelDrawerReplacement(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 @UnstableApi
 private fun StableFullscreenPlayerReplacement(
@@ -879,6 +975,7 @@ private fun StableFullscreenPlayerReplacement(
     onNextChannel: () -> Unit,
     onStop: () -> Unit
 ) {
+    var controlsVisible by rememberSaveable { mutableStateOf(true) }
     BackHandler(onBack = onToggleFullscreen)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         if (session != null) {
@@ -887,6 +984,8 @@ private fun StableFullscreenPlayerReplacement(
                 scale = scale,
                 expanded = true,
                 volume = volume,
+                showControls = controlsVisible,
+                onToggleControls = { controlsVisible = !controlsVisible },
                 onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },
                 onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
                 onToggleMute = onToggleMute,
@@ -899,16 +998,20 @@ private fun StableFullscreenPlayerReplacement(
             )
         } else {
             Box(
-                modifier = Modifier.fillMaxSize().clickable(onClick = onToggleFullscreen),
+                modifier = Modifier.fillMaxSize().combinedClickable(
+                            onClick = { controlsVisible = !controlsVisible },
+                            onDoubleClick = onToggleFullscreen
+                        ),
                 contentAlignment = Alignment.Center
             ) {
                 Text(channel?.name ?: "Канал не выбран", color = Color.White)
             }
         }
 
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
+        if (controlsVisible) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .background(Color.Black.copy(alpha = 0.68f))
                 .windowInsetsPadding(WindowInsets.safeDrawing)
@@ -945,8 +1048,9 @@ private fun StableFullscreenPlayerReplacement(
                 volume = volume,
                 onVolumeChange = onVolumeChange,
                 onToggleMute = onToggleMute,
-                dark = true
-            )
+                    dark = true
+                )
+            }
         }
 
         if (showChannelBanner) {
@@ -1018,7 +1122,6 @@ private fun VerticalScrollControls(
 ) {
     val scope = rememberCoroutineScope()
     val pageSize = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-    val lastIndex = (itemCount - 1).coerceAtLeast(0)
 
     Column(
         modifier = modifier.padding(start = 6.dp),
@@ -1032,7 +1135,14 @@ private fun VerticalScrollControls(
         OutlinedButton(
             onClick = {
                 scope.launch {
-                    state.animateScrollToItem((state.firstVisibleItemIndex - pageSize).coerceAtLeast(0))
+                    state.animateScrollToItem(
+                        StableChannelNavigation.pageTargetIndex(
+                            currentIndex = state.firstVisibleItemIndex,
+                            itemCount = itemCount,
+                            pageSize = pageSize,
+                            direction = -1
+                        )
+                    )
                 }
             },
             enabled = state.canScrollBackward
@@ -1043,7 +1153,14 @@ private fun VerticalScrollControls(
         OutlinedButton(
             onClick = {
                 scope.launch {
-                    state.animateScrollToItem((state.firstVisibleItemIndex + pageSize).coerceAtMost(lastIndex))
+                    state.animateScrollToItem(
+                        StableChannelNavigation.pageTargetIndex(
+                            currentIndex = state.firstVisibleItemIndex,
+                            itemCount = itemCount,
+                            pageSize = pageSize,
+                            direction = 1
+                        )
+                    )
                 }
             },
             enabled = state.canScrollForward
@@ -1165,20 +1282,45 @@ private fun ScrollableButtonList(
     modifier: Modifier = Modifier
 ) {
     val state = rememberLazyListState()
+    LaunchedEffect(selectedIndex, labels.size) {
+        if (selectedIndex in labels.indices) {
+            state.animateScrollToItem(selectedIndex)
+        }
+    }
     Row(modifier.fillMaxWidth().heightIn(min = 180.dp, max = 520.dp)) {
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .focusGroup()
+                .stablePagedListNavigation(state = state, itemCount = labels.size),
             state = state,
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             items(labels.size, key = { it }) { index ->
                 if (index == selectedIndex) {
-                    Button(onClick = { onClick(index) }, modifier = Modifier.fillMaxWidth()) {
-                        Text(labels[index], maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Button(
+                        onClick = { onClick(index) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .stableSelectedFocus(true)
+                    ) {
+                        Text(
+                            labels[index],
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 } else {
-                    OutlinedButton(onClick = { onClick(index) }, modifier = Modifier.fillMaxWidth()) {
-                        Text(labels[index], maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    OutlinedButton(
+                        onClick = { onClick(index) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            labels[index],
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
