@@ -149,10 +149,10 @@ jobs:
             echo "No failed JUnit XML report was produced. The Gradle test JVM may have crashed before writing results."
           fi
 
-      - name: Assemble debug ARM TV APKs
+      - name: Assemble debug for validation
         run: ./gradlew --no-daemon --stacktrace assembleDebug
 
-      - name: Assemble release for validation
+      - name: Assemble compact signed ARM TV APKs
         shell: bash
         run: |
           set -o pipefail
@@ -163,23 +163,42 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-artifacts/tv
-          cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk \
-            build-artifacts/tv/Rinat-IPTV-TV-arm64-v8a-debug.apk
-          cp app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk \
-            build-artifacts/tv/Rinat-IPTV-TV-armeabi-v7a-debug.apk
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk \
+            build-artifacts/tv/Rinat-IPTV-TV-arm64-v8a.apk
+          cp app/build/outputs/apk/release/app-armeabi-v7a-release.apk \
+            build-artifacts/tv/Rinat-IPTV-TV-armeabi-v7a.apk
           cd build-artifacts/tv
           sha256sum *.apk > SHA256SUMS.txt
           ls -lh
           cat SHA256SUMS.txt
 
+      - name: Package clean source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts/source
+          git archive --format=zip \
+            --prefix=iptv-tv-app-updated/ \
+            --output=build-artifacts/source/iptv-tv-app-updated-source.zip \
+            HEAD
+
       - name: Upload TV Box APKs only
         uses: actions/upload-artifact@v4
         with:
-          name: tv-box-debug-apks
+          name: tv-box-apks
           path: |
-            build-artifacts/tv/Rinat-IPTV-TV-arm64-v8a-debug.apk
-            build-artifacts/tv/Rinat-IPTV-TV-armeabi-v7a-debug.apk
+            build-artifacts/tv/Rinat-IPTV-TV-arm64-v8a.apk
+            build-artifacts/tv/Rinat-IPTV-TV-armeabi-v7a.apk
             build-artifacts/tv/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Upload clean source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptv-tv-app-updated-source
+          path: build-artifacts/source/iptv-tv-app-updated-source.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
