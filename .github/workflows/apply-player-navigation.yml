@@ -162,10 +162,8 @@ jobs:
           )
 
           replace_once(
-              '''                        .tvFocusOutline()
-                              .clickable { onSelect(channel.id) },''',
-              '''                        .tvFocusOutline()
-                              .stableSelectedFocus(selected)
+              '                        .clickable { onSelect(channel.id) },',
+              '''                        .stableSelectedFocus(selected)
                               .clickable { onSelect(channel.id) },''',
               'selected channel focus'
           )
