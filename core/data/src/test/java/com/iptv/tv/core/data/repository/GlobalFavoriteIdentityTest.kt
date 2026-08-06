@@ -22,6 +22,22 @@ class GlobalFavoriteIdentityTest {
     }
 
     @Test
+    fun normalizedUrlIsFinalFallbackWhenMetadataMissing() {
+        val first = GlobalFavoriteIdentity.key(
+            tvgId = null,
+            name = "",
+            streamUrl = "HTTPS://Example.COM/live/channel?token=first"
+        )
+        val second = GlobalFavoriteIdentity.key(
+            tvgId = "",
+            name = " ",
+            streamUrl = "https://example.com/live/channel?token=second"
+        )
+
+        assertEquals(first, second)
+    }
+
+    @Test
     fun differentNamedChannelsRemainIndependent() {
         val first = GlobalFavoriteIdentity.key(null, "Канал 1", "https://a/1")
         val second = GlobalFavoriteIdentity.key(null, "Канал 2", "https://a/1")
