@@ -1,0 +1,266 @@
+name: Apply player navigation integration
+
+on:
+  push:
+    branches:
+      - feat/player-channel-navigation-v2
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: feat/player-channel-navigation-v2
+
+      - name: Apply guarded source patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''internal fun stableAdjacentChannelId(
+              channelIds: List<Long>,
+              selectedChannelId: Long?,
+              step: Int
+          ): Long? {
+              if (channelIds.isEmpty()) return null
+              val currentIndex = channelIds.indexOf(selectedChannelId).takeIf { it >= 0 } ?: 0
+              return channelIds[Math.floorMod(currentIndex + step, channelIds.size)]
+          }''',
+              '''internal fun stableAdjacentChannelId(
+              channelIds: List<Long>,
+              selectedChannelId: Long?,
+              step: Int
+          ): Long? = StableChannelNavigation.adjacentId(
+              channelIds = channelIds,
+              selectedChannelId = selectedChannelId,
+              step = step
+          )''',
+              'adjacent policy'
+          )
+
+          replace_once(
+              '''            .toList()
+              }
+
+              val selectedChannel = state.channels.firstOrNull { it.id == state.selectedChannelId }''',
+              '''            .toList()
+              }
+
+              LaunchedEffect(
+                  state.availableGroups,
+                  state.availableSubGroups,
+                  state.selectedGroup,
+                  state.selectedSubGroup
+              ) {
+                  val normalized = StableChannelNavigation.normalizeGroupSelection(
+                      selectedGroup = state.selectedGroup,
+                      selectedSubGroup = state.selectedSubGroup,
+                      availableGroups = state.availableGroups,
+                      availableSubGroups = state.availableSubGroups
+                  )
+                  when {
+                      normalized.first != state.selectedGroup -> viewModel.selectGroup(normalized.first)
+                      normalized.second != state.selectedSubGroup -> viewModel.selectSubGroup(normalized.second)
+                  }
+              }
+
+              val selectedChannel = state.channels.firstOrNull { it.id == state.selectedChannelId }''',
+              'group normalization'
+          )
+
+          replace_once(
+              '''                        listState.animateScrollToItem((listState.firstVisibleItemIndex - 3).coerceAtLeast(0))''',
+              '''                        listState.animateScrollToItem(
+                              StableChannelNavigation.pageTargetIndex(
+                                  currentIndex = listState.firstVisibleItemIndex,
+                                  itemCount = channels.size,
+                                  pageSize = 3,
+                                  direction = -1
+                              )
+                          )''',
+              'nearby previous page'
+          )
+
+          replace_once(
+              '''                        val last = (channels.size - 1).coerceAtLeast(0)
+                          listState.animateScrollToItem((listState.firstVisibleItemIndex + 3).coerceAtMost(last))''',
+              '''                        listState.animateScrollToItem(
+                              StableChannelNavigation.pageTargetIndex(
+                                  currentIndex = listState.firstVisibleItemIndex,
+                                  itemCount = channels.size,
+                                  pageSize = 3,
+                                  direction = 1
+                              )
+                          )''',
+              'nearby next page'
+          )
+
+          replace_once(
+              '''    val listState = rememberLazyListState()
+              LaunchedEffect(selectedChannelId, channels) {
+                  val index = channels.indexOfFirst { it.id == selectedChannelId }
+                  if (index >= 0) listState.animateScrollToItem(index)
+              }''',
+              '''    val listState = rememberLazyListState()
+              val visibleSelectedChannelId = remember(channels, selectedChannelId) {
+                  StableChannelNavigation.selectionAfterFilter(
+                      visibleChannelIds = channels.map { it.id },
+                      previousSelectedChannelId = selectedChannelId
+                  )
+              }
+              LaunchedEffect(visibleSelectedChannelId, channels) {
+                  val index = channels.indexOfFirst { it.id == visibleSelectedChannelId }
+                  if (index >= 0) listState.animateScrollToItem(index)
+              }''',
+              'visible channel selection'
+          )
+
+          replace_once(
+              '''            modifier = Modifier.weight(1f).fillMaxHeight().focusGroup(),
+                  state = listState,
+                  verticalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                  items(channels, key = { it.id })''',
+              '''            modifier = Modifier
+                      .weight(1f)
+                      .fillMaxHeight()
+                      .focusGroup()
+                      .stablePagedListNavigation(state = listState, itemCount = channels.size),
+                  state = listState,
+                  verticalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                  items(channels, key = { it.id })''',
+              'channel list key paging'
+          )
+
+          replace_once(
+              '''                val selected = channel.id == selectedChannelId''',
+              '''                val selected = channel.id == visibleSelectedChannelId''',
+              'visible selected row'
+          )
+
+          replace_once(
+              '''                    modifier = Modifier
+                              .fillMaxWidth()
+                              .tvFocusOutline()
+                              .clickable { onSelect(channel.id) },''',
+              '''                    modifier = Modifier
+                              .fillMaxWidth()
+                              .tvFocusOutline()
+                              .stableSelectedFocus(selected)
+                              .clickable { onSelect(channel.id) },''',
+              'selected channel focus'
+          )
+
+          replace_once(
+              '''    val pageSize = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+              val lastIndex = (itemCount - 1).coerceAtLeast(0)''',
+              '''    val pageSize = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)''',
+              'remove local last index'
+          )
+
+          replace_once(
+              '''                    state.animateScrollToItem((state.firstVisibleItemIndex - pageSize).coerceAtLeast(0))''',
+              '''                    state.animateScrollToItem(
+                          StableChannelNavigation.pageTargetIndex(
+                              currentIndex = state.firstVisibleItemIndex,
+                              itemCount = itemCount,
+                              pageSize = pageSize,
+                              direction = -1
+                          )
+                      )''',
+              'vertical previous page'
+          )
+
+          replace_once(
+              '''                    state.animateScrollToItem((state.firstVisibleItemIndex + pageSize).coerceAtMost(lastIndex))''',
+              '''                    state.animateScrollToItem(
+                          StableChannelNavigation.pageTargetIndex(
+                              currentIndex = state.firstVisibleItemIndex,
+                              itemCount = itemCount,
+                              pageSize = pageSize,
+                              direction = 1
+                          )
+                      )''',
+              'vertical next page'
+          )
+
+          replace_once(
+              '''    val state = rememberLazyListState()
+              Row(modifier.fillMaxWidth().heightIn(min = 180.dp, max = 520.dp)) {''',
+              '''    val state = rememberLazyListState()
+              LaunchedEffect(selectedIndex, labels.size) {
+                  if (selectedIndex in labels.indices) {
+                      state.animateScrollToItem(selectedIndex)
+                  }
+              }
+              Row(modifier.fillMaxWidth().heightIn(min = 180.dp, max = 520.dp)) {''',
+              'selected group visibility'
+          )
+
+          replace_once(
+              '''            modifier = Modifier.weight(1f).fillMaxHeight(),
+                  state = state,
+                  verticalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                  items(labels.size, key = { it })''',
+              '''            modifier = Modifier
+                      .weight(1f)
+                      .fillMaxHeight()
+                      .focusGroup()
+                      .stablePagedListNavigation(state = state, itemCount = labels.size),
+                  state = state,
+                  verticalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                  items(labels.size, key = { it })''',
+              'group list key paging'
+          )
+
+          replace_once(
+              '''                    Button(onClick = { onClick(index) }, modifier = Modifier.fillMaxWidth()) {''',
+              '''                    Button(
+                          onClick = { onClick(index) },
+                          modifier = Modifier.fillMaxWidth().stableSelectedFocus(true)
+                      ) {''',
+              'selected group focus'
+          )
+
+          replace_once(
+              '''                    OutlinedButton(onClick = { onClick(index) }, modifier = Modifier.fillMaxWidth()) {''',
+              '''                    OutlinedButton(
+                          onClick = { onClick(index) },
+                          modifier = Modifier.fillMaxWidth().stableSelectedFocus(false)
+                      ) {''',
+              'unselected group focus modifier'
+          )
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit integration
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt
+          git diff --cached --check
+          git commit -m "feat(player): connect channel navigation to UI"
+          git push origin HEAD:feat/player-channel-navigation-v2
