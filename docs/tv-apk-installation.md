@@ -1,9 +1,9 @@
 # Установка APK на Android TV / TV Box
 
-GitHub Actions публикует два устанавливаемых debug APK без x86-библиотек и без unsigned release:
+GitHub Actions публикует два компактных устанавливаемых APK без x86-библиотек и без unsigned release:
 
-- `Rinat-IPTV-TV-arm64-v8a-debug.apk` — основной вариант для большинства современных 64-битных TV Box;
-- `Rinat-IPTV-TV-armeabi-v7a-debug.apk` — вариант для старых 32-битных ARM-устройств.
+- `Rinat-IPTV-TV-arm64-v8a.apk` — основной вариант для большинства современных 64-битных TV Box;
+- `Rinat-IPTV-TV-armeabi-v7a.apk` — вариант для старых 32-битных ARM-устройств.
 
 ## Как определить архитектуру
 
@@ -26,7 +26,9 @@ sha256sum -c SHA256SUMS.txt
 ## Установка
 
 ```bash
-adb install -r Rinat-IPTV-TV-arm64-v8a-debug.apk
+adb install -r Rinat-IPTV-TV-arm64-v8a.apk
 ```
 
-Сборочные каталоги Gradle не публикуются. В APK-артефакт входят только два установочных файла и контрольные суммы.
+При отсутствии production-keystore CI использует стандартную debug-подпись Android Gradle Plugin. Такой APK предназначен для тестирования и ручной установки. После настройки release-secrets эти же задачи автоматически используют production-подпись.
+
+Сборочные каталоги Gradle не публикуются. В APK-артефакт входят только два установочных файла и контрольные суммы. Чистый архив исходников публикуется отдельным артефактом.
