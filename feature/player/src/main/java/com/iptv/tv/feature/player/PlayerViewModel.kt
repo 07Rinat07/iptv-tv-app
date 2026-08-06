@@ -78,6 +78,19 @@ private const val DUPLICATE_INTERNAL_PLAY_WINDOW_MS = 1_500L
 private const val CHANNEL_LIST_EPG_WINDOW_MS = 3 * 60 * 60 * 1000L
 private const val CHANNEL_LIST_EPG_REFRESH_MS = 10 * 60 * 1000L
 
+
+internal fun isDefaultLocalAceEndpoint(endpoint: String): Boolean {
+    val normalized = endpoint
+        .trim()
+        .lowercase(Locale.ROOT)
+        .removeSuffix("/")
+        .removePrefix("http://")
+        .removePrefix("https://")
+    return normalized == "127.0.0.1:6878" ||
+        normalized == "localhost:6878" ||
+        normalized.isBlank()
+}
+
 private fun defaultMultiviewDeviceCapability(): MultiviewDeviceCapability {
     return evaluateMultiviewDeviceCapability(
         cpuCount = Runtime.getRuntime().availableProcessors(),
@@ -1484,15 +1497,9 @@ class PlayerViewModel @Inject constructor(
         }
 
         if (playlist.epgSourceUrl.isNullOrBlank()) {
-            channelListEpgJob?.cancel()
-            channelListEpgLoadedPlaylistId = null
             _uiState.update {
-                it.copy(
-                    channelListEpgPrograms = emptyMap(),
-                    channelListEpgStatus = "EPG в списке: источник не настроен"
-                )
+                it.copy(channelListEpgStatus = "EPG в списке: автопоиск источника...")
             }
-            return
         }
 
         val now = System.currentTimeMillis()
@@ -1621,13 +1628,9 @@ class PlayerViewModel @Inject constructor(
         val playlist = playlistId?.let { id -> stateSnapshot.playlists.firstOrNull { it.id == id } }
         val epgUrl = playlist?.epgSourceUrl?.trim().orEmpty()
         if (playlist != null && epgUrl.isBlank()) {
-            pushEpgUiErrorWithCooldown(
-                signature = "missing_epg_source|${playlist.id}",
-                message = "EPG: источник не настроен для плейлиста ${playlist.name} (id=${playlist.id})",
-                cooldownMs = MISSING_EPG_SOURCE_LOG_COOLDOWN_MS
-            )
-            logMissingEpgSourceOncePerCooldown(playlistId = playlist.id, channelId = channelId)
-            return
+            _uiState.update {
+                it.copy(epgStatus = "EPG: источник не задан, выполняется автопоиск по заголовку плейлиста")
+            }
         }
 
         epgJob?.cancel()
@@ -1788,8 +1791,8 @@ class PlayerViewModel @Inject constructor(
 
     private fun observeFavorites() {
         viewModelScope.launch {
-            favoritesRepository.observeFavorites().collect { channels ->
-                _uiState.update { it.copy(favoriteChannelIds = channels.map { item -> item.id }.toSet()) }
+            favoritesRepository.observeFavoriteChannelIds().collect { channelIds ->
+                _uiState.update { it.copy(favoriteChannelIds = channelIds) }
             }
         }
     }
@@ -1924,16 +1927,24 @@ class PlayerViewModel @Inject constructor(
             }
         }
 
-        when (val connectResult = engineRepository.connect(state.engineEndpoint)) {
-            is AppResult.Success -> Unit
-            is AppResult.Error -> return AppResult.Error("Ошибка подключения к Engine Stream: ${connectResult.message}")
-            AppResult.Loading -> return AppResult.Loading
+        val configuredEndpoint = state.engineEndpoint.trim()
+        if (!isDefaultLocalAceEndpoint(configuredEndpoint)) {
+            when (val connectResult = engineRepository.connect(configuredEndpoint)) {
+                is AppResult.Success -> Unit
+                is AppResult.Error -> return AppResult.Error(
+                    "Не удалось подключиться к пользовательскому Ace endpoint: ${connectResult.message}"
+                )
+                AppResult.Loading -> return AppResult.Loading
+            }
         }
 
         val descriptorToResolve = aceDescriptor ?: url
         return when (val resolveResult = engineRepository.resolveTorrentStream(descriptorToResolve)) {
             is AppResult.Success -> resolveResult
-            is AppResult.Error -> AppResult.Error("Ошибка резолва torrent потока: ${resolveResult.message}")
+            is AppResult.Error -> AppResult.Error(
+                "Ace Stream не подготовил поток: ${resolveResult.message}. " +
+                    "Убедитесь, что официальное приложение Ace Stream установлено и разрешён запуск службы."
+            )
             AppResult.Loading -> AppResult.Loading
         }
     }

@@ -426,6 +426,7 @@ class PlayerViewModelMultiviewTest {
 
     private class FakeFavoritesRepository : FavoritesRepository {
         override fun observeFavorites(): Flow<List<Channel>> = MutableStateFlow(emptyList())
+        override fun observeFavoriteChannelIds(): Flow<Set<Long>> = MutableStateFlow(emptySet())
         override suspend fun toggleFavorite(channelId: Long) = Unit
     }
 

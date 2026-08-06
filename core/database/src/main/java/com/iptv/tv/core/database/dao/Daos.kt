@@ -52,6 +52,13 @@ interface PlaylistDao {
     @Query("SELECT id FROM playlists")
     suspend fun getAllIds(): List<Long>
 
+    @Query(
+        "SELECT * FROM playlists " +
+            "WHERE epgSourceUrl IS NOT NULL AND TRIM(epgSourceUrl) != '' " +
+            "ORDER BY createdAt DESC"
+    )
+    suspend fun getPlaylistsWithEpgSource(): List<PlaylistEntity>
+
     @Query("UPDATE playlists SET lastSyncedAt = :syncedAt WHERE id = :playlistId")
     suspend fun updateLastSynced(playlistId: Long, syncedAt: Long)
 
@@ -72,6 +79,9 @@ interface ChannelDao {
 
     @Query("SELECT * FROM channels WHERE playlistId = :playlistId ORDER BY orderIndex ASC")
     suspend fun getChannels(playlistId: Long): List<ChannelEntity>
+
+    @Query("SELECT * FROM channels")
+    suspend fun getAllChannels(): List<ChannelEntity>
 
     @Query("SELECT * FROM channels WHERE id IN (:channelIds)")
     suspend fun findByIds(channelIds: List<Long>): List<ChannelEntity>
@@ -128,6 +138,12 @@ interface FavoriteDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: FavoriteEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(items: List<FavoriteEntity>)
+
+    @Query("SELECT * FROM favorites")
+    suspend fun getFavorites(): List<FavoriteEntity>
 
     @Query("DELETE FROM favorites WHERE channelId = :channelId")
     suspend fun delete(channelId: Long)

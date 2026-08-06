@@ -26,6 +26,7 @@ class EngineStreamClient(
     )
 
     private var connectedEndpoint: String? = null
+    private var connectedAccessToken: String? = null
 
     fun observeStatus(): StateFlow<EngineStatus> = status.asStateFlow()
 
@@ -36,6 +37,7 @@ class EngineStreamClient(
         return when (val result = fetchStatus(normalized)) {
             is AppResult.Success -> {
                 connectedEndpoint = normalized
+                connectedAccessToken = null
                 status.value = result.data.copy(
                     connected = true,
                     message = "Connected: $normalized"
@@ -61,7 +63,21 @@ class EngineStreamClient(
         val connector = serviceConnector
             ?: return AppResult.Error("Ace Stream service connector is not configured")
         return when (val result = connector.ensureStarted()) {
-            is AppResult.Success -> connect(result.data.endpoint)
+            is AppResult.Success -> {
+                connectedEndpoint = result.data.endpoint
+                connectedAccessToken = result.data.accessToken
+                when (val statusResult = fetchStatus(result.data.endpoint)) {
+                    is AppResult.Success -> {
+                        status.value = statusResult.data.copy(
+                            connected = true,
+                            message = "Connected: ${result.data.packageName}"
+                        )
+                        AppResult.Success(Unit)
+                    }
+                    is AppResult.Error -> statusResult
+                    AppResult.Loading -> AppResult.Loading
+                }
+            }
             is AppResult.Error -> {
                 status.value = status.value.copy(
                     connected = false,
@@ -123,6 +139,7 @@ class EngineStreamClient(
         val request = buildEngineRequest(descriptor)
         val options = buildMap {
             put("method", "open_torrent")
+            connectedAccessToken?.takeIf { it.isNotBlank() }?.let { put("access_token", it) }
             putAll(request)
         }
 
@@ -132,7 +149,7 @@ class EngineStreamClient(
                 options = options
             )
             val playable = extractPlayableUrl(response)
-                ?: buildFallbackStreamUrl(endpoint, request)
+                ?: buildFallbackStreamUrl(endpoint, request, connectedAccessToken)
 
             status.value = status.value.copy(
                 connected = true,
@@ -154,6 +171,7 @@ class EngineStreamClient(
     fun closeInstalledEngineConnection() {
         serviceConnector?.close()
         connectedEndpoint = null
+        connectedAccessToken = null
         status.value = status.value.copy(
             connected = false,
             peers = 0,
@@ -169,6 +187,7 @@ class EngineStreamClient(
         return when (val result = connector.ensureStarted()) {
             is AppResult.Success -> {
                 connectedEndpoint = result.data.endpoint
+                connectedAccessToken = result.data.accessToken
                 status.value = status.value.copy(
                     connected = true,
                     message = "Ace Stream Engine ready: ${result.data.packageName}"
@@ -183,10 +202,18 @@ class EngineStreamClient(
     private suspend fun fetchStatus(endpoint: String): AppResult<EngineStatus> {
         return runCatching {
             val serviceUrl = buildServiceUrl(endpoint)
+            val statusOptions = buildMap {
+                put("method", "get_status")
+                connectedAccessToken?.takeIf { it.isNotBlank() }?.let { put("access_token", it) }
+            }
             val response = runCatching {
-                api.status(serviceUrl, mapOf("method" to "get_status"))
+                api.status(serviceUrl, statusOptions)
             }.getOrElse {
-                api.status(serviceUrl)
+                val tokenOnly = connectedAccessToken
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { mapOf("access_token" to it) }
+                    .orEmpty()
+                api.status(serviceUrl, tokenOnly)
             }
 
             val root = extractRootMap(response)
@@ -229,11 +256,21 @@ class EngineStreamClient(
         return AceStreamDescriptorParser.toEngineRequest(descriptor)
     }
 
-    private fun buildFallbackStreamUrl(endpoint: String, request: Map<String, String>): String {
+    private fun buildFallbackStreamUrl(
+        endpoint: String,
+        request: Map<String, String>,
+        accessToken: String?
+    ): String {
         val key = if (request.containsKey("id")) "id" else "url"
         val value = request[key].orEmpty()
         val encoded = URLEncoder.encode(value, StandardCharsets.UTF_8.toString())
-        return "${endpoint.removeSuffix("/")}/ace/getstream?$key=$encoded"
+        val tokenQuery = accessToken
+            ?.takeIf { it.isNotBlank() }
+            ?.let { token ->
+                "&access_token=${URLEncoder.encode(token, StandardCharsets.UTF_8.toString())}"
+            }
+            .orEmpty()
+        return "${endpoint.removeSuffix("/")}/ace/getstream?$key=$encoded$tokenQuery"
     }
 
     private fun normalizeEndpoint(raw: String): String? {

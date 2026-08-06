@@ -23,12 +23,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -45,8 +47,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 private const val STABLE_IPTV_USER_AGENT = "Rinat-IPTV/1.0 (Android TV; Media3)"
-private const val FIRST_VIDEO_FRAME_TIMEOUT_MS = 12_000L
-private const val VIDEO_RECOVERY_TIMEOUT_MS = 14_000L
+private const val FIRST_VIDEO_FRAME_TIMEOUT_MS = 8_000L
+private const val VIDEO_RECOVERY_TIMEOUT_MS = 6_000L
+
+internal fun stablePictureConfirmed(
+    firstFrameRendered: Boolean,
+    videoWidth: Int,
+    videoHeight: Int
+): Boolean = firstFrameRendered && videoWidth > 0 && videoHeight > 0
 
 private enum class StablePlaybackBackend {
     MEDIA3,
@@ -75,54 +83,69 @@ internal fun StableVideoSurface(
     var backend by remember(session.sessionId) { mutableStateOf(StablePlaybackBackend.MEDIA3) }
     var media3Failure by remember(session.sessionId) { mutableStateOf<String?>(null) }
 
-    when (backend) {
-        StablePlaybackBackend.MEDIA3 -> StableMedia3VideoSurface(
-            session = session,
-            scale = scale,
-            expanded = expanded,
-            volume = volume,
-            showControls = showControls,
-            onToggleControls = onToggleControls,
-            onVolumeUp = onVolumeUp,
-            onVolumeDown = onVolumeDown,
-            onToggleMute = onToggleMute,
-            onReady = onReady,
-            onError = { message ->
-                val decision = LibVlcFallbackPolicy.evaluate(message)
-                if (decision.shouldFallback) {
-                    media3Failure = "$message (${decision.diagnostic})"
-                    backend = StablePlaybackBackend.LIBVLC
-                } else {
-                    onError(message)
-                }
-            },
-            onToggleFullscreen = onToggleFullscreen,
-            onPreviousChannel = onPreviousChannel,
-            onNextChannel = onNextChannel,
-            modifier = modifier
-        )
+    Box(modifier = modifier.background(Color.Black)) {
+        when (backend) {
+            StablePlaybackBackend.MEDIA3 -> StableMedia3VideoSurface(
+                session = session,
+                scale = scale,
+                expanded = expanded,
+                volume = volume,
+                showControls = showControls,
+                onToggleControls = onToggleControls,
+                onVolumeUp = onVolumeUp,
+                onVolumeDown = onVolumeDown,
+                onToggleMute = onToggleMute,
+                onReady = onReady,
+                onError = { message ->
+                    val decision = LibVlcFallbackPolicy.evaluate(message)
+                    if (decision.shouldFallback) {
+                        media3Failure = "$message (${decision.diagnostic})"
+                        backend = StablePlaybackBackend.LIBVLC
+                    } else {
+                        onError(message)
+                    }
+                },
+                onToggleFullscreen = onToggleFullscreen,
+                onPreviousChannel = onPreviousChannel,
+                onNextChannel = onNextChannel,
+                modifier = Modifier.fillMaxSize()
+            )
 
-        StablePlaybackBackend.LIBVLC -> StableLibVlcVideoSurface(
-            session = session,
-            scale = scale,
-            expanded = expanded,
-            volume = volume,
-            showControls = showControls,
-            onToggleControls = onToggleControls,
-            onVolumeUp = onVolumeUp,
-            onVolumeDown = onVolumeDown,
-            onToggleMute = onToggleMute,
-            onReady = onReady,
-            onError = { vlcMessage ->
-                val original = media3Failure ?: "неизвестная ошибка Media3"
-                onError("Media3: $original; LibVLC: $vlcMessage")
-            },
-            onToggleFullscreen = onToggleFullscreen,
-            onPreviousChannel = onPreviousChannel,
-            onNextChannel = onNextChannel,
-            modifier = modifier
-        )
+            StablePlaybackBackend.LIBVLC -> StableLibVlcVideoSurface(
+                session = session,
+                scale = scale,
+                expanded = expanded,
+                volume = volume,
+                showControls = showControls,
+                onToggleControls = onToggleControls,
+                onVolumeUp = onVolumeUp,
+                onVolumeDown = onVolumeDown,
+                onToggleMute = onToggleMute,
+                onReady = onReady,
+                onError = { vlcMessage ->
+                    val original = media3Failure ?: "неизвестная ошибка Media3"
+                    onError("Media3: $original; LibVLC: $vlcMessage")
+                },
+                onToggleFullscreen = onToggleFullscreen,
+                onPreviousChannel = onPreviousChannel,
+                onNextChannel = onNextChannel,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        if (showControls && backend == StablePlaybackBackend.MEDIA3) {
+            OutlinedButton(
+                onClick = {
+                    media3Failure = "Ручное переключение: изображение Media3 не отображается"
+                    backend = StablePlaybackBackend.LIBVLC
+                },
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+            ) {
+                Text("LibVLC")
+            }
+        }
     }
+
 }
 
 @Composable
@@ -183,6 +206,15 @@ private fun StableMedia3VideoSurface(
                 .setLoadControl(session.bufferConfig.toLoadControl())
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
                 .build()
+                .apply {
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(C.USAGE_MEDIA)
+                            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                            .build(),
+                        true
+                    )
+                }
         }
     }
 
@@ -224,6 +256,8 @@ private fun StableMedia3VideoSurface(
     var readySinceMs by remember(session.sessionId) { mutableLongStateOf(0L) }
     var softRecoveryCount by remember(session.sessionId) { mutableIntStateOf(0) }
     var firstVideoFrameRendered by remember(session.sessionId) { mutableStateOf(false) }
+    var videoWidth by remember(session.sessionId) { mutableIntStateOf(0) }
+    var videoHeight by remember(session.sessionId) { mutableIntStateOf(0) }
     var audioTrackSelected by remember(session.sessionId) { mutableStateOf(false) }
     var videoTrackSelected by remember(session.sessionId) { mutableStateOf(false) }
     var videoTrackSupported by remember(session.sessionId) { mutableStateOf(true) }
@@ -260,7 +294,15 @@ private fun StableMedia3VideoSurface(
 
             override fun onRenderedFirstFrame() {
                 firstVideoFrameRendered = true
-                diagnosticMessage = null
+                if (videoWidth > 0 && videoHeight > 0) diagnosticMessage = null
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                videoWidth = videoSize.width
+                videoHeight = videoSize.height
+                if (firstVideoFrameRendered && videoWidth > 0 && videoHeight > 0) {
+                    diagnosticMessage = null
+                }
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -322,9 +364,14 @@ private fun StableMedia3VideoSurface(
             }
 
             val readyStarted = readySinceMs
+            val pictureConfirmed = stablePictureConfirmed(
+                firstFrameRendered = firstVideoFrameRendered,
+                videoWidth = videoWidth,
+                videoHeight = videoHeight
+            )
             val audioWithoutPicture = readyStarted > 0L &&
                 audioTrackSelected &&
-                !firstVideoFrameRendered &&
+                !pictureConfirmed &&
                 now - readyStarted >= FIRST_VIDEO_FRAME_TIMEOUT_MS
 
             if (!audioWithoutPicture || videoFailureReported) continue
@@ -354,9 +401,12 @@ private fun StableMedia3VideoSurface(
                 }
 
                 now - videoRecoveryStartedAt >= VIDEO_RECOVERY_TIMEOUT_MS -> {
-                    diagnosticMessage = "Видеодорожка выбрана, но декодер не вывел первый кадр"
+                    diagnosticMessage = "Media3 не подтвердил изображение ${videoWidth}×${videoHeight}; переход на LibVLC"
                     videoFailureReported = true
-                    onError("Звук воспроизводится, но видеодекодер не вывел изображение после перезапуска")
+                    onError(
+                        "Звук воспроизводится, но Media3 не вывел подтверждённое изображение " +
+                            "после перезапуска (video=${videoWidth}x${videoHeight})"
+                    )
                 }
             }
         }

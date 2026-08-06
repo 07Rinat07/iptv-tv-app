@@ -142,6 +142,7 @@ class PlaylistRepositoryImpl @Inject constructor(
         .callTimeout(7, TimeUnit.SECONDS)
         .build()
     private val epgCache = ConcurrentHashMap<String, EpgCacheEntry>()
+    private val epgDiscoveryAttemptAtMs = ConcurrentHashMap<Long, Long>()
 
     override fun observePlaylists(): Flow<List<Playlist>> {
         return playlistDao.observePlaylistsWithCount().map { rows ->
@@ -244,11 +245,19 @@ class PlaylistRepositoryImpl @Inject constructor(
                 streams = streams,
                 categoryById = categoryById
             )
+            val xmlTvUrl = normalizedBaseUrl.toHttpUrl()
+                .newBuilder()
+                .addPathSegment("xmltv.php")
+                .addQueryParameter("username", normalizedUsername)
+                .addQueryParameter("password", normalizedPassword)
+                .build()
+                .toString()
             importParsedPlaylist(
                 playlistName = name,
                 rawPlaylist = rawPlaylist,
                 sourceType = PlaylistSourceType.XTREAM,
-                source = "$normalizedBaseUrl/player_api.php?username=${urlEncode(normalizedUsername)}&action=get_live_streams"
+                source = "$normalizedBaseUrl/player_api.php?username=${urlEncode(normalizedUsername)}&action=get_live_streams",
+                epgSourceOverride = xmlTvUrl
             )
         }.getOrElse { throwable ->
             AppResult.Error("Unable to import Xtream Codes: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
@@ -692,41 +701,57 @@ class PlaylistRepositoryImpl @Inject constructor(
         val playlist = playlistDao.findById(channelEntity.playlistId)
             ?: return@withContext AppResult.Error("Playlist not found: id=${channelEntity.playlistId}")
 
-        val epgUrl = playlist.epgSourceUrl?.trim().orEmpty()
-        if (epgUrl.isBlank()) {
-            return@withContext AppResult.Error("EPG source URL is not configured for playlist ${playlist.id}")
-        }
-
-        val epgData = runCatching { getOrLoadXmlTv(epgUrl) }.getOrElse { throwable ->
+        val candidates = resolveEpgCandidates(playlist)
+        if (candidates.isEmpty()) {
             return@withContext AppResult.Error(
-                "Unable to load EPG: ${throwable.toLogSummary(maxDepth = 4)}",
-                throwable
+                "EPG source URL is not configured and was not discovered for playlist ${playlist.id}"
             )
         }
 
-        val match = matchChannelToEpg(
-            channelName = channelEntity.name,
-            tvgId = channelEntity.tvgId,
-            data = epgData
-        )
-        val now = System.currentTimeMillis()
-        val nowProgram = match.programs.firstOrNull { it.startEpochMs <= now && now < it.endEpochMs }
-        val nextProgram = match.programs.firstOrNull { it.startEpochMs > now }
-        val upcoming = match.programs
-            .filter { it.endEpochMs > now }
-            .take(12)
-
-        AppResult.Success(
-            ChannelEpgInfo(
-                channelId = channelEntity.id,
+        var lastLoadError: Throwable? = null
+        for (epgUrl in candidates) {
+            val loaded = runCatching { getOrLoadXmlTv(epgUrl) }
+            if (loaded.isFailure) {
+                lastLoadError = loaded.exceptionOrNull()
+                continue
+            }
+            val epgData = loaded.getOrThrow()
+            val match = matchChannelToEpg(
                 channelName = channelEntity.name,
                 tvgId = channelEntity.tvgId,
-                epgSourceUrl = epgUrl,
-                matchedBy = match.matchedBy,
-                now = nowProgram,
-                next = nextProgram,
-                upcoming = upcoming
+                data = epgData
             )
+            if (match.programs.isEmpty()) continue
+
+            val now = System.currentTimeMillis()
+            val nowProgram = match.programs.firstOrNull { it.startEpochMs <= now && now < it.endEpochMs }
+            val nextProgram = match.programs.firstOrNull { it.startEpochMs > now }
+            val upcoming = match.programs
+                .filter { it.endEpochMs > now }
+                .take(12)
+
+            return@withContext AppResult.Success(
+                ChannelEpgInfo(
+                    channelId = channelEntity.id,
+                    channelName = channelEntity.name,
+                    tvgId = channelEntity.tvgId,
+                    epgSourceUrl = epgUrl,
+                    matchedBy = match.matchedBy,
+                    now = nowProgram,
+                    next = nextProgram,
+                    upcoming = upcoming
+                )
+            )
+        }
+
+        if (lastLoadError != null && candidates.size == 1) {
+            return@withContext AppResult.Error(
+                "Unable to load EPG: ${lastLoadError!!.toLogSummary(maxDepth = 4)}",
+                lastLoadError
+            )
+        }
+        AppResult.Error(
+            "EPG sources were checked, but channel '${channelEntity.name}' was not matched"
         )
     }
 
@@ -741,41 +766,56 @@ class PlaylistRepositoryImpl @Inject constructor(
 
         val playlist = playlistDao.findById(playlistId)
             ?: return@withContext AppResult.Error("Playlist not found: id=$playlistId")
-        val epgUrl = playlist.epgSourceUrl?.trim().orEmpty()
-        if (epgUrl.isBlank()) {
-            return@withContext AppResult.Error("EPG source URL is not configured for playlist ${playlist.id}")
-        }
-
-        val epgData = runCatching { getOrLoadXmlTv(epgUrl) }.getOrElse { throwable ->
+        val candidates = resolveEpgCandidates(playlist)
+        if (candidates.isEmpty()) {
             return@withContext AppResult.Error(
-                "Unable to load EPG: ${throwable.toLogSummary(maxDepth = 4)}",
-                throwable
+                "EPG source URL is not configured and was not discovered for playlist ${playlist.id}"
             )
         }
 
         val parentalGate = currentParentalChannelGate()
-        val result = channelDao.getChannels(playlistId)
+        val channels = channelDao.getChannels(playlistId)
             .asSequence()
             .filter { !it.isHidden }
             .filterNot { it.isBlockedByParental(parentalGate) }
-            .mapNotNull { channel ->
-                val match = matchChannelToEpg(
-                    channelName = channel.name,
-                    tvgId = channel.tvgId,
-                    data = epgData
-                )
-                val programs = EpgProgramWindowIndex.selectWindow(
-                    programs = match.programs,
-                    startEpochMs = startEpochMs,
-                    endEpochMs = endEpochMs,
-                    query = query,
-                    channelName = channel.name
-                )
-                if (programs.isEmpty()) null else channel.id to programs
-            }
-            .toMap()
+            .toList()
+        var lastLoadError: Throwable? = null
 
-        AppResult.Success(result)
+        for (epgUrl in candidates) {
+            val loaded = runCatching { getOrLoadXmlTv(epgUrl) }
+            if (loaded.isFailure) {
+                lastLoadError = loaded.exceptionOrNull()
+                continue
+            }
+            val epgData = loaded.getOrThrow()
+            val result = channels
+                .asSequence()
+                .mapNotNull { channel ->
+                    val match = matchChannelToEpg(
+                        channelName = channel.name,
+                        tvgId = channel.tvgId,
+                        data = epgData
+                    )
+                    val programs = EpgProgramWindowIndex.selectWindow(
+                        programs = match.programs,
+                        startEpochMs = startEpochMs,
+                        endEpochMs = endEpochMs,
+                        query = query,
+                        channelName = channel.name
+                    )
+                    if (programs.isEmpty()) null else channel.id to programs
+                }
+                .toMap()
+            if (result.isNotEmpty()) return@withContext AppResult.Success(result)
+        }
+
+        if (lastLoadError != null && candidates.size == 1) {
+            return@withContext AppResult.Error(
+                "Unable to load EPG: ${lastLoadError!!.toLogSummary(maxDepth = 4)}",
+                lastLoadError
+            )
+        }
+        AppResult.Success(emptyMap())
     }
 
     private fun observeParentalChannelGate(): Flow<ParentalChannelGate> {
@@ -783,7 +823,9 @@ class PlaylistRepositoryImpl @Inject constructor(
             ParentalChannelGate(
                 enabled = prefs[SettingsKeys.parentalEnabled] ?: false,
                 hideAdultChannels = prefs[SettingsKeys.parentalHideAdultChannels] ?: true,
-                blockedKeywords = ParentalChannelFilter.decodeKeywords(prefs[SettingsKeys.parentalBlockedKeywords])
+                blockedKeywords = ParentalChannelFilter.decodeKeywords(
+                    prefs[SettingsKeys.parentalBlockedKeywords]
+                )
             )
         }
     }
@@ -801,11 +843,36 @@ class PlaylistRepositoryImpl @Inject constructor(
         )
     }
 
+    private suspend fun inheritGlobalFavorites(channels: List<ChannelEntity>) {
+        if (channels.isEmpty()) return
+
+        val favoriteChannelIds = favoriteDao.getFavorites()
+            .map { it.channelId }
+        if (favoriteChannelIds.isEmpty()) return
+
+        val favoriteIdentities = channelDao.findByIds(favoriteChannelIds)
+            .mapTo(mutableSetOf()) { channel ->
+                GlobalFavoriteIdentity.key(channel.tvgId, channel.name, channel.streamUrl)
+            }
+        if (favoriteIdentities.isEmpty()) return
+
+        val inherited = channels
+            .filter { channel ->
+                GlobalFavoriteIdentity.key(channel.tvgId, channel.name, channel.streamUrl) in
+                    favoriteIdentities
+            }
+            .map { channel ->
+                FavoriteEntity(channelId = channel.id, addedAt = System.currentTimeMillis())
+            }
+        if (inherited.isNotEmpty()) favoriteDao.upsertAll(inherited)
+    }
+
     private suspend fun importParsedPlaylist(
         playlistName: String,
         rawPlaylist: String,
         sourceType: PlaylistSourceType,
-        source: String
+        source: String,
+        epgSourceOverride: String? = null
     ): AppResult<PlaylistImportReport> {
         if (playlistName.isBlank()) return AppResult.Error("Playlist name is empty")
         if (rawPlaylist.isBlank()) return AppResult.Error("Playlist content is empty")
@@ -836,7 +903,8 @@ class PlaylistRepositoryImpl @Inject constructor(
                         name = playlistName,
                         sourceType = sourceType.name,
                         source = source,
-                        epgSourceUrl = parsed.epgUrls.firstOrNull(),
+                        epgSourceUrl = epgSourceOverride?.trim()?.ifBlank { null }
+                            ?: parsed.epgUrls.firstOrNull(),
                         scheduleHours = 12,
                         lastSyncedAt = null,
                         isCustom = false,
@@ -852,6 +920,7 @@ class PlaylistRepositoryImpl @Inject constructor(
                     .forEach { chunk -> channelDao.insertAll(chunk.map { it.toEntity() }) }
 
                 val storedChannels = channelDao.getChannels(playlistId)
+                inheritGlobalFavorites(storedChannels)
                 val quickStats = probeAndPersistHealth(storedChannels.take(AUTO_HEALTH_CHECK_LIMIT))
 
                 syncLogDao.insert(
@@ -1382,6 +1451,57 @@ class PlaylistRepositoryImpl @Inject constructor(
         )?.url
     }
 
+    private suspend fun resolveEpgCandidates(playlist: PlaylistEntity): List<String> {
+        val own = playlist.epgSourceUrl?.trim()?.takeIf { it.isNotBlank() }
+            ?: discoverEpgSourceFromPlaylist(playlist)
+        val shared = playlistDao.getPlaylistsWithEpgSource()
+            .asSequence()
+            .filter { it.id != playlist.id }
+            .mapNotNull { it.epgSourceUrl?.trim()?.takeIf(String::isNotBlank) }
+        return sequenceOf(own)
+            .plus(shared)
+            .filterNotNull()
+            .distinct()
+            .take(MAX_EPG_SOURCE_CANDIDATES)
+            .toList()
+    }
+
+    private suspend fun discoverEpgSourceFromPlaylist(playlist: PlaylistEntity): String? {
+        if (!playlist.sourceType.equals(PlaylistSourceType.URL.name, ignoreCase = true)) return null
+        val sourceUrl = playlist.source.trim()
+        if (!sourceUrl.startsWith("http://", true) && !sourceUrl.startsWith("https://", true)) return null
+        val now = System.currentTimeMillis()
+        val lastAttempt = epgDiscoveryAttemptAtMs[playlist.id] ?: 0L
+        if (now - lastAttempt < EPG_DISCOVERY_RETRY_MS) return null
+        epgDiscoveryAttemptAtMs[playlist.id] = now
+
+        val discovered = runCatching {
+            val body = okHttpClient.newCall(Request.Builder().url(sourceUrl).get().build())
+                .execute()
+                .use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    response.body?.string().orEmpty()
+                }
+            when (val parsed = parser.parse(playlistId = playlist.id, raw = body)) {
+                is ParseResult.Valid -> parsed.epgUrls.firstOrNull()
+                is ParseResult.Invalid -> null
+            }
+        }.getOrNull()?.trim()?.takeIf { it.isNotBlank() }
+
+        if (discovered != null) {
+            playlistDao.updateEpgSourceUrl(playlist.id, discovered)
+            syncLogDao.insert(
+                SyncLogEntity(
+                    playlistId = playlist.id,
+                    status = "epg_source_discovered",
+                    message = "EPG source discovered from playlist header: $discovered",
+                    createdAt = now
+                )
+            )
+        }
+        return discovered
+    }
+
     private fun getOrLoadXmlTv(url: String): XmlTvData {
         val now = System.currentTimeMillis()
         epgCache[url]?.takeIf { now - it.loadedAtMs <= EPG_CACHE_TTL_MS }?.let { cached ->
@@ -1785,6 +1905,8 @@ class PlaylistRepositoryImpl @Inject constructor(
         const val HEALTH_CHECK_RETRIES = 2
         const val HEALTH_RETRY_DELAY_MS = 450L
         const val EPG_CACHE_TTL_MS = 15 * 60 * 1000L
+        const val EPG_DISCOVERY_RETRY_MS = 10 * 60 * 1000L
+        const val MAX_EPG_SOURCE_CANDIDATES = 4
         const val STALKER_USER_AGENT = "Mozilla/5.0 (QtEmbedded; U; Linux; MAG200; en-US) AppleWebKit/533.3"
         val XMLTV_TIME_REGEX =
             Regex("^(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})?\\s*([+\\-]\\d{4})?.*$")
@@ -2559,14 +2681,40 @@ class FavoritesRepositoryImpl @Inject constructor(
     private val channelDao: ChannelDao
 ) : FavoritesRepository {
     override fun observeFavorites(): Flow<List<Channel>> {
-        return channelDao.observeFavoriteChannels().map { rows -> rows.map { it.toModel() } }
+        return channelDao.observeFavoriteChannels().map { rows ->
+            rows
+                .distinctBy { channel ->
+                    GlobalFavoriteIdentity.key(channel.tvgId, channel.name, channel.streamUrl)
+                }
+                .map { it.toModel() }
+        }
+    }
+
+    override fun observeFavoriteChannelIds(): Flow<Set<Long>> {
+        return favoriteDao.observeFavorites().map { rows -> rows.mapTo(mutableSetOf()) { it.channelId } }
     }
 
     override suspend fun toggleFavorite(channelId: Long) {
-        if (favoriteDao.exists(channelId)) {
-            favoriteDao.delete(channelId)
+        val selected = channelDao.findById(channelId) ?: return
+        val identity = GlobalFavoriteIdentity.key(selected.tvgId, selected.name, selected.streamUrl)
+        val equivalentIds = channelDao.getAllChannels()
+            .asSequence()
+            .filter { channel ->
+                GlobalFavoriteIdentity.key(channel.tvgId, channel.name, channel.streamUrl) == identity
+            }
+            .map { it.id }
+            .toList()
+            .ifEmpty { listOf(channelId) }
+        val favoriteIds = favoriteDao.getFavorites().mapTo(mutableSetOf()) { it.channelId }
+        val removeGlobally = equivalentIds.any { it in favoriteIds }
+
+        if (removeGlobally) {
+            favoriteDao.deleteByChannelIds(equivalentIds)
         } else {
-            favoriteDao.upsert(FavoriteEntity(channelId = channelId, addedAt = System.currentTimeMillis()))
+            val now = System.currentTimeMillis()
+            favoriteDao.upsertAll(
+                equivalentIds.map { id -> FavoriteEntity(channelId = id, addedAt = now) }
+            )
         }
     }
 }

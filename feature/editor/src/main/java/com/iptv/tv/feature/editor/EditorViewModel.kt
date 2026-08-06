@@ -1417,8 +1417,8 @@ class EditorViewModel @Inject constructor(
 
     private fun observeFavorites() {
         viewModelScope.launch {
-            favoritesRepository.observeFavorites().collect { channels ->
-                _uiState.update { it.copy(favoriteChannelIds = channels.map { channel -> channel.id }.toSet()) }
+            favoritesRepository.observeFavoriteChannelIds().collect { channelIds ->
+                _uiState.update { it.copy(favoriteChannelIds = channelIds) }
             }
         }
     }
