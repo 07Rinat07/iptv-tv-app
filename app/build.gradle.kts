@@ -56,7 +56,10 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            // CI/test builds remain installable without publishing a private release key.
+            // When release secrets are configured, the real release key is used automatically.
             signingConfig = signingConfigs.findByName("release")
+                ?: signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
