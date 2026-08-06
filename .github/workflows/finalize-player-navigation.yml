@@ -1,0 +1,380 @@
+name: Finalize player navigation integration
+
+on:
+  push:
+    branches:
+      - feat/player-channel-navigation-v2
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: feat/player-channel-navigation-v2
+
+      - name: Apply guarded cleanup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_function(pattern: str, replacement: str, label: str) -> None:
+              global text
+              text, count = re.subn(
+                  pattern,
+                  lambda _: replacement,
+                  text,
+                  count=1,
+                  flags=re.MULTILINE | re.DOTALL
+              )
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+
+          replace_function(
+              r'@Composable\nprivate fun StableNearbyChannelsReplacement\(.*?\n\}\n\n@Composable\nprivate fun StableChannelBrowserReplacement',
+              '''@Composable
+          private fun StableNearbyChannelsReplacement(
+              channels: List<Channel>,
+              epgByChannel: Map<Long, List<EpgProgram>>,
+              onSelectChannel: (Long) -> Unit,
+              modifier: Modifier = Modifier
+          ) {
+              val listState = rememberLazyListState()
+              val scope = rememberCoroutineScope()
+              Column(modifier) {
+                  Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(6.dp)
+                  ) {
+                      Text(
+                          "Каналы рядом",
+                          modifier = Modifier.weight(1f),
+                          style = MaterialTheme.typography.titleSmall
+                      )
+                      OutlinedButton(
+                          onClick = { scope.launch { listState.animateScrollToItem(0) } }
+                      ) { Text("В начало") }
+                      OutlinedButton(
+                          onClick = {
+                              scope.launch {
+                                  listState.animateScrollToItem(
+                                      StableChannelNavigation.pageTargetIndex(
+                                          currentIndex = listState.firstVisibleItemIndex,
+                                          itemCount = channels.size,
+                                          pageSize = 3,
+                                          direction = -1
+                                      )
+                                  )
+                              }
+                          }
+                      ) { Text("◀") }
+                      OutlinedButton(
+                          onClick = {
+                              scope.launch {
+                                  listState.animateScrollToItem(
+                                      StableChannelNavigation.pageTargetIndex(
+                                          currentIndex = listState.firstVisibleItemIndex,
+                                          itemCount = channels.size,
+                                          pageSize = 3,
+                                          direction = 1
+                                      )
+                                  )
+                              }
+                          }
+                      ) { Text("▶") }
+                  }
+                  LazyRow(
+                      modifier = Modifier.fillMaxWidth().focusGroup(),
+                      state = listState,
+                      horizontalArrangement = Arrangement.spacedBy(8.dp)
+                  ) {
+                      items(channels, key = { it.id }) { channel ->
+                          val current = stableCurrentProgram(
+                              epgByChannel[channel.id].orEmpty(),
+                              System.currentTimeMillis()
+                          )
+                          Card(
+                              modifier = Modifier
+                                  .width(184.dp)
+                                  .tvFocusOutline()
+                                  .clickable { onSelectChannel(channel.id) }
+                          ) {
+                              Column(
+                                  Modifier.padding(10.dp),
+                                  verticalArrangement = Arrangement.spacedBy(4.dp)
+                              ) {
+                                  Text(
+                                      channel.name,
+                                      maxLines = 1,
+                                      overflow = TextOverflow.Ellipsis,
+                                      fontWeight = FontWeight.SemiBold
+                                  )
+                                  Text(
+                                      current?.let { "${stableTime(it.startEpochMs)} ${it.title}" }
+                                          ?: "EPG нет",
+                                      style = MaterialTheme.typography.bodySmall,
+                                      maxLines = 2,
+                                      overflow = TextOverflow.Ellipsis
+                                  )
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          private fun StableChannelBrowserReplacement''',
+              'nearby channels function'
+          )
+
+          replace_function(
+              r'@Composable\nprivate fun StableChannelListReplacement\(.*?\n\}\n\n@Composable\nprivate fun StableChannelDrawerReplacement',
+              '''@Composable
+          private fun StableChannelListReplacement(
+              modifier: Modifier,
+              channels: List<Channel>,
+              selectedChannelId: Long?,
+              favoriteIds: Set<Long>,
+              epgByChannel: Map<Long, List<EpgProgram>>,
+              onSelect: (Long) -> Unit,
+              onToggleFavorite: (Long) -> Unit
+          ) {
+              val listState = rememberLazyListState()
+              val focusChannelId = remember(channels, selectedChannelId) {
+                  StableChannelNavigation.selectionAfterFilter(
+                      visibleChannelIds = channels.map { it.id },
+                      previousSelectedChannelId = selectedChannelId
+                  )
+              }
+              LaunchedEffect(focusChannelId, channels) {
+                  val index = channels.indexOfFirst { it.id == focusChannelId }
+                  if (index >= 0) listState.animateScrollToItem(index)
+              }
+              Row(modifier) {
+                  LazyColumn(
+                      modifier = Modifier
+                          .weight(1f)
+                          .fillMaxHeight()
+                          .focusGroup()
+                          .stablePagedListNavigation(
+                              state = listState,
+                              itemCount = channels.size
+                          ),
+                      state = listState,
+                      verticalArrangement = Arrangement.spacedBy(6.dp)
+                  ) {
+                      items(channels, key = { it.id }) { channel ->
+                          val current = stableCurrentProgram(
+                              epgByChannel[channel.id].orEmpty(),
+                              System.currentTimeMillis()
+                          )
+                          val selected = channel.id == selectedChannelId
+                          Surface(
+                              modifier = Modifier
+                                  .fillMaxWidth()
+                                  .tvFocusOutline()
+                                  .stableSelectedFocus(channel.id == focusChannelId)
+                                  .clickable { onSelect(channel.id) },
+                              tonalElevation = if (selected) 8.dp else 1.dp,
+                              color = if (selected) {
+                                  MaterialTheme.colorScheme.primaryContainer
+                              } else {
+                                  MaterialTheme.colorScheme.surfaceVariant
+                              },
+                              shape = MaterialTheme.shapes.medium
+                          ) {
+                              Row(
+                                  modifier = Modifier.fillMaxWidth().padding(8.dp),
+                                  verticalAlignment = Alignment.CenterVertically,
+                                  horizontalArrangement = Arrangement.spacedBy(8.dp)
+                              ) {
+                                  AsyncImage(
+                                      model = channel.logo,
+                                      contentDescription = channel.name,
+                                      modifier = Modifier.size(38.dp)
+                                  )
+                                  Column(
+                                      Modifier.weight(1f),
+                                      verticalArrangement = Arrangement.spacedBy(2.dp)
+                                  ) {
+                                      Text(
+                                          channel.name,
+                                          maxLines = 1,
+                                          overflow = TextOverflow.Ellipsis,
+                                          fontWeight = if (selected) {
+                                              FontWeight.Bold
+                                          } else {
+                                              FontWeight.Normal
+                                          }
+                                      )
+                                      Text(
+                                          current?.let {
+                                              "${stableTime(it.startEpochMs)}–${stableTime(it.endEpochMs)} ${it.title}"
+                                          } ?: "Программа не найдена",
+                                          style = MaterialTheme.typography.bodySmall,
+                                          maxLines = 2,
+                                          overflow = TextOverflow.Ellipsis
+                                      )
+                                  }
+                                  OutlinedButton(onClick = { onToggleFavorite(channel.id) }) {
+                                      Text(if (channel.id in favoriteIds) "★" else "☆")
+                                  }
+                              }
+                          }
+                      }
+                  }
+                  VerticalScrollControls(state = listState, itemCount = channels.size)
+              }
+          }
+
+          @Composable
+          private fun StableChannelDrawerReplacement''',
+              'channel list function'
+          )
+
+          replace_function(
+              r'@Composable\nprivate fun VerticalScrollControls\(.*?\n\}\n\n@Composable\nprivate fun StablePanelDialogReplacement',
+              '''@Composable
+          private fun VerticalScrollControls(
+              state: LazyListState,
+              itemCount: Int,
+              modifier: Modifier = Modifier
+          ) {
+              val scope = rememberCoroutineScope()
+              val pageSize = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+
+              Column(
+                  modifier = modifier.padding(start = 6.dp),
+                  verticalArrangement = Arrangement.spacedBy(6.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally
+              ) {
+                  OutlinedButton(
+                      onClick = { scope.launch { state.animateScrollToItem(0) } },
+                      enabled = itemCount > 0 && state.canScrollBackward
+                  ) { Text("⌂") }
+                  OutlinedButton(
+                      onClick = {
+                          scope.launch {
+                              state.animateScrollToItem(
+                                  StableChannelNavigation.pageTargetIndex(
+                                      currentIndex = state.firstVisibleItemIndex,
+                                      itemCount = itemCount,
+                                      pageSize = pageSize,
+                                      direction = -1
+                                  )
+                              )
+                          }
+                      },
+                      enabled = state.canScrollBackward
+                  ) { Text("▲") }
+                  Spacer(Modifier.weight(1f))
+                  Text("${if (itemCount == 0) 0 else state.firstVisibleItemIndex + 1}/$itemCount")
+                  Spacer(Modifier.weight(1f))
+                  OutlinedButton(
+                      onClick = {
+                          scope.launch {
+                              state.animateScrollToItem(
+                                  StableChannelNavigation.pageTargetIndex(
+                                      currentIndex = state.firstVisibleItemIndex,
+                                      itemCount = itemCount,
+                                      pageSize = pageSize,
+                                      direction = 1
+                                  )
+                              )
+                          }
+                      },
+                      enabled = state.canScrollForward
+                  ) { Text("▼") }
+              }
+          }
+
+          @Composable
+          private fun StablePanelDialogReplacement''',
+              'vertical controls function'
+          )
+
+          replace_function(
+              r'@Composable\nprivate fun ScrollableButtonList\(.*?\n\}\n\nprivate fun stableChannelMatchesSelection',
+              '''@Composable
+          private fun ScrollableButtonList(
+              labels: List<String>,
+              selectedIndex: Int,
+              onClick: (Int) -> Unit,
+              modifier: Modifier = Modifier
+          ) {
+              val state = rememberLazyListState()
+              LaunchedEffect(selectedIndex, labels.size) {
+                  if (selectedIndex in labels.indices) {
+                      state.animateScrollToItem(selectedIndex)
+                  }
+              }
+              Row(modifier.fillMaxWidth().heightIn(min = 180.dp, max = 520.dp)) {
+                  LazyColumn(
+                      modifier = Modifier
+                          .weight(1f)
+                          .fillMaxHeight()
+                          .focusGroup()
+                          .stablePagedListNavigation(state = state, itemCount = labels.size),
+                      state = state,
+                      verticalArrangement = Arrangement.spacedBy(6.dp)
+                  ) {
+                      items(labels.size, key = { it }) { index ->
+                          if (index == selectedIndex) {
+                              Button(
+                                  onClick = { onClick(index) },
+                                  modifier = Modifier
+                                      .fillMaxWidth()
+                                      .stableSelectedFocus(true)
+                              ) {
+                                  Text(
+                                      labels[index],
+                                      maxLines = 1,
+                                      overflow = TextOverflow.Ellipsis
+                                  )
+                              }
+                          } else {
+                              OutlinedButton(
+                                  onClick = { onClick(index) },
+                                  modifier = Modifier.fillMaxWidth()
+                              ) {
+                                  Text(
+                                      labels[index],
+                                      maxLines = 1,
+                                      overflow = TextOverflow.Ellipsis
+                                  )
+                              }
+                          }
+                      }
+                  }
+                  VerticalScrollControls(state = state, itemCount = labels.size)
+              }
+          }
+
+          private fun stableChannelMatchesSelection''',
+              'scrollable button list function'
+          )
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit finalization
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt
+          git diff --cached --check
+          git commit -m "refactor(player): finalize channel focus and paging"
+          git push origin HEAD:feat/player-channel-navigation-v2
