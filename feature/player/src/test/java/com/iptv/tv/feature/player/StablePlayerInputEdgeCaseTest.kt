@@ -2,6 +2,8 @@ package com.iptv.tv.feature.player
 
 import android.view.KeyEvent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StablePlayerInputEdgeCaseTest {
@@ -49,5 +51,22 @@ class StablePlayerInputEdgeCaseTest {
             StableRemoteAction.NONE,
             stableRemoteActionForKey(KeyEvent.KEYCODE_UNKNOWN, fullscreen = true)
         )
+    }
+
+    @Test
+    fun `channel volume mute and playback actions reveal controls`() {
+        assertTrue(stableActionRevealsControls(StableRemoteAction.NEXT_CHANNEL))
+        assertTrue(stableActionRevealsControls(StableRemoteAction.PREVIOUS_CHANNEL))
+        assertTrue(stableActionRevealsControls(StableRemoteAction.VOLUME_UP))
+        assertTrue(stableActionRevealsControls(StableRemoteAction.VOLUME_DOWN))
+        assertTrue(stableActionRevealsControls(StableRemoteAction.TOGGLE_MUTE))
+        assertTrue(stableActionRevealsControls(StableRemoteAction.TOGGLE_PLAYBACK))
+    }
+
+    @Test
+    fun `visibility and fullscreen actions keep their dedicated behavior`() {
+        assertFalse(stableActionRevealsControls(StableRemoteAction.TOGGLE_CONTROLS))
+        assertFalse(stableActionRevealsControls(StableRemoteAction.TOGGLE_FULLSCREEN))
+        assertFalse(stableActionRevealsControls(StableRemoteAction.NONE))
     }
 }
