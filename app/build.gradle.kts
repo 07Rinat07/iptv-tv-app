@@ -30,6 +30,17 @@ android {
         }
     }
 
+    // Physical Android TV / TV Box devices use ARM. Building separate packages
+    // avoids bundling x86 emulator binaries and cuts the APK size substantially.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
+        }
+    }
+
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
@@ -75,6 +86,11 @@ android {
     }
 
     packaging {
+        // Compress LibVLC native libraries inside the APK. Android extracts them
+        // during installation, keeping download packages leaner for TV boxes.
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
@@ -137,4 +153,3 @@ dependencies {
 kapt {
     correctErrorTypes = true
 }
-
