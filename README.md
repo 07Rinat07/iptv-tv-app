@@ -1,44 +1,37 @@
-# myscanerIPTV
+# Rinat IPTV
 
-Android TV/TV Box приложение для поиска, импорта, редактирования и просмотра IPTV-плейлистов.
+Android TV/TV Box приложение для просмотра IPTV, управления плейлистами и работы с EPG.
+
+## Быстрый старт
+
+После запуска открывается экран **«Смотреть ТВ»**:
+
+1. выберите один из сохранённых списков каналов; или
+2. нажмите **«Смотреть»** у готового списка — приложение загрузит его и сразу откроет плеер;
+3. когда готовых источников станет мало, используйте кнопку **«Найти новые списки в сканере»**.
+
+Сканер и поиск плейлистов остаются отдельным инструментом и не изменяются текущим этапом.
 
 ## Возможности
 
-- Поиск публичных M3U/M3U8 через API репозиториев и поисковые системы.
-- Расширенный web-поиск плейлистов через DuckDuckGo, Bing, Google и Yandex с региональными запросами для Казахстана, русских, турецких и мировых каналов.
-- Импорт плейлистов по URL, из файла, из текста, Xtream Codes и Stalker Portal.
-- Редактор плейлистов с безопасной рабочей копией, ручной чисткой каналов и экспортом в `M3U`, `M3U8` и `TXT`.
-- Встроенный Media3/ExoPlayer плеер с fallback во VLC.
-- Списки каналов с группами, подгруппами, избранным, логотипами и программой передач, если у плейлиста настроен EPG.
-- EPG отображается с учетом часового пояса плеера: `Asia/Oral` / Уральск / UTC+5.
-- Диагностика сети, сканера, импорта, плеера и экспорт логов.
-- Готовый APK для проверки на TV Box: `build-artifacts/myscanerIPTV-tvbox-debug-latest.apk`.
-
-## Технологии
-
-- Kotlin
-- Jetpack Compose
-- Media3 / ExoPlayer
-- Coroutines / Flow
-- Room
-- WorkManager
-- Hilt
-- Retrofit / OkHttp
+- готовые и пользовательские M3U/M3U8-плейлисты;
+- сканирование публичных источников и ручной импорт;
+- редактор каналов и безопасные рабочие копии;
+- Media3/ExoPlayer с изолированным LibVLC fallback;
+- Ace Stream Android Service/AIDL;
+- группы, подгруппы, избранное, история и EPG;
+- управление D-pad, пультом, мышью, тачпадом и сенсорным экраном;
+- полноэкранный режим, автоскрытие панели и постраничная навигация;
+- адаптивный буфер для слабых TV Box;
+- диагностика, экспорт и сброс старых ошибок.
 
 ## Требования
 
-- JDK 17
-- Android SDK 35
-- Android Gradle Plugin окружение, совместимое с проектом
-- Android TV / Android TV Box с Android 7.0+ (`minSdk 24`)
+- JDK 17;
+- Android SDK 35;
+- Android 7.0+ (`minSdk 24`).
 
-## Быстрая сборка
-
-Linux:
-
-```bash
-env JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew --no-daemon assembleDebug
-```
+## Сборка
 
 Windows PowerShell:
 
@@ -47,123 +40,41 @@ $env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"
 .\gradlew.bat --no-daemon assembleDebug
 ```
 
-После `assembleDebug` актуальный APK автоматически обновляется здесь:
-
-```text
-build-artifacts/myscanerIPTV-tvbox-debug-latest.apk
-```
-
-## Проверка перед GitHub
-
-Локальный прогон, близкий к GitHub Actions:
+Linux:
 
 ```bash
-env GRADLE_USER_HOME=/tmp/iptv-gh-clean JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 GRADLE_OPTS=-Dorg.gradle.workers.max=2 TZ=UTC LANG=C.UTF-8 LC_ALL=C.UTF-8 ./gradlew --no-daemon --stacktrace lintDebug :core:parser:test :sync:testDebugUnitTest :core:data:testDebugUnitTest :core:engine:testDebugUnitTest :core:network:testDebugUnitTest :core:player:testDebugUnitTest :feature:epg:testDebugUnitTest :feature:importer:testDebugUnitTest :feature:player:testDebugUnitTest :feature:scanner:testDebugUnitTest :feature:settings:testDebugUnitTest assembleDebug assembleRelease
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew --no-daemon assembleDebug
 ```
 
-Эта команда повторяет основные шаги `.github/workflows/android.yml`: lint, unit-тесты, debug-сборку и release-сборку.
+APK создаётся стандартно:
 
-## Установка на TV Box
+```text
+app/build/outputs/apk/debug/app-debug.apk
+app/build/outputs/apk/release/
+```
 
-1. Скопируйте `build-artifacts/myscanerIPTV-tvbox-debug-latest.apk` на флешку.
-2. Подключите флешку к TV Box.
-3. Откройте APK через файловый менеджер.
-4. Разрешите установку из неизвестных источников, если Android попросит.
-5. Запустите приложение.
+APK/AAB не хранятся в Git. GitHub Actions прикладывает их к успешным запускам workflow.
 
-## Основной сценарий
+## Проверка
 
-1. Откройте `Сканер` или `Готовые плейлисты`.
-2. Найдите и сохраните плейлист.
-3. Откройте `Мои плейлисты`.
-4. При необходимости очистите список в `Редакторе`.
-5. Откройте `Плеер`, выберите плейлист, группу и канал.
-6. Если у плейлиста есть EPG, используйте кнопку `Программа` в списках каналов.
-7. Для проблемных потоков попробуйте VLC или другой профиль буфера.
+Основной workflow `.github/workflows/android.yml` выполняет:
 
-## Сканер
+- Android lint;
+- unit-тесты модулей;
+- `assembleDebug`;
+- `assembleRelease`;
+- публикацию APK и отчётов как временных GitHub Actions artifacts.
 
-Режимы поиска:
+## Документация
 
-- `Auto` - основной режим: API репозиториев, поисковые системы и seed-источники.
-- `Direct API` - быстрее на стабильной сети, но чувствителен к DNS и блокировкам.
-- `Search Engine` - полезен, если API GitHub/GitLab/Bitbucket недоступны.
+Актуальная документация находится в [`docs/README.md`](docs/README.md).
+План развития и оставшиеся проверки: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-Если поиск ничего не находит:
+## Автор
 
-- проверьте интернет на TV Box;
-- откройте `Настройки -> Сетевой тест`;
-- попробуйте `Search Engine`;
-- при DNS/timeout ошибках настройте proxy в `Настройки`.
-
-## Редактор
-
-Редактор позволяет:
-
-- скрывать, показывать и удалять каналы;
-- удалять нерабочие каналы вручную или массовой командой;
-- менять название, группу, логотип и URL канала;
-- сохранять изменения в пользовательской копии плейлиста;
-- экспортировать список в `M3U`, `M3U8` или `TXT`;
-- просматривать программу передач для каналов, если у плейлиста есть EPG.
-
-## Плеер
-
-- Встроенный плеер работает на Media3/ExoPlayer.
-- VLC используется как внешний fallback.
-- Каналы можно переключать из быстрого списка рядом с видео или из полного каталога.
-- Быстрый список рядом с видео показывает весь плейлист, а не только первые 200 каналов.
-- Программа передач в списках раскрывается кнопкой `Программа` и скрывается кнопкой `Скрыть программу`.
-- Время EPG показывается для Уральска: UTC+5.
-- Текущее время плеера показывается поверх видео справа сверху в обычном режиме и в верхней панели полноэкранного режима.
-
-## Диагностика
-
-В приложении есть раздел `Диагностика`:
-
-- последние события сканера, импорта, плеера и Engine Stream;
-- экспорт логов в файл;
-- маскировка чувствительных данных в логах;
-- сетевой тест для основных источников поиска.
-
-Частые причины проблем:
-
-- `UnknownHostException` - проблема DNS на TV Box, роутере или у провайдера.
-- `Timeout` - источник долго отвечает или блокируется сетью.
-- `Missing #EXTM3U header` - ссылка ведет не на M3U/M3U8 плейлист.
-- `player_error` / `Source error` - поток недоступен, заблокирован или не поддерживается текущим декодером.
-
-## Документация по модулям
-
-- `docs/architecture-stage1.md` - архитектура проекта.
-- `docs/stage2-scanner.md` - сканер.
-- `docs/stage3-import.md` - импорт.
-- `docs/stage4-editor.md` - редактор.
-- `docs/stage5-player.md` - плеер.
-- `docs/stage6-engine-diagnostics.md` - Engine Stream и диагностика.
-- `docs/stage7-hardening.md` - стабилизация.
-- `docs/stage8-release-readiness.md` - подготовка к релизу.
-- `docs/stage9-device-acceptance-release-runbook.md` - проверка на устройстве.
-- `docs/stage10-navigation-scroll.md` - общий скролл и план навигации под пульт/телефон.
-
-## Безопасность
-
-Приложение не содержит механизмов обхода DRM или взлома защищенного контента. Используйте только источники и трансляции, на которые у вас есть законные права.
+**Rinat Sarmuldin**  
+`ura07srr@gmail.com`
 
 ## Лицензия
 
-Copyright 2026 Rinat Sarmuldin.
-
-Репозиторий распространяется по проприетарной лицензии. Условия указаны в `LICENSE`.
-
-## Обновление Stage 11: TV-интерфейс и плеер
-
-- Добавлена адаптивная боковая панель разделов для широких экранов.
-- Переработан браузер каналов: плейлисты, группы, подгруппы, поиск и EPG рядом с видео.
-- Двойной клик/двойное касание переключает полноэкранный режим.
-- Добавлены команды пульта для переключения каналов и возврата к списку.
-- Буфер Media3 ограничивается с учетом CPU, heap и числа окон multiview.
-- Добавлен раздел `О приложении`: Rinat Sarmuldin, `ura07srr@gmail.com`.
-- Сканер и механизм поиска в этом этапе не изменялись.
-
-Подробный план и матрица проверки: `docs/stage11-tv-ui-player-hardening.md`.
+Проект распространяется на условиях файла [`LICENSE`](LICENSE). Лицензии сторонних компонентов сохранены в `docs/legal/`.

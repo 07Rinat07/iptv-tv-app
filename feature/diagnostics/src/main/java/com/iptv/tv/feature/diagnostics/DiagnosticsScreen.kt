@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
@@ -48,6 +49,7 @@ fun DiagnosticsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     var selectedTab by rememberSaveable { mutableStateOf(DiagnosticsTab.OVERVIEW) }
+    var showLogResetConfirm by rememberSaveable { mutableStateOf(false) }
 
     val saveDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/plain")
@@ -350,6 +352,12 @@ fun DiagnosticsScreen(
                             ) {
                                 Text("Экспорт как...")
                             }
+                            OutlinedButton(
+                                onClick = { showLogResetConfirm = true },
+                                enabled = state.logs.isNotEmpty()
+                            ) {
+                                Text("Сбросить старые ошибки")
+                            }
                         }
                     }
                 }
@@ -386,6 +394,31 @@ fun DiagnosticsScreen(
                 }
             }
         }
+    }
+
+    if (showLogResetConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogResetConfirm = false },
+            title = { Text("Сбросить старые ошибки?") },
+            text = {
+                Text("Старые записи перестанут отображаться. Новые ошибки и события будут собираться с момента сброса.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showLogResetConfirm = false
+                        viewModel.resetLogs()
+                    }
+                ) {
+                    Text("Сбросить")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showLogResetConfirm = false }) {
+                    Text("Отмена")
+                }
+            }
+        )
     }
 }
 

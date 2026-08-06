@@ -12,3 +12,10 @@
 /.android-sdk/
 __pycache__/
 *.pyc
+
+# Build packages are published through GitHub Actions/Releases, not committed.
+*.apk
+*.aab
+/artifacts/
+/build-artifacts/
+/Rinat-IPTV-final-build/

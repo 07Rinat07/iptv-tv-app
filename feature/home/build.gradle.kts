@@ -1,6 +1,8 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.hilt)
+    alias(libs.plugins.kotlin.kapt)
 }
 
 android {
@@ -30,6 +32,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core:common"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:domain"))
     implementation(project(":core:model"))
@@ -45,6 +48,14 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
 
+    implementation(libs.hilt.android)
+    kapt(libs.hilt.compiler)
+    implementation(libs.androidx.hilt.navigation.compose)
+
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit4)
+}
+
+kapt {
+    correctErrorTypes = true
 }

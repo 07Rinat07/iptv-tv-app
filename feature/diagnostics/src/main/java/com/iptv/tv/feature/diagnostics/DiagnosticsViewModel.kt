@@ -79,7 +79,8 @@ data class DiagnosticsUiState(
     val playlistSearchQuery: String = "",
     val playlistMinEntries: String = "0",
     val playlistOnlyOk: Boolean = false,
-    val logSearchQuery: String = ""
+    val logSearchQuery: String = "",
+    val logResetAt: Long = 0L
 )
 
 @HiltViewModel
@@ -91,7 +92,12 @@ class DiagnosticsViewModel @Inject constructor(
     private val scannerRepository: ScannerRepository,
     private val diagnosticsRepository: DiagnosticsRepository
 ) : ViewModel() {
-    private val _uiState = MutableStateFlow(DiagnosticsUiState())
+    private val diagnosticsPreferences = appContext.getSharedPreferences(DIAGNOSTICS_PREFS, Context.MODE_PRIVATE)
+    private val _uiState = MutableStateFlow(
+        DiagnosticsUiState(
+            logResetAt = diagnosticsPreferences.getLong(KEY_LOG_RESET_AT, 0L)
+        )
+    )
     val uiState: StateFlow<DiagnosticsUiState> = _uiState.asStateFlow()
 
     private val connectivityManager =
@@ -145,6 +151,12 @@ class DiagnosticsViewModel @Inject constructor(
 
     fun updateLogSearchQuery(value: String) {
         _uiState.update { it.copy(logSearchQuery = value) }
+    }
+
+    fun resetLogs() {
+        val resetAt = System.currentTimeMillis()
+        diagnosticsPreferences.edit().putLong(KEY_LOG_RESET_AT, resetAt).apply()
+        _uiState.update { state -> state.afterLogReset(resetAt) }
     }
 
     fun updateScanQuery(value: String) {
@@ -628,7 +640,8 @@ class DiagnosticsViewModel @Inject constructor(
     private fun observeLogs() {
         viewModelScope.launch {
             diagnosticsRepository.observeLogs(limit = 120).collect { logs ->
-                val readyStartupSamples = logs
+                val activeLogs = activeDiagnosticsLogs(logs, _uiState.value.logResetAt)
+                val readyStartupSamples = activeLogs
                     .filter { it.status == "player_ready" }
                     .mapNotNull { log ->
                         Regex("startupMs=(\\d+)").find(log.message)
@@ -639,10 +652,10 @@ class DiagnosticsViewModel @Inject constructor(
                 val startupAvg = if (readyStartupSamples.isEmpty()) 0L else readyStartupSamples.average().toLong()
                 _uiState.update {
                     it.copy(
-                        logs = logs,
+                        logs = activeLogs,
                         playerStartupAvgMs = startupAvg,
-                        playerErrorCount = logs.count { log -> log.status == "player_error" },
-                        playerRebufferCount = logs.count { log -> log.status == "player_rebuffer" }
+                        playerErrorCount = activeLogs.count { log -> log.status == "player_error" },
+                        playerRebufferCount = activeLogs.count { log -> log.status == "player_rebuffer" }
                     )
                 }
             }
@@ -731,5 +744,7 @@ class DiagnosticsViewModel @Inject constructor(
 
     private companion object {
         const val MB = 1024L * 1024L
+        const val DIAGNOSTICS_PREFS = "diagnostics_view"
+        const val KEY_LOG_RESET_AT = "log_reset_at"
     }
 }
