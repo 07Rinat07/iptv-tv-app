@@ -129,11 +129,11 @@ internal fun stableAdjacentChannelId(
     channelIds: List<Long>,
     selectedChannelId: Long?,
     step: Int
-): Long? {
-    if (channelIds.isEmpty()) return null
-    val currentIndex = channelIds.indexOf(selectedChannelId).takeIf { it >= 0 } ?: 0
-    return channelIds[Math.floorMod(currentIndex + step, channelIds.size)]
-}
+): Long? = StableChannelNavigation.adjacentId(
+    channelIds = channelIds,
+    selectedChannelId = selectedChannelId,
+    step = step
+)
 
 private enum class StablePlayerPanel {
     NONE,
@@ -211,6 +211,24 @@ fun StablePlayerScreen(
                     .thenBy { it.name }
             )
             .toList()
+    }
+
+    LaunchedEffect(
+        state.availableGroups,
+        state.availableSubGroups,
+        state.selectedGroup,
+        state.selectedSubGroup
+    ) {
+        val normalized = StableChannelNavigation.normalizeGroupSelection(
+            selectedGroup = state.selectedGroup,
+            selectedSubGroup = state.selectedSubGroup,
+            availableGroups = state.availableGroups,
+            availableSubGroups = state.availableSubGroups
+        )
+        when {
+            normalized.first != state.selectedGroup -> viewModel.selectGroup(normalized.first)
+            normalized.second != state.selectedSubGroup -> viewModel.selectSubGroup(normalized.second)
+        }
     }
 
     val selectedChannel = state.channels.firstOrNull { it.id == state.selectedChannelId }
@@ -681,15 +699,28 @@ private fun StableNearbyChannelsReplacement(
             OutlinedButton(
                 onClick = {
                     scope.launch {
-                        listState.animateScrollToItem((listState.firstVisibleItemIndex - 3).coerceAtLeast(0))
+                        listState.animateScrollToItem(
+                    StableChannelNavigation.pageTargetIndex(
+                        currentIndex = listState.firstVisibleItemIndex,
+                        itemCount = channels.size,
+                        pageSize = 3,
+                        direction = -1
+                    )
+                )
                     }
                 }
             ) { Text("◀") }
             OutlinedButton(
                 onClick = {
                     scope.launch {
-                        val last = (channels.size - 1).coerceAtLeast(0)
-                        listState.animateScrollToItem((listState.firstVisibleItemIndex + 3).coerceAtMost(last))
+                        listState.animateScrollToItem(
+                    StableChannelNavigation.pageTargetIndex(
+                        currentIndex = listState.firstVisibleItemIndex,
+                        itemCount = channels.size,
+                        pageSize = 3,
+                        direction = 1
+                    )
+                )
                     }
                 }
             ) { Text("▶") }
@@ -784,13 +815,23 @@ private fun StableChannelListReplacement(
     onToggleFavorite: (Long) -> Unit
 ) {
     val listState = rememberLazyListState()
-    LaunchedEffect(selectedChannelId, channels) {
-        val index = channels.indexOfFirst { it.id == selectedChannelId }
+    val visibleSelectedChannelId = remember(channels, selectedChannelId) {
+        StableChannelNavigation.selectionAfterFilter(
+            visibleChannelIds = channels.map { it.id },
+            previousSelectedChannelId = selectedChannelId
+        )
+    }
+    LaunchedEffect(visibleSelectedChannelId, channels) {
+        val index = channels.indexOfFirst { it.id == visibleSelectedChannelId }
         if (index >= 0) listState.animateScrollToItem(index)
     }
     Row(modifier) {
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxHeight().focusGroup(),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .focusGroup()
+                .stablePagedListNavigation(state = listState, itemCount = channels.size),
             state = listState,
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -799,12 +840,13 @@ private fun StableChannelListReplacement(
                     epgByChannel[channel.id].orEmpty(),
                     System.currentTimeMillis()
                 )
-                val selected = channel.id == selectedChannelId
+                val selected = channel.id == visibleSelectedChannelId
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .tvFocusOutline()
-                        .clickable { onSelect(channel.id) },
+                        .stableSelectedFocus(selected)
+                    .clickable { onSelect(channel.id) },
                     tonalElevation = if (selected) 8.dp else 1.dp,
                     color = if (selected) {
                         MaterialTheme.colorScheme.primaryContainer
@@ -1060,7 +1102,6 @@ private fun VerticalScrollControls(
 ) {
     val scope = rememberCoroutineScope()
     val pageSize = state.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-    val lastIndex = (itemCount - 1).coerceAtLeast(0)
 
     Column(
         modifier = modifier.padding(start = 6.dp),
@@ -1074,7 +1115,14 @@ private fun VerticalScrollControls(
         OutlinedButton(
             onClick = {
                 scope.launch {
-                    state.animateScrollToItem((state.firstVisibleItemIndex - pageSize).coerceAtLeast(0))
+                    state.animateScrollToItem(
+                StableChannelNavigation.pageTargetIndex(
+                    currentIndex = state.firstVisibleItemIndex,
+                    itemCount = itemCount,
+                    pageSize = pageSize,
+                    direction = -1
+                )
+            )
                 }
             },
             enabled = state.canScrollBackward
@@ -1085,7 +1133,14 @@ private fun VerticalScrollControls(
         OutlinedButton(
             onClick = {
                 scope.launch {
-                    state.animateScrollToItem((state.firstVisibleItemIndex + pageSize).coerceAtMost(lastIndex))
+                    state.animateScrollToItem(
+                StableChannelNavigation.pageTargetIndex(
+                    currentIndex = state.firstVisibleItemIndex,
+                    itemCount = itemCount,
+                    pageSize = pageSize,
+                    direction = 1
+                )
+            )
                 }
             },
             enabled = state.canScrollForward
@@ -1207,15 +1262,27 @@ private fun ScrollableButtonList(
     modifier: Modifier = Modifier
 ) {
     val state = rememberLazyListState()
+    LaunchedEffect(selectedIndex, labels.size) {
+        if (selectedIndex in labels.indices) {
+            state.animateScrollToItem(selectedIndex)
+        }
+    }
     Row(modifier.fillMaxWidth().heightIn(min = 180.dp, max = 520.dp)) {
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-            state = state,
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxHeight()
+            .focusGroup()
+            .stablePagedListNavigation(state = state, itemCount = labels.size),
+        state = state,
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             items(labels.size, key = { it }) { index ->
                 if (index == selectedIndex) {
-                    Button(onClick = { onClick(index) }, modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                onClick = { onClick(index) },
+                modifier = Modifier.fillMaxWidth().stableSelectedFocus(true)
+            ) {
                         Text(labels[index], maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 } else {
