@@ -1103,6 +1103,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun stopInternalPlayback() {
+        // Repository-owned cleanup survives ViewModel scope cancellation during navigation.
+        engineRepository.releaseTorrentStream()
         invalidatePrimaryPlaybackRequest()
         _uiState.update {
             it.copy(
@@ -1910,6 +1912,9 @@ class PlayerViewModel @Inject constructor(
         val url = channel.streamUrl.trim()
         val aceDescriptor = detectAceDescriptor(url)
         if (!forceAceResolution && aceDescriptor == null) {
+            // A direct IPTV request supersedes any previously active embedded torrent.
+            // Cleanup errors must not block direct playback.
+            engineRepository.stopTorrentStream()
             return AppResult.Success(url)
         }
         if (forceAceResolution && aceDescriptor == null) {
