@@ -45,9 +45,6 @@ class HybridEngineRepositoryImpl @Inject constructor(
     private val streamEpoch = AtomicLong(0L)
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    @Volatile
-    private var embeddedStreamActive: Boolean = false
-
     override suspend fun connect(endpoint: String): AppResult<Unit> {
         return when (val result = client.connect(endpoint)) {
             is AppResult.Success -> {
@@ -105,13 +102,11 @@ class HybridEngineRepositoryImpl @Inject constructor(
         // Once initialized, however, always forward stopStream(): it also invalidates an in-flight
         // metadata preparation even when no loopback stream has become active yet.
         if (!embeddedEngineDelegate.isInitialized()) {
-            embeddedStreamActive = false
             return AppResult.Success(Unit)
         }
 
         return when (val stopped = embeddedEngine.stopStream()) {
             is P2pResult.Success -> {
-                embeddedStreamActive = false
                 log("embedded_p2p_stopped", "Embedded BitTorrent stream stopped")
                 AppResult.Success(Unit)
             }
@@ -147,7 +142,6 @@ class HybridEngineRepositoryImpl @Inject constructor(
                         return@withLock supersededResult()
                     }
 
-                    embeddedStreamActive = true
                     log(
                         status = "embedded_p2p_resolved",
                         message = "Embedded BitTorrent stream prepared: ${embedded.data.file.name}"
@@ -158,7 +152,6 @@ class HybridEngineRepositoryImpl @Inject constructor(
             is P2pResult.Error -> {
                 if (streamEpoch.get() != epoch) return supersededResult()
 
-                embeddedStreamActive = false
                 log("embedded_p2p_resolve_error", embedded.message)
                 when (val fallback = resolveExternal(rawSource)) {
                     is AppResult.Success -> {
