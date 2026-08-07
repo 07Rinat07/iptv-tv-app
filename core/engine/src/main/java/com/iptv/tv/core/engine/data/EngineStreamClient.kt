@@ -116,6 +116,67 @@ class EngineStreamClient(
         }
     }
 
+    /**
+     * Resolve a true Ace content id to the BitTorrent transport infohash reported by Ace Engine.
+     *
+     * Content IDs and BitTorrent infohashes are different identifiers. This method therefore asks
+     * the engine metadata API for the transport metadata and only returns a hash when the response
+     * represents BitTorrent transport and contains a valid SHA-1 infohash.
+     */
+    suspend fun resolveContentIdInfoHash(rawSource: String): AppResult<String> {
+        val descriptor = AceStreamDescriptorParser.parse(rawSource)
+        if (descriptor !is AceStreamDescriptor.ContentId) {
+            return AppResult.Error("Ace Stream content id is required for metadata resolution")
+        }
+
+        val endpoint = when (val local = ensureEndpoint()) {
+            is AppResult.Success -> local.data
+            is AppResult.Error -> return local
+            AppResult.Loading -> return AppResult.Loading
+        }
+
+        val options = buildMap {
+            put("api_version", "3")
+            put("method", "get_media_files")
+            put("content_id", descriptor.value)
+            put("mode", "brief")
+        }
+
+        return runCatching {
+            val response = api.resolve(
+                url = buildServerApiUrl(endpoint),
+                options = options
+            )
+            val transportType = extractNamedString(response, "transport_type")
+                ?.trim()
+                ?.lowercase()
+            if (transportType != null && transportType != "bt") {
+                return@runCatching AppResult.Error(
+                    "Ace content id resolved to unsupported transport type: $transportType"
+                )
+            }
+
+            val infoHash = extractNamedString(response, "infohash")
+                ?.trim()
+                ?.lowercase()
+                ?.takeIf(BITTORRENT_INFO_HASH::matches)
+                ?: return@runCatching AppResult.Error(
+                    "Ace content id metadata did not contain a valid BitTorrent infohash"
+                )
+
+            status.value = status.value.copy(
+                connected = true,
+                message = "Ace content metadata resolved"
+            )
+            AppResult.Success(infoHash)
+        }.getOrElse { throwable ->
+            AppResult.Error(
+                "Ace content metadata request failed: ${throwable.toLogSummary(maxDepth = 4)}",
+                throwable
+            )
+        }
+    }
+
     suspend fun resolveStream(rawSource: String): AppResult<String> {
         val descriptor = AceStreamDescriptorParser.parse(rawSource)
         if (descriptor is AceStreamDescriptor.Direct) {
@@ -237,6 +298,9 @@ class EngineStreamClient(
     private fun buildServiceUrl(endpoint: String): String =
         "${endpoint.removeSuffix("/")}/webui/api/service"
 
+    private fun buildServerApiUrl(endpoint: String): String =
+        "${endpoint.removeSuffix("/")}/server/api"
+
     private fun buildEngineRequest(descriptor: AceStreamDescriptor): Map<String, String> {
         if (descriptor is AceStreamDescriptor.ContentId) {
             val original = descriptor.original.trim()
@@ -333,6 +397,25 @@ class EngineStreamClient(
         return null
     }
 
+    private fun extractNamedString(data: Any?, key: String): String? = when (data) {
+        is Map<*, *> -> {
+            data.entries.firstNotNullOfOrNull { (entryKey, value) ->
+                if (entryKey is String && entryKey.equals(key, ignoreCase = true)) {
+                    (value as? String)?.takeIf { it.isNotBlank() }
+                } else {
+                    null
+                }
+            } ?: data.values.firstNotNullOfOrNull { value ->
+                when (value) {
+                    is Map<*, *>, is Iterable<*> -> extractNamedString(value, key)
+                    else -> null
+                }
+            }
+        }
+        is Iterable<*> -> data.firstNotNullOfOrNull { value -> extractNamedString(value, key) }
+        else -> null
+    }
+
     private fun extractPlayableUrl(payload: Any?): String? = when (payload) {
         is String -> payload.takeIf { it.startsWith("http://") || it.startsWith("https://") }
         is Map<*, *> -> {
@@ -350,5 +433,9 @@ class EngineStreamClient(
         }
         is Iterable<*> -> payload.firstNotNullOfOrNull(::extractPlayableUrl)
         else -> null
+    }
+
+    private companion object {
+        val BITTORRENT_INFO_HASH = Regex("^[a-fA-F0-9]{40}$")
     }
 }
