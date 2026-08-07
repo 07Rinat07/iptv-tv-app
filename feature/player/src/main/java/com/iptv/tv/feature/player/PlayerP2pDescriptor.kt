@@ -8,14 +8,16 @@ import java.util.Locale
 /** Pure player-side P2P descriptor classifier; it does not depend on libtorrent or Ace APIs. */
 internal object PlayerP2pDescriptor {
     private val hash40Regex = Regex("^[a-fA-F0-9]{40}$")
-    private val descriptorQueryKeys = setOf("id", "content_id", "infohash", "hash", "url")
+    private val aceContentIdRegex = Regex("^[A-Za-z0-9_-]{20,128}$")
+    private val infoHashQueryKeys = setOf("infohash", "hash")
+    private val aceContentIdQueryKeys = setOf("content_id", "id")
 
     fun detect(raw: String): String? {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return null
 
         val nested = extractDescriptorFromUrl(trimmed)
-        if (!nested.isNullOrBlank()) return normalize(nested)
+        if (!nested.isNullOrBlank()) return nested
 
         return trimmed.takeIf(::isDescriptor)?.let(::normalize)
     }
@@ -96,16 +98,59 @@ internal object PlayerP2pDescriptor {
         val source = raw.substringBefore('|').trim()
         val uri = runCatching { URI(source) }.getOrNull() ?: return null
         val query = uri.rawQuery ?: return null
-        for (pair in query.split('&')) {
-            val key = pair.substringBefore('=').trim().lowercase(Locale.ROOT)
-            val encodedValue = pair.substringAfter('=', "").trim()
-            if (key.isBlank() || encodedValue.isBlank() || key !in descriptorQueryKeys) continue
+        val params = query.split('&').mapNotNull(::decodeQueryPair)
 
-            val value = runCatching {
-                URLDecoder.decode(encodedValue, StandardCharsets.UTF_8.toString()).trim()
-            }.getOrDefault(encodedValue)
-            if (value.isNotBlank() && isDescriptor(value)) return value
-        }
+        // A real infohash is usable by the embedded BitTorrent engine and must win even when
+        // the same Ace API URL also carries a separate content_id.
+        params.firstOrNull { it.first in infoHashQueryKeys }
+            ?.second
+            ?.let(::normalizeInfoHashParameter)
+            ?.let { return it }
+
+        params.firstOrNull { it.first == "url" }
+            ?.second
+            ?.takeIf { it != source }
+            ?.let(::detect)
+            ?.let { return it }
+
+        // Ace content_id/id is deliberately NOT treated as a bare BitTorrent infohash.
+        params.firstOrNull { it.first in aceContentIdQueryKeys }
+            ?.second
+            ?.let(::normalizeAceContentIdParameter)
+            ?.let { return it }
+
         return null
+    }
+
+    private fun decodeQueryPair(pair: String): Pair<String, String>? {
+        val key = pair.substringBefore('=').trim().lowercase(Locale.ROOT)
+        val encodedValue = pair.substringAfter('=', "").trim()
+        if (key.isBlank() || encodedValue.isBlank()) return null
+        val value = runCatching {
+            URLDecoder.decode(encodedValue, StandardCharsets.UTF_8.toString()).trim()
+        }.getOrDefault(encodedValue)
+        return key to value
+    }
+
+    private fun normalizeInfoHashParameter(raw: String): String? {
+        val value = raw.trim()
+        return when {
+            hash40Regex.matches(value) -> "magnet:?xt=urn:btih:$value"
+            value.startsWith("infohash:", ignoreCase = true) -> {
+                normalize(value).takeIf { it.startsWith("magnet:", ignoreCase = true) }
+            }
+            value.startsWith("magnet:?", ignoreCase = true) -> value
+            else -> null
+        }
+    }
+
+    private fun normalizeAceContentIdParameter(raw: String): String? {
+        val value = raw.trim()
+        return when {
+            value.startsWith("acestream://", ignoreCase = true) ||
+                value.startsWith("ace://", ignoreCase = true) -> normalize(value)
+            aceContentIdRegex.matches(value) -> "acestream://$value"
+            else -> null
+        }
     }
 }

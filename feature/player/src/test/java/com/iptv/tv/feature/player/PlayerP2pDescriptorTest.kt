@@ -41,6 +41,36 @@ class PlayerP2pDescriptorTest {
     }
 
     @Test
+    fun contentIdQueryRemainsExternalAceEvenWhenItLooksLikeSha1() {
+        val contentId = "1111111111111111111111111111111111111111"
+        val source = "http://127.0.0.1:6878/ace/getstream?id=$contentId"
+
+        assertEquals("acestream://$contentId", PlayerP2pDescriptor.detect(source))
+        assertEquals("Ace Stream поток (внешний Engine)", PlayerP2pDescriptor.describe(source))
+    }
+
+    @Test
+    fun explicitInfoHashQueryUsesEmbeddedBitTorrent() {
+        val infoHash = "2222222222222222222222222222222222222222"
+        val source = "https://example.org/play?infohash=$infoHash"
+
+        assertEquals("magnet:?xt=urn:btih:$infoHash", PlayerP2pDescriptor.detect(source))
+        assertEquals("BitTorrent поток (встроенный P2P)", PlayerP2pDescriptor.describe(source))
+    }
+
+    @Test
+    fun infoHashWinsWhenAceApiUrlContainsBothIdentifiersRegardlessOfOrder() {
+        val contentId = "3333333333333333333333333333333333333333"
+        val infoHash = "4444444444444444444444444444444444444444"
+        val contentFirst = "https://example.org/play?content_id=$contentId&infohash=$infoHash"
+        val infoHashFirst = "https://example.org/play?infohash=$infoHash&content_id=$contentId"
+        val expected = "magnet:?xt=urn:btih:$infoHash"
+
+        assertEquals(expected, PlayerP2pDescriptor.detect(contentFirst))
+        assertEquals(expected, PlayerP2pDescriptor.detect(infoHashFirst))
+    }
+
+    @Test
     fun directIptvUrlIsNotP2p() {
         assertNull(PlayerP2pDescriptor.detect("https://example.org/live/channel.m3u8?token=abc"))
     }
