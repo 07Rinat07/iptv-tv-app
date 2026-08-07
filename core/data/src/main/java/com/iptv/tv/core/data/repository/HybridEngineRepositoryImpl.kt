@@ -37,9 +37,10 @@ class HybridEngineRepositoryImpl @Inject constructor(
     private val syncLogDao: SyncLogDao,
     okHttpClient: OkHttpClient
 ) : EngineRepository {
-    private val embeddedEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+    private val embeddedEngineDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         LibtorrentEmbeddedEngine(context, okHttpClient)
     }
+    private val embeddedEngine by embeddedEngineDelegate
     private val streamMutex = Mutex()
     private val streamEpoch = AtomicLong(0L)
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -100,7 +101,13 @@ class HybridEngineRepositoryImpl @Inject constructor(
     }
 
     private suspend fun stopEmbeddedLocked(): AppResult<Unit> {
-        if (!embeddedStreamActive) return AppResult.Success(Unit)
+        // Do not initialize libtorrent just to stop a stream that never used the embedded backend.
+        // Once initialized, however, always forward stopStream(): it also invalidates an in-flight
+        // metadata preparation even when no loopback stream has become active yet.
+        if (!embeddedEngineDelegate.isInitialized()) {
+            embeddedStreamActive = false
+            return AppResult.Success(Unit)
+        }
 
         return when (val stopped = embeddedEngine.stopStream()) {
             is P2pResult.Success -> {
@@ -118,53 +125,70 @@ class HybridEngineRepositoryImpl @Inject constructor(
     private suspend fun resolveEmbeddedWithFallback(
         rawSource: String,
         epoch: Long
-    ): AppResult<String> = streamMutex.withLock {
-        if (streamEpoch.get() != epoch) return@withLock supersededResult()
+    ): AppResult<String> {
+        if (streamEpoch.get() != epoch) return supersededResult()
 
         val parsed = P2pSourceParser.parse(rawSource)
         if (parsed !is P2pResult.Success) {
-            return@withLock if (streamEpoch.get() == epoch) {
+            return if (streamEpoch.get() == epoch) {
                 resolveExternal(rawSource)
             } else {
                 supersededResult()
             }
         }
 
-        when (val embedded = embeddedEngine.prepareStream(parsed.data)) {
+        // Intentionally do not hold streamMutex while prepareStream() performs magnet/.torrent
+        // metadata work. stopTorrentStream() and direct-channel switches must be able to enter
+        // stopEmbeddedLocked() immediately and invalidate the engine preparation epoch.
+        return when (val embedded = embeddedEngine.prepareStream(parsed.data)) {
             is P2pResult.Success -> {
-                if (streamEpoch.get() != epoch) {
-                    embeddedStreamActive = true
-                    stopEmbeddedLocked()
-                    return@withLock supersededResult()
-                }
+                streamMutex.withLock {
+                    if (streamEpoch.get() != epoch) {
+                        return@withLock supersededResult()
+                    }
 
-                embeddedStreamActive = true
-                log(
-                    status = "embedded_p2p_resolved",
-                    message = "Embedded BitTorrent stream prepared: ${embedded.data.file.name}"
-                )
-                AppResult.Success(embedded.data.url)
+                    embeddedStreamActive = true
+                    log(
+                        status = "embedded_p2p_resolved",
+                        message = "Embedded BitTorrent stream prepared: ${embedded.data.file.name}"
+                    )
+                    AppResult.Success(embedded.data.url)
+                }
             }
             is P2pResult.Error -> {
-                embeddedStreamActive = false
-                if (streamEpoch.get() != epoch) return@withLock supersededResult()
+                if (streamEpoch.get() != epoch) return supersededResult()
 
+                embeddedStreamActive = false
                 log("embedded_p2p_resolve_error", embedded.message)
                 when (val fallback = resolveExternal(rawSource)) {
                     is AppResult.Success -> {
-                        log("embedded_p2p_fallback", "External Ace fallback resolved BitTorrent source")
-                        fallback
+                        if (streamEpoch.get() != epoch) {
+                            supersededResult()
+                        } else {
+                            log("embedded_p2p_fallback", "External Ace fallback resolved BitTorrent source")
+                            fallback
+                        }
                     }
-                    is AppResult.Error -> AppResult.Error(
-                        message = buildString {
-                            append("Embedded BitTorrent failed: ")
-                            append(embedded.message)
-                            append("; external Ace fallback failed: ")
-                            append(fallback.message)
-                        },
-                        cause = fallback.cause ?: embedded.cause
-                    )
-                    AppResult.Loading -> AppResult.Loading
+                    is AppResult.Error -> {
+                        if (streamEpoch.get() != epoch) {
+                            supersededResult()
+                        } else {
+                            AppResult.Error(
+                                message = buildString {
+                                    append("Embedded BitTorrent failed: ")
+                                    append(embedded.message)
+                                    append("; external Ace fallback failed: ")
+                                    append(fallback.message)
+                                },
+                                cause = fallback.cause ?: embedded.cause
+                            )
+                        }
+                    }
+                    AppResult.Loading -> if (streamEpoch.get() == epoch) {
+                        AppResult.Loading
+                    } else {
+                        supersededResult()
+                    }
                 }
             }
         }
