@@ -29,6 +29,8 @@ class LibtorrentEmbeddedEngine(
     private val session = SessionManager(false)
     private val lifecycleMutex = Mutex()
     private val streamMutex = Mutex()
+    private val activationMutex = Mutex()
+    private val preparationEpoch = P2pPreparationEpoch()
     private val metadataDir = File(appContext.cacheDir, "p2p/metadata")
     private val contentDir = File(appContext.cacheDir, "p2p/content")
     private var activeStream: P2pActiveStream<TorrentHandle>? = null
@@ -50,6 +52,9 @@ class LibtorrentEmbeddedEngine(
 
     suspend fun stopStream(): P2pResult<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            // Invalidate in-flight metadata/handle preparation before touching the active stream.
+            // Long-running metadata work may finish naturally, but it can no longer publish a URL.
+            preparationEpoch.cancelAll()
             streamMutex.withLock {
                 closeActiveStreamLocked()
             }
@@ -63,6 +68,7 @@ class LibtorrentEmbeddedEngine(
         runCatching {
             var failure: Throwable? = null
 
+            preparationEpoch.cancelAll()
             streamMutex.withLock {
                 try {
                     closeActiveStreamLocked()
@@ -132,34 +138,53 @@ class LibtorrentEmbeddedEngine(
             )
         }
 
+        // The token is created before start(), so a stop/switch that happens while the native
+        // session starts also supersedes this request.
+        val preparationToken = preparationEpoch.begin()
+
         when (val started = start()) {
             is P2pResult.Error -> return@withContext started
             is P2pResult.Success -> Unit
         }
 
-        streamMutex.withLock {
-            var pendingServer: LoopbackHttpRangeServer? = null
-            var pendingHandle: TorrentHandle? = null
+        var pendingServer: LoopbackHttpRangeServer? = null
+        var pendingHandle: TorrentHandle? = null
 
-            runCatching {
-                // A player switch owns exactly one embedded stream. Stop the previous torrent before
-                // resolving/adding the next one so the old handle cannot keep using bandwidth.
+        runCatching {
+            preparationEpoch.requireCurrent(preparationToken)
+
+            // Release the currently playing torrent immediately, then perform potentially slow
+            // magnet/.torrent metadata resolution without holding streamMutex. This is what lets
+            // stopStream() and direct-channel switches return promptly while metadata is slow.
+            streamMutex.withLock {
+                preparationEpoch.requireCurrent(preparationToken)
                 closeActiveStreamLocked()
+            }
 
-                val torrentInfo = resolveTorrentInfo(source, magnetTimeoutSeconds)
-                val metadata = buildMetadata(torrentInfo)
-                val selectedFileIndex = fileIndex ?: metadata.preferredFileIndex
-                    ?: error("Torrent does not contain a playable non-empty file")
-                val selectedFile = metadata.files.firstOrNull { it.index == selectedFileIndex }
-                    ?: error("Torrent file index $selectedFileIndex does not exist")
-                if (selectedFile.sizeBytes <= 0L) error("Selected torrent file is empty")
+            val torrentInfo = resolveTorrentInfo(source, magnetTimeoutSeconds)
+            preparationEpoch.requireCurrent(preparationToken)
 
-                val storage = torrentInfo.files()
-                val torrentDirectory = File(contentDir, torrentDirectoryName(torrentInfo)).apply { mkdirs() }
+            val metadata = buildMetadata(torrentInfo)
+            val selectedFileIndex = fileIndex ?: metadata.preferredFileIndex
+                ?: error("Torrent does not contain a playable non-empty file")
+            val selectedFile = metadata.files.firstOrNull { it.index == selectedFileIndex }
+                ?: error("Torrent file index $selectedFileIndex does not exist")
+            if (selectedFile.sizeBytes <= 0L) error("Selected torrent file is empty")
+
+            val storage = torrentInfo.files()
+            val torrentDirectory = File(contentDir, torrentDirectoryName(torrentInfo)).apply { mkdirs() }
+
+            // Only the short native add/activation phase is serialized. Metadata resolution above
+            // remains concurrent/cancellable-by-epoch, while this prevents stale prepares from
+            // removing a TorrentHandle that a newer prepare is simultaneously trying to own.
+            activationMutex.withLock {
+                preparationEpoch.requireCurrent(preparationToken)
 
                 session.download(torrentInfo, torrentDirectory)
                 val handle = awaitTorrentHandle(torrentInfo)
                 pendingHandle = handle
+                preparationEpoch.requireCurrent(preparationToken)
+
                 configureFilePriorities(handle, storage.numFiles(), selectedFileIndex)
                 handle.resume()
 
@@ -179,12 +204,17 @@ class LibtorrentEmbeddedEngine(
                 val server = LoopbackHttpRangeServer(byteSource)
                 pendingServer = server
                 val url = server.start()
+                preparationEpoch.requireCurrent(preparationToken)
 
-                activeStream = P2pActiveStream(
-                    server = server,
-                    handle = handle,
-                    removeHandle = ::removeTorrentHandle
-                )
+                streamMutex.withLock {
+                    preparationEpoch.requireCurrent(preparationToken)
+                    closeActiveStreamLocked()
+                    activeStream = P2pActiveStream(
+                        server = server,
+                        handle = handle,
+                        removeHandle = ::removeTorrentHandle
+                    )
+                }
                 pendingServer = null
                 pendingHandle = null
 
@@ -193,29 +223,29 @@ class LibtorrentEmbeddedEngine(
                     file = selectedFile,
                     torrent = metadata
                 )
-            }.fold(
-                onSuccess = { P2pResult.Success(it) },
-                onFailure = { error ->
-                    var cleanupFailure: Throwable? = null
-                    try {
-                        pendingServer?.close()
-                    } catch (cleanupError: Throwable) {
-                        cleanupFailure = cleanupError
-                    }
-                    try {
-                        pendingHandle?.let(::removeTorrentHandle)
-                    } catch (cleanupError: Throwable) {
-                        if (cleanupFailure == null) {
-                            cleanupFailure = cleanupError
-                        } else {
-                            cleanupFailure?.addSuppressed(cleanupError)
-                        }
-                    }
-                    cleanupFailure?.let(error::addSuppressed)
-                    P2pResult.Error(error.message ?: "Unable to prepare embedded BitTorrent stream", error)
+            }
+        }.fold(
+            onSuccess = { P2pResult.Success(it) },
+            onFailure = { error ->
+                var cleanupFailure: Throwable? = null
+                try {
+                    pendingServer?.close()
+                } catch (cleanupError: Throwable) {
+                    cleanupFailure = cleanupError
                 }
-            )
-        }
+                try {
+                    pendingHandle?.let(::removeTorrentHandle)
+                } catch (cleanupError: Throwable) {
+                    if (cleanupFailure == null) {
+                        cleanupFailure = cleanupError
+                    } else {
+                        cleanupFailure?.addSuppressed(cleanupError)
+                    }
+                }
+                cleanupFailure?.let(error::addSuppressed)
+                P2pResult.Error(error.message ?: "Unable to prepare embedded BitTorrent stream", error)
+            }
+        )
     }
 
     private fun closeActiveStreamLocked() {
