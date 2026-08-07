@@ -9,6 +9,7 @@ import com.iptv.tv.core.engine.data.EngineStreamClient
 import com.iptv.tv.core.model.EngineStatus
 import com.iptv.tv.core.p2p.LibtorrentEmbeddedEngine
 import com.iptv.tv.core.p2p.P2pResult
+import com.iptv.tv.core.p2p.P2pSource
 import com.iptv.tv.core.p2p.P2pSourceParser
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.atomic.AtomicBoolean
@@ -25,9 +26,10 @@ import okhttp3.OkHttpClient
 /**
  * Player-facing engine repository.
  *
- * BitTorrent metadata is resolved by the in-process libtorrent backend first. True Ace
- * descriptors remain on the external Ace Engine integration. If embedded BitTorrent cannot
- * prepare a stream, the existing Ace path is retained as a compatibility fallback.
+ * BitTorrent metadata is resolved by the in-process libtorrent backend first. True Ace content
+ * ids are never reinterpreted as infohashes. When an Ace Engine endpoint is available, the
+ * repository may ask it only for transport metadata and then hand a proven BitTorrent infohash
+ * to the embedded backend. External Ace playback remains the compatibility fallback.
  */
 @Singleton
 class HybridEngineRepositoryImpl @Inject constructor(
@@ -65,12 +67,16 @@ class HybridEngineRepositoryImpl @Inject constructor(
         val epoch = streamEpoch.incrementAndGet()
         return when (EngineStreamRouting.route(magnetOrAce)) {
             EngineStreamRoute.EXTERNAL_ACE -> {
-                stopEmbeddedForEpoch(epoch)
-                if (streamEpoch.get() != epoch) {
-                    supersededResult()
+                if (isPureAceContentId(magnetOrAce)) {
+                    resolveAceContentIdWithEmbeddedMetadata(magnetOrAce, epoch)
                 } else {
-                    resolveExternal(magnetOrAce).takeIf { streamEpoch.get() == epoch }
-                        ?: supersededResult()
+                    stopEmbeddedForEpoch(epoch)
+                    if (streamEpoch.get() != epoch) {
+                        supersededResult()
+                    } else {
+                        resolveExternal(magnetOrAce).takeIf { streamEpoch.get() == epoch }
+                            ?: supersededResult()
+                    }
                 }
             }
             EngineStreamRoute.EMBEDDED_BITTORRENT -> resolveEmbeddedWithFallback(magnetOrAce, epoch)
@@ -168,6 +174,59 @@ class HybridEngineRepositoryImpl @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * A pure Ace content id is not a BitTorrent hash. If an Ace endpoint is available we ask its
+     * metadata API for the real transport infohash, then attempt playback through our embedded
+     * libtorrent backend. Any metadata or embedded failure falls back to the existing Ace path.
+     */
+    private suspend fun resolveAceContentIdWithEmbeddedMetadata(
+        rawSource: String,
+        epoch: Long
+    ): AppResult<String> {
+        stopEmbeddedForEpoch(epoch)
+        if (streamEpoch.get() != epoch) return supersededResult()
+
+        val metadata = client.resolveContentIdInfoHash(rawSource)
+        if (streamEpoch.get() != epoch) return supersededResult()
+
+        if (metadata !is AppResult.Success) {
+            if (metadata is AppResult.Error) {
+                log("engine_content_id_metadata_error", metadata.message)
+            }
+            val fallback = resolveExternal(rawSource)
+            return if (streamEpoch.get() == epoch) fallback else supersededResult()
+        }
+
+        log(
+            "engine_content_id_metadata_resolved",
+            "Ace content id mapped to BitTorrent infohash ${metadata.data}"
+        )
+
+        embeddedEngineUsed.set(true)
+        val embedded = embeddedEngine.prepareStream(P2pSource.InfoHash(metadata.data))
+        if (streamEpoch.get() != epoch) return supersededResult()
+
+        return when (embedded) {
+            is P2pResult.Success -> {
+                log(
+                    "embedded_p2p_content_id_resolved",
+                    "Embedded BitTorrent stream prepared from Ace content metadata: ${embedded.data.file.name}"
+                )
+                AppResult.Success(embedded.data.url)
+            }
+            is P2pResult.Error -> {
+                log("embedded_p2p_content_id_error", embedded.message)
+                val fallback = resolveExternal(rawSource)
+                if (streamEpoch.get() != epoch) supersededResult() else fallback
+            }
+        }
+    }
+
+    private fun isPureAceContentId(rawSource: String): Boolean {
+        val parsed = P2pSourceParser.parse(rawSource)
+        return parsed is P2pResult.Success && parsed.data is P2pSource.AceContentId
     }
 
     private fun supersededResult(): AppResult.Error = AppResult.Error(
