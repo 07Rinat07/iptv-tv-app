@@ -1,6 +1,6 @@
 package com.iptv.tv.core.data.di
 
-import com.iptv.tv.core.data.repository.EngineRepositoryImpl
+import com.iptv.tv.core.data.repository.HybridEngineRepositoryImpl
 import com.iptv.tv.core.data.repository.ChannelMetadataRepositoryImpl
 import com.iptv.tv.core.data.repository.FavoritesRepositoryImpl
 import com.iptv.tv.core.data.repository.HistoryRepositoryImpl
@@ -79,7 +79,7 @@ abstract class RepositoryBindings {
 
     @Binds
     @Singleton
-    abstract fun bindEngineRepository(impl: EngineRepositoryImpl): EngineRepository
+    abstract fun bindEngineRepository(impl: HybridEngineRepositoryImpl): EngineRepository
 
     @Binds
     @Singleton

@@ -31,6 +31,7 @@ dependencies {
     implementation(project(":core:database"))
     implementation(project(":core:parser"))
     implementation(project(":core:engine"))
+    implementation(project(":core:p2p"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore.preferences)
