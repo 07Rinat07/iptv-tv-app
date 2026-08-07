@@ -22,54 +22,67 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
+
+          def replace_exactly_once(text, pattern, replacement, label):
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
+              if count != 1:
+                  raise SystemExit(f"Expected one {label} block, found {count}")
+              return updated
 
           vm = Path("feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt")
           text = vm.read_text(encoding="utf-8")
 
-          old_direct = '''        if (!forceAceResolution && aceDescriptor == null) {
-              return AppResult.Success(url)
-          }
-          '''
-          new_direct = '''        if (!forceAceResolution && aceDescriptor == null) {
-              // A direct IPTV request supersedes any previously active embedded torrent.
-              // Cleanup errors must not block direct playback.
-              engineRepository.stopTorrentStream()
-              return AppResult.Success(url)
-          }
-          '''
-          if text.count(old_direct) != 1:
-              raise SystemExit(f"Expected one direct-playback block, found {text.count(old_direct)}")
-          text = text.replace(old_direct, new_direct, 1)
+          direct_pattern = (
+              r'^(?P<i>[ \t]*)if \(!forceAceResolution && aceDescriptor == null\) \{\n'
+              r'(?P=i)    return AppResult\.Success\(url\)\n'
+              r'(?P=i)\}'
+          )
+          def direct_replacement(match):
+              i = match.group('i')
+              return (
+                  f"{i}if (!forceAceResolution && aceDescriptor == null) {{\n"
+                  f"{i}    // A direct IPTV request supersedes any previously active embedded torrent.\n"
+                  f"{i}    // Cleanup errors must not block direct playback.\n"
+                  f"{i}    engineRepository.stopTorrentStream()\n"
+                  f"{i}    return AppResult.Success(url)\n"
+                  f"{i}}}"
+              )
+          text = replace_exactly_once(text, direct_pattern, direct_replacement, "direct-playback")
 
-          old_stop = '''    fun stopInternalPlayback() {
-              invalidatePrimaryPlaybackRequest()
-          '''
-          new_stop = '''    fun stopInternalPlayback() {
-              // Repository-owned cleanup survives ViewModel scope cancellation during navigation.
-              engineRepository.releaseTorrentStream()
-              invalidatePrimaryPlaybackRequest()
-          '''
-          if text.count(old_stop) != 1:
-              raise SystemExit(f"Expected one stopInternalPlayback block, found {text.count(old_stop)}")
-          text = text.replace(old_stop, new_stop, 1)
+          stop_pattern = (
+              r'^(?P<i>[ \t]*)fun stopInternalPlayback\(\) \{\n'
+              r'(?P=i)    invalidatePrimaryPlaybackRequest\(\)'
+          )
+          def stop_replacement(match):
+              i = match.group('i')
+              return (
+                  f"{i}fun stopInternalPlayback() {{\n"
+                  f"{i}    // Repository-owned cleanup survives ViewModel scope cancellation during navigation.\n"
+                  f"{i}    engineRepository.releaseTorrentStream()\n"
+                  f"{i}    invalidatePrimaryPlaybackRequest()"
+              )
+          text = replace_exactly_once(text, stop_pattern, stop_replacement, "stopInternalPlayback")
           vm.write_text(text, encoding="utf-8")
 
           screen = Path("feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt")
           text = screen.read_text(encoding="utf-8")
-          old_dispose = '''    DisposableEffect(Unit) {
-              onDispose { onFullscreenChanged(false) }
-          }
-          '''
-          new_dispose = '''    DisposableEffect(Unit) {
-              onDispose {
-                  viewModel.stopInternalPlayback()
-                  onFullscreenChanged(false)
-              }
-          }
-          '''
-          if text.count(old_dispose) != 1:
-              raise SystemExit(f"Expected one screen DisposableEffect block, found {text.count(old_dispose)}")
-          text = text.replace(old_dispose, new_dispose, 1)
+          dispose_pattern = (
+              r'^(?P<i>[ \t]*)DisposableEffect\(Unit\) \{\n'
+              r'(?P=i)    onDispose \{ onFullscreenChanged\(false\) \}\n'
+              r'(?P=i)\}'
+          )
+          def dispose_replacement(match):
+              i = match.group('i')
+              return (
+                  f"{i}DisposableEffect(Unit) {{\n"
+                  f"{i}    onDispose {{\n"
+                  f"{i}        viewModel.stopInternalPlayback()\n"
+                  f"{i}        onFullscreenChanged(false)\n"
+                  f"{i}    }}\n"
+                  f"{i}}}"
+              )
+          text = replace_exactly_once(text, dispose_pattern, dispose_replacement, "screen DisposableEffect")
           screen.write_text(text, encoding="utf-8")
 
       - name: Remove one-shot workflow
