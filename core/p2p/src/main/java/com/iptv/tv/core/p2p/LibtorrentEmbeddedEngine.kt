@@ -31,7 +31,7 @@ class LibtorrentEmbeddedEngine(
     private val streamMutex = Mutex()
     private val metadataDir = File(appContext.cacheDir, "p2p/metadata")
     private val contentDir = File(appContext.cacheDir, "p2p/content")
-    private var activeStreamServer: LoopbackHttpRangeServer? = null
+    private var activeStream: P2pActiveStream<TorrentHandle>? = null
 
     suspend fun start(): P2pResult<Unit> = withContext(Dispatchers.IO) {
         runCatching {
@@ -51,8 +51,7 @@ class LibtorrentEmbeddedEngine(
     suspend fun stopStream(): P2pResult<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             streamMutex.withLock {
-                activeStreamServer?.close()
-                activeStreamServer = null
+                closeActiveStreamLocked()
             }
         }.fold(
             onSuccess = { P2pResult.Success(Unit) },
@@ -62,13 +61,29 @@ class LibtorrentEmbeddedEngine(
 
     suspend fun stop(): P2pResult<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            var failure: Throwable? = null
+
             streamMutex.withLock {
-                activeStreamServer?.close()
-                activeStreamServer = null
+                try {
+                    closeActiveStreamLocked()
+                } catch (error: Throwable) {
+                    failure = error
+                }
             }
+
             lifecycleMutex.withLock {
-                if (session.isRunning) session.stop()
+                try {
+                    if (session.isRunning) session.stop()
+                } catch (error: Throwable) {
+                    if (failure == null) {
+                        failure = error
+                    } else {
+                        failure?.addSuppressed(error)
+                    }
+                }
             }
+
+            failure?.let { throw it }
         }.fold(
             onSuccess = { P2pResult.Success(Unit) },
             onFailure = { P2pResult.Error("Unable to stop embedded BitTorrent engine", it) }
@@ -121,59 +136,97 @@ class LibtorrentEmbeddedEngine(
             is P2pResult.Success -> Unit
         }
 
-        var newServer: LoopbackHttpRangeServer? = null
-        runCatching {
-            val torrentInfo = resolveTorrentInfo(source, magnetTimeoutSeconds)
-            val metadata = buildMetadata(torrentInfo)
-            val selectedFileIndex = fileIndex ?: metadata.preferredFileIndex
-                ?: error("Torrent does not contain a playable non-empty file")
-            val selectedFile = metadata.files.firstOrNull { it.index == selectedFileIndex }
-                ?: error("Torrent file index $selectedFileIndex does not exist")
-            if (selectedFile.sizeBytes <= 0L) error("Selected torrent file is empty")
+        streamMutex.withLock {
+            var pendingServer: LoopbackHttpRangeServer? = null
+            var pendingHandle: TorrentHandle? = null
 
-            val storage = torrentInfo.files()
-            val torrentDirectory = File(contentDir, torrentDirectoryName(torrentInfo)).apply { mkdirs() }
+            runCatching {
+                // A player switch owns exactly one embedded stream. Stop the previous torrent before
+                // resolving/adding the next one so the old handle cannot keep using bandwidth.
+                closeActiveStreamLocked()
 
-            session.download(torrentInfo, torrentDirectory)
-            val handle = awaitTorrentHandle(torrentInfo)
-            configureFilePriorities(handle, storage.numFiles(), selectedFileIndex)
-            handle.resume()
+                val torrentInfo = resolveTorrentInfo(source, magnetTimeoutSeconds)
+                val metadata = buildMetadata(torrentInfo)
+                val selectedFileIndex = fileIndex ?: metadata.preferredFileIndex
+                    ?: error("Torrent does not contain a playable non-empty file")
+                val selectedFile = metadata.files.firstOrNull { it.index == selectedFileIndex }
+                    ?: error("Torrent file index $selectedFileIndex does not exist")
+                if (selectedFile.sizeBytes <= 0L) error("Selected torrent file is empty")
 
-            val targetFile = File(storage.filePath(selectedFileIndex, torrentDirectory.absolutePath))
-            val byteSource = LibtorrentStreamByteSource(
-                handle = handle,
-                torrentInfo = torrentInfo,
-                fileIndex = selectedFileIndex,
-                file = targetFile,
-                contentType = contentTypeFor(selectedFile.name)
+                val storage = torrentInfo.files()
+                val torrentDirectory = File(contentDir, torrentDirectoryName(torrentInfo)).apply { mkdirs() }
+
+                session.download(torrentInfo, torrentDirectory)
+                val handle = awaitTorrentHandle(torrentInfo)
+                pendingHandle = handle
+                configureFilePriorities(handle, storage.numFiles(), selectedFileIndex)
+                handle.resume()
+
+                val targetFile = File(storage.filePath(selectedFileIndex, torrentDirectory.absolutePath))
+                val byteSource = LibtorrentStreamByteSource(
+                    handle = handle,
+                    torrentInfo = torrentInfo,
+                    fileIndex = selectedFileIndex,
+                    file = targetFile,
+                    contentType = contentTypeFor(selectedFile.name)
+                )
+                byteSource.onRangeRequested(
+                    start = 0L,
+                    endInclusive = minOf(selectedFile.sizeBytes - 1L, STARTUP_PRIORITY_BYTES - 1L)
+                )
+
+                val server = LoopbackHttpRangeServer(byteSource)
+                pendingServer = server
+                val url = server.start()
+
+                activeStream = P2pActiveStream(
+                    server = server,
+                    handle = handle,
+                    removeHandle = ::removeTorrentHandle
+                )
+                pendingServer = null
+                pendingHandle = null
+
+                P2pStreamDescriptor(
+                    url = url,
+                    file = selectedFile,
+                    torrent = metadata
+                )
+            }.fold(
+                onSuccess = { P2pResult.Success(it) },
+                onFailure = { error ->
+                    var cleanupFailure: Throwable? = null
+                    try {
+                        pendingServer?.close()
+                    } catch (cleanupError: Throwable) {
+                        cleanupFailure = cleanupError
+                    }
+                    try {
+                        pendingHandle?.let(::removeTorrentHandle)
+                    } catch (cleanupError: Throwable) {
+                        if (cleanupFailure == null) {
+                            cleanupFailure = cleanupError
+                        } else {
+                            cleanupFailure?.addSuppressed(cleanupError)
+                        }
+                    }
+                    cleanupFailure?.let(error::addSuppressed)
+                    P2pResult.Error(error.message ?: "Unable to prepare embedded BitTorrent stream", error)
+                }
             )
-            byteSource.onRangeRequested(
-                start = 0L,
-                endInclusive = minOf(selectedFile.sizeBytes - 1L, STARTUP_PRIORITY_BYTES - 1L)
-            )
+        }
+    }
 
-            val server = LoopbackHttpRangeServer(byteSource)
-            newServer = server
-            val url = server.start()
+    private fun closeActiveStreamLocked() {
+        val stream = activeStream ?: return
+        activeStream = null
+        stream.close()
+    }
 
-            streamMutex.withLock {
-                activeStreamServer?.close()
-                activeStreamServer = server
-            }
-            newServer = null
-
-            P2pStreamDescriptor(
-                url = url,
-                file = selectedFile,
-                torrent = metadata
-            )
-        }.fold(
-            onSuccess = { P2pResult.Success(it) },
-            onFailure = {
-                newServer?.close()
-                P2pResult.Error(it.message ?: "Unable to prepare embedded BitTorrent stream", it)
-            }
-        )
+    private fun removeTorrentHandle(handle: TorrentHandle) {
+        if (session.isRunning && handle.isValid) {
+            session.remove(handle)
+        }
     }
 
     private fun resolveTorrentInfo(
