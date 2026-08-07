@@ -22,11 +22,40 @@ class P2pSourceParserTest {
     }
 
     @Test
+    fun parsesBase32BtihAndBuildsMagnet() {
+        val hash = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        val source = P2pSourceParser.parse(hash.lowercase())
+        assertTrue(source is P2pResult.Success)
+        val data = (source as P2pResult.Success).data
+        assertEquals("magnet:?xt=urn:btih:$hash", P2pSourceParser.toMagnetUri(data))
+    }
+
+    @Test
+    fun parsesExplicitBase32InfoHashPrefix() {
+        val hash = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        val source = P2pSourceParser.parse("infohash:${hash.lowercase()}")
+        assertTrue(source is P2pResult.Success)
+        val data = (source as P2pResult.Success).data
+        assertEquals("magnet:?xt=urn:btih:$hash", P2pSourceParser.toMagnetUri(data))
+    }
+
+    @Test
     fun parsesAceContentIdSeparatelyFromBitTorrent() {
         val source = P2pSourceParser.parse("acestream://abcdef123456")
         assertTrue(source is P2pResult.Success)
         assertEquals(
             P2pSource.AceContentId("abcdef123456"),
+            (source as P2pResult.Success).data
+        )
+    }
+
+    @Test
+    fun base32ShapedAceContentIdRemainsAceWhenSchemeIsExplicit() {
+        val contentId = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        val source = P2pSourceParser.parse("acestream://$contentId")
+        assertTrue(source is P2pResult.Success)
+        assertEquals(
+            P2pSource.AceContentId(contentId),
             (source as P2pResult.Success).data
         )
     }
