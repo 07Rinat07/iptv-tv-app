@@ -12,22 +12,14 @@ internal enum class EngineStreamRoute {
 /**
  * Keeps player-facing source routing independent from either P2P implementation.
  *
- * Explicit Ace descriptors stay on the official Ace Engine integration. Sources that the
- * embedded parser can prove are BitTorrent metadata are routed to libtorrent. Everything
- * unknown falls back to the legacy external path to preserve compatibility with descriptors
- * understood by AceStreamDescriptorParser but not by the embedded parser.
+ * Ace content ids stay on the official Ace Engine integration because a content id is not a
+ * BitTorrent infohash. Ace descriptors that explicitly carry a valid infohash are safe to route
+ * to the embedded libtorrent backend. Everything unknown falls back to the legacy external path
+ * to preserve compatibility with descriptors understood only by AceStreamDescriptorParser.
  */
 internal object EngineStreamRouting {
     fun route(rawSource: String): EngineStreamRoute {
-        val source = rawSource.trim()
-        if (
-            source.startsWith("acestream://", ignoreCase = true) ||
-            source.startsWith("ace://", ignoreCase = true)
-        ) {
-            return EngineStreamRoute.EXTERNAL_ACE
-        }
-
-        return when (val parsed = P2pSourceParser.parse(source)) {
+        return when (val parsed = P2pSourceParser.parse(rawSource.trim())) {
             is P2pResult.Success -> when (parsed.data) {
                 is P2pSource.AceContentId -> EngineStreamRoute.EXTERNAL_ACE
                 else -> EngineStreamRoute.EMBEDDED_BITTORRENT
