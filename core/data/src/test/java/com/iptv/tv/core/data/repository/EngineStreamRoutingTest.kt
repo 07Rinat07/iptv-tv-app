@@ -37,7 +37,17 @@ class EngineStreamRoutingTest {
     }
 
     @Test
-    fun acestreamSchemeStaysExternal() {
+    fun aceDescriptorWithExplicitInfoHashUsesEmbeddedBitTorrent() {
+        assertEquals(
+            EngineStreamRoute.EMBEDDED_BITTORRENT,
+            EngineStreamRouting.route(
+                "acestream:?infohash=0123456789abcdef0123456789abcdef01234567"
+            )
+        )
+    }
+
+    @Test
+    fun acestreamContentIdStaysExternalEvenWhenItLooksLikeInfoHash() {
         assertEquals(
             EngineStreamRoute.EXTERNAL_ACE,
             EngineStreamRouting.route("acestream://0123456789abcdef0123456789abcdef01234567")
