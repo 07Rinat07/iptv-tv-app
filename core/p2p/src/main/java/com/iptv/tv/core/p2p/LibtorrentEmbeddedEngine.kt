@@ -81,6 +81,7 @@ class LibtorrentEmbeddedEngine(
                         failure?.addSuppressed(error)
                     }
                 }
+                Unit
             }
 
             failure?.let { throw it }
