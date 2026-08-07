@@ -118,7 +118,7 @@ class EngineStreamClientTest {
                 "result" to mapOf(
                     "infohash" to infoHash,
                     "transport_type" to "bt",
-                    "type" to "live"
+                    "type" to "vod"
                 )
             )
         )
@@ -134,6 +134,28 @@ class EngineStreamClientTest {
         assertEquals("get_media_files", api.lastResolveOptions["method"])
         assertEquals(contentId.lowercase(), api.lastResolveOptions["content_id"])
         assertEquals("brief", api.lastResolveOptions["mode"])
+    }
+
+    @Test
+    fun resolveContentIdInfoHash_rejectsAceLiveTransport() = runTest {
+        val contentId = "11223344556677889900AABBCCDDEEFF00112233"
+        val api = FakeApi(
+            statusPayload = mapOf("response" to mapOf("peers" to 1, "speed" to 10)),
+            resolvePayload = mapOf(
+                "result" to mapOf(
+                    "infohash" to "0a4848271c91ce2d8965ce416267c25047dc8141",
+                    "transport_type" to "bt",
+                    "type" to "live"
+                )
+            )
+        )
+        val client = EngineStreamClient(api)
+        client.connect("127.0.0.1:6878")
+
+        val result = client.resolveContentIdInfoHash("acestream://$contentId")
+
+        assertTrue(result is AppResult.Error)
+        assertTrue((result as AppResult.Error).message.contains("Ace live protocol"))
     }
 
     @Test
@@ -164,8 +186,9 @@ class EngineStreamClientTest {
             statusPayload = mapOf("response" to mapOf("peers" to 1, "speed" to 10)),
             resolvePayload = mapOf(
                 "result" to mapOf(
-                    "name" to "Live channel",
-                    "transport_type" to "bt"
+                    "name" to "Video",
+                    "transport_type" to "bt",
+                    "type" to "vod"
                 )
             )
         )
