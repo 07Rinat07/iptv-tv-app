@@ -41,9 +41,27 @@ class PlayerP2pDescriptorTest {
     }
 
     @Test
+    fun normalizesExplicitBase32InfoHash() {
+        val hash = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        assertEquals(
+            "magnet:?xt=urn:btih:$hash",
+            PlayerP2pDescriptor.detect("infohash:${hash.lowercase()}")
+        )
+    }
+
+    @Test
     fun contentIdQueryRemainsExternalAceEvenWhenItLooksLikeSha1() {
         val contentId = "1111111111111111111111111111111111111111"
         val source = "http://127.0.0.1:6878/ace/getstream?id=$contentId"
+
+        assertEquals("acestream://$contentId", PlayerP2pDescriptor.detect(source))
+        assertEquals("Ace Stream поток (внешний Engine)", PlayerP2pDescriptor.describe(source))
+    }
+
+    @Test
+    fun base32ShapedContentIdRemainsExternalAce() {
+        val contentId = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        val source = "https://example.org/play?content_id=$contentId"
 
         assertEquals("acestream://$contentId", PlayerP2pDescriptor.detect(source))
         assertEquals("Ace Stream поток (внешний Engine)", PlayerP2pDescriptor.describe(source))
@@ -59,6 +77,15 @@ class PlayerP2pDescriptorTest {
     }
 
     @Test
+    fun explicitBase32InfoHashQueryUsesEmbeddedBitTorrent() {
+        val infoHash = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        val source = "https://example.org/play?infohash=${infoHash.lowercase()}"
+
+        assertEquals("magnet:?xt=urn:btih:$infoHash", PlayerP2pDescriptor.detect(source))
+        assertEquals("BitTorrent поток (встроенный P2P)", PlayerP2pDescriptor.describe(source))
+    }
+
+    @Test
     fun infoHashWinsWhenAceApiUrlContainsBothIdentifiersRegardlessOfOrder() {
         val contentId = "3333333333333333333333333333333333333333"
         val infoHash = "4444444444444444444444444444444444444444"
@@ -68,6 +95,15 @@ class PlayerP2pDescriptorTest {
 
         assertEquals(expected, PlayerP2pDescriptor.detect(contentFirst))
         assertEquals(expected, PlayerP2pDescriptor.detect(infoHashFirst))
+    }
+
+    @Test
+    fun base32InfoHashStillWinsOverAceContentId() {
+        val contentId = "CONTENTIDABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        val infoHash = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        val source = "https://example.org/play?content_id=$contentId&infohash=${infoHash.lowercase()}"
+
+        assertEquals("magnet:?xt=urn:btih:$infoHash", PlayerP2pDescriptor.detect(source))
     }
 
     @Test
