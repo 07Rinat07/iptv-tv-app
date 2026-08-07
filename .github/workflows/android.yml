@@ -103,6 +103,9 @@ jobs:
       - name: Unit tests core engine
         run: ./gradlew --no-daemon --stacktrace :core:engine:testDebugUnitTest
 
+      - name: Unit tests core P2P
+        run: ./gradlew --no-daemon --stacktrace :core:p2p:testDebugUnitTest
+
       - name: Unit tests core network
         run: ./gradlew --no-daemon --stacktrace :core:network:testDebugUnitTest
 
