@@ -117,14 +117,13 @@ class EngineStreamClient(
     }
 
     /**
-     * Resolve a true Ace content id to the BitTorrent transport infohash reported by Ace Engine.
+     * Resolve a true Ace content id to the complete transport metadata reported by Ace Engine.
      *
-     * Content IDs and BitTorrent infohashes are different identifiers. This method therefore asks
-     * the engine metadata API for the transport metadata and only returns a hash when the response
-     * represents non-live BitTorrent transport and contains a valid SHA-1 infohash. Ace live uses
-     * its own piece/chunk streaming protocol and must not be treated as a standard libtorrent magnet.
+     * The official SDK keeps content id, infohash, media files and dumped transport-file data as
+     * separate fields. Mirroring that shape lets routing code distinguish ordinary BitTorrent VOD
+     * from Ace live transport without guessing from one recursively discovered value.
      */
-    suspend fun resolveContentIdInfoHash(rawSource: String): AppResult<String> {
+    suspend fun resolveContentIdMetadata(rawSource: String): AppResult<AceTransportMetadata> {
         val descriptor = AceStreamDescriptorParser.parse(rawSource)
         if (descriptor !is AceStreamDescriptor.ContentId) {
             return AppResult.Error("Ace Stream content id is required for metadata resolution")
@@ -140,7 +139,9 @@ class EngineStreamClient(
             put("api_version", "3")
             put("method", "get_media_files")
             put("content_id", descriptor.value)
-            put("mode", "brief")
+            put("mode", "full")
+            put("expand_wrapper", "1")
+            put("dump_transport_file", "1")
         }
 
         return runCatching {
@@ -148,42 +149,45 @@ class EngineStreamClient(
                 url = buildServerApiUrl(endpoint),
                 options = options
             )
-            val transportType = extractNamedString(response, "transport_type")
-                ?.trim()
-                ?.lowercase()
-            if (transportType != null && transportType != "bt") {
-                return@runCatching AppResult.Error(
-                    "Ace content id resolved to unsupported transport type: $transportType"
-                )
-            }
-
-            val mediaType = extractNamedString(response, "type")
-                ?.trim()
-                ?.lowercase()
-            if (mediaType == "live") {
-                return@runCatching AppResult.Error(
-                    "Ace live transport requires the Ace live protocol and cannot use embedded BitTorrent"
-                )
-            }
-
-            val infoHash = extractNamedString(response, "infohash")
-                ?.trim()
-                ?.lowercase()
-                ?.takeIf(BITTORRENT_INFO_HASH::matches)
-                ?: return@runCatching AppResult.Error(
-                    "Ace content id metadata did not contain a valid BitTorrent infohash"
-                )
+            val metadata = AceTransportMetadataParser.parse(response)
 
             status.value = status.value.copy(
                 connected = true,
-                message = "Ace content metadata resolved"
+                message = "Ace transport metadata resolved"
             )
-            AppResult.Success(infoHash)
+            AppResult.Success(metadata)
         }.getOrElse { throwable ->
             AppResult.Error(
                 "Ace content metadata request failed: ${throwable.toLogSummary(maxDepth = 4)}",
                 throwable
             )
+        }
+    }
+
+    /**
+     * Compatibility helper for callers that only need a standard BitTorrent hash.
+     * Live and non-BitTorrent transports deliberately return an error here.
+     */
+    suspend fun resolveContentIdInfoHash(rawSource: String): AppResult<String> {
+        return when (val resolved = resolveContentIdMetadata(rawSource)) {
+            is AppResult.Success -> {
+                val metadata = resolved.data
+                val hash = metadata.embeddedBitTorrentInfoHash
+                when {
+                    metadata.isLive -> AppResult.Error(
+                        "Ace live transport requires the Ace live protocol and cannot use embedded BitTorrent"
+                    )
+                    metadata.transportType != null && metadata.transportType != "bt" -> AppResult.Error(
+                        "Ace content id resolved to unsupported transport type: ${metadata.transportType}"
+                    )
+                    hash == null -> AppResult.Error(
+                        "Ace content id metadata did not contain a valid BitTorrent infohash"
+                    )
+                    else -> AppResult.Success(hash)
+                }
+            }
+            is AppResult.Error -> resolved
+            AppResult.Loading -> AppResult.Loading
         }
     }
 
@@ -407,25 +411,6 @@ class EngineStreamClient(
         return null
     }
 
-    private fun extractNamedString(data: Any?, key: String): String? = when (data) {
-        is Map<*, *> -> {
-            data.entries.firstNotNullOfOrNull { (entryKey, value) ->
-                if (entryKey is String && entryKey.equals(key, ignoreCase = true)) {
-                    (value as? String)?.takeIf { it.isNotBlank() }
-                } else {
-                    null
-                }
-            } ?: data.values.firstNotNullOfOrNull { value ->
-                when (value) {
-                    is Map<*, *>, is Iterable<*> -> extractNamedString(value, key)
-                    else -> null
-                }
-            }
-        }
-        is Iterable<*> -> data.firstNotNullOfOrNull { value -> extractNamedString(value, key) }
-        else -> null
-    }
-
     private fun extractPlayableUrl(payload: Any?): String? = when (payload) {
         is String -> payload.takeIf { it.startsWith("http://") || it.startsWith("https://") }
         is Map<*, *> -> {
@@ -443,9 +428,5 @@ class EngineStreamClient(
         }
         is Iterable<*> -> payload.firstNotNullOfOrNull(::extractPlayableUrl)
         else -> null
-    }
-
-    private companion object {
-        val BITTORRENT_INFO_HASH = Regex("^[a-fA-F0-9]{40}$")
     }
 }
