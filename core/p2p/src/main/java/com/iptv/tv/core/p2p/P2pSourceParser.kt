@@ -11,6 +11,12 @@ object P2pSourceParser {
         val value = raw.trim()
         if (value.isBlank()) return P2pResult.Error("P2P source is empty")
 
+        aceQueryParameter(value, "infohash")?.let { hash ->
+            return normalizeInfoHash(hash)?.let { normalized ->
+                P2pResult.Success(P2pSource.InfoHash(normalized))
+            } ?: P2pResult.Error("Invalid BitTorrent infohash in Ace Stream descriptor")
+        }
+
         return when {
             value.startsWith("magnet:?", ignoreCase = true) -> {
                 P2pResult.Success(P2pSource.Magnet(value))
@@ -65,6 +71,27 @@ object P2pSourceParser {
         is P2pSource.Magnet -> source.uri
         is P2pSource.InfoHash -> "magnet:?xt=urn:btih:${source.value}"
         else -> null
+    }
+
+    private fun aceQueryParameter(value: String, name: String): String? {
+        if (
+            !value.startsWith("acestream:", ignoreCase = true) &&
+            !value.startsWith("ace:", ignoreCase = true)
+        ) {
+            return null
+        }
+
+        val query = value.substringAfter('?', missingDelimiterValue = "")
+        if (query.isBlank()) return null
+
+        return query.split('&').firstNotNullOfOrNull { part ->
+            val key = part.substringBefore('=', missingDelimiterValue = part).trim()
+            if (!key.equals(name, ignoreCase = true)) {
+                null
+            } else {
+                part.substringAfter('=', missingDelimiterValue = "").trim()
+            }
+        }
     }
 
     private fun isInfoHash(value: String): Boolean =
