@@ -30,9 +30,10 @@ class HybridEngineRepositoryImpl @Inject constructor(
     private val syncLogDao: SyncLogDao,
     okHttpClient: OkHttpClient
 ) : EngineRepository {
-    private val embeddedEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+    private val embeddedEngineDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         LibtorrentEmbeddedEngine(context, okHttpClient)
     }
+    private val embeddedEngine by embeddedEngineDelegate
 
     override suspend fun connect(endpoint: String): AppResult<Unit> {
         return when (val result = client.connect(endpoint)) {
@@ -55,10 +56,23 @@ class HybridEngineRepositoryImpl @Inject constructor(
     override suspend fun resolveTorrentStream(magnetOrAce: String): AppResult<String> {
         return when (EngineStreamRouting.route(magnetOrAce)) {
             EngineStreamRoute.EXTERNAL_ACE -> {
-                runCatching { embeddedEngine.stopStream() }
+                stopResolvedP2pStream()
                 resolveExternal(magnetOrAce)
             }
             EngineStreamRoute.EMBEDDED_BITTORRENT -> resolveEmbeddedWithFallback(magnetOrAce)
+        }
+    }
+
+    override suspend fun stopResolvedP2pStream(): AppResult<Unit> {
+        if (!embeddedEngineDelegate.isInitialized()) {
+            return AppResult.Success(Unit)
+        }
+        return when (val stopped = embeddedEngine.stopStream()) {
+            is P2pResult.Success -> AppResult.Success(Unit)
+            is P2pResult.Error -> {
+                log("embedded_p2p_stop_error", stopped.message)
+                AppResult.Error(stopped.message, stopped.cause)
+            }
         }
     }
 
