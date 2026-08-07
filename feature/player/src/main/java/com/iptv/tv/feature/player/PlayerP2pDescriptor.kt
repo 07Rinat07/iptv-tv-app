@@ -40,6 +40,7 @@ internal object PlayerP2pDescriptor {
             lowered.startsWith("ace://") ||
             lowered.startsWith("infohash:") ||
             hash40Regex.matches(normalized) ||
+            hash32Base32Regex.matches(normalized) ||
             looksLikeTorrentUrl(normalized)
     }
 
@@ -89,8 +90,8 @@ internal object PlayerP2pDescriptor {
             val hash = trimmed.substringAfter(':').trim()
             return normalizeInfoHash(hash)?.let { "magnet:?xt=urn:btih:$it" } ?: trimmed
         }
-        if (hash40Regex.matches(trimmed)) {
-            return "magnet:?xt=urn:btih:${trimmed.lowercase(Locale.ROOT)}"
+        normalizeInfoHash(trimmed)?.let { normalizedHash ->
+            return "magnet:?xt=urn:btih:$normalizedHash"
         }
         return trimmed
     }
