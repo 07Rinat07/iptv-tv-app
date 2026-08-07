@@ -127,12 +127,14 @@ internal class LibtorrentStreamByteSource(
     }
 
     private fun waitForPieces(firstPiece: Int, lastPiece: Int) {
+        val waitBudget = TorrentPieceWaitBudget(pieceWaitTimeoutMillis)
         for (piece in firstPiece..lastPiece) {
-            val deadlineNanos = System.nanoTime() + pieceWaitTimeoutMillis * NANOS_PER_MILLI
             while (!handle.havePiece(piece)) {
                 if (!handle.isValid) throw IOException("Torrent handle became invalid while buffering")
-                if (System.nanoTime() >= deadlineNanos) {
-                    throw IOException("Timed out waiting for torrent piece $piece")
+                if (waitBudget.isExpired()) {
+                    throw IOException(
+                        "Timed out waiting for torrent pieces $firstPiece..$lastPiece; pending piece $piece"
+                    )
                 }
                 try {
                     Thread.sleep(PIECE_POLL_INTERVAL_MILLIS)
@@ -157,6 +159,5 @@ internal class LibtorrentStreamByteSource(
         const val PIECE_POLL_INTERVAL_MILLIS = 50L
         const val PIECE_DEADLINE_STEP_MILLIS = 150
         const val MAX_PIECE_DEADLINE_MILLIS = 4_000
-        const val NANOS_PER_MILLI = 1_000_000L
     }
 }
