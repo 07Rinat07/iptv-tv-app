@@ -40,6 +40,33 @@ class P2pSourceParserTest {
     }
 
     @Test
+    fun parsesStandaloneUrnBtihHex() {
+        val hash = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        val source = P2pSourceParser.parse("URN:BTIH:$hash")
+        assertTrue(source is P2pResult.Success)
+        val data = (source as P2pResult.Success).data
+        assertEquals(
+            "magnet:?xt=urn:btih:${hash.lowercase()}",
+            P2pSourceParser.toMagnetUri(data)
+        )
+    }
+
+    @Test
+    fun parsesStandaloneUrnBtihBase32() {
+        val hash = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        val source = P2pSourceParser.parse("urn:btih:${hash.lowercase()}")
+        assertTrue(source is P2pResult.Success)
+        val data = (source as P2pResult.Success).data
+        assertEquals("magnet:?xt=urn:btih:$hash", P2pSourceParser.toMagnetUri(data))
+    }
+
+    @Test
+    fun rejectsInvalidStandaloneUrnBtih() {
+        val source = P2pSourceParser.parse("urn:btih:not-a-valid-infohash")
+        assertTrue(source is P2pResult.Error)
+    }
+
+    @Test
     fun parsesAceContentIdSeparatelyFromBitTorrent() {
         val source = P2pSourceParser.parse("acestream://abcdef123456")
         assertTrue(source is P2pResult.Success)
