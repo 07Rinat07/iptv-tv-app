@@ -121,7 +121,8 @@ class EngineStreamClient(
      *
      * Content IDs and BitTorrent infohashes are different identifiers. This method therefore asks
      * the engine metadata API for the transport metadata and only returns a hash when the response
-     * represents BitTorrent transport and contains a valid SHA-1 infohash.
+     * represents non-live BitTorrent transport and contains a valid SHA-1 infohash. Ace live uses
+     * its own piece/chunk streaming protocol and must not be treated as a standard libtorrent magnet.
      */
     suspend fun resolveContentIdInfoHash(rawSource: String): AppResult<String> {
         val descriptor = AceStreamDescriptorParser.parse(rawSource)
@@ -153,6 +154,15 @@ class EngineStreamClient(
             if (transportType != null && transportType != "bt") {
                 return@runCatching AppResult.Error(
                     "Ace content id resolved to unsupported transport type: $transportType"
+                )
+            }
+
+            val mediaType = extractNamedString(response, "type")
+                ?.trim()
+                ?.lowercase()
+            if (mediaType == "live") {
+                return@runCatching AppResult.Error(
+                    "Ace live transport requires the Ace live protocol and cannot use embedded BitTorrent"
                 )
             }
 
