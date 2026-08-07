@@ -30,13 +30,13 @@ android {
         }
     }
 
-    // Physical Android TV / TV Box devices use ARM. Building separate packages
-    // avoids bundling x86 emulator binaries and cuts the APK size substantially.
+    // ARM packages are used on real TV boxes. x86_64 is kept temporarily for
+    // BlueStacks 5 acceptance of the embedded P2P engine.
     splits {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a")
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
             isUniversalApk = false
         }
     }
@@ -56,8 +56,6 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            // CI/test builds remain installable without publishing a private release key.
-            // When release secrets are configured, the real release key is used automatically.
             signingConfig = signingConfigs.findByName("release")
                 ?: signingConfigs.getByName("debug")
             proguardFiles(
@@ -89,8 +87,6 @@ android {
     }
 
     packaging {
-        // Compress LibVLC native libraries inside the APK. Android extracts them
-        // during installation, keeping download packages leaner for TV boxes.
         jniLibs {
             useLegacyPackaging = true
         }
@@ -105,6 +101,7 @@ dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:data"))
     implementation(project(":core:utils"))
+    implementation(project(":core:p2p"))
     implementation(project(":sync"))
 
     implementation(project(":feature:home"))
