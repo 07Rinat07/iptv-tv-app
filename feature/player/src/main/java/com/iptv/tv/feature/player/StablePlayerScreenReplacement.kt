@@ -281,7 +281,10 @@ fun StablePlayerScreen(
     }
 
     DisposableEffect(Unit) {
-        onDispose { onFullscreenChanged(false) }
+        onDispose {
+            viewModel.stopInternalPlayback()
+            onFullscreenChanged(false)
+        }
     }
 
     BackHandler(
