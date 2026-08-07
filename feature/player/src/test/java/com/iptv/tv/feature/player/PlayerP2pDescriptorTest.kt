@@ -50,6 +50,19 @@ class PlayerP2pDescriptorTest {
     }
 
     @Test
+    fun normalizesBareBase32InfoHash() {
+        val hash = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        assertEquals(
+            "magnet:?xt=urn:btih:$hash",
+            PlayerP2pDescriptor.detect(hash.lowercase())
+        )
+        assertEquals(
+            "BitTorrent поток (встроенный P2P)",
+            PlayerP2pDescriptor.describe(hash.lowercase())
+        )
+    }
+
+    @Test
     fun contentIdQueryRemainsExternalAceEvenWhenItLooksLikeSha1() {
         val contentId = "1111111111111111111111111111111111111111"
         val source = "http://127.0.0.1:6878/ace/getstream?id=$contentId"
