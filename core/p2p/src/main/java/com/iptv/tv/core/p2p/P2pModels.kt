@@ -25,6 +25,12 @@ data class P2pTorrentMetadata(
     val preferredFileIndex: Int?
 )
 
+data class P2pStreamDescriptor(
+    val url: String,
+    val file: P2pTorrentFile,
+    val torrent: P2pTorrentMetadata
+)
+
 data class P2pEngineSnapshot(
     val running: Boolean,
     val downloadRateBytesPerSecond: Long,
