@@ -32,7 +32,7 @@ dependencies {
     implementation(libs.libtorrent4j)
     runtimeOnly(libs.libtorrent4j.android.arm)
     runtimeOnly(libs.libtorrent4j.android.arm64)
-    runtimeOnly(libs.libtorrent4j.android.x86.64)
+    runtimeOnly(libs.libtorrent4j.android.x8664)
 
     testImplementation(libs.junit4)
     testImplementation(libs.kotlinx.coroutines.test)
