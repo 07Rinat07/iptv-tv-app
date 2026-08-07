@@ -52,7 +52,7 @@ class TorrentPieceMapperTest {
     @Test
     fun capsRequestedAndReadAheadPiecesAtTorrentEnd() {
         assertEquals(
-            TorrentPieceWindow(3, 3, 3),
+            TorrentPieceWindow(2, 3, 3),
             TorrentPieceMapper.map(
                 fileOffsetBytes = 0L,
                 rangeStartBytes = 49_000L,
