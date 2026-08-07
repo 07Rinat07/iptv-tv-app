@@ -5,6 +5,7 @@ import java.util.Locale
 object P2pSourceParser {
     private val sha1InfoHashHex = Regex("^[0-9a-fA-F]{40}$")
     private val sha1InfoHashBase32 = Regex("^[A-Za-z2-7]{32}$")
+    private const val URN_BTIH_PREFIX = "urn:btih:"
 
     fun parse(raw: String): P2pResult<P2pSource> {
         val value = raw.trim()
@@ -13,6 +14,13 @@ object P2pSourceParser {
         return when {
             value.startsWith("magnet:?", ignoreCase = true) -> {
                 P2pResult.Success(P2pSource.Magnet(value))
+            }
+
+            value.startsWith(URN_BTIH_PREFIX, ignoreCase = true) -> {
+                val hash = value.substring(URN_BTIH_PREFIX.length).trim()
+                normalizeInfoHash(hash)?.let { normalized ->
+                    P2pResult.Success(P2pSource.InfoHash(normalized))
+                } ?: P2pResult.Error("Invalid BitTorrent infohash")
             }
 
             value.startsWith("acestream://", ignoreCase = true) -> {
