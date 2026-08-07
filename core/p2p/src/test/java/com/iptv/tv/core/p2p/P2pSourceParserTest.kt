@@ -67,6 +67,34 @@ class P2pSourceParserTest {
     }
 
     @Test
+    fun parsesAceDescriptorWithExplicitInfoHashAsBitTorrent() {
+        val hash = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        val source = P2pSourceParser.parse("acestream:?infohash=$hash")
+        assertTrue(source is P2pResult.Success)
+        assertEquals(
+            P2pSource.InfoHash(hash.lowercase()),
+            (source as P2pResult.Success).data
+        )
+    }
+
+    @Test
+    fun parsesAceDescriptorWithSlashesAndExplicitInfoHashAsBitTorrent() {
+        val hash = "0123456789abcdef0123456789abcdef01234567"
+        val source = P2pSourceParser.parse("acestream://?infohash=$hash")
+        assertTrue(source is P2pResult.Success)
+        assertEquals(
+            P2pSource.InfoHash(hash),
+            (source as P2pResult.Success).data
+        )
+    }
+
+    @Test
+    fun rejectsInvalidAceDescriptorInfoHash() {
+        val source = P2pSourceParser.parse("acestream:?infohash=not-a-valid-infohash")
+        assertTrue(source is P2pResult.Error)
+    }
+
+    @Test
     fun parsesAceContentIdSeparatelyFromBitTorrent() {
         val source = P2pSourceParser.parse("acestream://abcdef123456")
         assertTrue(source is P2pResult.Success)
