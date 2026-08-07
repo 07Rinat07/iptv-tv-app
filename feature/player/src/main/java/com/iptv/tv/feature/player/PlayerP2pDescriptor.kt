@@ -13,10 +13,11 @@ internal object PlayerP2pDescriptor {
     fun detect(raw: String): String? {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return null
-        if (isDescriptor(trimmed)) return normalize(trimmed)
 
         val nested = extractDescriptorFromUrl(trimmed)
-        return nested?.takeIf { it.isNotBlank() }?.let(::normalize)
+        if (!nested.isNullOrBlank()) return normalize(nested)
+
+        return trimmed.takeIf(::isDescriptor)?.let(::normalize)
     }
 
     fun describe(raw: String): String {
