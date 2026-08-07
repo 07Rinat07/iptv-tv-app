@@ -8,6 +8,7 @@ import java.util.Locale
 /** Pure player-side P2P descriptor classifier; it does not depend on libtorrent or Ace APIs. */
 internal object PlayerP2pDescriptor {
     private val hash40Regex = Regex("^[a-fA-F0-9]{40}$")
+    private val hash32Base32Regex = Regex("^[A-Za-z2-7]{32}$")
     private val aceContentIdRegex = Regex("^[A-Za-z0-9_-]{20,128}$")
     private val infoHashQueryKeys = setOf("infohash", "hash")
     private val aceContentIdQueryKeys = setOf("content_id", "id")
@@ -86,10 +87,10 @@ internal object PlayerP2pDescriptor {
         }
         if (trimmed.startsWith("infohash:", ignoreCase = true)) {
             val hash = trimmed.substringAfter(':').trim()
-            return if (hash40Regex.matches(hash)) "magnet:?xt=urn:btih:$hash" else trimmed
+            return normalizeInfoHash(hash)?.let { "magnet:?xt=urn:btih:$it" } ?: trimmed
         }
         if (hash40Regex.matches(trimmed)) {
-            return "magnet:?xt=urn:btih:$trimmed"
+            return "magnet:?xt=urn:btih:${trimmed.lowercase(Locale.ROOT)}"
         }
         return trimmed
     }
@@ -135,13 +136,21 @@ internal object PlayerP2pDescriptor {
     private fun normalizeInfoHashParameter(raw: String): String? {
         val value = raw.trim()
         return when {
-            hash40Regex.matches(value) -> "magnet:?xt=urn:btih:$value"
+            normalizeInfoHash(value) != null -> {
+                "magnet:?xt=urn:btih:${normalizeInfoHash(value)}"
+            }
             value.startsWith("infohash:", ignoreCase = true) -> {
                 normalize(value).takeIf { it.startsWith("magnet:", ignoreCase = true) }
             }
             value.startsWith("magnet:?", ignoreCase = true) -> value
             else -> null
         }
+    }
+
+    private fun normalizeInfoHash(raw: String): String? = when {
+        hash40Regex.matches(raw) -> raw.lowercase(Locale.ROOT)
+        hash32Base32Regex.matches(raw) -> raw.uppercase(Locale.ROOT)
+        else -> null
     }
 
     private fun normalizeAceContentIdParameter(raw: String): String? {

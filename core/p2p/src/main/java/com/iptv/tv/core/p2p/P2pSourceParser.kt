@@ -1,7 +1,10 @@
 package com.iptv.tv.core.p2p
 
+import java.util.Locale
+
 object P2pSourceParser {
-    private val sha1InfoHash = Regex("^[0-9a-fA-F]{40}$")
+    private val sha1InfoHashHex = Regex("^[0-9a-fA-F]{40}$")
+    private val sha1InfoHashBase32 = Regex("^[A-Za-z2-7]{32}$")
 
     fun parse(raw: String): P2pResult<P2pSource> {
         val value = raw.trim()
@@ -21,8 +24,15 @@ object P2pSourceParser {
                 }
             }
 
-            sha1InfoHash.matches(value) -> {
-                P2pResult.Success(P2pSource.InfoHash(value.lowercase()))
+            value.startsWith("infohash:", ignoreCase = true) -> {
+                val hash = value.substringAfter(':').trim()
+                normalizeInfoHash(hash)?.let { normalized ->
+                    P2pResult.Success(P2pSource.InfoHash(normalized))
+                } ?: P2pResult.Error("Invalid BitTorrent infohash")
+            }
+
+            isInfoHash(value) -> {
+                P2pResult.Success(P2pSource.InfoHash(normalizeInfoHash(value)!!))
             }
 
             value.startsWith("http://", ignoreCase = true) ||
@@ -46,6 +56,15 @@ object P2pSourceParser {
     fun toMagnetUri(source: P2pSource): String? = when (source) {
         is P2pSource.Magnet -> source.uri
         is P2pSource.InfoHash -> "magnet:?xt=urn:btih:${source.value}"
+        else -> null
+    }
+
+    private fun isInfoHash(value: String): Boolean =
+        sha1InfoHashHex.matches(value) || sha1InfoHashBase32.matches(value)
+
+    private fun normalizeInfoHash(value: String): String? = when {
+        sha1InfoHashHex.matches(value) -> value.lowercase(Locale.ROOT)
+        sha1InfoHashBase32.matches(value) -> value.uppercase(Locale.ROOT)
         else -> null
     }
 
