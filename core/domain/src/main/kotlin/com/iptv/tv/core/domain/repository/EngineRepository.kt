@@ -9,4 +9,7 @@ interface EngineRepository {
     suspend fun refreshStatus(): AppResult<EngineStatus>
     fun observeStatus(): Flow<EngineStatus>
     suspend fun resolveTorrentStream(magnetOrAce: String): AppResult<String>
+
+    /** Releases an active locally resolved P2P stream when playback no longer needs it. */
+    suspend fun stopResolvedP2pStream(): AppResult<Unit> = AppResult.Success(Unit)
 }
