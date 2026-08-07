@@ -63,6 +63,36 @@ class PlayerP2pDescriptorTest {
     }
 
     @Test
+    fun normalizesStandaloneUrnBtihHexAndBase32() {
+        val hex = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        val base32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+
+        assertEquals(
+            "magnet:?xt=urn:btih:${hex.lowercase()}",
+            PlayerP2pDescriptor.detect("URN:BTIH:$hex")
+        )
+        assertEquals(
+            "magnet:?xt=urn:btih:$base32",
+            PlayerP2pDescriptor.detect("urn:btih:${base32.lowercase()}")
+        )
+        assertEquals(
+            "BitTorrent поток (встроенный P2P)",
+            PlayerP2pDescriptor.describe("urn:btih:${base32.lowercase()}")
+        )
+    }
+
+    @Test
+    fun normalizesUrnBtihInsideInfoHashQuery() {
+        val hash = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        val source = "https://example.org/play?infohash=urn%3Abtih%3A${hash.lowercase()}"
+
+        assertEquals(
+            "magnet:?xt=urn:btih:$hash",
+            PlayerP2pDescriptor.detect(source)
+        )
+    }
+
+    @Test
     fun contentIdQueryRemainsExternalAceEvenWhenItLooksLikeSha1() {
         val contentId = "1111111111111111111111111111111111111111"
         val source = "http://127.0.0.1:6878/ace/getstream?id=$contentId"
