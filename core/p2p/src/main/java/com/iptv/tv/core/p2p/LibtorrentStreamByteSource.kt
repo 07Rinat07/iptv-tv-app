@@ -25,6 +25,8 @@ internal class LibtorrentStreamByteSource(
     private val fileOffsetBytes = storage.fileOffset(fileIndex)
     private val pieceLengthBytes = torrentInfo.pieceLength()
     private val pieceCount = torrentInfo.numPieces()
+    private val schedulingLock = Any()
+    private val priorityWindowTracker = TorrentPriorityWindowTracker()
 
     override val length: Long = storage.fileSize(fileIndex)
 
@@ -38,7 +40,15 @@ internal class LibtorrentStreamByteSource(
 
     override fun onRangeRequested(start: Long, endInclusive: Long) {
         if (start !in 0 until length || endInclusive < start) return
-        scheduleRange(start, minOf(endInclusive, boundedEnd(start, PRIORITY_WINDOW_BYTES)))
+
+        val window = mapRange(
+            start = start,
+            endInclusive = minOf(endInclusive, boundedEnd(start, PRIORITY_WINDOW_BYTES))
+        )
+        synchronized(schedulingLock) {
+            priorityWindowTracker.replace(window)?.let(::resetPriorityWindowLocked)
+            applyPriorityWindowLocked(window)
+        }
     }
 
     override fun readAt(position: Long, buffer: ByteArray, offset: Int, length: Int): Int {
@@ -75,15 +85,31 @@ internal class LibtorrentStreamByteSource(
     }
 
     private fun scheduleRange(start: Long, endInclusive: Long): TorrentPieceWindow {
-        val window = TorrentPieceMapper.map(
-            fileOffsetBytes = fileOffsetBytes,
-            rangeStartBytes = start,
-            rangeEndInclusiveBytes = endInclusive,
-            pieceLengthBytes = pieceLengthBytes,
-            pieceCount = pieceCount,
-            readAheadPieces = READ_AHEAD_PIECES
-        )
+        val window = mapRange(start, endInclusive)
+        synchronized(schedulingLock) {
+            applyPriorityWindowLocked(window)
+            priorityWindowTracker.record(window)
+        }
+        return window
+    }
 
+    private fun mapRange(start: Long, endInclusive: Long): TorrentPieceWindow = TorrentPieceMapper.map(
+        fileOffsetBytes = fileOffsetBytes,
+        rangeStartBytes = start,
+        rangeEndInclusiveBytes = endInclusive,
+        pieceLengthBytes = pieceLengthBytes,
+        pieceCount = pieceCount,
+        readAheadPieces = READ_AHEAD_PIECES
+    )
+
+    private fun resetPriorityWindowLocked(window: TorrentPieceWindow) {
+        handle.clearPieceDeadlines()
+        for (piece in window.firstRequestedPiece..window.lastPriorityPiece) {
+            handle.piecePriority(piece, Priority.DEFAULT)
+        }
+    }
+
+    private fun applyPriorityWindowLocked(window: TorrentPieceWindow) {
         handle.setSequentialRange(window.firstRequestedPiece, window.lastPriorityPiece)
 
         var deadlineMillis = 0
@@ -98,7 +124,6 @@ internal class LibtorrentStreamByteSource(
                 handle.piecePriority(piece, Priority.FIVE)
             }
         }
-        return window
     }
 
     private fun waitForPieces(firstPiece: Int, lastPiece: Int) {
