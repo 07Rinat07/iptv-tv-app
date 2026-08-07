@@ -9,7 +9,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.libtorrent4j.Priority
 import org.libtorrent4j.SessionManager
+import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
 
 /**
@@ -26,13 +28,17 @@ class LibtorrentEmbeddedEngine(
     private val appContext = context.applicationContext
     private val session = SessionManager(false)
     private val lifecycleMutex = Mutex()
+    private val streamMutex = Mutex()
     private val metadataDir = File(appContext.cacheDir, "p2p/metadata")
+    private val contentDir = File(appContext.cacheDir, "p2p/content")
+    private var activeStreamServer: LoopbackHttpRangeServer? = null
 
     suspend fun start(): P2pResult<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             lifecycleMutex.withLock {
                 if (!session.isRunning) {
                     metadataDir.mkdirs()
+                    contentDir.mkdirs()
                     session.start()
                 }
             }
@@ -42,8 +48,24 @@ class LibtorrentEmbeddedEngine(
         )
     }
 
+    suspend fun stopStream(): P2pResult<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            streamMutex.withLock {
+                activeStreamServer?.close()
+                activeStreamServer = null
+            }
+        }.fold(
+            onSuccess = { P2pResult.Success(Unit) },
+            onFailure = { P2pResult.Error("Unable to stop embedded BitTorrent stream", it) }
+        )
+    }
+
     suspend fun stop(): P2pResult<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            streamMutex.withLock {
+                activeStreamServer?.close()
+                activeStreamServer = null
+            }
             lifecycleMutex.withLock {
                 if (session.isRunning) session.stop()
             }
@@ -76,28 +98,148 @@ class LibtorrentEmbeddedEngine(
         }
 
         runCatching {
-            val torrentBytes = when (source) {
-                is P2pSource.Magnet,
-                is P2pSource.InfoHash -> {
-                    val magnet = P2pSourceParser.toMagnetUri(source)
-                        ?: error("Unable to convert source to magnet URI")
-                    session.fetchMagnet(
-                        magnet,
-                        magnetTimeoutSeconds.coerceIn(5, 120),
-                        metadataDir
-                    ) ?: error("Torrent metadata was not received before timeout")
-                }
-
-                is P2pSource.TorrentUrl -> downloadTorrentMetadata(source.url)
-                is P2pSource.LocalTorrentUri -> readTorrentMetadata(source.uri)
-                is P2pSource.AceContentId -> error("Ace content id is not BitTorrent metadata")
-            }
-
-            buildMetadata(TorrentInfo(torrentBytes))
+            buildMetadata(resolveTorrentInfo(source, magnetTimeoutSeconds))
         }.fold(
             onSuccess = { P2pResult.Success(it) },
             onFailure = { P2pResult.Error(it.message ?: "Unable to inspect torrent metadata", it) }
         )
+    }
+
+    suspend fun prepareStream(
+        source: P2pSource,
+        fileIndex: Int? = null,
+        magnetTimeoutSeconds: Int = DEFAULT_MAGNET_TIMEOUT_SECONDS
+    ): P2pResult<P2pStreamDescriptor> = withContext(Dispatchers.IO) {
+        if (source is P2pSource.AceContentId) {
+            return@withContext P2pResult.Error(
+                "Ace content id requires compatibility metadata; embedded BitTorrent backend cannot resolve it yet"
+            )
+        }
+
+        when (val started = start()) {
+            is P2pResult.Error -> return@withContext started
+            is P2pResult.Success -> Unit
+        }
+
+        var newServer: LoopbackHttpRangeServer? = null
+        runCatching {
+            val torrentInfo = resolveTorrentInfo(source, magnetTimeoutSeconds)
+            val metadata = buildMetadata(torrentInfo)
+            val selectedFileIndex = fileIndex ?: metadata.preferredFileIndex
+                ?: error("Torrent does not contain a playable non-empty file")
+            val selectedFile = metadata.files.firstOrNull { it.index == selectedFileIndex }
+                ?: error("Torrent file index $selectedFileIndex does not exist")
+            if (selectedFile.sizeBytes <= 0L) error("Selected torrent file is empty")
+
+            val storage = torrentInfo.files()
+            val torrentDirectory = File(contentDir, torrentDirectoryName(torrentInfo)).apply { mkdirs() }
+
+            session.download(torrentInfo, torrentDirectory)
+            val handle = awaitTorrentHandle(torrentInfo)
+            configureFilePriorities(handle, storage.numFiles(), selectedFileIndex)
+            handle.resume()
+
+            val targetFile = File(storage.filePath(selectedFileIndex, torrentDirectory.absolutePath))
+            val byteSource = LibtorrentStreamByteSource(
+                handle = handle,
+                torrentInfo = torrentInfo,
+                fileIndex = selectedFileIndex,
+                file = targetFile,
+                contentType = contentTypeFor(selectedFile.name)
+            )
+            byteSource.onRangeRequested(
+                start = 0L,
+                endInclusive = minOf(selectedFile.sizeBytes - 1L, STARTUP_PRIORITY_BYTES - 1L)
+            )
+
+            val server = LoopbackHttpRangeServer(byteSource)
+            newServer = server
+            val url = server.start()
+
+            streamMutex.withLock {
+                activeStreamServer?.close()
+                activeStreamServer = server
+            }
+            newServer = null
+
+            P2pStreamDescriptor(
+                url = url,
+                file = selectedFile,
+                torrent = metadata
+            )
+        }.fold(
+            onSuccess = { P2pResult.Success(it) },
+            onFailure = {
+                newServer?.close()
+                P2pResult.Error(it.message ?: "Unable to prepare embedded BitTorrent stream", it)
+            }
+        )
+    }
+
+    private fun resolveTorrentInfo(
+        source: P2pSource,
+        magnetTimeoutSeconds: Int
+    ): TorrentInfo {
+        val torrentBytes = when (source) {
+            is P2pSource.Magnet,
+            is P2pSource.InfoHash -> {
+                val magnet = P2pSourceParser.toMagnetUri(source)
+                    ?: error("Unable to convert source to magnet URI")
+                session.fetchMagnet(
+                    magnet,
+                    magnetTimeoutSeconds.coerceIn(5, 120),
+                    metadataDir
+                ) ?: error("Torrent metadata was not received before timeout")
+            }
+
+            is P2pSource.TorrentUrl -> downloadTorrentMetadata(source.url)
+            is P2pSource.LocalTorrentUri -> readTorrentMetadata(source.uri)
+            is P2pSource.AceContentId -> error("Ace content id is not BitTorrent metadata")
+        }
+
+        return TorrentInfo(torrentBytes).also {
+            if (!it.isValid) error("Invalid torrent metadata")
+        }
+    }
+
+    private fun awaitTorrentHandle(
+        info: TorrentInfo,
+        timeoutMillis: Long = TORRENT_HANDLE_TIMEOUT_MILLIS
+    ): TorrentHandle {
+        val deadlineNanos = System.nanoTime() + timeoutMillis * NANOS_PER_MILLI
+        while (System.nanoTime() < deadlineNanos) {
+            session.find(info.infoHash())?.takeIf { it.isValid }?.let { return it }
+            try {
+                Thread.sleep(TORRENT_HANDLE_POLL_MILLIS)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                error("Interrupted while waiting for torrent handle")
+            }
+        }
+        error("Timed out waiting for libtorrent to add the torrent")
+    }
+
+    private fun configureFilePriorities(
+        handle: TorrentHandle,
+        fileCount: Int,
+        selectedFileIndex: Int
+    ) {
+        for (index in 0 until fileCount) {
+            handle.filePriority(
+                index,
+                if (index == selectedFileIndex) Priority.DEFAULT else Priority.IGNORE
+            )
+        }
+    }
+
+    private fun torrentDirectoryName(info: TorrentInfo): String {
+        val hash = info.infoHash().toHex().lowercase().filter { it in '0'..'9' || it in 'a'..'f' }
+        if (hash.isNotBlank()) return hash
+        return info.name()
+            .replace(Regex("[^A-Za-z0-9._-]+"), "_")
+            .trim('_')
+            .take(80)
+            .ifBlank { "torrent" }
     }
 
     private fun downloadTorrentMetadata(url: String): ByteArray {
@@ -158,6 +300,26 @@ class LibtorrentEmbeddedEngine(
         )
     }
 
+    private fun contentTypeFor(name: String): String = when (
+        name.substringAfterLast('.', missingDelimiterValue = "").lowercase()
+    ) {
+        "mp4", "m4v" -> "video/mp4"
+        "mkv" -> "video/x-matroska"
+        "webm" -> "video/webm"
+        "ts", "m2ts", "mts" -> "video/mp2t"
+        "mpeg", "mpg" -> "video/mpeg"
+        "avi" -> "video/x-msvideo"
+        "mov" -> "video/quicktime"
+        "flv" -> "video/x-flv"
+        "wmv" -> "video/x-ms-wmv"
+        "mp3" -> "audio/mpeg"
+        "aac" -> "audio/aac"
+        "m4a" -> "audio/mp4"
+        "flac" -> "audio/flac"
+        "ogg" -> "audio/ogg"
+        else -> "application/octet-stream"
+    }
+
     private fun isMediaFile(name: String): Boolean {
         val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()
         return extension in MEDIA_EXTENSIONS
@@ -165,6 +327,10 @@ class LibtorrentEmbeddedEngine(
 
     private companion object {
         const val DEFAULT_MAGNET_TIMEOUT_SECONDS = 30
+        const val TORRENT_HANDLE_TIMEOUT_MILLIS = 5_000L
+        const val TORRENT_HANDLE_POLL_MILLIS = 50L
+        const val NANOS_PER_MILLI = 1_000_000L
+        const val STARTUP_PRIORITY_BYTES = 2L * 1024L * 1024L
 
         val MEDIA_EXTENSIONS = setOf(
             "mp4", "mkv", "avi", "mov", "m4v", "webm", "ts", "m2ts", "mts",
