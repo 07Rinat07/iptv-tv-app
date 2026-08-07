@@ -12,6 +12,7 @@ internal object PlayerP2pDescriptor {
     private val aceContentIdRegex = Regex("^[A-Za-z0-9_-]{20,128}$")
     private val infoHashQueryKeys = setOf("infohash", "hash")
     private val aceContentIdQueryKeys = setOf("content_id", "id")
+    private const val URN_BTIH_PREFIX = "urn:btih:"
 
     fun detect(raw: String): String? {
         val trimmed = raw.trim()
@@ -39,6 +40,7 @@ internal object PlayerP2pDescriptor {
             lowered.startsWith("acestream://") ||
             lowered.startsWith("ace://") ||
             lowered.startsWith("infohash:") ||
+            lowered.startsWith(URN_BTIH_PREFIX) ||
             hash40Regex.matches(normalized) ||
             hash32Base32Regex.matches(normalized) ||
             looksLikeTorrentUrl(normalized)
@@ -90,6 +92,10 @@ internal object PlayerP2pDescriptor {
             val hash = trimmed.substringAfter(':').trim()
             return normalizeInfoHash(hash)?.let { "magnet:?xt=urn:btih:$it" } ?: trimmed
         }
+        if (trimmed.startsWith(URN_BTIH_PREFIX, ignoreCase = true)) {
+            val hash = trimmed.substring(URN_BTIH_PREFIX.length).trim()
+            return normalizeInfoHash(hash)?.let { "magnet:?xt=urn:btih:$it" } ?: trimmed
+        }
         normalizeInfoHash(trimmed)?.let { normalizedHash ->
             return "magnet:?xt=urn:btih:$normalizedHash"
         }
@@ -136,11 +142,12 @@ internal object PlayerP2pDescriptor {
 
     private fun normalizeInfoHashParameter(raw: String): String? {
         val value = raw.trim()
+        normalizeInfoHash(value)?.let { normalized ->
+            return "magnet:?xt=urn:btih:$normalized"
+        }
         return when {
-            normalizeInfoHash(value) != null -> {
-                "magnet:?xt=urn:btih:${normalizeInfoHash(value)}"
-            }
-            value.startsWith("infohash:", ignoreCase = true) -> {
+            value.startsWith("infohash:", ignoreCase = true) ||
+                value.startsWith(URN_BTIH_PREFIX, ignoreCase = true) -> {
                 normalize(value).takeIf { it.startsWith("magnet:", ignoreCase = true) }
             }
             value.startsWith("magnet:?", ignoreCase = true) -> value
