@@ -20,8 +20,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 
 /**
@@ -41,10 +39,9 @@ class HybridEngineRepositoryImpl @Inject constructor(
     private val embeddedEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         LibtorrentEmbeddedEngine(context, okHttpClient)
     }
-    private val streamMutex = Mutex()
     private val streamEpoch = AtomicLong(0L)
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val embeddedStreamActive = AtomicBoolean(false)
+    private val embeddedEngineUsed = AtomicBoolean(false)
 
     override suspend fun connect(endpoint: String): AppResult<Unit> {
         return when (val result = client.connect(endpoint)) {
@@ -72,7 +69,8 @@ class HybridEngineRepositoryImpl @Inject constructor(
                 if (streamEpoch.get() != epoch) {
                     supersededResult()
                 } else {
-                    resolveExternal(magnetOrAce)
+                    resolveExternal(magnetOrAce).takeIf { streamEpoch.get() == epoch }
+                        ?: supersededResult()
                 }
             }
             EngineStreamRoute.EMBEDDED_BITTORRENT -> resolveEmbeddedWithFallback(magnetOrAce, epoch)
@@ -81,48 +79,37 @@ class HybridEngineRepositoryImpl @Inject constructor(
 
     override suspend fun stopTorrentStream(): AppResult<Unit> {
         val epoch = streamEpoch.incrementAndGet()
-
-        // An in-flight magnet/torrent preparation can spend tens of seconds inside native
-        // metadata resolution while holding streamMutex. If it has not published an active
-        // stream yet, do not make direct IPTV playback wait for that obsolete work. The epoch
-        // invalidation above guarantees the stale preparation tears itself down when it returns.
-        if (!embeddedStreamActive.get()) return AppResult.Success(Unit)
-
         return stopEmbeddedForEpoch(epoch)
     }
 
     override fun releaseTorrentStream() {
         val epoch = streamEpoch.incrementAndGet()
-
-        // Same rule as stopTorrentStream(): no active stream means there is nothing synchronous
-        // to close. Any preparation already in progress is invalidated by the new epoch and will
-        // destroy its late result before exposing it to the player.
-        if (!embeddedStreamActive.get()) return
+        if (!embeddedEngineUsed.get()) return
 
         cleanupScope.launch {
             stopEmbeddedForEpoch(epoch)
         }
     }
 
-    private suspend fun stopEmbeddedForEpoch(epoch: Long): AppResult<Unit> = streamMutex.withLock {
-        if (streamEpoch.get() != epoch) {
-            return@withLock AppResult.Success(Unit)
+    /**
+     * Stop requests are no longer serialized behind metadata preparation. The embedded engine
+     * invalidates its own generation before touching the stream lock, so a slow stale magnet
+     * fetch can finish in the background without keeping direct IPTV or a newer P2P request waiting.
+     */
+    private suspend fun stopEmbeddedForEpoch(epoch: Long): AppResult<Unit> {
+        if (streamEpoch.get() != epoch || !embeddedEngineUsed.get()) {
+            return AppResult.Success(Unit)
         }
-        stopEmbeddedLocked()
-    }
-
-    private suspend fun stopEmbeddedLocked(): AppResult<Unit> {
-        if (!embeddedStreamActive.get()) return AppResult.Success(Unit)
 
         return when (val stopped = embeddedEngine.stopStream()) {
-            is P2pResult.Success -> {
-                embeddedStreamActive.set(false)
-                log("embedded_p2p_stopped", "Embedded BitTorrent stream stopped")
-                AppResult.Success(Unit)
-            }
+            is P2pResult.Success -> AppResult.Success(Unit)
             is P2pResult.Error -> {
-                log("embedded_p2p_stop_error", stopped.message)
-                AppResult.Error(stopped.message, stopped.cause)
+                if (streamEpoch.get() != epoch) {
+                    AppResult.Success(Unit)
+                } else {
+                    log("embedded_p2p_stop_error", stopped.message)
+                    AppResult.Error(stopped.message, stopped.cause)
+                }
             }
         }
     }
@@ -130,39 +117,40 @@ class HybridEngineRepositoryImpl @Inject constructor(
     private suspend fun resolveEmbeddedWithFallback(
         rawSource: String,
         epoch: Long
-    ): AppResult<String> = streamMutex.withLock {
-        if (streamEpoch.get() != epoch) return@withLock supersededResult()
+    ): AppResult<String> {
+        if (streamEpoch.get() != epoch) return supersededResult()
 
         val parsed = P2pSourceParser.parse(rawSource)
         if (parsed !is P2pResult.Success) {
-            return@withLock if (streamEpoch.get() == epoch) {
-                resolveExternal(rawSource)
-            } else {
-                supersededResult()
-            }
+            if (streamEpoch.get() != epoch) return supersededResult()
+            val fallback = resolveExternal(rawSource)
+            return if (streamEpoch.get() == epoch) fallback else supersededResult()
         }
 
-        when (val embedded = embeddedEngine.prepareStream(parsed.data)) {
-            is P2pResult.Success -> {
-                if (streamEpoch.get() != epoch) {
-                    embeddedStreamActive.set(true)
-                    stopEmbeddedLocked()
-                    return@withLock supersededResult()
-                }
+        embeddedEngineUsed.set(true)
+        val embedded = embeddedEngine.prepareStream(parsed.data)
+        if (streamEpoch.get() != epoch) return supersededResult()
 
-                embeddedStreamActive.set(true)
+        return when (embedded) {
+            is P2pResult.Success -> {
                 log(
                     status = "embedded_p2p_resolved",
                     message = "Embedded BitTorrent stream prepared: ${embedded.data.file.name}"
                 )
-                AppResult.Success(embedded.data.url)
+                if (streamEpoch.get() == epoch) {
+                    AppResult.Success(embedded.data.url)
+                } else {
+                    supersededResult()
+                }
             }
             is P2pResult.Error -> {
-                embeddedStreamActive.set(false)
-                if (streamEpoch.get() != epoch) return@withLock supersededResult()
+                if (streamEpoch.get() != epoch) return supersededResult()
 
                 log("embedded_p2p_resolve_error", embedded.message)
-                when (val fallback = resolveExternal(rawSource)) {
+                val fallback = resolveExternal(rawSource)
+                if (streamEpoch.get() != epoch) return supersededResult()
+
+                when (fallback) {
                     is AppResult.Success -> {
                         log("embedded_p2p_fallback", "External Ace fallback resolved BitTorrent source")
                         fallback
