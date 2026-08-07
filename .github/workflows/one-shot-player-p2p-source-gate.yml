@@ -1,0 +1,41 @@
+name: One-shot player P2P source gate
+
+on:
+  push:
+    branches:
+      - feature/player-p2p-source-gate
+    paths:
+      - .github/workflows/one-shot-player-p2p-source-gate.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-source-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/player-p2p-source-gate
+          fetch-depth: 0
+
+      - name: Apply verified source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .github/patches/player-p2p-source-gate.patch
+          git apply .github/patches/player-p2p-source-gate.patch
+          git rm .github/patches/player-p2p-source-gate.patch
+          git rm .github/workflows/one-shot-player-p2p-source-gate.yml
+          git diff --check
+
+      - name: Commit patched source and remove one-shot files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt
+          git commit -m "feat(player): wire P2P source gate"
+          git push origin HEAD:feature/player-p2p-source-gate
