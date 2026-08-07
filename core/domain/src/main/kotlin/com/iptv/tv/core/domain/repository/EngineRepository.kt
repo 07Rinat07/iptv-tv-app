@@ -9,4 +9,13 @@ interface EngineRepository {
     suspend fun refreshStatus(): AppResult<EngineStatus>
     fun observeStatus(): Flow<EngineStatus>
     suspend fun resolveTorrentStream(magnetOrAce: String): AppResult<String>
+
+    /** Stops the currently active embedded torrent stream, if any. */
+    suspend fun stopTorrentStream(): AppResult<Unit> = AppResult.Success(Unit)
+
+    /**
+     * Requests non-blocking torrent cleanup for UI teardown paths where the caller cannot suspend.
+     * Implementations that do not own an embedded torrent backend may keep the default no-op.
+     */
+    fun releaseTorrentStream() = Unit
 }
