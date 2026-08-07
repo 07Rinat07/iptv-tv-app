@@ -28,6 +28,7 @@ include(
     ":core:player-vlc",
     ":core:utils",
     ":core:engine",
+    ":core:p2p",
     ":core:designsystem",
     ":core:data",
     ":sync",
