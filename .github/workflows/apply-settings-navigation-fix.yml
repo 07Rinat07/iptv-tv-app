@@ -1,0 +1,73 @@
+name: Apply settings navigation fix
+
+on:
+  push:
+    branches:
+      - fix/settings-start-destination-navigation
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply deterministic settings navigation fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          main = Path('app/src/main/java/com/iptv/tv/MainActivity.kt')
+          settings = Path('feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsScreen.kt')
+
+          main_text = main.read_text(encoding='utf-8')
+          old_main = '''                            SettingsScreen(\n                                onOpenNetworkTest = { navController.navigate(Routes.NETWORK_TEST) },\n                                onPrimaryAction = { navController.navigate(Routes.DIAGNOSTICS) },\n                                primaryLabel = "Диагностика"\n                            )'''
+          new_main = '''                            SettingsScreen(\n                                onOpenNetworkTest = { navController.navigate(Routes.NETWORK_TEST) },\n                                onOpenStartDestination = { destination ->\n                                    navController.navigate(destination.toAppRoute()) {\n                                        launchSingleTop = true\n                                    }\n                                },\n                                onPrimaryAction = { navController.navigate(Routes.DIAGNOSTICS) },\n                                primaryLabel = "Диагностика"\n                            )'''
+          if main_text.count(old_main) != 1:
+              raise SystemExit('Expected SettingsScreen call was not found exactly once')
+          main.write_text(main_text.replace(old_main, new_main, 1), encoding='utf-8')
+
+          settings_text = settings.read_text(encoding='utf-8')
+          signature_old = '''fun SettingsScreen(\n    onOpenNetworkTest: (() -> Unit)? = null,\n    onPrimaryAction: (() -> Unit)? = null,'''
+          signature_new = '''fun SettingsScreen(\n    onOpenNetworkTest: (() -> Unit)? = null,\n    onOpenStartDestination: ((CoreAppStartDestination) -> Unit)? = null,\n    onPrimaryAction: (() -> Unit)? = null,'''
+          if settings_text.count(signature_old) != 1:
+              raise SystemExit('Expected SettingsScreen signature was not found exactly once')
+          settings_text = settings_text.replace(signature_old, signature_new, 1)
+
+          replacements = {
+              '                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.HOME) },': '''                        onClick = {\n                            viewModel.setAppStartDestination(CoreAppStartDestination.HOME)\n                            onOpenStartDestination?.invoke(CoreAppStartDestination.HOME)\n                        },''',
+              '                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.PLAYER) },': '''                        onClick = {\n                            viewModel.setAppStartDestination(CoreAppStartDestination.PLAYER)\n                            onOpenStartDestination?.invoke(CoreAppStartDestination.PLAYER)\n                        },''',
+              '                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.SCANNER) },': '''                        onClick = {\n                            viewModel.setAppStartDestination(CoreAppStartDestination.SCANNER)\n                            onOpenStartDestination?.invoke(CoreAppStartDestination.SCANNER)\n                        },''',
+              '                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.FAVORITES) },': '''                        onClick = {\n                            viewModel.setAppStartDestination(CoreAppStartDestination.FAVORITES)\n                            onOpenStartDestination?.invoke(CoreAppStartDestination.FAVORITES)\n                        },''',
+              '                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.PLAYLISTS) },': '''                        onClick = {\n                            viewModel.setAppStartDestination(CoreAppStartDestination.PLAYLISTS)\n                            onOpenStartDestination?.invoke(CoreAppStartDestination.PLAYLISTS)\n                        },''',
+              '                    text = "При следующем запуске приложение откроет выбранный раздел.",': '                    text = "Выбор сохраняется для следующего запуска и сразу открывает выбранный раздел.",',
+          }
+          for old, new in replacements.items():
+              if settings_text.count(old) != 1:
+                  raise SystemExit(f'Expected settings fragment was not found exactly once: {old}')
+              settings_text = settings_text.replace(old, new, 1)
+          settings.write_text(settings_text, encoding='utf-8')
+          PY
+
+      - name: Validate diff
+        shell: bash
+        run: |
+          git diff --check
+          git status --short
+          test -n "$(git status --porcelain -- app/src/main/java/com/iptv/tv/MainActivity.kt feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsScreen.kt)"
+
+      - name: Commit fix to branch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/iptv/tv/MainActivity.kt feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsScreen.kt
+          git commit -m "fix(settings): open selected start destination immediately"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
