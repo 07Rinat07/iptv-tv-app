@@ -2,7 +2,7 @@ package com.iptv.tv.core.p2p
 
 import android.util.Log
 
-internal sealed interface P2pRuntimeMetric {
+sealed interface P2pRuntimeMetric {
     val sourceType: String
     val elapsedMillis: Long
 
@@ -31,7 +31,7 @@ internal sealed interface P2pRuntimeMetric {
     ) : P2pRuntimeMetric
 }
 
-internal fun interface P2pRuntimeMetricsReporter {
+fun interface P2pRuntimeMetricsReporter {
     fun report(metric: P2pRuntimeMetric)
 
     companion object {
