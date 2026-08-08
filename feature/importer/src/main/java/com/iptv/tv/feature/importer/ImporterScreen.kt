@@ -39,6 +39,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
+import com.iptv.tv.core.designsystem.theme.tvBringIntoViewOnFocus
 import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistProvider
@@ -157,7 +158,7 @@ fun ImporterScreen(
                 label = { Text("https://...") },
                 singleLine = true
             )
-            Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier = Modifier.padding(top = 8.dp).tvBringIntoViewOnFocus(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = viewModel::importFromUrl,
                     modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_URL),
@@ -208,7 +209,7 @@ fun ImporterScreen(
                         visualTransformation = PasswordVisualTransformation()
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.tvBringIntoViewOnFocus(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = viewModel::importFromXtream,
                         modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_XTREAM),
@@ -248,7 +249,7 @@ fun ImporterScreen(
                     label = { Text("00:1A:79:00:00:00") },
                     singleLine = true
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.tvBringIntoViewOnFocus(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = viewModel::importFromStalker,
                         modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_STALKER),
@@ -279,7 +280,7 @@ fun ImporterScreen(
                     label = { Text("http://hdhomerun.local или http://device/lineup.json") },
                     singleLine = true
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.tvBringIntoViewOnFocus(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = viewModel::importFromHdHomeRun,
                         modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_HDHOMERUN),
@@ -331,7 +332,7 @@ fun ImporterScreen(
                         visualTransformation = PasswordVisualTransformation()
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.tvBringIntoViewOnFocus(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = viewModel::importFromTvheadend,
                         modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_TVHEADEND),
@@ -372,7 +373,7 @@ fun ImporterScreen(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation()
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.tvBringIntoViewOnFocus(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = viewModel::importFromJellyfin,
                         modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_JELLYFIN),
@@ -413,7 +414,7 @@ fun ImporterScreen(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation()
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.tvBringIntoViewOnFocus(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = viewModel::importFromPlex,
                         modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_PLEX),
@@ -460,7 +461,7 @@ fun ImporterScreen(
                 label = { Text("C:/.../list.m3u или content://...") },
                 singleLine = true
             )
-            Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier = Modifier.padding(top = 8.dp).tvBringIntoViewOnFocus(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {
                         openDocumentLauncher.launch(
@@ -514,7 +515,7 @@ fun ImporterScreen(
                 label = { Text("#EXTM3U ...") },
                 minLines = 8
             )
-            Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier = Modifier.padding(top = 8.dp).tvBringIntoViewOnFocus(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = viewModel::importFromText,
                     modifier = Modifier.testTag(TAG_IMPORTER_IMPORT_TEXT),
