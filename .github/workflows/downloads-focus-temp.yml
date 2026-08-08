@@ -1,0 +1,80 @@
+name: Temporary Downloads action focus patch
+
+on:
+  push:
+    branches:
+      - feat/downloads-action-focus-scroll
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/downloads-action-focus-scroll
+          fetch-depth: 0
+      - name: Apply Downloads focus-follow patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('feature/downloads/src/main/java/com/iptv/tv/feature/downloads/DownloadsScreen.kt')
+          s = path.read_text(encoding='utf-8')
+          s = s.replace(
+              'import com.iptv.tv.core.designsystem.theme.tvFocusOutline\n',
+              'import com.iptv.tv.core.designsystem.theme.tvBringIntoViewOnFocus\nimport com.iptv.tv.core.designsystem.theme.tvFocusOutline\n',
+              1,
+          )
+
+          markers = [
+              'Text("Добавить в очередь")',
+              'Text("Записать сейчас")',
+              'Text("Проверить")',
+              'Text("Пауза")',
+              'Text("Очистить старше 7 дней")',
+              'Text("Открыть запись")',
+              'Text(if (schedule.enabled) "Выключить" else "Включить")',
+          ]
+
+          for marker in markers:
+              pos = s.find(marker)
+              if pos < 0:
+                  raise SystemExit(f'marker not found: {marker}')
+              row = s.rfind('Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {', 0, pos)
+              if row < 0:
+                  raise SystemExit(f'row not found for: {marker}')
+              old = 'Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {'
+              new = '''Row(
+                        modifier = Modifier.tvBringIntoViewOnFocus(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {'''
+              s = s[:row] + s[row:].replace(old, new, 1)
+
+          path.write_text(s, encoding='utf-8')
+
+          roadmap = Path('docs/ROADMAP.md')
+          r = roadmap.read_text(encoding='utf-8')
+          old = '- общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About, History и Favorites, верхние вкладки Diagnostics также удерживаются в видимой области; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;'
+          if old not in r:
+              old = '- общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About и History, верхние вкладки Diagnostics также удерживаются в видимой области; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;'
+          if old not in r:
+              raise SystemExit('ROADMAP focus-follow line not found')
+          new = '- общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About, History, Favorites и Downloads, верхние вкладки Diagnostics также удерживаются в видимой области; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;'
+          roadmap.write_text(r.replace(old, new, 1), encoding='utf-8')
+          PY
+          rm .github/workflows/downloads-focus-temp.yml
+      - name: Commit Downloads focus-follow patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "S.Rinat"
+          git config user.email "102806560+07Rinat07@users.noreply.github.com"
+          git add feature/downloads/src/main/java/com/iptv/tv/feature/downloads/DownloadsScreen.kt docs/ROADMAP.md .github/workflows/downloads-focus-temp.yml
+          git diff --cached --check
+          git commit -m "feat(downloads): keep action groups visible on focus"
+          git push origin HEAD:feat/downloads-action-focus-scroll
