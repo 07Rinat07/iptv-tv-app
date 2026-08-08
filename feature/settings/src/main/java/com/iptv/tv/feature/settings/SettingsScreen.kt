@@ -45,6 +45,7 @@ import com.iptv.tv.core.model.PlayerType as CorePlayerType
 @Composable
 fun SettingsScreen(
     onOpenNetworkTest: (() -> Unit)? = null,
+    onOpenStartDestination: ((CoreAppStartDestination) -> Unit)? = null,
     onPrimaryAction: (() -> Unit)? = null,
     primaryLabel: String = "Открыть",
     viewModel: SettingsViewModel = hiltViewModel()
@@ -114,36 +115,56 @@ fun SettingsScreen(
                     SelectionButton(
                         selected = state.appStartDestination == CoreAppStartDestination.HOME,
                         label = "Главная",
-                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.HOME) },
+                        onClick = {
+                            if (viewModel.setAppStartDestination(CoreAppStartDestination.HOME)) {
+                                onOpenStartDestination?.invoke(CoreAppStartDestination.HOME)
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
                     SelectionButton(
                         selected = state.appStartDestination == CoreAppStartDestination.PLAYER,
                         label = "Плеер",
-                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.PLAYER) },
+                        onClick = {
+                            if (viewModel.setAppStartDestination(CoreAppStartDestination.PLAYER)) {
+                                onOpenStartDestination?.invoke(CoreAppStartDestination.PLAYER)
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
                     SelectionButton(
                         selected = state.appStartDestination == CoreAppStartDestination.SCANNER,
                         label = "Сканер",
-                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.SCANNER) },
+                        onClick = {
+                            if (viewModel.setAppStartDestination(CoreAppStartDestination.SCANNER)) {
+                                onOpenStartDestination?.invoke(CoreAppStartDestination.SCANNER)
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
                     SelectionButton(
                         selected = state.appStartDestination == CoreAppStartDestination.FAVORITES,
                         label = "Избранное",
-                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.FAVORITES) },
+                        onClick = {
+                            if (viewModel.setAppStartDestination(CoreAppStartDestination.FAVORITES)) {
+                                onOpenStartDestination?.invoke(CoreAppStartDestination.FAVORITES)
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
                     SelectionButton(
                         selected = state.appStartDestination == CoreAppStartDestination.PLAYLISTS,
                         label = "Плейлисты",
-                        onClick = { viewModel.setAppStartDestination(CoreAppStartDestination.PLAYLISTS) },
+                        onClick = {
+                            if (viewModel.setAppStartDestination(CoreAppStartDestination.PLAYLISTS)) {
+                                onOpenStartDestination?.invoke(CoreAppStartDestination.PLAYLISTS)
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
                 }
                 Text(
-                    text = "При следующем запуске приложение откроет выбранный раздел.",
+                    text = "Выбор сохраняется для следующего запуска и сразу открывает выбранный раздел.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }

@@ -398,6 +398,11 @@ private fun AppRoot(
                         composable(Routes.SETTINGS) {
                             SettingsScreen(
                                 onOpenNetworkTest = { navController.navigate(Routes.NETWORK_TEST) },
+                                onOpenStartDestination = { destination ->
+                                    navController.navigate(destination.toAppRoute()) {
+                                        launchSingleTop = true
+                                    }
+                                },
                                 onPrimaryAction = { navController.navigate(Routes.DIAGNOSTICS) },
                                 primaryLabel = "Диагностика"
                             )

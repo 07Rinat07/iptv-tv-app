@@ -82,8 +82,8 @@ class SettingsViewModel @Inject constructor(
         observeTvHomeStates()
     }
 
-    fun setAppStartDestination(destination: AppStartDestination) {
-        if (!ensureSettingsUnlocked()) return
+    fun setAppStartDestination(destination: AppStartDestination): Boolean {
+        if (!ensureSettingsUnlocked()) return false
         viewModelScope.launch {
             settingsRepository.setAppStartDestination(destination)
             _uiState.update {
@@ -93,6 +93,7 @@ class SettingsViewModel @Inject constructor(
                 )
             }
         }
+        return true
     }
 
     fun setDefaultPlayer(playerType: PlayerType) {
