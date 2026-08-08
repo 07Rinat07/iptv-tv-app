@@ -59,12 +59,10 @@ jobs:
 
           roadmap = Path('docs/ROADMAP.md')
           r = roadmap.read_text(encoding='utf-8')
-          old = '- общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About, History и Favorites, верхние вкладки Diagnostics также удерживаются в видимой области; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;'
-          if old not in r:
-              old = '- общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About и History, верхние вкладки Diagnostics также удерживаются в видимой области; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;'
+          old = '- общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About и History, верхние вкладки Diagnostics и основная action-группа Favorites также удерживаются в видимой области; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;'
           if old not in r:
               raise SystemExit('ROADMAP focus-follow line not found')
-          new = '- общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About, History, Favorites и Downloads, верхние вкладки Diagnostics также удерживаются в видимой области; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;'
+          new = '- общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About и History, верхние вкладки Diagnostics, основная action-группа Favorites и action-группы Downloads также удерживаются в видимой области; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;'
           roadmap.write_text(r.replace(old, new, 1), encoding='utf-8')
           PY
           rm .github/workflows/downloads-focus-temp.yml
