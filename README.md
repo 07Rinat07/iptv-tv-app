@@ -27,6 +27,12 @@ Android TV/TV Box приложение для просмотра IPTV, упра�
 - адаптивный буфер для слабых TV Box;
 - диагностика, экспорт и сброс старых ошибок.
 
+## Архитектурный этап каталога
+
+В `core/model` формируется канонический контракт `Source/Catalog -> Subcatalog -> Playlist -> Group/Subgroup -> Channel` со стабильной identity, parent relationship, ordering и source provenance. Текущие Room/UI-модели переводятся на него поэтапно в Issue #45, без одновременной переделки Scanner, EPG и Player.
+
+Оптимизированный порядок зависимостей: TV-navigation regression baseline -> canonical catalog/unified Favorites -> P2P transport -> EPG/real archive -> Player UX -> Help/docs -> hardware/release acceptance. Реальные BlueStacks/TV Box дефекты из ручного тестирования исправляются отдельными приоритетными hotfix PR.
+
 ## Требования
 
 - JDK 17;
@@ -62,7 +68,8 @@ APK/AAB не хранятся в Git. GitHub Actions прикладывает и
 Основной workflow `.github/workflows/android.yml` выполняет:
 
 - Android lint;
-- unit-тесты модулей;
+- unit-тесты модулей, включая `core:model` для canonical catalog contracts;
+- компиляцию Android instrumentation tests;
 - `assembleDebug`;
 - `assembleRelease`;
 - публикацию APK и отчётов как временных GitHub Actions artifacts.
