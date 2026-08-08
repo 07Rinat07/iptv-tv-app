@@ -14,7 +14,8 @@ data class AceTransportMetadata(
     val name: String?,
     val files: List<AceTransportFile>,
     val transportFileData: String?,
-    val transportFileCacheKey: String?
+    val transportFileCacheKey: String?,
+    val wrapperData: AceWrapperData?
 ) {
     val isLive: Boolean
         get() = mediaType == MEDIA_TYPE_LIVE || files.any { it.mediaType == MEDIA_TYPE_LIVE }
@@ -41,4 +42,10 @@ data class AceTransportFile(
     val filename: String?,
     val mime: String?,
     val size: Long?
+)
+
+data class AceWrapperData(
+    val type: String?,
+    val mime: String?,
+    val data: String?
 )
