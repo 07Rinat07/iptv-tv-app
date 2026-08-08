@@ -5,6 +5,8 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.SyncLogEntity
 import com.iptv.tv.core.domain.repository.EngineRepository
+import com.iptv.tv.core.engine.data.AceContentTransportResolution
+import com.iptv.tv.core.engine.data.AceContentTransportResolver
 import com.iptv.tv.core.engine.data.EngineStreamClient
 import com.iptv.tv.core.model.EngineStatus
 import com.iptv.tv.core.p2p.LibtorrentEmbeddedEngine
@@ -36,6 +38,7 @@ import okhttp3.OkHttpClient
 class HybridEngineRepositoryImpl @Inject constructor(
     @ApplicationContext context: Context,
     private val client: EngineStreamClient,
+    private val contentTransportResolver: AceContentTransportResolver,
     private val syncLogDao: SyncLogDao,
     okHttpClient: OkHttpClient
 ) : EngineRepository {
@@ -196,9 +199,10 @@ class HybridEngineRepositoryImpl @Inject constructor(
     }
 
     /**
-     * A pure Ace content id is not a BitTorrent hash. If an Ace endpoint is available we ask its
-     * metadata API for the real transport infohash, then attempt playback through our embedded
-     * libtorrent backend. Any metadata or embedded failure falls back to the existing Ace path.
+     * A pure Ace content id is not a BitTorrent hash. Transport discovery is delegated to the
+     * resolver boundary so playback routing no longer depends directly on an external Ace Engine.
+     * Only a proven non-live BitTorrent transport may enter standard libtorrent; live/unsupported
+     * transports and resolver failures keep the existing external compatibility fallback.
      */
     private suspend fun resolveAceContentIdWithEmbeddedMetadata(
         rawSource: String,
@@ -207,24 +211,38 @@ class HybridEngineRepositoryImpl @Inject constructor(
         stopEmbeddedForEpoch(epoch)
         if (streamEpoch.get() != epoch) return supersededResult()
 
-        val metadata = client.resolveContentIdInfoHash(rawSource)
+        val resolution = contentTransportResolver.resolve(rawSource)
         if (streamEpoch.get() != epoch) return supersededResult()
 
-        if (metadata !is AppResult.Success) {
-            if (metadata is AppResult.Error) {
-                log("engine_content_id_metadata_error", metadata.message)
+        val infoHash = when (resolution) {
+            is AppResult.Success -> when (val transport = resolution.data) {
+                is AceContentTransportResolution.EmbeddedBitTorrent -> transport.infoHash
+                is AceContentTransportResolution.AceLive -> {
+                    log(
+                        "engine_content_id_live_transport",
+                        "Ace content id resolved to live transport; using external compatibility fallback"
+                    )
+                    return resolveExternalIfCurrent(rawSource, epoch)
+                }
+                is AceContentTransportResolution.Unsupported -> {
+                    log("engine_content_id_transport_unsupported", transport.reason)
+                    return resolveExternalIfCurrent(rawSource, epoch)
+                }
             }
-            val fallback = resolveExternal(rawSource)
-            return if (streamEpoch.get() == epoch) fallback else supersededResult()
+            is AppResult.Error -> {
+                log("engine_content_id_metadata_error", resolution.message)
+                return resolveExternalIfCurrent(rawSource, epoch)
+            }
+            AppResult.Loading -> return resolveExternalIfCurrent(rawSource, epoch)
         }
 
         log(
             "engine_content_id_metadata_resolved",
-            "Ace content id mapped to BitTorrent infohash ${metadata.data}"
+            "Ace content id mapped to proven non-live BitTorrent infohash $infoHash"
         )
 
         embeddedEngineUsed.set(true)
-        val embedded = embeddedEngine.prepareStream(P2pSource.InfoHash(metadata.data))
+        val embedded = embeddedEngine.prepareStream(P2pSource.InfoHash(infoHash))
         if (streamEpoch.get() != epoch) return supersededResult()
 
         return when (embedded) {
@@ -237,10 +255,18 @@ class HybridEngineRepositoryImpl @Inject constructor(
             }
             is P2pResult.Error -> {
                 log("embedded_p2p_content_id_error", embedded.message)
-                val fallback = resolveExternal(rawSource)
-                if (streamEpoch.get() != epoch) supersededResult() else fallback
+                resolveExternalIfCurrent(rawSource, epoch)
             }
         }
+    }
+
+    private suspend fun resolveExternalIfCurrent(
+        rawSource: String,
+        epoch: Long
+    ): AppResult<String> {
+        if (streamEpoch.get() != epoch) return supersededResult()
+        val fallback = resolveExternal(rawSource)
+        return if (streamEpoch.get() == epoch) fallback else supersededResult()
     }
 
     private fun isPureAceContentId(rawSource: String): Boolean {
