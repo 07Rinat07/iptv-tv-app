@@ -1,6 +1,7 @@
 package com.iptv.tv.core.designsystem.theme
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -21,6 +22,7 @@ internal fun shouldRequestBringIntoView(
     hasFocus: Boolean
 ): Boolean = hasFocus && !wasFocused
 
+@OptIn(ExperimentalFoundationApi::class)
 fun Modifier.tvFocusOutline(): Modifier = composed {
     val shape = RoundedCornerShape(12.dp)
     val defaultColor = MaterialTheme.colorScheme.outlineVariant
