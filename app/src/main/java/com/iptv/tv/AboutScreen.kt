@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
+import com.iptv.tv.core.designsystem.theme.tvBringIntoViewOnFocus
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 
 private const val AUTHOR_NAME = "Rinat Sarmuldin"
@@ -84,7 +85,9 @@ fun AboutScreen(
         }
         item {
             FlowRow(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .tvBringIntoViewOnFocus(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
