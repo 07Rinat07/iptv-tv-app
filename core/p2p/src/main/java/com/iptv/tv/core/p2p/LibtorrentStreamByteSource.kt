@@ -2,6 +2,7 @@ package com.iptv.tv.core.p2p
 
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.util.concurrent.atomic.AtomicBoolean
 import org.libtorrent4j.Priority
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
@@ -19,7 +20,8 @@ internal class LibtorrentStreamByteSource(
     private val fileIndex: Int,
     private val file: java.io.File,
     override val contentType: String,
-    private val pieceWaitTimeoutMillis: Long = DEFAULT_PIECE_WAIT_TIMEOUT_MILLIS
+    private val pieceWaitTimeoutMillis: Long = DEFAULT_PIECE_WAIT_TIMEOUT_MILLIS,
+    private val onFirstBytesRead: ((position: Long, byteCount: Int) -> Unit)? = null
 ) : HttpRangeByteSource {
     private val storage = torrentInfo.files()
     private val fileOffsetBytes = storage.fileOffset(fileIndex)
@@ -28,6 +30,7 @@ internal class LibtorrentStreamByteSource(
     private val readAheadPlan = TorrentReadAheadPolicy.plan(pieceLengthBytes)
     private val schedulingLock = Any()
     private val priorityWindowTracker = TorrentPriorityWindowTracker()
+    private val firstReadReported = AtomicBoolean(false)
 
     override val length: Long = storage.fileSize(fileIndex)
 
@@ -70,7 +73,7 @@ internal class LibtorrentStreamByteSource(
             throw IOException("Downloaded torrent file is not available on disk yet")
         }
 
-        return RandomAccessFile(file, "r").use { randomAccess ->
+        val totalRead = RandomAccessFile(file, "r").use { randomAccess ->
             randomAccess.seek(position)
             var total = 0
             while (total < actualLength) {
@@ -83,6 +86,11 @@ internal class LibtorrentStreamByteSource(
             }
             total
         }
+
+        if (totalRead > 0 && firstReadReported.compareAndSet(false, true)) {
+            runCatching { onFirstBytesRead?.invoke(position, totalRead) }
+        }
+        return totalRead
     }
 
     private fun scheduleRange(start: Long, endInclusive: Long): TorrentPieceWindow {
