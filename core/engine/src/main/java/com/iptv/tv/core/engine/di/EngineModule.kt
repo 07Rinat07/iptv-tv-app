@@ -1,8 +1,10 @@
 package com.iptv.tv.core.engine.di
 
 import com.iptv.tv.core.engine.api.EngineStreamApi
+import com.iptv.tv.core.engine.data.AceContentTransportResolver
 import com.iptv.tv.core.engine.data.AceStreamServiceConnector
 import com.iptv.tv.core.engine.data.EngineStreamClient
+import com.iptv.tv.core.engine.data.ExternalAceContentTransportResolver
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -52,4 +54,10 @@ object EngineModule {
         api: EngineStreamApi,
         serviceConnector: AceStreamServiceConnector
     ): EngineStreamClient = EngineStreamClient(api, serviceConnector)
+
+    @Provides
+    @Singleton
+    fun provideAceContentTransportResolver(
+        client: EngineStreamClient
+    ): AceContentTransportResolver = ExternalAceContentTransportResolver(client)
 }

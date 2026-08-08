@@ -34,6 +34,14 @@
 
 Адаптер конкретного источника обязан передавать уже нормализованный `stableKey`. Политика Room persistence/migration, unified Favorites storage и UI-навигация намеренно выполняются следующими изолированными PR. Это позволяет менять storage/UI без изменения самой идентичности каталога.
 
+## P2P / Ace transport boundary
+
+`core:p2p` обрабатывает только подтверждённый BitTorrent transport: magnet, infohash и `.torrent`. Чистый `acestream://content_id` не считается BitTorrent infohash.
+
+`core:engine` содержит отдельный `AceContentTransportResolver`. Он переводит transport metadata в одно из трёх решений: безопасный non-live BitTorrent для embedded libtorrent, Ace Live transport, либо unsupported transport. Текущая compatibility-реализация получает metadata через внешний Ace Engine API; следующий инкремент может заменить или предварить её собственным in-process resolver без изменения player-facing routing. Live transport намеренно не пропускается в стандартный libtorrent только на основании наличия `infohash`.
+
+Это разделение введено после реальной регрессии Torrent-TV, где `acestream://content_id` ошибочно выглядел как «embedded» сценарий, хотя metadata всё ещё требовала внешний Ace Engine. До появления собственного resolver/backend такой путь считается compatibility-only, а не автономным.
+
 ## Порядок зависимостей
 
 1. завершить кодовую regression-baseline TV navigation (#40), а реальную BlueStacks/TV Box приёмку вести параллельно;
