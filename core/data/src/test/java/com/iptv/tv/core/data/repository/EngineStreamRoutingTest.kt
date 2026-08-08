@@ -29,6 +29,24 @@ class EngineStreamRoutingTest {
     }
 
     @Test
+    fun directAceLiveUrlUsesCompatibilityRoute() {
+        assertEquals(
+            EngineStreamRoute.ACE_LIVE_COMPATIBILITY,
+            EngineStreamRouting.route("https://example.org/live/channel.acelive?token=abc")
+        )
+    }
+
+    @Test
+    fun encodedAceLiveDescriptorUsesCompatibilityRoute() {
+        assertEquals(
+            EngineStreamRoute.ACE_LIVE_COMPATIBILITY,
+            EngineStreamRouting.route(
+                "acestream:?url=https%3A%2F%2Fexample.org%2Flive%2Fchannel.acelive"
+            )
+        )
+    }
+
+    @Test
     fun localTorrentUriUsesEmbeddedBitTorrent() {
         assertEquals(
             EngineStreamRoute.EMBEDDED_BITTORRENT,
