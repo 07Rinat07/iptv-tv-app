@@ -130,10 +130,12 @@ class EngineStreamClientTest {
         assertTrue(result is AppResult.Success)
         assertEquals(infoHash.lowercase(), (result as AppResult.Success).data)
         assertEquals("http://127.0.0.1:6878/server/api", api.lastResolveUrl)
-        assertEquals("3", api.lastResolveOptions["api_version"])
+        assertEquals("2", api.lastResolveOptions["api_version"])
         assertEquals("get_media_files", api.lastResolveOptions["method"])
         assertEquals(contentId.lowercase(), api.lastResolveOptions["content_id"])
-        assertEquals("brief", api.lastResolveOptions["mode"])
+        assertEquals("full", api.lastResolveOptions["mode"])
+        assertEquals("1", api.lastResolveOptions["expand_wrapper"])
+        assertEquals("1", api.lastResolveOptions["dump_transport_file"])
     }
 
     @Test
