@@ -56,6 +56,7 @@ import androidx.media3.common.util.UnstableApi
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.designsystem.theme.IptvTheme
+import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.AppStartDestination
 import com.iptv.tv.feature.editor.EDITOR_PLAYLIST_ID_ARG
 import com.iptv.tv.feature.diagnostics.DiagnosticsScreen
@@ -224,7 +225,8 @@ private fun AppRoot(
                                     }
                                 },
                                 onExit = { showExitConfirm = true },
-                                onSections = { showSectionsMenu = true }
+                                onSections = { showSectionsMenu = true },
+                                sectionsMenuVisible = showSectionsMenu
                             )
                         }
                     }
@@ -428,17 +430,29 @@ private fun AppRoot(
             }
         }
             if (showExitConfirm) {
+                val exitCancelFocusRequester = remember { FocusRequester() }
+                LaunchedEffect(Unit) {
+                    exitCancelFocusRequester.requestFocus()
+                }
                 AlertDialog(
                     onDismissRequest = { showExitConfirm = false },
                     title = { Text("Выход из приложения") },
                     text = { Text("Закрыть приложение?") },
                     confirmButton = {
-                        Button(onClick = { activity?.finish() }) {
+                        Button(
+                            onClick = { activity?.finish() },
+                            modifier = Modifier.tvFocusOutline()
+                        ) {
                             Text("Да, закрыть")
                         }
                     },
                     dismissButton = {
-                        Button(onClick = { showExitConfirm = false }) {
+                        Button(
+                            onClick = { showExitConfirm = false },
+                            modifier = Modifier
+                                .focusRequester(exitCancelFocusRequester)
+                                .tvFocusOutline()
+                        ) {
                             Text("Отмена")
                         }
                     }
@@ -464,11 +478,14 @@ private fun AppRoot(
 private fun NavControlButtons(
     onBack: () -> Unit,
     onExit: () -> Unit,
-    onSections: () -> Unit
+    onSections: () -> Unit,
+    sectionsMenuVisible: Boolean
 ) {
     val sectionsFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        sectionsFocusRequester.requestFocus()
+    LaunchedEffect(sectionsMenuVisible) {
+        if (!sectionsMenuVisible) {
+            sectionsFocusRequester.requestFocus()
+        }
     }
 
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -508,6 +525,11 @@ private fun SectionsMenuDialog(
         Routes.DIAGNOSTICS to "Логи",
         Routes.ABOUT to "О приложении"
     )
+    val firstSelectableIndex = routes.indexOfFirst { (route, _) -> route != currentRoute }
+    val firstSelectableFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(currentRoute) {
+        firstSelectableFocusRequester.requestFocus()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -528,7 +550,15 @@ private fun SectionsMenuDialog(
                             enabled = route != currentRoute,
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .then(
+                                    if (index == firstSelectableIndex) {
+                                        Modifier.focusRequester(firstSelectableFocusRequester)
+                                    } else {
+                                        Modifier
+                                    }
+                                )
                                 .testTag(navButtonTag(route))
+                                .tvFocusOutline()
                         ) {
                             val suffix = if (route == currentRoute) " (текущий)" else ""
                             Text("$label$suffix")
@@ -538,7 +568,7 @@ private fun SectionsMenuDialog(
             }
         },
         confirmButton = {
-            OutlinedButton(onClick = onDismiss) { Text("Закрыть") }
+            OutlinedButton(onClick = onDismiss, modifier = Modifier.tvFocusOutline()) { Text("Закрыть") }
         }
     )
 }
