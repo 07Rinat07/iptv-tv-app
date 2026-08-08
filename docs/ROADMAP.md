@@ -33,6 +33,32 @@
 8. Отдельно исследовать `acestream://content_id` и `.acelive`. Не считать Ace Stream закрытым, пока реальные торрент-ТВ каналы не воспроизводятся.
 9. Проверять P2P сначала в BlueStacks 5, затем на ARM TV Box.
 
+### Детализация Ace transport / torrent-TV
+
+1. Не считать `content_id` эквивалентом BitTorrent infohash. Явный `acestream:?infohash=...` может идти во встроенный BitTorrent backend, а чистый `acestream://content_id` сначала должен быть разрешён через transport metadata.
+2. Использовать публичный контракт официального `acestream/acestream-android-sdk`: `get_media_files` в полном режиме с `expand_wrapper=1` и `dump_transport_file=1`; хранить раздельно `infohash`, `transport_file_data`, `transport_file_cache_key`, `files[]` и `wrapper_data`.
+3. Различать `type=vod|live` и `transport_type=bt|hls|wrapper`. Только подтверждённый non-live BitTorrent transport разрешается передавать стандартному libtorrent.
+4. Добавить явную модель `.acelive`/Ace Live descriptor и отдельную диагностику маршрута. До появления собственного совместимого live backend сохранять внешний Ace как compatibility fallback.
+5. Для Ace Live отдельно исследовать transport descriptor, live window, piece/chunk scheduling, live seek, peer discovery и восстановление после пропусков. Реализацию строить только по публичной спецификации или открытой реализации; бинарные внутренности сторонних APK не копировать.
+6. После стабилизации transport metadata выполнить реальную приёмку на нескольких `acestream://content_id`, обычных magnet/.torrent и `.acelive` источниках.
+
+### Исследовательские ориентиры и лицензионные границы
+
+- `acestream/acestream-android-sdk` — основной открытый эталон transport descriptor/API. Лицензия MIT; публичные модели и API можно адаптировать с соблюдением notice.
+- `Flux-1.38.apk` — статический анализ подтвердил архитектуру встроенного torrent streaming через локальный HTTP и Go-слой на базе `anacrolix/torrent`/`tsynik/torrent`. APK используется только для поиска публичных upstream-реализаций и архитектурных ориентиров; декомпилированный/бинарный код не переносится.
+- `YouROK/TorrServer` — полезный эталон поведения для streaming read-ahead, reader lifecycle, cache windows и приоритетов pieces. Проект GPL-3.0, поэтому прямое копирование его реализации в текущую кодовую базу без отдельного лицензионного решения не допускается.
+- `proninyaroslav/libretorrent` — полезный эталон libtorrent4j для sequential download, first/last piece priority, alerts и metadata lifecycle. Проект GPL-3.0; использовать для сравнения поведения и API, а не для прямого копирования кода.
+- `tsynik/torrent` — fork torrent engine, обнаруженный как upstream в Flux; лицензия MPL-2.0. Можно исследовать алгоритмы и поведение, но прямое включение исходных файлов потребует соблюдения MPL на уровне затронутых файлов.
+- `AceStreamCoreLive` и AceServe APK — использовать как доказательство существования отдельного Ace Live subsystem и как карту компонентов/терминов. Закрытые/AOT/native реализации не переносить в исходный код приложения.
+
+### Следующие P2P-инкременты
+
+1. Завершить структурированную full transport-metadata модель и тесты.
+2. Добавить `.acelive` descriptor/routing/diagnostics без ошибочного преобразования в обычный magnet.
+3. Независимо улучшить bounded read-ahead и tiered piece priorities нашего libtorrent backend, сравнивая поведение с публичными torrent-streaming реализациями, но сохраняя собственную реализацию.
+4. Добавить измеримые P2P diagnostics: metadata time, first-piece time, startup time, peers, download rate, seek recovery time и fallback reason.
+5. Провести реальные тесты: быстрое переключение каналов, seek, слабая сеть, потеря peers, повторное открытие, долгий просмотр.
+
 ## Блокирующий этап 2: EPG и архив
 
 1. Сохранять EPG URL из `url-tvg`, `x-tvg-url`, `tvg-url` и провайдерских API.
