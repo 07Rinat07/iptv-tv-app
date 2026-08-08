@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
+import com.iptv.tv.core.designsystem.theme.tvBringIntoViewOnFocus
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.Playlist
@@ -140,6 +141,7 @@ fun PlaylistsScreen(
 
         item {
             FlowRow(
+                modifier = Modifier.tvBringIntoViewOnFocus(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
