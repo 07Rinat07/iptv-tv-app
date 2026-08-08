@@ -1,5 +1,6 @@
 package com.iptv.tv
 
+import android.view.KeyEvent
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -63,6 +64,22 @@ class AppSmokeTest {
         composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).assertIsFocused()
         composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).performClick()
         assertRoute("scanner")
+        composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).assertIsFocused()
+    }
+
+    @Test
+    fun sectionsDialogDpadDownAndCenterRoutesAndRestoresSectionsButton() {
+        unlockApp()
+        composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).performClick()
+        composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).assertIsFocused()
+
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_DOWN)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag(navButtonTag(Routes.IMPORTER)).assertIsFocused()
+
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_CENTER)
+        composeRule.waitForIdle()
+        assertRoute("importer")
         composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).assertIsFocused()
     }
 
