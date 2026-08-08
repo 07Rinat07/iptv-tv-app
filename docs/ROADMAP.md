@@ -15,6 +15,7 @@
 - улучшенное обнаружение актуального Ace Stream приложения/службы;
 - TV-интерфейс, пульт, мышь, тачпад и полноэкранный режим;
 - группы, подгруппы, восстановление фокуса и постраничная прокрутка в основных разделах;
+- Editor использует общий `TvScrollableLazyColumn`: TV-кнопки начала/Page Up/Page Down, PageUp/PageDown и ChannelUp/ChannelDown, mouse wheel/touchpad и scrollbar без изменения операций редактирования;
 - общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About и History, верхние вкладки Diagnostics также удерживаются в видимой области; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;
 - адаптивный буфер для слабых устройств;
 - автоматические lint, unit, debug и release сборки;
