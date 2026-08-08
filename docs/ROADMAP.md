@@ -18,14 +18,43 @@
 - Editor использует общий `TvScrollableLazyColumn`: TV-кнопки начала/Page Up/Page Down, PageUp/PageDown и ChannelUp/ChannelDown, mouse wheel/touchpad и scrollbar без изменения операций редактирования;
 - меню «Разделы» при открытии фокусирует первый доступный маршрут, удерживает TV-focus видимым и возвращает фокус на кнопку «Разделы» после закрытия/перехода; диалог выхода по умолчанию фокусирует безопасную «Отмена»;
 - общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About и History, верхние вкладки Diagnostics, основная action-группа Favorites и action-группы Downloads также удерживаются в видимой области; Settings selection/section controls, основные source action-группы Importer, action controls Network Test и standalone action-группа Playlists также используют focus-follow; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;
-- D-pad smoke-тест меню «Разделы» проверяет реальное перемещение focus Scanner → Importer и активацию Enter; Android CI компилирует `:app:assembleDebugAndroidTest`, чтобы instrumentation-тесты не оставались непроверенным исходным кодом;
+- D-pad smoke-тест меню «Разделы» проверяет реальное перемещение focus Scanner → Importer и активацию DPAD_CENTER; Android CI компилирует `:app:assembleDebugAndroidTest`, чтобы instrumentation-тесты не оставались непроверенным исходным кодом;
 - адаптивный буфер для слабых устройств;
 - автоматические lint, unit, debug и release сборки;
 - очистка документации, workflow и бинарных артефактов.
 
-## Блокирующий этап 1: встроенный P2P engine
+## Актуальный оптимизированный порядок выполнения
 
-Внешний Ace Stream больше не считается достаточным решением. В APK должен находиться собственный BitTorrent/P2P backend.
+Этот порядок имеет приоритет над исторической нумерацией технических блоков ниже. Причина — сначала стабилизировать contracts данных/transport, затем строить зависимые EPG и Player UI, чтобы не переделывать одни и те же экраны несколько раз.
+
+0. **Issue #40 — завершить regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
+1. **Issue #45 — canonical catalog hierarchy + unified Favorites.** Стабильные identity, parent/source provenance, adapters, navigation skeleton, dedup/source variants и единое избранное.
+2. **Master #44 — P2P transport blocker.** После стабильного source provenance завершить собственное разрешение Ace content-id и затем отдельный Ace Live/.acelive backend, не смешивая transport с Player UX.
+3. **Issue #47 — EPG / Now-Next / real archive.** Строить ingestion/cache/matching и catch-up поверх стабильной channel identity из #45.
+4. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
+5. **Issue #43 — contextual Help + built-in Help + docs baseline.** Завершать после стабилизации основных экранов, чтобы не переписывать подсказки после Catalog/EPG/Player изменений.
+6. **Master #44 release gate.** Hardware/playback hardening, P2P acceptance, D-pad-only/mouse-only sessions, weak network, 2h/8h soak, signed release и финальная синхронизация docs. Только после этого закрывать #44 и объявлять stable.
+
+## Этап 1: canonical catalog hierarchy и provenance (#45)
+
+Целевая структура:
+
+`Source/Catalog -> Subcatalog -> Playlist/List -> Group/Subgroup -> Channel`.
+
+1. Ввести в `core/model` стабильные `CatalogNodeId`, `CatalogNodeKind`, `CatalogProvenance` и parent/order contract без зависимости от Room auto-generated id.
+2. Добавить source adapters для user import, ready catalog, Scanner import, provider, local и будущих P2P sources.
+3. Добавить безопасную Room persistence/migration отдельным PR после стабилизации contract.
+4. Построить navigation skeleton с predictable Back, breadcrumb-equivalent context и focus restore.
+5. Перевести Favorites на единый агрегированный слой, сохраняя исходный playlist/group/channel provenance.
+6. Добавить dedup и source variants так, чтобы повторный импорт не плодил безымянные копии.
+7. Добавить virtual views: All channels, Favorites, Recent/History, позднее Now/Next/EPG/archive/P2P filters.
+8. Проверить lazy rendering, кэш подготовленной структуры и non-blocking rebuild больших наборов.
+
+Первый инкремент намеренно не меняет Room/UI/Player/EPG: он фиксирует только canonical identity/provenance contract и unit tests. Это уменьшает риск миграции существующих данных.
+
+## Этап 2: встроенный P2P engine и Ace transport
+
+Внешний Ace Stream больше не считается достаточным решением. В APK должен находиться собственный BitTorrent/P2P backend. Ordinary BitTorrent основа уже реализована; следующий приоритет после canonical source identity — transport metadata для Ace content-id и отдельный Ace Live backend.
 
 1. Добавить модуль `core:p2p` на базе libtorrent/libtorrent4j.
 2. Поддержать `magnet:`, infohash, локальный `.torrent` и HTTP(S) URL на `.torrent`.
@@ -58,25 +87,50 @@
 ### Следующие P2P-инкременты
 
 1. Завершить структурированную full transport-metadata модель и тесты.
-2. Добавить `.acelive` descriptor/routing/diagnostics без ошибочного преобразования в обычный magnet.
-3. Независимо улучшить bounded read-ahead и tiered piece priorities нашего libtorrent backend, сравнивая поведение с публичными torrent-streaming реализациями, но сохраняя собственную реализацию.
-4. Добавить измеримые P2P diagnostics: metadata time, first-piece time, startup time, peers, download rate, seek recovery time и fallback reason.
-5. Провести реальные тесты: быстрое переключение каналов, seek, слабая сеть, потеря peers, повторное открытие, долгий просмотр.
+2. Реализовать собственное разрешение transport data для `acestream://content_id` без обязательного внешнего Ace Engine.
+3. Добавить `.acelive` descriptor/routing/backend/diagnostics без ошибочного преобразования в обычный magnet.
+4. Сохранять ordinary BitTorrent regression baseline: magnet/infohash/local/HTTP torrent, read-ahead, seek и local HTTP Range.
+5. Добавить/сохранить измеримые P2P diagnostics: metadata time, first-piece time, startup time, peers, download rate, seek recovery time и fallback reason.
+6. Провести реальные тесты: быстрое переключение каналов, seek, слабая сеть, потеря peers, повторное открытие, долгий просмотр.
 
-## Блокирующий этап 2: EPG и архив
+## Этап 3: EPG, Now/Next и реальный архив (#47)
 
 1. Сохранять EPG URL из `url-tvg`, `x-tvg-url`, `tvg-url` и провайдерских API.
 2. Автоматически обнаруживать XMLTV для плейлистов без явного EPG URL.
-3. Добавить управляемый каталог EPG-источников и авто-сопоставление по `tvg-id`, нормализованному имени и стране.
-4. Показывать диагностику: источник найден/не найден, сколько каналов сопоставлено, время последнего обновления.
-5. Поддержать catch-up/archive только когда плейлист или провайдер реально предоставляет соответствующий URL/шаблон. Не показывать фиктивный архив.
+3. Добавить управляемый каталог EPG-источников и авто-сопоставление прежде всего по `tvg-id`, затем по контролируемому fallback нормализованного имени/alias/страны.
+4. Добавить локальный cache/TTL/last-valid и очистку устаревших данных.
+5. Показывать диагностику: источник найден/не найден, matched/unmatched channels, время последнего успешного обновления.
+6. Реализовать Now/Next, программу на день, переход по датам, описание и progress текущей передачи.
+7. Поддержать catch-up/archive только когда playlist/provider реально предоставляет capability/template; строить корректный playback URL/range и не показывать фиктивный архив.
+8. Интегрировать archive launch с Player только после появления проверенного playback context.
 
-## Блокирующий этап 3: удобство сканера без изменения алгоритма поиска
+## Этап 4: Player UX (#46)
+
+1. Стабилизировать fullscreen/overlay state machine и правило Back: сначала закрыть overlay, затем выйти из Player.
+2. Построить channel/group selector поверх canonical catalog model, сохраняя специализированную Player D-pad navigation.
+3. Показывать channel/source/group, Now/Next и progress из готового EPG contract.
+4. Явно различать Live / Archive / P2P режимы и поддерживаемые действия.
+5. Добавить retry/reconnect, live edge, archive seek, audio/subtitle и aspect controls там, где capability действительно поддерживается.
+6. Использовать единый Favorites contract из #45.
+7. Проверить мышь/тачпад, крупные click targets и отсутствие случайного channel/volume switch от wheel.
+8. Добавить hooks для onboarding/`Управление`; полный текст Help завершить на этапе #43.
+
+## Этап 5: contextual Help и документация (#43)
+
+1. Добавить reusable helper components, читаемые с TV-distance и доступные D-pad/mouse.
+2. Покрыть Home, Scanner, Importer, catalogs, Editor, Favorites, History, EPG/Archive, Player, Downloads, Settings, Network Test, Diagnostics и About.
+3. Создать top-level `Помощь / Инструкция` с быстрым стартом, каталогами, Scanner, Favorites, Player, EPG/archive, remote/mouse, P2P status и troubleshooting.
+4. Создать/поддерживать `docs/USER_GUIDE.md`, `docs/TROUBLESHOOTING.md`, `docs/REMOTE_AND_MOUSE.md` и при необходимости `docs/CATALOG_AND_EPG.md`.
+5. Синхронизировать README, ROADMAP, architecture, testing/release docs и встроенный Help с фактическим поведением.
+
+## Issue #40: кодовая baseline завершена, ручная TV-приёмка продолжается
 
 1. Не менять `ScannerViewModel`, провайдеры и поисковую логику без отдельной причины.
 2. `ScannerScreen` использует общий `TvScrollableLazyColumn`: видимые кнопки в начало/Page Up/Page Down и аппаратные PageUp/PageDown/ChannelUp/ChannelDown.
 3. Штатную прокрутку колесом мыши/тачпадом и scrollbar drag сохранить без изменения query/provider/search/import semantics.
-4. Общий TV-focus modifier запрашивает вывод сфокусированной карточки в видимую область; отдельно проверить это после прокрутки и возврата из предпросмотра на BlueStacks/TV Box.
+4. Общий TV-focus modifier запрашивает вывод сфокусированной карточки/standalone action в видимую область.
+5. Sections D-pad regression compile проверяется Android CI; реальное поведение D-pad/mouse/Back/Exit дополнительно проверяется в BlueStacks/TV Box.
+6. Любой воспроизводимый дефект из ручного тестирования исправляется отдельным минимальным hotfix PR от свежего `main`, после чего разработка возвращается к текущему roadmap этапу.
 
 ## Приёмка перед стабильным релизом
 
