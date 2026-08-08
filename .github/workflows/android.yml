@@ -155,6 +155,9 @@ jobs:
       - name: Assemble debug for validation
         run: ./gradlew --no-daemon --stacktrace assembleDebug
 
+      - name: Compile Android instrumentation tests
+        run: ./gradlew --no-daemon --stacktrace :app:assembleDebugAndroidTest
+
       - name: Assemble compact signed ARM TV APKs
         shell: bash
         run: |
