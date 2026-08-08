@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
+import com.iptv.tv.core.designsystem.theme.tvBringIntoViewOnFocus
 
 private enum class DiagnosticsTab(val title: String) {
     OVERVIEW("Обзор"),
@@ -92,11 +93,17 @@ fun DiagnosticsScreen(
                 ) {
                     DiagnosticsTab.entries.forEach { tab ->
                         if (tab == selectedTab) {
-                            Button(onClick = { selectedTab = tab }) {
+                            Button(
+                                onClick = { selectedTab = tab },
+                                modifier = Modifier.tvBringIntoViewOnFocus()
+                            ) {
                                 Text(tab.title)
                             }
                         } else {
-                            OutlinedButton(onClick = { selectedTab = tab }) {
+                            OutlinedButton(
+                                onClick = { selectedTab = tab },
+                                modifier = Modifier.tvBringIntoViewOnFocus()
+                            ) {
                                 Text(tab.title)
                             }
                         }
