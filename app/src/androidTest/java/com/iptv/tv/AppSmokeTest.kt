@@ -9,6 +9,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -53,6 +54,16 @@ class AppSmokeTest {
 
         openSection(Routes.DIAGNOSTICS)
         assertRoute("diagnostics")
+    }
+
+    @Test
+    fun sectionsDialogStartsFocusedAndRestoresSectionsButton() {
+        unlockApp()
+        composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).performClick()
+        composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).assertIsFocused()
+        composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).performClick()
+        assertRoute("scanner")
+        composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).assertIsFocused()
     }
 
     @Test
