@@ -16,7 +16,7 @@ jobs:
         with:
           ref: test/sections-dpad-smoke
 
-      - name: Apply D-pad smoke and CI compilation patch
+      - name: Apply D-pad smoke patch
         shell: bash
         run: |
           set -euo pipefail
@@ -25,41 +25,37 @@ jobs:
 
           smoke = Path('app/src/androidTest/java/com/iptv/tv/AppSmokeTest.kt')
           text = smoke.read_text()
-          text = text.replace(
-              'import androidx.compose.ui.test.junit4.createAndroidComposeRule\n',
-              'import androidx.compose.ui.input.key.Key\nimport androidx.compose.ui.test.junit4.createAndroidComposeRule\n',
-              1,
-          )
-          text = text.replace(
-              'import androidx.compose.ui.test.performClick\n',
-              'import androidx.compose.ui.test.performClick\nimport androidx.compose.ui.test.performKeyInput\n',
-              1,
-          )
-          anchor = '''    @Test\n    fun importTextAndOpenPlayerRouteSmoke() {\n'''
-          test = '''    @Test\n    fun sectionsDialogDpadDownAndEnterRoutesAndRestoresSectionsButton() {\n        unlockApp()\n        composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).performClick()\n        composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).assertIsFocused()\n\n        composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).performKeyInput {\n            keyDown(Key.DirectionDown)\n            keyUp(Key.DirectionDown)\n        }\n        composeRule.onNodeWithTag(navButtonTag(Routes.IMPORTER)).assertIsFocused()\n\n        composeRule.onNodeWithTag(navButtonTag(Routes.IMPORTER)).performKeyInput {\n            keyDown(Key.Enter)\n            keyUp(Key.Enter)\n        }\n        assertRoute("importer")\n        composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).assertIsFocused()\n    }\n\n'''
-          if anchor not in text:
-              raise SystemExit('AppSmokeTest insertion anchor not found')
-          text = text.replace(anchor, test + anchor, 1)
+          if 'import androidx.compose.ui.input.key.Key\n' not in text:
+              text = text.replace(
+                  'import androidx.compose.ui.test.junit4.createAndroidComposeRule\n',
+                  'import androidx.compose.ui.input.key.Key\nimport androidx.compose.ui.test.junit4.createAndroidComposeRule\n',
+                  1,
+              )
+          if 'import androidx.compose.ui.test.performKeyInput\n' not in text:
+              text = text.replace(
+                  'import androidx.compose.ui.test.performClick\n',
+                  'import androidx.compose.ui.test.performClick\nimport androidx.compose.ui.test.performKeyInput\n',
+                  1,
+              )
+          test_name = 'fun sectionsDialogDpadDownAndEnterRoutesAndRestoresSectionsButton()'
+          if test_name not in text:
+              anchor = '''    @Test\n    fun importTextAndOpenPlayerRouteSmoke() {\n'''
+              test = '''    @Test\n    fun sectionsDialogDpadDownAndEnterRoutesAndRestoresSectionsButton() {\n        unlockApp()\n        composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).performClick()\n        composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).assertIsFocused()\n\n        composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).performKeyInput {\n            keyDown(Key.DirectionDown)\n            keyUp(Key.DirectionDown)\n        }\n        composeRule.onNodeWithTag(navButtonTag(Routes.IMPORTER)).assertIsFocused()\n\n        composeRule.onNodeWithTag(navButtonTag(Routes.IMPORTER)).performKeyInput {\n            keyDown(Key.Enter)\n            keyUp(Key.Enter)\n        }\n        assertRoute("importer")\n        composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).assertIsFocused()\n    }\n\n'''
+              if anchor not in text:
+                  raise SystemExit('AppSmokeTest insertion anchor not found')
+              text = text.replace(anchor, test + anchor, 1)
           smoke.write_text(text)
-
-          ci = Path('.github/workflows/android.yml')
-          text = ci.read_text()
-          anchor = '''      - name: Assemble debug for validation\n        run: ./gradlew --no-daemon --stacktrace assembleDebug\n\n      - name: Assemble compact signed ARM TV APKs\n'''
-          replacement = '''      - name: Assemble debug for validation\n        run: ./gradlew --no-daemon --stacktrace assembleDebug\n\n      - name: Compile Android instrumentation tests\n        run: ./gradlew --no-daemon --stacktrace :app:assembleDebugAndroidTest\n\n      - name: Assemble compact signed ARM TV APKs\n'''
-          if anchor not in text:
-              raise SystemExit('Android CI insertion anchor not found')
-          ci.write_text(text.replace(anchor, replacement, 1))
 
           roadmap = Path('docs/ROADMAP.md')
           text = roadmap.read_text()
-          anchor = '- адаптивный буфер для слабых устройств;\n'
           addition = '- D-pad smoke-тест меню «Разделы» проверяет реальное перемещение focus Scanner → Importer и активацию Enter; Android CI компилирует `:app:assembleDebugAndroidTest`, чтобы instrumentation-тесты не оставались непроверенным исходным кодом;\n'
-          if anchor not in text:
-              raise SystemExit('ROADMAP insertion anchor not found')
-          roadmap.write_text(text.replace(anchor, addition + anchor, 1))
+          if addition not in text:
+              anchor = '- адаптивный буфер для слабых устройств;\n'
+              if anchor not in text:
+                  raise SystemExit('ROADMAP insertion anchor not found')
+              text = text.replace(anchor, addition + anchor, 1)
+          roadmap.write_text(text)
           PY
-
-          rm .github/workflows/sections-dpad-smoke-temp.yml
           git diff --check
 
       - name: Commit D-pad smoke patch
@@ -68,6 +64,10 @@ jobs:
           set -euo pipefail
           git config user.name "S.Rinat"
           git config user.email "102806560+07Rinat07@users.noreply.github.com"
-          git add app/src/androidTest/java/com/iptv/tv/AppSmokeTest.kt .github/workflows/android.yml docs/ROADMAP.md .github/workflows/sections-dpad-smoke-temp.yml
-          git commit -m "test(tv): compile and cover sections D-pad navigation"
+          git add app/src/androidTest/java/com/iptv/tv/AppSmokeTest.kt docs/ROADMAP.md
+          if git diff --cached --quiet; then
+            echo "No source changes needed"
+            exit 0
+          fi
+          git commit -m "test(tv): cover sections D-pad navigation"
           git push origin HEAD:test/sections-dpad-smoke
