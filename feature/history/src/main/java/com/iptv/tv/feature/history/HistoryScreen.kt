@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
+import com.iptv.tv.core.designsystem.theme.tvBringIntoViewOnFocus
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 
 @Composable
@@ -44,14 +45,19 @@ fun HistoryScreen(
                         onOpenPlayer?.invoke(playlistId)
                     }
                 },
-                enabled = state.selectedHistoryId != null
+                enabled = state.selectedHistoryId != null,
+                modifier = Modifier.tvBringIntoViewOnFocus()
             ) {
                 Text("Повторить выбранный")
             }
         }
 
         item {
-            Button(onClick = viewModel::clearHistory, enabled = state.entries.isNotEmpty()) {
+            Button(
+                onClick = viewModel::clearHistory,
+                enabled = state.entries.isNotEmpty(),
+                modifier = Modifier.tvBringIntoViewOnFocus()
+            ) {
                 Text("Очистить историю")
             }
         }
