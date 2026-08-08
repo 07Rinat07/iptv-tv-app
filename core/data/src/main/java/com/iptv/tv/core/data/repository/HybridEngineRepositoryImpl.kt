@@ -29,7 +29,8 @@ import okhttp3.OkHttpClient
  * BitTorrent metadata is resolved by the in-process libtorrent backend first. True Ace content
  * ids are never reinterpreted as infohashes. When an Ace Engine endpoint is available, the
  * repository may ask it only for transport metadata and then hand a proven BitTorrent infohash
- * to the embedded backend. External Ace playback remains the compatibility fallback.
+ * to the embedded backend. Ace Live transport has an explicit compatibility route so `.acelive`
+ * descriptors never enter standard libtorrent accidentally.
  */
 @Singleton
 class HybridEngineRepositoryImpl @Inject constructor(
@@ -66,6 +67,9 @@ class HybridEngineRepositoryImpl @Inject constructor(
     override suspend fun resolveTorrentStream(magnetOrAce: String): AppResult<String> {
         val epoch = streamEpoch.incrementAndGet()
         return when (EngineStreamRouting.route(magnetOrAce)) {
+            EngineStreamRoute.ACE_LIVE_COMPATIBILITY -> {
+                resolveAceLiveCompatibility(magnetOrAce, epoch)
+            }
             EngineStreamRoute.EXTERNAL_ACE -> {
                 if (isPureAceContentId(magnetOrAce)) {
                     resolveAceContentIdWithEmbeddedMetadata(magnetOrAce, epoch)
@@ -174,6 +178,21 @@ class HybridEngineRepositoryImpl @Inject constructor(
                 }
             }
         }
+    }
+
+    private suspend fun resolveAceLiveCompatibility(
+        rawSource: String,
+        epoch: Long
+    ): AppResult<String> {
+        stopEmbeddedForEpoch(epoch)
+        if (streamEpoch.get() != epoch) return supersededResult()
+
+        log(
+            "ace_live_compatibility_route",
+            "Ace Live transport routed to the external compatibility engine"
+        )
+        val result = resolveExternal(rawSource)
+        return if (streamEpoch.get() == epoch) result else supersededResult()
     }
 
     /**
