@@ -27,9 +27,12 @@
 - `CatalogOriginKind` — происхождение данных: user import, ready catalog, Scanner import, provider, local, P2P или system;
 - `CatalogProvenance` — стабильная ссылка на источник без паролей, токенов и credential-bearing URL;
 - `CatalogNodeId` / `CatalogNodeIdFactory` — детерминированная identity, не зависящая от Room auto-generated id и отображаемого названия;
-- `CanonicalCatalogNode` — минимальный контракт `id + kind + name + parentId + order + provenance`.
+- `CanonicalCatalogNode` — минимальный контракт `id + kind + name + parentId + order + provenance`;
+- `ChannelStableIdentity` — единый provenance-agnostic logical key канала для dedup/Favorites с совместимым приоритетом `tvg-id -> normalized name -> normalized URL`.
 
-Адаптер конкретного источника обязан передавать уже нормализованный `stableKey`. Политика fallback/dedup для каналов, Room-миграция, unified Favorites и UI-навигация намеренно не входят в этот базовый контракт и реализуются следующими изолированными PR. Это позволяет менять storage/UI без изменения самой идентичности каталога.
+У канала намеренно существуют два разных уровня идентичности. `ChannelStableIdentity` отвечает на вопрос «это тот же логический телеканал?» и может совпадать между разными плейлистами/источниками. `CatalogNodeId` отвечает на вопрос «это тот же узел в конкретной иерархии?» и остаётся parent/provenance-scoped. Существующий `GlobalFavoriteIdentity` в `core:data` является compatibility adapter и делегирует общий алгоритм `ChannelStableIdentity`, поэтому Favorites и будущие catalog adapters не развивают две независимые схемы дедупликации.
+
+Адаптер конкретного источника обязан передавать уже нормализованный `stableKey`. Политика Room persistence/migration, unified Favorites storage и UI-навигация намеренно выполняются следующими изолированными PR. Это позволяет менять storage/UI без изменения самой идентичности каталога.
 
 ## Порядок зависимостей
 
