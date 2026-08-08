@@ -29,6 +29,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -51,6 +56,7 @@ fun TvScrollableLazyColumn(
 ) {
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val showControls = showPageControls && screenWidthDp >= scrollControlsMinScreenWidthDp
+    val keyScrollScope = rememberCoroutineScope()
 
     Row(
         modifier = modifier,
@@ -59,7 +65,23 @@ fun TvScrollableLazyColumn(
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxHeight(),
+                .fillMaxHeight()
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    val command = when (event.key) {
+                        Key.PageUp, Key.ChannelUp -> TvListScrollCommand.PAGE_UP
+                        Key.PageDown, Key.ChannelDown -> TvListScrollCommand.PAGE_DOWN
+                        else -> null
+                    } ?: return@onPreviewKeyEvent false
+                    val target = calculateTvListScrollTarget(
+                        command = command,
+                        firstVisibleItemIndex = state.firstVisibleItemIndex,
+                        visibleItemCount = state.layoutInfo.visibleItemsInfo.size,
+                        totalItemCount = state.layoutInfo.totalItemsCount
+                    ) ?: return@onPreviewKeyEvent false
+                    keyScrollScope.launch { state.animateScrollToItem(target) }
+                    true
+                },
             state = state,
             verticalArrangement = verticalArrangement,
             horizontalAlignment = horizontalAlignment,
@@ -103,11 +125,9 @@ private fun TvLazyColumnNavigationRail(
 
     if (!scrollable) return
 
-    val pageSize = (visibleItems - 1).coerceAtLeast(1)
-    val lastIndex = (totalItems - 1).coerceAtLeast(0)
     val canScrollUp = listState.canScrollBackward
     val canScrollDown = listState.canScrollForward
-    val showHome = canScrollUp && firstVisible >= pageSize
+    val showHome = canScrollUp && firstVisible > 0
 
     Column(
         modifier = modifier.width(52.dp),
@@ -125,7 +145,12 @@ private fun TvLazyColumnNavigationRail(
             description = "Прокрутить на страницу вверх",
             enabled = canScrollUp,
             onClick = {
-                val target = (firstVisible - pageSize).coerceAtLeast(0)
+                val target = calculateTvListScrollTarget(
+                    command = TvListScrollCommand.PAGE_UP,
+                    firstVisibleItemIndex = firstVisible,
+                    visibleItemCount = visibleItems,
+                    totalItemCount = totalItems
+                ) ?: return@TvScrollButton
                 scope.launch { listState.animateScrollToItem(target) }
             }
         )
@@ -145,7 +170,12 @@ private fun TvLazyColumnNavigationRail(
             description = "Прокрутить на страницу вниз",
             enabled = canScrollDown,
             onClick = {
-                val target = (firstVisible + pageSize).coerceAtMost(lastIndex)
+                val target = calculateTvListScrollTarget(
+                    command = TvListScrollCommand.PAGE_DOWN,
+                    firstVisibleItemIndex = firstVisible,
+                    visibleItemCount = visibleItems,
+                    totalItemCount = totalItems
+                ) ?: return@TvScrollButton
                 scope.launch { listState.animateScrollToItem(target) }
             }
         )
