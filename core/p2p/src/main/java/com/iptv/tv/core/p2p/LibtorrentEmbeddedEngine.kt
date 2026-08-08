@@ -23,7 +23,8 @@ import org.libtorrent4j.TorrentInfo
  */
 class LibtorrentEmbeddedEngine(
     context: Context,
-    private val httpClient: OkHttpClient = OkHttpClient()
+    private val httpClient: OkHttpClient = OkHttpClient(),
+    private val runtimeMetricsReporter: P2pRuntimeMetricsReporter = P2pRuntimeMetricsReporter.LOGCAT
 ) {
     private val appContext = context.applicationContext
     private val session = SessionManager(false)
@@ -141,6 +142,8 @@ class LibtorrentEmbeddedEngine(
             )
         }
 
+        val preparationStartedAtNanos = System.nanoTime()
+        val sourceType = source.metricSourceType()
         val generation = preparationGeneration.begin()
 
         when (val started = start()) {
@@ -188,6 +191,17 @@ class LibtorrentEmbeddedEngine(
                 supersededStreamResult()
             }
         }
+        val metadataReadyAtNanos = System.nanoTime()
+        val metadataElapsedMillis = elapsedMillis(preparationStartedAtNanos, metadataReadyAtNanos)
+        runtimeMetricsReporter.reportSafely(
+            P2pRuntimeMetric.MetadataReady(
+                sourceType = sourceType,
+                elapsedMillis = metadataElapsedMillis,
+                fileCount = metadata.files.size,
+                pieceLengthBytes = metadata.pieceLengthBytes
+            )
+        )
+
         val selectedFileIndex = fileIndex ?: metadata.preferredFileIndex
             ?: return@withContext P2pResult.Error("Torrent does not contain a playable non-empty file")
         val selectedFile = metadata.files.firstOrNull { it.index == selectedFileIndex }
@@ -223,7 +237,17 @@ class LibtorrentEmbeddedEngine(
                     torrentInfo = torrentInfo,
                     fileIndex = selectedFileIndex,
                     file = targetFile,
-                    contentType = contentTypeFor(selectedFile.name)
+                    contentType = contentTypeFor(selectedFile.name),
+                    onFirstBytesRead = { position, byteCount ->
+                        runtimeMetricsReporter.reportSafely(
+                            P2pRuntimeMetric.FirstByteReady(
+                                sourceType = sourceType,
+                                elapsedMillis = elapsedMillis(preparationStartedAtNanos, System.nanoTime()),
+                                positionBytes = position,
+                                byteCount = byteCount
+                            )
+                        )
+                    }
                 )
                 byteSource.onRangeRequested(
                     start = 0L,
@@ -243,6 +267,19 @@ class LibtorrentEmbeddedEngine(
                 )
                 pendingServer = null
                 pendingHandle = null
+
+                val engineSnapshot = snapshot()
+                runtimeMetricsReporter.reportSafely(
+                    P2pRuntimeMetric.StreamReady(
+                        sourceType = sourceType,
+                        elapsedMillis = elapsedMillis(preparationStartedAtNanos, System.nanoTime()),
+                        metadataMillis = metadataElapsedMillis,
+                        fileName = selectedFile.name,
+                        fileSizeBytes = selectedFile.sizeBytes,
+                        downloadRateBytesPerSecond = engineSnapshot.downloadRateBytesPerSecond,
+                        dhtNodes = engineSnapshot.dhtNodes
+                    )
+                )
 
                 P2pStreamDescriptor(
                     url = url,
