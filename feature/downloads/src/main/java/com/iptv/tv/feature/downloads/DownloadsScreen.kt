@@ -81,9 +81,9 @@ fun DownloadsScreen(
 
         item {
             Row(
-              modifier = Modifier.tvBringIntoViewOnFocus(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
+                modifier = Modifier.tvBringIntoViewOnFocus(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(onClick = viewModel::enqueue) {
                     Text("Добавить в очередь")
                 }
@@ -135,9 +135,9 @@ fun DownloadsScreen(
                         )
                     }
                     Row(
-              modifier = Modifier.tvBringIntoViewOnFocus(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
+                        modifier = Modifier.tvBringIntoViewOnFocus(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Button(onClick = viewModel::recordNow) {
                             Text("Записать сейчас")
                         }
@@ -153,9 +153,9 @@ fun DownloadsScreen(
                     }
                     Text("Timeshift buffer", style = MaterialTheme.typography.titleSmall)
                     Row(
-              modifier = Modifier.tvBringIntoViewOnFocus(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
+                        modifier = Modifier.tvBringIntoViewOnFocus(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         OutlinedTextField(
                             value = state.timeshiftMinutesInput,
                             onValueChange = viewModel::updateTimeshiftMinutes,
@@ -213,9 +213,9 @@ fun DownloadsScreen(
                             )
                         }
                         Row(
-              modifier = Modifier.tvBringIntoViewOnFocus(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
+                            modifier = Modifier.tvBringIntoViewOnFocus(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             Button(
                                 onClick = { viewModel.pause(task.id) },
                                 enabled = viewModel.canPause(task.status)
@@ -255,9 +255,9 @@ fun DownloadsScreen(
                         style = MaterialTheme.typography.bodySmall
                     )
                     Row(
-              modifier = Modifier.tvBringIntoViewOnFocus(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
+                        modifier = Modifier.tvBringIntoViewOnFocus(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Button(
                             onClick = { viewModel.cleanupRecordings(7) },
                             enabled = !state.isProcessingRecordings
@@ -376,9 +376,9 @@ private fun RecordingCard(
             Text("Файл: ${recording.filePath.toRecordingPathLabel(context) ?: "ещё не создан"}")
             Text("Размер: ${recording.filePath.toRecordingFileSizeLabel(context)}")
             Row(
-              modifier = Modifier.tvBringIntoViewOnFocus(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
+                modifier = Modifier.tvBringIntoViewOnFocus(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(onClick = onOpen, enabled = canOpen) {
                     Text("Открыть запись")
                 }
@@ -550,9 +550,9 @@ private fun ScheduleCard(
             Text("Длительность: ${schedule.toScheduleDurationLabel()}")
             Text("Старт: ${schedule.toScheduleStartStatusLabel()}")
             Row(
-              modifier = Modifier.tvBringIntoViewOnFocus(),
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
+                modifier = Modifier.tvBringIntoViewOnFocus(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(onClick = { onToggleEnabled(!schedule.enabled) }) {
                     Text(if (schedule.enabled) "Выключить" else "Включить")
                 }
