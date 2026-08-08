@@ -27,6 +27,7 @@ import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
+import com.iptv.tv.core.designsystem.theme.tvBringIntoViewOnFocus
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.DownloadSourceType
 import com.iptv.tv.core.model.DownloadStatus
@@ -79,7 +80,10 @@ fun DownloadsScreen(
         }
 
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.tvBringIntoViewOnFocus(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(onClick = viewModel::enqueue) {
                     Text("Добавить в очередь")
                 }
@@ -130,7 +134,10 @@ fun DownloadsScreen(
                             singleLine = true
                         )
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.tvBringIntoViewOnFocus(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Button(onClick = viewModel::recordNow) {
                             Text("Записать сейчас")
                         }
@@ -145,7 +152,10 @@ fun DownloadsScreen(
                         }
                     }
                     Text("Timeshift buffer", style = MaterialTheme.typography.titleSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.tvBringIntoViewOnFocus(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         OutlinedTextField(
                             value = state.timeshiftMinutesInput,
                             onValueChange = viewModel::updateTimeshiftMinutes,
@@ -202,7 +212,10 @@ fun DownloadsScreen(
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.tvBringIntoViewOnFocus(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             Button(
                                 onClick = { viewModel.pause(task.id) },
                                 enabled = viewModel.canPause(task.status)
@@ -241,7 +254,10 @@ fun DownloadsScreen(
                         text = state.recordings.toRecordingSummaryLabel(),
                         style = MaterialTheme.typography.bodySmall
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.tvBringIntoViewOnFocus(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Button(
                             onClick = { viewModel.cleanupRecordings(7) },
                             enabled = !state.isProcessingRecordings
@@ -359,7 +375,10 @@ private fun RecordingCard(
             }
             Text("Файл: ${recording.filePath.toRecordingPathLabel(context) ?: "ещё не создан"}")
             Text("Размер: ${recording.filePath.toRecordingFileSizeLabel(context)}")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.tvBringIntoViewOnFocus(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(onClick = onOpen, enabled = canOpen) {
                     Text("Открыть запись")
                 }
@@ -530,7 +549,10 @@ private fun ScheduleCard(
             Text("${formatEpoch(schedule.startAt)} - ${formatEpoch(schedule.endAt)}")
             Text("Длительность: ${schedule.toScheduleDurationLabel()}")
             Text("Старт: ${schedule.toScheduleStartStatusLabel()}")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.tvBringIntoViewOnFocus(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(onClick = { onToggleEnabled(!schedule.enabled) }) {
                     Text(if (schedule.enabled) "Выключить" else "Включить")
                 }
