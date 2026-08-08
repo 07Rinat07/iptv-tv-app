@@ -2,7 +2,8 @@ name: Temporary Editor syntax fix
 
 on:
   push:
-    branches: [feat/editor-tv-scroll-navigation]
+    branches:
+      - feat/editor-tv-scroll-navigation
 
 permissions:
   contents: write
@@ -15,36 +16,19 @@ jobs:
         with:
           ref: feat/editor-tv-scroll-navigation
           fetch-depth: 0
-      - name: Remove obsolete outer Row brace
+      - name: Fix Editor container braces
         run: |
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-
           p = Path('feature/editor/src/main/java/com/iptv/tv/feature/editor/EditorScreen.kt')
           s = p.read_text(encoding='utf-8')
-          old = '''                }
-            }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChannelMetadataSummary'''
-          new = '''                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChannelMetadataSummary'''
-          if old not in s:
-              raise SystemExit('expected duplicated closing brace sequence not found')
+          old = "                }\n            }\n            }\n        }\n    }\n}\n\n@Composable\nprivate fun ChannelMetadataSummary"
+          new = "                }\n            }\n        }\n    }\n}\n\n@Composable\nprivate fun ChannelMetadataSummary"
+          assert old in s, 'expected duplicated brace sequence not found'
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           PY
           rm .github/workflows/editor-syntax-fix-temp.yml
-      - name: Commit syntax fix and remove temporary workflow
+      - name: Commit fix
         run: |
           git config user.name "S.Rinat"
           git config user.email "102806560+07Rinat07@users.noreply.github.com"
