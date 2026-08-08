@@ -136,7 +136,7 @@ class EngineStreamClient(
         }
 
         val options = buildMap {
-            put("api_version", "3")
+            put("api_version", "2")
             put("method", "get_media_files")
             put("content_id", descriptor.value)
             put("mode", "full")
