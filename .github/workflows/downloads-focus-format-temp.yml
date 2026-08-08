@@ -1,0 +1,55 @@
+name: Temporary Downloads focus formatting
+
+on:
+  push:
+    branches:
+      - feat/downloads-action-focus-scroll
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/downloads-action-focus-scroll
+          fetch-depth: 0
+      - name: Normalize inserted Row indentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('feature/downloads/src/main/java/com/iptv/tv/feature/downloads/DownloadsScreen.kt')
+          s = path.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r'(?m)^(?P<indent>[ \t]*)Row\(\n[ \t]*modifier = Modifier\.tvBringIntoViewOnFocus\(\),\n[ \t]*horizontalArrangement = Arrangement\.spacedBy\(8\.dp\)\n[ \t]*\) \{'
+          )
+          def repl(match):
+              i = match.group('indent')
+              return (
+                  f'{i}Row(\n'
+                  f'{i}    modifier = Modifier.tvBringIntoViewOnFocus(),\n'
+                  f'{i}    horizontalArrangement = Arrangement.spacedBy(8.dp)\n'
+                  f'{i}) {{'
+              )
+          s, count = pattern.subn(repl, s)
+          if count != 7:
+              raise SystemExit(f'expected 7 focus rows, formatted {count}')
+          path.write_text(s, encoding='utf-8')
+          PY
+          rm .github/workflows/downloads-focus-format-temp.yml
+      - name: Commit formatting cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "S.Rinat"
+          git config user.email "102806560+07Rinat07@users.noreply.github.com"
+          git add feature/downloads/src/main/java/com/iptv/tv/feature/downloads/DownloadsScreen.kt .github/workflows/downloads-focus-format-temp.yml
+          git diff --cached --check
+          git commit -m "style(downloads): align focus-follow rows"
+          git push origin HEAD:feat/downloads-action-focus-scroll
