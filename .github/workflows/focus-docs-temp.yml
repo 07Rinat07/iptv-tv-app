@@ -1,0 +1,45 @@
+name: Temporary focus docs patch
+
+on:
+  push:
+    branches: [feat/tv-focus-visible-scroll]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/tv-focus-visible-scroll
+          fetch-depth: 0
+      - name: Update roadmap
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('docs/ROADMAP.md')
+          s = p.read_text(encoding='utf-8')
+          anchor = '- группы, подгруппы, восстановление фокуса и постраничная прокрутка в основных разделах;\n'
+          bullet = '- общий TV-focus modifier запрашивает bring-into-view при получении фокуса; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;\n'
+          assert anchor in s
+          if bullet not in s:
+              s = s.replace(anchor, anchor + bullet, 1)
+          old = '4. Следующим отдельным UX-инкрементом проверить сохранение видимого фокуса после прокрутки и возврата из предпросмотра.\n'
+          new = '4. Общий TV-focus modifier запрашивает вывод сфокусированной карточки в видимую область; отдельно проверить это после прокрутки и возврата из предпросмотра на BlueStacks/TV Box.\n'
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise RuntimeError('Scanner focus roadmap line not found')
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit roadmap update
+        run: |
+          git config user.name "S.Rinat"
+          git config user.email "102806560+07Rinat07@users.noreply.github.com"
+          git add docs/ROADMAP.md
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "docs: update focus visibility roadmap"
+          git push origin HEAD:feat/tv-focus-visible-scroll
