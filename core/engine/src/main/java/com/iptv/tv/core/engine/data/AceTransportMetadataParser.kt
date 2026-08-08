@@ -17,7 +17,8 @@ internal object AceTransportMetadataParser {
             name = stringValue(root["name"]),
             files = files,
             transportFileData = stringValue(root["transport_file_data"]),
-            transportFileCacheKey = stringValue(root["transport_file_cache_key"])
+            transportFileCacheKey = stringValue(root["transport_file_cache_key"]),
+            wrapperData = parseWrapper(root["wrapper_data"] as? Map<*, *>)
         )
     }
 
@@ -43,6 +44,15 @@ internal object AceTransportMetadataParser {
             mime = stringValue(map["mime"]),
             size = longValue(map["size"])
         )
+    }
+
+    private fun parseWrapper(map: Map<*, *>?): AceWrapperData? {
+        if (map == null) return null
+        val type = normalizeString(map["type"])
+        val mime = stringValue(map["mime"])
+        val data = stringValue(map["data"])
+        if (type == null && mime == null && data == null) return null
+        return AceWrapperData(type = type, mime = mime, data = data)
     }
 
     private fun normalizeInfoHash(value: Any?): String? = stringValue(value)
