@@ -784,7 +784,6 @@ fun EditorScreen(
                     }
                 }
             }
-            }
         }
     }
 }
