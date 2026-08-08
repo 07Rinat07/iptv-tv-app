@@ -1,11 +1,13 @@
 package com.iptv.tv
 
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
@@ -63,6 +65,26 @@ class AppSmokeTest {
         composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).assertIsFocused()
         composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).performClick()
         assertRoute("scanner")
+        composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).assertIsFocused()
+    }
+
+    @Test
+    fun sectionsDialogDpadDownAndEnterRoutesAndRestoresSectionsButton() {
+        unlockApp()
+        composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).performClick()
+        composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).assertIsFocused()
+
+        composeRule.onNodeWithTag(navButtonTag(Routes.SCANNER)).performKeyInput {
+            keyDown(Key.DirectionDown)
+            keyUp(Key.DirectionDown)
+        }
+        composeRule.onNodeWithTag(navButtonTag(Routes.IMPORTER)).assertIsFocused()
+
+        composeRule.onNodeWithTag(navButtonTag(Routes.IMPORTER)).performKeyInput {
+            keyDown(Key.Enter)
+            keyUp(Key.Enter)
+        }
+        assertRoute("importer")
         composeRule.onNodeWithTag(TAG_SECTIONS_BUTTON).assertIsFocused()
     }
 
