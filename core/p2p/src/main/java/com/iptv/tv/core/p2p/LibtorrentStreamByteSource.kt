@@ -25,6 +25,7 @@ internal class LibtorrentStreamByteSource(
     private val fileOffsetBytes = storage.fileOffset(fileIndex)
     private val pieceLengthBytes = torrentInfo.pieceLength()
     private val pieceCount = torrentInfo.numPieces()
+    private val readAheadPlan = TorrentReadAheadPolicy.plan(pieceLengthBytes)
     private val schedulingLock = Any()
     private val priorityWindowTracker = TorrentPriorityWindowTracker()
 
@@ -99,7 +100,7 @@ internal class LibtorrentStreamByteSource(
         rangeEndInclusiveBytes = endInclusive,
         pieceLengthBytes = pieceLengthBytes,
         pieceCount = pieceCount,
-        readAheadPieces = READ_AHEAD_PIECES
+        readAheadPieces = readAheadPlan.readAheadPieces
     )
 
     private fun resetPriorityWindowLocked(window: TorrentPieceWindow) {
@@ -119,9 +120,28 @@ internal class LibtorrentStreamByteSource(
             deadlineMillis = (deadlineMillis + PIECE_DEADLINE_STEP_MILLIS)
                 .coerceAtMost(MAX_PIECE_DEADLINE_MILLIS)
         }
-        if (window.lastPriorityPiece > window.lastRequestedPiece) {
-            for (piece in (window.lastRequestedPiece + 1)..window.lastPriorityPiece) {
+
+        if (window.lastPriorityPiece <= window.lastRequestedPiece) return
+
+        val firstReadAheadPiece = window.lastRequestedPiece + 1
+        val lastElevatedPiece = minOf(
+            window.lastPriorityPiece,
+            window.lastRequestedPiece.toLong()
+                .plus(readAheadPlan.elevatedPriorityPieces.toLong())
+                .coerceAtMost(Int.MAX_VALUE.toLong())
+                .toInt()
+        )
+
+        if (firstReadAheadPiece <= lastElevatedPiece) {
+            for (piece in firstReadAheadPiece..lastElevatedPiece) {
                 handle.piecePriority(piece, Priority.FIVE)
+            }
+        }
+
+        val firstBackgroundPiece = maxOf(firstReadAheadPiece, lastElevatedPiece + 1)
+        if (firstBackgroundPiece <= window.lastPriorityPiece) {
+            for (piece in firstBackgroundPiece..window.lastPriorityPiece) {
+                handle.piecePriority(piece, Priority.DEFAULT)
             }
         }
     }
@@ -153,7 +173,6 @@ internal class LibtorrentStreamByteSource(
     }
 
     private companion object {
-        const val READ_AHEAD_PIECES = 6
         const val PRIORITY_WINDOW_BYTES = 2L * 1024L * 1024L
         const val DEFAULT_PIECE_WAIT_TIMEOUT_MILLIS = 30_000L
         const val PIECE_POLL_INTERVAL_MILLIS = 50L
