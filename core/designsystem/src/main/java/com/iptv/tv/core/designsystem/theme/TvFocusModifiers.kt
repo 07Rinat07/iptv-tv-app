@@ -16,6 +16,11 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
+internal fun shouldRequestBringIntoView(
+    wasFocused: Boolean,
+    hasFocus: Boolean
+): Boolean = hasFocus && !wasFocused
+
 fun Modifier.tvFocusOutline(): Modifier = composed {
     val shape = RoundedCornerShape(12.dp)
     val defaultColor = MaterialTheme.colorScheme.outlineVariant
@@ -31,7 +36,10 @@ fun Modifier.tvFocusOutline(): Modifier = composed {
     this
         .bringIntoViewRequester(bringIntoViewRequester)
         .onFocusChanged { state ->
-            val gainedFocus = state.hasFocus && !focused.value
+            val gainedFocus = shouldRequestBringIntoView(
+                wasFocused = focused.value,
+                hasFocus = state.hasFocus
+            )
             focused.value = state.hasFocus
             if (gainedFocus) {
                 coroutineScope.launch {
