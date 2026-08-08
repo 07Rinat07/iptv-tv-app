@@ -8,12 +8,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
@@ -35,7 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
-import com.iptv.tv.core.designsystem.components.TvLazyColumnScrollbar
+import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelMetadata
@@ -106,19 +104,13 @@ fun EditorScreen(
     }
     val editorListState = rememberLazyListState()
 
-    Row(
+    TvScrollableLazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        state = editorListState,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight(),
-            state = editorListState,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
             item {
             Text(text = state.title, style = MaterialTheme.typography.headlineMedium)
             Text(
@@ -792,12 +784,7 @@ fun EditorScreen(
                     }
                 }
             }
-            }
         }
-        TvLazyColumnScrollbar(
-            listState = editorListState,
-            modifier = Modifier.fillMaxHeight()
-        )
     }
 }
 
