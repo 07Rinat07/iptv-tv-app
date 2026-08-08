@@ -1,0 +1,66 @@
+name: Temporary Network Test focus patch
+
+on:
+  push:
+    branches:
+      - feat/network-test-action-focus-scroll
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/network-test-action-focus-scroll
+          fetch-depth: 0
+      - name: Apply Network Test focus-follow patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          screen = Path('feature/settings/src/main/java/com/iptv/tv/feature/settings/NetworkTestScreen.kt')
+          s = screen.read_text(encoding='utf-8')
+          old_import = 'import com.iptv.tv.core.designsystem.theme.tvFocusOutline\n'
+          if old_import not in s:
+              raise SystemExit('NetworkTest focus import anchor not found')
+          s = s.replace(
+              old_import,
+              'import com.iptv.tv.core.designsystem.theme.tvBringIntoViewOnFocus\nimport com.iptv.tv.core.designsystem.theme.tvFocusOutline\n',
+              1,
+          )
+          old_flow = 'modifier = Modifier.fillMaxWidth(),\n                horizontalArrangement = Arrangement.spacedBy(8.dp),'
+          new_flow = 'modifier = Modifier\n                    .fillMaxWidth()\n                    .tvBringIntoViewOnFocus(),\n                horizontalArrangement = Arrangement.spacedBy(8.dp),'
+          if old_flow not in s:
+              raise SystemExit('NetworkTest action FlowRow anchor not found')
+          s = s.replace(old_flow, new_flow, 1)
+          old_primary = 'Button(onClick = action) {\n                    Text(primaryLabel)'
+          new_primary = 'Button(\n                    onClick = action,\n                    modifier = Modifier.tvBringIntoViewOnFocus()\n                ) {\n                    Text(primaryLabel)'
+          if old_primary not in s:
+              raise SystemExit('NetworkTest primary action anchor not found')
+          s = s.replace(old_primary, new_primary, 1)
+          screen.write_text(s, encoding='utf-8')
+
+          roadmap = Path('docs/ROADMAP.md')
+          r = roadmap.read_text(encoding='utf-8')
+          old = '- общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About и History, верхние вкладки Diagnostics, основная action-группа Favorites и action-группы Downloads также удерживаются в видимой области; Settings selection/section controls и основные source action-группы Importer также используют focus-follow; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;'
+          new = '- общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About и History, верхние вкладки Diagnostics, основная action-группа Favorites и action-группы Downloads также удерживаются в видимой области; Settings selection/section controls, основные source action-группы Importer и action controls Network Test также используют focus-follow; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;'
+          if old not in r:
+              raise SystemExit('ROADMAP focus-follow anchor not found')
+          roadmap.write_text(r.replace(old, new, 1), encoding='utf-8')
+          PY
+          rm .github/workflows/network-test-focus-temp.yml
+      - name: Commit Network Test focus-follow patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "S.Rinat"
+          git config user.email "102806560+07Rinat07@users.noreply.github.com"
+          git add feature/settings/src/main/java/com/iptv/tv/feature/settings/NetworkTestScreen.kt docs/ROADMAP.md .github/workflows/network-test-focus-temp.yml
+          git diff --cached --check
+          git commit -m "feat(network): keep actions visible on focus"
+          git push origin HEAD:feat/network-test-action-focus-scroll
