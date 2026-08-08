@@ -116,8 +116,9 @@ fun SettingsScreen(
                         selected = state.appStartDestination == CoreAppStartDestination.HOME,
                         label = "Главная",
                         onClick = {
-                            viewModel.setAppStartDestination(CoreAppStartDestination.HOME)
-                            onOpenStartDestination?.invoke(CoreAppStartDestination.HOME)
+                            if (viewModel.setAppStartDestination(CoreAppStartDestination.HOME)) {
+                                onOpenStartDestination?.invoke(CoreAppStartDestination.HOME)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
@@ -125,8 +126,9 @@ fun SettingsScreen(
                         selected = state.appStartDestination == CoreAppStartDestination.PLAYER,
                         label = "Плеер",
                         onClick = {
-                            viewModel.setAppStartDestination(CoreAppStartDestination.PLAYER)
-                            onOpenStartDestination?.invoke(CoreAppStartDestination.PLAYER)
+                            if (viewModel.setAppStartDestination(CoreAppStartDestination.PLAYER)) {
+                                onOpenStartDestination?.invoke(CoreAppStartDestination.PLAYER)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
@@ -134,8 +136,9 @@ fun SettingsScreen(
                         selected = state.appStartDestination == CoreAppStartDestination.SCANNER,
                         label = "Сканер",
                         onClick = {
-                            viewModel.setAppStartDestination(CoreAppStartDestination.SCANNER)
-                            onOpenStartDestination?.invoke(CoreAppStartDestination.SCANNER)
+                            if (viewModel.setAppStartDestination(CoreAppStartDestination.SCANNER)) {
+                                onOpenStartDestination?.invoke(CoreAppStartDestination.SCANNER)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
@@ -143,8 +146,9 @@ fun SettingsScreen(
                         selected = state.appStartDestination == CoreAppStartDestination.FAVORITES,
                         label = "Избранное",
                         onClick = {
-                            viewModel.setAppStartDestination(CoreAppStartDestination.FAVORITES)
-                            onOpenStartDestination?.invoke(CoreAppStartDestination.FAVORITES)
+                            if (viewModel.setAppStartDestination(CoreAppStartDestination.FAVORITES)) {
+                                onOpenStartDestination?.invoke(CoreAppStartDestination.FAVORITES)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
@@ -152,8 +156,9 @@ fun SettingsScreen(
                         selected = state.appStartDestination == CoreAppStartDestination.PLAYLISTS,
                         label = "Плейлисты",
                         onClick = {
-                            viewModel.setAppStartDestination(CoreAppStartDestination.PLAYLISTS)
-                            onOpenStartDestination?.invoke(CoreAppStartDestination.PLAYLISTS)
+                            if (viewModel.setAppStartDestination(CoreAppStartDestination.PLAYLISTS)) {
+                                onOpenStartDestination?.invoke(CoreAppStartDestination.PLAYLISTS)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(0.48f)
                     )
