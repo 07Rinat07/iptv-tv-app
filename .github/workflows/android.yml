@@ -94,6 +94,9 @@ jobs:
       - name: Unit tests parser
         run: ./gradlew --no-daemon --stacktrace :core:parser:test
 
+      - name: Unit tests core model
+        run: ./gradlew --no-daemon --stacktrace :core:model:test
+
       - name: Unit tests sync
         run: ./gradlew --no-daemon --stacktrace :sync:testDebugUnitTest
 
