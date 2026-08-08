@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
+import com.iptv.tv.core.designsystem.theme.tvBringIntoViewOnFocus
 import com.iptv.tv.core.model.RecordingStorageLocation
 import com.iptv.tv.core.model.TvHomeChannelType
 import java.text.SimpleDateFormat
@@ -1002,7 +1003,10 @@ private fun SettingsSectionCard(
                         }
                     }
                     onToggleExpanded?.let { toggle ->
-                        OutlinedButton(onClick = toggle) {
+                        OutlinedButton(
+                            onClick = toggle,
+                            modifier = Modifier.tvBringIntoViewOnFocus()
+                        ) {
                             Text(if (expanded) "Скрыть" else "Открыть")
                         }
                     }
@@ -1023,11 +1027,11 @@ private fun SelectionButton(
     modifier: Modifier = Modifier
 ) {
     if (selected) {
-        Button(onClick = onClick, modifier = modifier) {
+        Button(onClick = onClick, modifier = modifier.tvBringIntoViewOnFocus()) {
             Text(label)
         }
     } else {
-        OutlinedButton(onClick = onClick, modifier = modifier) {
+        OutlinedButton(onClick = onClick, modifier = modifier.tvBringIntoViewOnFocus()) {
             Text(label)
         }
     }
