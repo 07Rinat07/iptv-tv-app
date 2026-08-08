@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
+import com.iptv.tv.core.designsystem.theme.tvBringIntoViewOnFocus
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -64,7 +65,9 @@ fun NetworkTestScreen(
 
         item {
             FlowRow(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .tvBringIntoViewOnFocus(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -139,7 +142,10 @@ fun NetworkTestScreen(
 
         onPrimaryAction?.let { action ->
             item {
-                Button(onClick = action) {
+                Button(
+                    onClick = action,
+                    modifier = Modifier.tvBringIntoViewOnFocus()
+                ) {
                     Text(primaryLabel)
                 }
             }
