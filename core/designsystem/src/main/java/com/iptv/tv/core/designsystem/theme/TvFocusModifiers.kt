@@ -23,17 +23,10 @@ internal fun shouldRequestBringIntoView(
 ): Boolean = hasFocus && !wasFocused
 
 @OptIn(ExperimentalFoundationApi::class)
-fun Modifier.tvFocusOutline(): Modifier = composed {
-    val shape = RoundedCornerShape(12.dp)
-    val defaultColor = MaterialTheme.colorScheme.outlineVariant
-    val focusedColor = MaterialTheme.colorScheme.primary
+fun Modifier.tvBringIntoViewOnFocus(): Modifier = composed {
     val focused = remember { mutableStateOf(false) }
     val bringIntoViewRequester = remember { BringIntoViewRequester() }
     val coroutineScope = rememberCoroutineScope()
-    val borderColor by animateColorAsState(
-        targetValue = if (focused.value) focusedColor else defaultColor,
-        label = "tvFocusOutline"
-    )
 
     this
         .bringIntoViewRequester(bringIntoViewRequester)
@@ -49,5 +42,20 @@ fun Modifier.tvFocusOutline(): Modifier = composed {
                 }
             }
         }
+}
+
+fun Modifier.tvFocusOutline(): Modifier = composed {
+    val shape = RoundedCornerShape(12.dp)
+    val defaultColor = MaterialTheme.colorScheme.outlineVariant
+    val focusedColor = MaterialTheme.colorScheme.primary
+    val focused = remember { mutableStateOf(false) }
+    val borderColor by animateColorAsState(
+        targetValue = if (focused.value) focusedColor else defaultColor,
+        label = "tvFocusOutline"
+    )
+
+    this
+        .tvBringIntoViewOnFocus()
+        .onFocusChanged { state -> focused.value = state.hasFocus }
         .border(width = 2.dp, color = borderColor, shape = shape)
 }
