@@ -1,0 +1,64 @@
+name: Temporary Editor TV scroll patch
+
+on:
+  push:
+    branches: [feat/editor-tv-scroll-navigation]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/editor-tv-scroll-navigation
+          fetch-depth: 0
+      - name: Migrate Editor to shared TV scrolling
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path('feature/editor/src/main/java/com/iptv/tv/feature/editor/EditorScreen.kt')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('import androidx.compose.foundation.layout.fillMaxHeight\n', '')
+          s = s.replace('import androidx.compose.foundation.lazy.LazyColumn\n', '')
+          s = s.replace('import com.iptv.tv.core.designsystem.components.TvLazyColumnScrollbar\n', 'import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn\n')
+
+          old = '''    Row(\n        modifier = Modifier\n            .fillMaxSize()\n            .padding(24.dp),\n        horizontalArrangement = Arrangement.spacedBy(10.dp)\n    ) {\n        LazyColumn(\n            modifier = Modifier\n                .weight(1f)\n                .fillMaxHeight(),\n            state = editorListState,\n            verticalArrangement = Arrangement.spacedBy(12.dp)\n        ) {'''
+          new = '''    TvScrollableLazyColumn(\n        modifier = Modifier\n            .fillMaxSize()\n            .padding(24.dp),\n        state = editorListState,\n        verticalArrangement = Arrangement.spacedBy(12.dp)\n    ) {'''
+          assert old in s, 'Editor list container not found'
+          s = s.replace(old, new, 1)
+
+          old_scrollbar = '''        TvLazyColumnScrollbar(\n            listState = editorListState,\n            modifier = Modifier.fillMaxHeight()\n        )\n'''
+          assert old_scrollbar in s, 'Editor manual scrollbar not found'
+          s = s.replace(old_scrollbar, '', 1)
+          p.write_text(s, encoding='utf-8')
+
+          r = Path('README.md')
+          t = r.read_text(encoding='utf-8')
+          old_readme = '- редактор каналов и безопасные рабочие копии;\n'
+          new_readme = '- редактор каналов и безопасные рабочие копии с общей TV-постраничной прокруткой;\n'
+          assert old_readme in t or new_readme in t
+          if old_readme in t:
+              t = t.replace(old_readme, new_readme, 1)
+          r.write_text(t, encoding='utf-8')
+
+          m = Path('docs/ROADMAP.md')
+          u = m.read_text(encoding='utf-8')
+          anchor = '- группы, подгруппы, восстановление фокуса и постраничная прокрутка в основных разделах;\n'
+          addition = '- Editor использует общий `TvScrollableLazyColumn`: TV-кнопки начала/Page Up/Page Down, PageUp/PageDown и ChannelUp/ChannelDown, mouse wheel/touchpad и scrollbar без изменения операций редактирования;\n'
+          assert anchor in u
+          if addition not in u:
+              u = u.replace(anchor, anchor + addition, 1)
+          m.write_text(u, encoding='utf-8')
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "S.Rinat"
+          git config user.email "102806560+07Rinat07@users.noreply.github.com"
+          git add feature/editor/src/main/java/com/iptv/tv/feature/editor/EditorScreen.kt README.md docs/ROADMAP.md
+          git diff --cached --check
+          git commit -m "feat(editor): use shared TV list navigation"
+          git push origin HEAD:feat/editor-tv-scroll-navigation
