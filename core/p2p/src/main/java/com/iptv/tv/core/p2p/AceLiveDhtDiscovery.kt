@@ -147,6 +147,11 @@ class AceLiveDhtDiscovery(
                     continue
                 }
 
+                if (candidate.nodeId != null && candidate.nodeId != response.remoteNodeId) {
+                    failed += 1
+                    continue
+                }
+
                 for (peer in response.peers) {
                     if (!isAllowedPeerEndpoint(peer)) {
                         rejected += 1
