@@ -157,7 +157,7 @@ class EngineStreamClientTest {
         val client = EngineStreamClient(api)
         client.connect("127.0.0.1:6878")
 
-        val source = "https://example.org/private/channel.acelive?signature=secret"
+        val source = "acestream:?url=https%3A%2F%2Fexample.org%2Fprivate%2Fchannel.acelive%3Fsignature%3Dsecret"
         val result = client.resolveStream(source)
 
         assertTrue(result is AppResult.Success)
