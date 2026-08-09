@@ -32,6 +32,28 @@ class AceStreamDescriptorParserTest {
     }
 
     @Test
+    fun parsesEncodedAceQueryMagnetAndUrl() {
+        val magnet = "magnet:?xt=urn:btih:$contentId"
+        val magnetResult = AceStreamDescriptorParser.parse(
+            "acestream:?magnet=magnet%3A%3Fxt%3Durn%3Abtih%3A$contentId"
+        )
+        val urlResult = AceStreamDescriptorParser.parse(
+            "acestream:?url=https%3A%2F%2Fexample.org%2Flive.acelive"
+        )
+
+        assertEquals(AceStreamDescriptor.Magnet(magnetResult.original, magnet), magnetResult)
+        assertEquals(
+            mapOf("magnet" to magnet),
+            AceStreamDescriptorParser.toEngineRequest(magnetResult)
+        )
+        assertTrue(urlResult is AceStreamDescriptor.TransportFile)
+        assertEquals(
+            mapOf("url" to "https://example.org/live.acelive"),
+            AceStreamDescriptorParser.toEngineRequest(urlResult)
+        )
+    }
+
+    @Test
     fun parsesLegacyAceSchemeAsContentId() {
         val result = AceStreamDescriptorParser.parse("ace://$contentId")
 
