@@ -72,6 +72,25 @@ class AceLivePeerMetadataRecognizerTest {
     }
 
     @Test
+    fun invalidOptionalPositionAndDistanceAreRejected() {
+        val invalidPayloads = listOf(
+            "d9:max_piecei10e8:positioni-1ee",
+            "d9:max_piecei10e8:positioni4294967296ee",
+            "d20:distance_from_sourcei-1e9:max_piecei10ee",
+            "d20:distance_from_sourcei4294967296e9:max_piecei10ee"
+        )
+
+        invalidPayloads.forEach { payload ->
+            assertEquals(
+                AceLivePeerMetadataRecognition.Rejected(
+                    AceLivePeerMetadataRejectReason.INVALID_WINDOW
+                ),
+                recognizer.recognize(ascii(payload))
+            )
+        }
+    }
+
+    @Test
     fun payloadLimitIsEnforcedBeforeParsing() {
         val bounded = AceLivePeerMetadataRecognizer(maxPayloadBytes = 8)
 
