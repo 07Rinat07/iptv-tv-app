@@ -91,7 +91,7 @@ class AceLiveRecoveryCoordinator(
 
     fun updatePeer(window: AceLivePeerWindow): List<Long> {
         val requeued = scheduler.updatePeer(window)
-        requeued.forEach(requestStartedAtMillis::remove)
+        requeued.forEach { piece -> requestStartedAtMillis.remove(piece) }
         return requeued
     }
 
@@ -101,7 +101,7 @@ class AceLiveRecoveryCoordinator(
 
     fun removePeer(peerId: Long): List<Long> {
         val requeued = scheduler.removePeer(peerId)
-        requeued.forEach(requestStartedAtMillis::remove)
+        requeued.forEach { piece -> requestStartedAtMillis.remove(piece) }
         return requeued
     }
 
@@ -143,7 +143,7 @@ class AceLiveRecoveryCoordinator(
         requestStartedAtMillis.keys
             .filter { it < nextNeeded }
             .toList()
-            .forEach(requestStartedAtMillis::remove)
+            .forEach { piece -> requestStartedAtMillis.remove(piece) }
     }
 
     /**
@@ -162,31 +162,34 @@ class AceLiveRecoveryCoordinator(
     }
 
     /**
-     * Runs one bounded recovery sweep. Calls made faster than [requestCheckIntervalMillis] still
+     * Runs one bounded recovery sweep. Calls made faster than the configured check interval still
      * observe cursor progress but do not repeat timeout/recovery work.
      */
     fun evaluate(nextNeeded: Long, nowMillis: Long): AceLiveRecoveryPlan {
         observeCursor(nextNeeded, nowMillis)
 
         val lastCheck = lastCheckAtMillis
-        if (lastCheck != null && elapsedSince(lastCheck, nowMillis) < policy.requestCheckIntervalMillis) {
+        if (
+            lastCheck != null &&
+            elapsedSince(lastCheck, nowMillis) < policy.requestCheckIntervalMillis
+        ) {
             return AceLiveRecoveryPlan()
         }
         lastCheckAtMillis = nowMillis
 
-        val timedOut = requestStartedAtMillis.entries
-            .asSequence()
+        val timedOutPieces = requestStartedAtMillis.entries
             .filter { (piece, startedAt) ->
                 piece >= nextNeeded && elapsedSince(startedAt, nowMillis) >= policy.requestTimeoutMillis
             }
-            .sortedBy { it.key }
-            .map { (piece, _) ->
-                val previousPeer = scheduler.ownerOf(piece)
-                scheduler.retry(piece)
-                requestStartedAtMillis.remove(piece)
-                AceLiveTimedOutRequest(piece = piece, previousPeerId = previousPeer)
-            }
-            .toList()
+            .map { it.key }
+            .sorted()
+
+        val timedOut = timedOutPieces.map { piece ->
+            val previousPeer = scheduler.ownerOf(piece)
+            scheduler.retry(piece)
+            requestStartedAtMillis.remove(piece)
+            AceLiveTimedOutRequest(piece = piece, previousPeerId = previousPeer)
+        }
 
         val stalledFor = elapsedSince(lastProgressAtMillis ?: nowMillis, nowMillis)
         var cursorAdvance: AceLiveCursorAdvance? = null
