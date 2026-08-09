@@ -24,26 +24,47 @@ class EngineStreamClient(
             message = "Engine not connected"
         )
     )
+    private val runtimeDiagnostics = MutableStateFlow(AceRuntimeDiagnostics())
 
     private val enginePlayerId = "engineProxy-${Random().nextInt()}"
     private val clientSessionIds = AtomicInteger(0)
 
     private var connectedEndpoint: String? = null
     private var connectedAccessToken: String? = null
+    private var connectedPackageName: String? = null
+    private var connectedRoute: String? = null
 
     fun observeStatus(): StateFlow<EngineStatus> = status.asStateFlow()
+
+    fun observeRuntimeDiagnostics(): StateFlow<AceRuntimeDiagnostics> =
+        runtimeDiagnostics.asStateFlow()
 
     suspend fun connect(endpoint: String): AppResult<Unit> {
         val normalized = normalizeEndpoint(endpoint)
             ?: return AppResult.Error("Engine endpoint is empty")
+        val preservingCompatibilityFallback =
+            runtimeDiagnostics.value.stage == AceRuntimeStage.COMPATIBILITY_FALLBACK
+        if (!preservingCompatibilityFallback) {
+            runtimeDiagnostics.value = AceRuntimeDiagnostics()
+        }
 
         return when (val result = fetchStatus(normalized)) {
             is AppResult.Success -> {
                 connectedEndpoint = normalized
                 connectedAccessToken = null
+                connectedPackageName = if (preservingCompatibilityFallback) {
+                    "loopback_http"
+                } else {
+                    "manual_endpoint"
+                }
+                connectedRoute = if (preservingCompatibilityFallback) {
+                    "loopback_compatibility"
+                } else {
+                    "manual_endpoint"
+                }
                 status.value = result.data.copy(
                     connected = true,
-                    message = "Connected: $normalized"
+                    message = runtimeMessageOr("Connected: $normalized")
                 )
                 AppResult.Success(Unit)
             }
@@ -53,7 +74,7 @@ class EngineStreamClient(
                     connected = false,
                     peers = 0,
                     speedKbps = 0,
-                    message = "Engine connect failed: ${result.message}"
+                    message = runtimeMessageOr("Engine connect failed: ${result.message}")
                 )
                 result
             }
@@ -69,11 +90,13 @@ class EngineStreamClient(
             is AppResult.Success -> {
                 connectedEndpoint = result.data.endpoint
                 connectedAccessToken = result.data.accessToken
+                connectedPackageName = result.data.packageName
+                connectedRoute = "installed_engine"
                 when (val statusResult = fetchStatus(result.data.endpoint)) {
                     is AppResult.Success -> {
                         status.value = statusResult.data.copy(
                             connected = true,
-                            message = "Connected: ${result.data.packageName}"
+                            message = runtimeMessageOr("Connected: ${result.data.packageName}")
                         )
                         AppResult.Success(Unit)
                     }
@@ -86,7 +109,7 @@ class EngineStreamClient(
                     connected = false,
                     peers = 0,
                     speedKbps = 0,
-                    message = result.message
+                    message = runtimeMessageOr(result.message)
                 )
                 result
             }
@@ -100,7 +123,7 @@ class EngineStreamClient(
             is AppResult.Success -> {
                 status.value = result.data.copy(
                     connected = true,
-                    message = "Connected: $endpoint"
+                    message = runtimeMessageOr("Connected: $endpoint")
                 )
                 AppResult.Success(status.value)
             }
@@ -110,7 +133,7 @@ class EngineStreamClient(
                     connected = false,
                     peers = 0,
                     speedKbps = 0,
-                    message = "Engine status error: ${result.message}"
+                    message = runtimeMessageOr("Engine status error: ${result.message}")
                 )
                 result
             }
@@ -129,14 +152,62 @@ class EngineStreamClient(
     suspend fun resolveContentIdMetadata(rawSource: String): AppResult<AceTransportMetadata> {
         val descriptor = AceStreamDescriptorParser.parse(rawSource)
         if (descriptor !is AceStreamDescriptor.ContentId) {
+            publishRuntime(
+                AceRuntimeDiagnostics(
+                    stage = AceRuntimeStage.ERROR,
+                    descriptorKind = descriptorKind(descriptor),
+                    provider = "external_engine",
+                    route = connectedRoute ?: "installed_engine",
+                    failureCode = "content_id_required"
+                )
+            )
             return AppResult.Error("Ace Stream content id is required for metadata resolution")
         }
 
+        val previousRuntime = runtimeDiagnostics.value
+        val preserveFallback = previousRuntime.stage == AceRuntimeStage.COMPATIBILITY_FALLBACK
+        publishRuntime(
+            AceRuntimeDiagnostics(
+                stage = AceRuntimeStage.RESOLVING_ENDPOINT,
+                descriptorKind = "content_id",
+                provider = "external_engine",
+                route = if (preserveFallback) {
+                    previousRuntime.route ?: "loopback_compatibility"
+                } else {
+                    connectedRoute ?: "installed_engine"
+                },
+                enginePackage = if (preserveFallback) previousRuntime.enginePackage else connectedPackageName,
+                endpoint = if (preserveFallback) previousRuntime.endpoint else diagnosticEndpoint(connectedEndpoint),
+                failureCode = if (preserveFallback) previousRuntime.failureCode else null
+            )
+        )
+
         val endpoint = when (val local = ensureEndpoint()) {
             is AppResult.Success -> local.data
-            is AppResult.Error -> return local
+            is AppResult.Error -> {
+                publishRuntime(
+                    runtimeDiagnostics.value.copy(
+                        stage = AceRuntimeStage.ERROR,
+                        enginePackage = connectedPackageName,
+                        endpoint = diagnosticEndpoint(connectedEndpoint),
+                        failureCode = "endpoint_unavailable"
+                    )
+                )
+                return local
+            }
             AppResult.Loading -> return AppResult.Loading
         }
+
+        publishRuntime(
+            runtimeDiagnostics.value.copy(
+                stage = AceRuntimeStage.REQUESTING_METADATA,
+                route = connectedRoute ?: runtimeDiagnostics.value.route ?: "installed_engine",
+                enginePackage = connectedPackageName,
+                endpoint = diagnosticEndpoint(endpoint),
+                failureCode = null
+            ),
+            connected = true
+        )
 
         val options = buildMap {
             put("api_version", "2")
@@ -153,13 +224,26 @@ class EngineStreamClient(
                 options = options
             )
             val metadata = AceTransportMetadataParser.parse(response)
+            val transport = metadata.transportType
+                ?: metadata.files.firstNotNullOfOrNull { it.transportType }
 
-            status.value = status.value.copy(
-                connected = true,
-                message = "Ace transport metadata resolved"
+            publishRuntime(
+                runtimeDiagnostics.value.copy(
+                    stage = AceRuntimeStage.METADATA_READY,
+                    transportType = transport,
+                    isLive = metadata.isLive,
+                    failureCode = null
+                ),
+                connected = true
             )
             AppResult.Success(metadata)
         }.getOrElse { throwable ->
+            publishRuntime(
+                runtimeDiagnostics.value.copy(
+                    stage = AceRuntimeStage.ERROR,
+                    failureCode = throwableFailureCode(throwable)
+                )
+            )
             AppResult.Error(
                 "Ace content metadata request failed: ${throwable.toLogSummary(maxDepth = 4)}",
                 throwable
@@ -204,6 +288,7 @@ class EngineStreamClient(
     suspend fun resolveStream(rawSource: String): AppResult<String> {
         val descriptor = AceStreamDescriptorParser.parse(rawSource)
         if (descriptor is AceStreamDescriptor.Direct) {
+            runtimeDiagnostics.value = AceRuntimeDiagnostics()
             return if (descriptor.value.isBlank()) {
                 AppResult.Error("Empty stream source")
             } else {
@@ -211,16 +296,59 @@ class EngineStreamClient(
             }
         }
 
+        publishRuntime(
+            AceRuntimeDiagnostics(
+                stage = AceRuntimeStage.RESOLVING_ENDPOINT,
+                descriptorKind = descriptorKind(descriptor),
+                provider = "external_engine",
+                route = connectedRoute ?: "installed_engine",
+                enginePackage = connectedPackageName,
+                endpoint = diagnosticEndpoint(connectedEndpoint)
+            )
+        )
+
         val endpoint = when (val local = ensureEndpoint()) {
             is AppResult.Success -> local.data
-            is AppResult.Error -> return local
+            is AppResult.Error -> {
+                publishRuntime(
+                    runtimeDiagnostics.value.copy(
+                        stage = AceRuntimeStage.ERROR,
+                        enginePackage = connectedPackageName,
+                        endpoint = diagnosticEndpoint(connectedEndpoint),
+                        failureCode = "endpoint_unavailable"
+                    )
+                )
+                return local
+            }
             AppResult.Loading -> return AppResult.Loading
         }
 
         // A loopback media URL without a descriptor query is already a resolved engine URL.
         if (descriptor is AceStreamDescriptor.LocalEngineUrl) {
+            publishRuntime(
+                runtimeDiagnostics.value.copy(
+                    stage = AceRuntimeStage.PLAYBACK_READY,
+                    route = "local_engine_url",
+                    enginePackage = connectedPackageName,
+                    endpoint = diagnosticEndpoint(endpoint),
+                    playbackTarget = sanitizeAceHttpUrl(descriptor.value),
+                    failureCode = null
+                ),
+                connected = true
+            )
             return AppResult.Success(descriptor.value)
         }
+
+        publishRuntime(
+            runtimeDiagnostics.value.copy(
+                stage = AceRuntimeStage.REQUESTING_PLAYBACK,
+                route = connectedRoute ?: "installed_engine",
+                enginePackage = connectedPackageName,
+                endpoint = diagnosticEndpoint(endpoint),
+                failureCode = null
+            ),
+            connected = true
+        )
 
         val options = buildPlaybackOptions(descriptor)
 
@@ -237,15 +365,22 @@ class EngineStreamClient(
             val playable = extractPlaybackUrl(response)
                 ?: error("Ace Stream Engine response is missing response.playback_url")
 
-            status.value = status.value.copy(
-                connected = true,
-                message = "Ace Stream playback URL resolved"
+            publishRuntime(
+                runtimeDiagnostics.value.copy(
+                    stage = AceRuntimeStage.PLAYBACK_READY,
+                    playbackTarget = sanitizeAceHttpUrl(playable),
+                    failureCode = null
+                ),
+                connected = true
             )
             AppResult.Success(playable)
         }.getOrElse { throwable ->
-            status.value = status.value.copy(
-                connected = false,
-                message = "Ace Stream resolve failed: ${throwable.message}"
+            publishRuntime(
+                runtimeDiagnostics.value.copy(
+                    stage = AceRuntimeStage.ERROR,
+                    failureCode = throwableFailureCode(throwable)
+                ),
+                connected = false
             )
             AppResult.Error(
                 "Engine resolve failed: ${throwable.toLogSummary(maxDepth = 4)}",
@@ -254,10 +389,25 @@ class EngineStreamClient(
         }
     }
 
+    internal fun recordCompatibilityFallback(loopbackEndpoint: String) {
+        publishRuntime(
+            runtimeDiagnostics.value.copy(
+                stage = AceRuntimeStage.COMPATIBILITY_FALLBACK,
+                route = "loopback_compatibility",
+                enginePackage = null,
+                endpoint = diagnosticEndpoint(loopbackEndpoint),
+                failureCode = "primary_metadata_failed"
+            )
+        )
+    }
+
     fun closeInstalledEngineConnection() {
         serviceConnector?.close()
         connectedEndpoint = null
         connectedAccessToken = null
+        connectedPackageName = null
+        connectedRoute = null
+        runtimeDiagnostics.value = AceRuntimeDiagnostics()
         status.value = status.value.copy(
             connected = false,
             peers = 0,
@@ -274,9 +424,11 @@ class EngineStreamClient(
             is AppResult.Success -> {
                 connectedEndpoint = result.data.endpoint
                 connectedAccessToken = result.data.accessToken
+                connectedPackageName = result.data.packageName
+                connectedRoute = "installed_engine"
                 status.value = status.value.copy(
                     connected = true,
-                    message = "Ace Stream Engine ready: ${result.data.packageName}"
+                    message = runtimeMessageOr("Ace Stream Engine ready: ${result.data.packageName}")
                 )
                 AppResult.Success(result.data.endpoint)
             }
@@ -350,6 +502,45 @@ class EngineStreamClient(
         } else {
             "http://${value.removeSuffix("/")}"
         }
+    }
+
+    private fun publishRuntime(
+        diagnostics: AceRuntimeDiagnostics,
+        connected: Boolean? = null
+    ) {
+        runtimeDiagnostics.value = diagnostics
+        status.value = status.value.copy(
+            connected = connected ?: status.value.connected,
+            message = diagnostics.toSummary()
+        )
+    }
+
+    private fun runtimeMessageOr(fallback: String): String {
+        val diagnostics = runtimeDiagnostics.value
+        return if (diagnostics.stage == AceRuntimeStage.IDLE) fallback else diagnostics.toSummary()
+    }
+
+    private fun diagnosticEndpoint(endpoint: String?): String? =
+        sanitizeAceHttpUrl(endpoint)?.removeSuffix("/")
+
+    private fun throwableFailureCode(throwable: Throwable): String =
+        throwable::class.java.simpleName
+            .takeIf { it.isNotBlank() }
+            ?.lowercase()
+            ?: "request_failed"
+
+    private fun descriptorKind(descriptor: AceStreamDescriptor): String = when (descriptor) {
+        is AceStreamDescriptor.ContentId -> "content_id"
+        is AceStreamDescriptor.Magnet -> "magnet"
+        is AceStreamDescriptor.TransportFile -> {
+            if (descriptor.value.substringBefore('?').lowercase().endsWith(".acelive")) {
+                "acelive_url"
+            } else {
+                "transport_file_url"
+            }
+        }
+        is AceStreamDescriptor.LocalEngineUrl -> "local_engine_url"
+        is AceStreamDescriptor.Direct -> "direct"
     }
 
     private fun extractRootMap(map: Map<String, Any?>): Map<String, Any?> {
