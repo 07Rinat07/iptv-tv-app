@@ -5,6 +5,7 @@ import java.nio.ByteOrder
 
 private const val ACE_LIVE_WIRE_ID_CHOKE = 0
 private const val ACE_LIVE_WIRE_ID_UNCHOKE = 1
+private const val ACE_LIVE_WIRE_ID_INTERESTED = 2
 private const val ACE_LIVE_WIRE_ID_REQUEST = 6
 private const val ACE_LIVE_WIRE_ID_PIECE = 7
 private const val ACE_LIVE_WIRE_PIECE_FIXED_PAYLOAD_BYTES = 18
@@ -64,17 +65,32 @@ class AceLivePeerWireCodec(
         require(maxFrameLengthBytes > 0) { "maxFrameLengthBytes must be positive" }
     }
 
-    fun decodeNext(buffer: ByteArray): AceLivePeerFrameDecodeResult {
-        if (buffer.size < LENGTH_PREFIX_BYTES) {
+    fun decodeNext(buffer: ByteArray): AceLivePeerFrameDecodeResult =
+        decodeNext(buffer = buffer, offset = 0, limit = buffer.size)
+
+    /**
+     * Decodes one frame beginning at [offset] without copying the unconsumed suffix of [buffer].
+     * [limit] is exclusive and lets a connection adapter walk a coalesced TCP read with one cursor.
+     */
+    fun decodeNext(
+        buffer: ByteArray,
+        offset: Int,
+        limit: Int = buffer.size
+    ): AceLivePeerFrameDecodeResult {
+        require(offset >= 0) { "offset must be non-negative" }
+        require(limit in offset..buffer.size) { "limit must be within buffer bounds" }
+
+        val available = limit - offset
+        if (available < LENGTH_PREFIX_BYTES) {
             return AceLivePeerFrameDecodeResult.NeedMoreData(LENGTH_PREFIX_BYTES)
         }
 
-        val bodyLength = readU32(buffer, 0)
+        val bodyLength = readU32(buffer, offset)
         if (bodyLength > maxFrameLengthBytes.toLong()) {
             return AceLivePeerFrameDecodeResult.Rejected(AceLivePeerFrameRejectReason.FRAME_TOO_LARGE)
         }
         val totalLength = LENGTH_PREFIX_BYTES + bodyLength.toInt()
-        if (buffer.size < totalLength) {
+        if (available < totalLength) {
             return AceLivePeerFrameDecodeResult.NeedMoreData(totalLength)
         }
         if (bodyLength == 0L) {
@@ -84,9 +100,10 @@ class AceLivePeerWireCodec(
             )
         }
 
-        val id = buffer[LENGTH_PREFIX_BYTES].toInt() and 0xff
-        val payloadStart = LENGTH_PREFIX_BYTES + 1
-        val payloadEnd = totalLength
+        val idOffset = offset + LENGTH_PREFIX_BYTES
+        val id = buffer[idOffset].toInt() and 0xff
+        val payloadStart = idOffset + 1
+        val payloadEnd = offset + totalLength
         val payloadLength = payloadEnd - payloadStart
 
         val message = when {
@@ -105,6 +122,12 @@ class AceLivePeerWireCodec(
             consumedBytes = totalLength
         )
     }
+
+    /** Standard peer interested frame emitted only after the outer handshake is accepted. */
+    fun encodeInterestedFrame(): ByteArray = byteArrayOf(
+        0, 0, 0, 1,
+        ACE_LIVE_WIRE_ID_INTERESTED.toByte()
+    )
 
     /** Encodes one request produced by [AceLiveActivePeerCoordinator] as a complete peer frame. */
     fun encodeChunkRequestFrame(request: AceLiveChunkRequest): ByteArray {
