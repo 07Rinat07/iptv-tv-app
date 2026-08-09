@@ -5,6 +5,7 @@ import java.nio.ByteOrder
 
 private const val ACE_LIVE_WIRE_ID_CHOKE = 0
 private const val ACE_LIVE_WIRE_ID_UNCHOKE = 1
+private const val ACE_LIVE_WIRE_ID_INTERESTED = 2
 private const val ACE_LIVE_WIRE_ID_REQUEST = 6
 private const val ACE_LIVE_WIRE_ID_PIECE = 7
 private const val ACE_LIVE_WIRE_PIECE_FIXED_PAYLOAD_BYTES = 18
@@ -105,6 +106,12 @@ class AceLivePeerWireCodec(
             consumedBytes = totalLength
         )
     }
+
+    /** Standard peer interested frame emitted only after the outer handshake is accepted. */
+    fun encodeInterestedFrame(): ByteArray = byteArrayOf(
+        0, 0, 0, 1,
+        ACE_LIVE_WIRE_ID_INTERESTED.toByte()
+    )
 
     /** Encodes one request produced by [AceLiveActivePeerCoordinator] as a complete peer frame. */
     fun encodeChunkRequestFrame(request: AceLiveChunkRequest): ByteArray {
