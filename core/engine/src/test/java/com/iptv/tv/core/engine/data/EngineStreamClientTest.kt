@@ -44,68 +44,101 @@ class EngineStreamClientTest {
     }
 
     @Test
-    fun resolve_torrentUsesApiResponseUrl() = runTest {
+    fun resolve_magnetUsesCurrentGetStreamControlApiAndPlaybackUrl() = runTest {
+        val playbackUrl = "http://127.0.0.1:6878/ace/stream/resolved"
         val api = FakeApi(
             statusPayload = mapOf("response" to mapOf("peers" to 1, "speed" to 10)),
-            resolvePayload = mapOf(
-                "response" to mapOf("url" to "http://127.0.0.1:6878/stream/resolved")
-            )
+            resolvePayload = playbackPayload(playbackUrl)
         )
         val client = EngineStreamClient(api)
         client.connect("http://127.0.0.1:6878")
 
-        val result = client.resolveStream("magnet:?xt=urn:btih:AAA")
+        val magnet = "magnet:?xt=urn:btih:AAA"
+        val result = client.resolveStream(magnet)
+
         assertTrue(result is AppResult.Success)
-        assertEquals(
-            "http://127.0.0.1:6878/stream/resolved",
-            (result as AppResult.Success).data
-        )
+        assertEquals(playbackUrl, (result as AppResult.Success).data)
+        assertEquals("http://127.0.0.1:6878/ace/getstream", api.lastResolveUrl)
+        assertEquals("json", api.lastResolveOptions["format"])
+        assertEquals("0", api.lastResolveOptions["_idx"])
+        assertEquals("0", api.lastResolveOptions["stream_id"])
+        assertEquals(magnet, api.lastResolveOptions["magnet"])
+        assertEquals("1", api.lastResolveOptions["auto_start_stream"])
+        assertTrue(api.lastResolveOptions["sid"].orEmpty().startsWith("engineProxy-"))
+        assertTrue(api.lastResolveOptions["client_session_id"]?.toIntOrNull() != null)
     }
 
     @Test
-    fun resolve_torrentBuildsFallbackWhenApiHasNoPlayableUrl() = runTest {
+    fun resolve_missingPlaybackUrlReturnsErrorInsteadOfControlUrl() = runTest {
         val api = FakeApi(
             statusPayload = mapOf("response" to mapOf("peers" to 2, "speed" to 20)),
-            resolvePayload = mapOf("response" to mapOf("id" to "123"))
+            resolvePayload = mapOf(
+                "error" to null,
+                "response" to mapOf("stat_url" to "http://127.0.0.1:6878/ace/stat/123")
+            )
         )
         val client = EngineStreamClient(api)
         client.connect("127.0.0.1:6878")
 
         val result = client.resolveStream("magnet:?xt=urn:btih:BBB")
-        assertTrue(result is AppResult.Success)
-        val stream = (result as AppResult.Success).data
-        assertTrue(stream.startsWith("http://127.0.0.1:6878/ace/getstream?url="))
+
+        assertTrue(result is AppResult.Error)
+        assertTrue((result as AppResult.Error).message.contains("playback_url"))
     }
 
     @Test
-    fun resolve_infohashNormalizesToMagnetForFallback() = runTest {
+    fun resolve_infohashNormalizesToMagnetParameter() = runTest {
+        val playbackUrl = "http://127.0.0.1:6878/ace/stream/infohash"
         val api = FakeApi(
             statusPayload = mapOf("response" to mapOf("peers" to 2, "speed" to 20)),
-            resolvePayload = mapOf("response" to mapOf("id" to "123"))
+            resolvePayload = playbackPayload(playbackUrl)
         )
         val client = EngineStreamClient(api)
         client.connect("127.0.0.1:6878")
 
-        val result = client.resolveStream("infohash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        val infoHash = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        val result = client.resolveStream("infohash:$infoHash")
+
         assertTrue(result is AppResult.Success)
-        val stream = (result as AppResult.Success).data
-        assertTrue(stream.contains("magnet%3A%3Fxt%3Durn%3Abtih%3A"))
-        assertTrue(stream.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+        assertEquals(playbackUrl, (result as AppResult.Success).data)
+        assertEquals(
+            "magnet:?xt=urn:btih:$infoHash",
+            api.lastResolveOptions["magnet"]
+        )
     }
 
     @Test
-    fun resolve_aceSchemeNormalizesToAcestream() = runTest {
+    fun resolve_aceSchemeUsesHexContentIdParameter() = runTest {
+        val playbackUrl = "http://127.0.0.1:6878/ace/stream/content-id"
         val api = FakeApi(
             statusPayload = mapOf("response" to mapOf("peers" to 2, "speed" to 20)),
-            resolvePayload = mapOf("response" to mapOf("id" to "123"))
+            resolvePayload = playbackPayload(playbackUrl)
         )
         val client = EngineStreamClient(api)
         client.connect("127.0.0.1:6878")
 
-        val result = client.resolveStream("ace://11223344556677889900AABBCCDDEEFF00112233")
+        val contentId = "11223344556677889900AABBCCDDEEFF00112233"
+        val result = client.resolveStream("ace://$contentId")
+
         assertTrue(result is AppResult.Success)
-        val stream = (result as AppResult.Success).data
-        assertTrue(stream.contains("acestream%3A%2F%2F11223344556677889900AABBCCDDEEFF00112233"))
+        assertEquals(playbackUrl, (result as AppResult.Success).data)
+        assertEquals(contentId.lowercase(), api.lastResolveOptions["content_id"])
+        assertTrue("id" !in api.lastResolveOptions)
+    }
+
+    @Test
+    fun resolve_engineErrorIsReported() = runTest {
+        val api = FakeApi(
+            statusPayload = mapOf("response" to mapOf("peers" to 1, "speed" to 10)),
+            resolvePayload = mapOf("error" to "missing content descriptor")
+        )
+        val client = EngineStreamClient(api)
+        client.connect("127.0.0.1:6878")
+
+        val result = client.resolveStream("https://example.org/live.acelive")
+
+        assertTrue(result is AppResult.Error)
+        assertTrue((result as AppResult.Error).message.contains("missing content descriptor"))
     }
 
     @Test
@@ -223,5 +256,15 @@ class EngineStreamClientTest {
             lastResolveOptions = options
             return resolvePayload
         }
+    }
+
+    private companion object {
+        fun playbackPayload(playbackUrl: String): Map<String, Any?> = mapOf(
+            "error" to null,
+            "response" to mapOf(
+                "playback_url" to playbackUrl,
+                "stat_url" to "http://127.0.0.1:6878/ace/stat/123"
+            )
+        )
     }
 }

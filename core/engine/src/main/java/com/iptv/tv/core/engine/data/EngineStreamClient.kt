@@ -7,8 +7,8 @@ import com.iptv.tv.core.model.EngineStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
+import java.util.Random
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Singleton
 
 @Singleton
@@ -24,6 +24,9 @@ class EngineStreamClient(
             message = "Engine not connected"
         )
     )
+
+    private val enginePlayerId = "engineProxy-${Random().nextInt()}"
+    private val clientSessionIds = AtomicInteger(0)
 
     private var connectedEndpoint: String? = null
     private var connectedAccessToken: String? = null
@@ -191,6 +194,13 @@ class EngineStreamClient(
         }
     }
 
+    /**
+     * Resolve an Ace descriptor through the current Ace Engine playback control API.
+     *
+     * `/ace/getstream?format=json` is a control endpoint. It returns JSON containing the local
+     * `response.playback_url`; only that URL is handed to Media3/LibVLC. The control endpoint
+     * itself must never be treated as a playable media URL.
+     */
     suspend fun resolveStream(rawSource: String): AppResult<String> {
         val descriptor = AceStreamDescriptorParser.parse(rawSource)
         if (descriptor is AceStreamDescriptor.Direct) {
@@ -207,28 +217,29 @@ class EngineStreamClient(
             AppResult.Loading -> return AppResult.Loading
         }
 
+        // A loopback media URL without a descriptor query is already a resolved engine URL.
         if (descriptor is AceStreamDescriptor.LocalEngineUrl) {
             return AppResult.Success(descriptor.value)
         }
 
-        val request = buildEngineRequest(descriptor)
-        val options = buildMap {
-            put("method", "open_torrent")
-            connectedAccessToken?.takeIf { it.isNotBlank() }?.let { put("access_token", it) }
-            putAll(request)
-        }
+        val options = buildPlaybackOptions(descriptor)
 
         return runCatching {
             val response = api.resolve(
-                url = buildServiceUrl(endpoint),
+                url = buildPlaybackControlUrl(endpoint),
                 options = options
             )
-            val playable = extractPlayableUrl(response)
-                ?: buildFallbackStreamUrl(endpoint, request, connectedAccessToken)
+
+            extractEngineError(response)?.let { engineError ->
+                error("Ace Stream Engine returned error: $engineError")
+            }
+
+            val playable = extractPlaybackUrl(response)
+                ?: error("Ace Stream Engine response is missing response.playback_url")
 
             status.value = status.value.copy(
                 connected = true,
-                message = "Ace Stream source resolved"
+                message = "Ace Stream playback URL resolved"
             )
             AppResult.Success(playable)
         }.getOrElse { throwable ->
@@ -309,47 +320,25 @@ class EngineStreamClient(
         }
     }
 
+    private fun buildPlaybackOptions(descriptor: AceStreamDescriptor): Map<String, String> =
+        buildMap {
+            put("format", "json")
+            put("sid", enginePlayerId)
+            put("_idx", "0")
+            put("stream_id", "0")
+            putAll(AceStreamDescriptorParser.toEngineRequest(descriptor))
+            put("auto_start_stream", "1")
+            put("client_session_id", clientSessionIds.incrementAndGet().toString())
+        }
+
+    private fun buildPlaybackControlUrl(endpoint: String): String =
+        "${endpoint.removeSuffix("/")}/ace/getstream"
+
     private fun buildServiceUrl(endpoint: String): String =
         "${endpoint.removeSuffix("/")}/webui/api/service"
 
     private fun buildServerApiUrl(endpoint: String): String =
         "${endpoint.removeSuffix("/")}/server/api"
-
-    private fun buildEngineRequest(descriptor: AceStreamDescriptor): Map<String, String> {
-        if (descriptor is AceStreamDescriptor.ContentId) {
-            val original = descriptor.original.trim()
-            if (original.startsWith("ace://", ignoreCase = true)) {
-                val legacyContentId = original
-                    .substringAfter("://")
-                    .trimStart('/')
-                    .substringBefore('?')
-                    .trim()
-
-                if (legacyContentId.isNotBlank()) {
-                    return mapOf("url" to "acestream://$legacyContentId")
-                }
-            }
-        }
-
-        return AceStreamDescriptorParser.toEngineRequest(descriptor)
-    }
-
-    private fun buildFallbackStreamUrl(
-        endpoint: String,
-        request: Map<String, String>,
-        accessToken: String?
-    ): String {
-        val key = if (request.containsKey("id")) "id" else "url"
-        val value = request[key].orEmpty()
-        val encoded = URLEncoder.encode(value, StandardCharsets.UTF_8.toString())
-        val tokenQuery = accessToken
-            ?.takeIf { it.isNotBlank() }
-            ?.let { token ->
-                "&access_token=${URLEncoder.encode(token, StandardCharsets.UTF_8.toString())}"
-            }
-            .orEmpty()
-        return "${endpoint.removeSuffix("/")}/ace/getstream?$key=$encoded$tokenQuery"
-    }
 
     private fun normalizeEndpoint(raw: String): String? {
         val value = raw.trim()
@@ -367,6 +356,24 @@ class EngineStreamClient(
             nested.entries.filter { it.key is String }.associate { it.key as String to it.value }
         } else {
             map
+        }
+    }
+
+    private fun extractPlaybackUrl(payload: Map<String, Any?>): String? {
+        val response = payload["response"] as? Map<*, *> ?: return null
+        val value = response["playback_url"] as? String ?: return null
+        return value.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+    }
+
+    private fun extractEngineError(payload: Map<String, Any?>): String? {
+        val error = payload["error"] ?: return null
+        return when (error) {
+            is Boolean -> if (error) "unknown error" else null
+            is Number -> if (error.toLong() == 0L) null else error.toString()
+            is String -> error.takeIf { it.isNotBlank() }
+            is Map<*, *> -> extractString(error, setOf("message", "error", "description"))
+                ?: error.toString().takeIf { it != "{}" }
+            else -> error.toString().takeIf { it.isNotBlank() }
         }
     }
 
@@ -409,24 +416,5 @@ class EngineStreamClient(
             }
         }
         return null
-    }
-
-    private fun extractPlayableUrl(payload: Any?): String? = when (payload) {
-        is String -> payload.takeIf { it.startsWith("http://") || it.startsWith("https://") }
-        is Map<*, *> -> {
-            val preferred = listOf(
-                "url",
-                "stream",
-                "stream_url",
-                "streamUrl",
-                "play_url",
-                "playback_url",
-                "link"
-            )
-            preferred.firstNotNullOfOrNull { key -> extractPlayableUrl(payload[key]) }
-                ?: payload.values.firstNotNullOfOrNull(::extractPlayableUrl)
-        }
-        is Iterable<*> -> payload.firstNotNullOfOrNull(::extractPlayableUrl)
-        else -> null
     }
 }

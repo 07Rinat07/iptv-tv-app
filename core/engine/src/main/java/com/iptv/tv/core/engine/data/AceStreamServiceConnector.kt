@@ -324,6 +324,7 @@ class AceStreamServiceConnector @Inject constructor(
         const val SERVICE_ACTION = "org.acestream.engine.service.v0.IAceStreamEngine"
         val KNOWN_PACKAGES = listOf(
             "org.acestream.node",
+            "org.acestream.live",
             "org.acestream.media",
             "org.acestream.media.atv",
             "org.acestream.core",

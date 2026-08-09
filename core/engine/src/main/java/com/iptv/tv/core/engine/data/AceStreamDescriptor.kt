@@ -70,8 +70,8 @@ object AceStreamDescriptorParser {
     }
 
     fun toEngineRequest(descriptor: AceStreamDescriptor): Map<String, String> = when (descriptor) {
-        is AceStreamDescriptor.ContentId -> mapOf("id" to descriptor.value)
-        is AceStreamDescriptor.Magnet -> mapOf("url" to descriptor.value)
+        is AceStreamDescriptor.ContentId -> mapOf("content_id" to descriptor.value)
+        is AceStreamDescriptor.Magnet -> mapOf("magnet" to descriptor.value)
         is AceStreamDescriptor.TransportFile -> mapOf("url" to descriptor.value)
         is AceStreamDescriptor.LocalEngineUrl -> mapOf("url" to descriptor.value)
         is AceStreamDescriptor.Direct -> emptyMap()

@@ -13,7 +13,10 @@ class AceStreamDescriptorParserTest {
 
         assertTrue(result is AceStreamDescriptor.ContentId)
         assertEquals(contentId, (result as AceStreamDescriptor.ContentId).value)
-        assertEquals(mapOf("id" to contentId), AceStreamDescriptorParser.toEngineRequest(result))
+        assertEquals(
+            mapOf("content_id" to contentId),
+            AceStreamDescriptorParser.toEngineRequest(result)
+        )
     }
 
     @Test
@@ -22,6 +25,10 @@ class AceStreamDescriptorParserTest {
 
         assertTrue(result is AceStreamDescriptor.ContentId)
         assertEquals(contentId, (result as AceStreamDescriptor.ContentId).value)
+        assertEquals(
+            mapOf("content_id" to contentId),
+            AceStreamDescriptorParser.toEngineRequest(result)
+        )
     }
 
     @Test
@@ -34,7 +41,7 @@ class AceStreamDescriptorParserTest {
 
         assertEquals(AceStreamDescriptor.Magnet(source, expectedMagnet), result)
         assertEquals(
-            mapOf("url" to expectedMagnet),
+            mapOf("magnet" to expectedMagnet),
             AceStreamDescriptorParser.toEngineRequest(result)
         )
     }
@@ -47,6 +54,10 @@ class AceStreamDescriptorParserTest {
 
         assertTrue(result is AceStreamDescriptor.ContentId)
         assertEquals(contentId, (result as AceStreamDescriptor.ContentId).value)
+        assertEquals(
+            mapOf("content_id" to contentId),
+            AceStreamDescriptorParser.toEngineRequest(result)
+        )
     }
 
     @Test
@@ -57,6 +68,10 @@ class AceStreamDescriptorParserTest {
         val aceLiveResult = AceStreamDescriptorParser.parse("https://example.org/live.acelive")
 
         assertEquals(AceStreamDescriptor.Magnet(magnet, magnet), magnetResult)
+        assertEquals(
+            mapOf("magnet" to magnet),
+            AceStreamDescriptorParser.toEngineRequest(magnetResult)
+        )
         assertTrue(torrentResult is AceStreamDescriptor.TransportFile)
         assertTrue(aceLiveResult is AceStreamDescriptor.TransportFile)
     }
