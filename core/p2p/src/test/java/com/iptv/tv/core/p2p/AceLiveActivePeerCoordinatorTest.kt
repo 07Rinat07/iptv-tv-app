@@ -55,14 +55,14 @@ class AceLiveActivePeerCoordinatorTest {
         coordinator.onPeerEvent(window(peerId = 1, min = 10, max = 20, unchoked = true))
         coordinator.onPeerEvent(window(peerId = 2, min = 10, max = 20, unchoked = true))
 
-        assertTrue(coordinator.schedule(10, 20, nowMillis = 0).all { it.peerId == 1L })
+        assertTrue(coordinator.schedule(10, 10, nowMillis = 0).all { it.peerId == 1L })
         assertEquals(1, coordinator.trackedPieceCount())
 
         val dropped = coordinator.onPeerEvent(AceLivePeerDropped(peerId = 1))
         assertEquals(listOf(10L), dropped.requeuedPieces)
         assertEquals(0, coordinator.trackedPieceCount())
 
-        val reassigned = coordinator.schedule(10, 20, nowMillis = 1)
+        val reassigned = coordinator.schedule(10, 10, nowMillis = 1)
         assertTrue(reassigned.all { it.peerId == 2L })
     }
 
