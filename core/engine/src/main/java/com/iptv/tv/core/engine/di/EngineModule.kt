@@ -1,10 +1,13 @@
 package com.iptv.tv.core.engine.di
 
 import com.iptv.tv.core.engine.api.EngineStreamApi
+import com.iptv.tv.core.engine.data.AceContentMetadataProvider
 import com.iptv.tv.core.engine.data.AceContentTransportResolver
 import com.iptv.tv.core.engine.data.AceStreamServiceConnector
+import com.iptv.tv.core.engine.data.ChainedAceContentMetadataProvider
 import com.iptv.tv.core.engine.data.EngineStreamClient
 import com.iptv.tv.core.engine.data.ExternalAceContentTransportResolver
+import com.iptv.tv.core.engine.data.ExternalEngineAceContentMetadataProvider
 import com.iptv.tv.core.engine.data.LoopbackFirstAceContentTransportResolver
 import dagger.Module
 import dagger.Provides
@@ -61,13 +64,25 @@ object EngineModule {
 
     @Provides
     @Singleton
-    fun provideAceContentTransportResolver(
+    fun provideAceContentMetadataProvider(
         client: EngineStreamClient
+    ): AceContentMetadataProvider {
+        val externalCompatibility = ExternalEngineAceContentMetadataProvider(client)
+        return ChainedAceContentMetadataProvider(
+            providers = listOf(externalCompatibility)
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideAceContentTransportResolver(
+        client: EngineStreamClient,
+        metadataProvider: AceContentMetadataProvider
     ): AceContentTransportResolver {
-        val external = ExternalAceContentTransportResolver(client)
+        val classifier = ExternalAceContentTransportResolver(metadataProvider)
         return LoopbackFirstAceContentTransportResolver(
             client = client,
-            delegate = external
+            delegate = classifier
         )
     }
 }
