@@ -19,8 +19,8 @@ class AceLiveDhtCodecTest {
         )
 
         assertEquals(
-            "d1:ad2:id20:AAAAAAAAAAAAAAAAAAAA9:info_hash20:BBBBBBBBBBBBBBBBBBBBee" +
-                "1:q9:get_peers1:t2:xy1:y1:qe",
+            "d1:ad2:id20:AAAAAAAAAAAAAAAAAAAA9:info_hash20:BBBBBBBBBBBBBBBBBBBBe" +
+                "1:q9:get_peers2:roi1e1:t2:xy1:y1:qe",
             String(query, StandardCharsets.US_ASCII)
         )
     }
