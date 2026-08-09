@@ -1,6 +1,8 @@
 package com.iptv.tv.core.engine.data
 
 import java.net.URI
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 
 /**
  * Normalized source accepted by the official Ace Stream Engine HTTP/API layer.
@@ -45,6 +47,8 @@ object AceStreamDescriptorParser {
         val value = raw.trim()
         if (value.isBlank()) return AceStreamDescriptor.Direct(raw, value)
 
+        parseAceQueryDescriptor(raw, value)?.let { return it }
+
         extractInfoHash(value)?.let { infoHash ->
             val magnet = "magnet:?xt=urn:btih:$infoHash"
             return AceStreamDescriptor.Magnet(raw, magnet)
@@ -77,6 +81,63 @@ object AceStreamDescriptorParser {
         is AceStreamDescriptor.Direct -> emptyMap()
     }
 
+    private fun parseAceQueryDescriptor(
+        original: String,
+        value: String
+    ): AceStreamDescriptor? {
+        if (
+            !value.startsWith("acestream:", ignoreCase = true) &&
+            !value.startsWith("ace:", ignoreCase = true)
+        ) {
+            return null
+        }
+
+        queryParameter(value, "content_id")
+            ?.takeIf(contentIdRegex::matches)
+            ?.let { return AceStreamDescriptor.ContentId(original, it.lowercase()) }
+        queryParameter(value, "id")
+            ?.takeIf(contentIdRegex::matches)
+            ?.let { return AceStreamDescriptor.ContentId(original, it.lowercase()) }
+
+        queryParameter(value, "infohash")
+            ?.takeIf(contentIdRegex::matches)
+            ?.let { infoHash ->
+                return AceStreamDescriptor.Magnet(
+                    original,
+                    "magnet:?xt=urn:btih:$infoHash"
+                )
+            }
+
+        queryParameter(value, "magnet")
+            ?.takeIf { it.startsWith("magnet:", ignoreCase = true) }
+            ?.let { return AceStreamDescriptor.Magnet(original, it) }
+
+        queryParameter(value, "url")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return AceStreamDescriptor.TransportFile(original, it) }
+
+        return null
+    }
+
+    private fun queryParameter(value: String, name: String): String? {
+        val query = value.substringAfter('?', missingDelimiterValue = "")
+        if (query.isBlank()) return null
+
+        return query.split('&').firstNotNullOfOrNull { pair ->
+            val key = decodeQueryValue(pair.substringBefore('=', missingDelimiterValue = pair).trim())
+            if (!key.equals(name, ignoreCase = true)) {
+                null
+            } else {
+                decodeQueryValue(pair.substringAfter('=', missingDelimiterValue = "").trim())
+                    .takeIf { it.isNotBlank() }
+            }
+        }
+    }
+
+    private fun decodeQueryValue(value: String): String = runCatching {
+        URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+    }.getOrDefault(value)
+
     private fun extractInfoHash(value: String): String? {
         if (!value.startsWith(INFO_HASH_PREFIX, ignoreCase = true)) return null
         val candidate = value.substring(INFO_HASH_PREFIX.length).trim()
@@ -90,15 +151,6 @@ object AceStreamDescriptorParser {
         prefixes.firstOrNull { value.startsWith(it, ignoreCase = true) }?.let { prefix ->
             val candidate = value.substring(prefix.length).trimStart('/').substringBefore('?').trim()
             if (contentIdRegex.matches(candidate)) return candidate
-        }
-
-        if (
-            value.startsWith("acestream:", ignoreCase = true) ||
-            value.startsWith("ace:", ignoreCase = true)
-        ) {
-            extractContentIdFromQuery(value.substringAfter('?', missingDelimiterValue = ""))?.let {
-                return it
-            }
         }
 
         if (isLocalAceEngineUrl(value)) {
