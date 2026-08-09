@@ -1,6 +1,7 @@
 package com.iptv.tv.core.p2p
 
 private const val MAX_ACE_LIVE_REASSEMBLY_PIECE = 0xffff_ffffL
+private const val MAX_ACE_LIVE_REASSEMBLY_CHUNKS_PER_PIECE = 0x1_0000
 
 /** A fully assembled Ace Live piece ready for contiguous downstream consumption. */
 class AceLiveReassembledPiece(
@@ -64,7 +65,9 @@ class AceLivePieceReassembler(
             "initialNextNeededPiece must fit Ace Live u32 wire field"
         }
         require(maxPiecesAhead > 0) { "maxPiecesAhead must be positive" }
-        require(geometry.chunksPerPiece > 0) { "geometry must contain at least one chunk per piece" }
+        require(geometry.chunksPerPiece in 1..MAX_ACE_LIVE_REASSEMBLY_CHUNKS_PER_PIECE) {
+            "Ace Live chunksPerPiece must fit the u16 chunk index space"
+        }
     }
 
     fun appendAcceptedChunk(chunk: AceLiveIncomingChunk): AceLiveReassemblyResult {
