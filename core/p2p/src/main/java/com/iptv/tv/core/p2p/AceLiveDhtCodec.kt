@@ -50,8 +50,10 @@ class AceLiveDhtProtocolException(message: String) : IllegalArgumentException(me
 /**
  * Bounded BEP-5/KRPC codec used only by the Ace Live DHT discovery adapter.
  *
- * It supports the `get_peers` query and the response fields required for iterative discovery.
- * `announce_peer` is intentionally absent until the app owns a real inbound peer-listener port.
+ * This client performs lookup-only `get_peers` queries and has no inbound DHT listener. Every
+ * outgoing query therefore carries BEP-43 `ro=1`, so remote nodes do not retain our ephemeral UDP
+ * endpoint in their routing tables. `announce_peer` remains intentionally absent until the app owns
+ * a real inbound peer-listener port.
  */
 object AceLiveDhtCodec {
     const val DEFAULT_MAX_PACKET_BYTES: Int = 8 * 1024
@@ -77,7 +79,7 @@ object AceLiveDhtCodec {
         output.write(nodeId.toByteArray())
         output.writeAscii("9:info_hash20:")
         output.write(swarmKey.toByteArray())
-        output.writeAscii("e1:q9:get_peers1:t")
+        output.writeAscii("e1:q9:get_peers2:roi1e1:t")
         output.writeAscii(transactionId.size.toString())
         output.write(':'.code)
         output.write(transactionId)
@@ -120,12 +122,10 @@ object AceLiveDhtCodec {
             throw AceLiveDhtProtocolException("KRPC node id must be exactly 20 bytes")
         }
 
-        val peers = parseCompactPeers(response.values["values"], maxPeers)
-        val nodes = parseCompactNodes(response.values["nodes"], maxNodes)
         return AceLiveDhtGetPeersResponse(
             remoteNodeId = AceLiveDhtNodeId.fromBytes(remoteIdBytes),
-            peers = peers,
-            nodes = nodes
+            peers = parseCompactPeers(response.values["values"], maxPeers),
+            nodes = parseCompactNodes(response.values["nodes"], maxNodes)
         )
     }
 
@@ -158,8 +158,8 @@ object AceLiveDhtCodec {
         repeat(count) { index ->
             val offset = index * COMPACT_NODE_BYTES
             val nodeId = AceLiveDhtNodeId.fromBytes(compact.copyOfRange(offset, offset + 20))
-            val peer = compactPeer(compact, offset + 20) ?: return@repeat
-            nodes += AceLiveDhtNodeContact(nodeId = nodeId, endpoint = peer)
+            val endpoint = compactPeer(compact, offset + 20) ?: return@repeat
+            nodes += AceLiveDhtNodeContact(nodeId = nodeId, endpoint = endpoint)
         }
         return nodes
     }
@@ -269,7 +269,7 @@ object AceLiveDhtCodec {
             val raw = bytes.copyOfRange(offset, end).asciiOrNull()
                 ?: throw AceLiveDhtProtocolException("Invalid bencode integer")
             if (raw.isEmpty() || raw == "-0" || (raw.startsWith('0') && raw.length > 1) ||
-                (raw.startsWith("-0"))
+                raw.startsWith("-0")
             ) {
                 throw AceLiveDhtProtocolException("Non-canonical bencode integer")
             }
