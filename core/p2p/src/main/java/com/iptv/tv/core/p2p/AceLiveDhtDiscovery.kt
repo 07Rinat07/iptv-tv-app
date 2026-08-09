@@ -7,12 +7,18 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.security.SecureRandom
-import java.util.ArrayDeque
+import java.util.PriorityQueue
 import java.util.concurrent.CancellationException
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlin.math.min
 
@@ -90,8 +96,8 @@ class AceLiveDhtDiscovery(
         withContext(ioDispatcher) {
             val deadlineNanos = System.nanoTime() + policy.discoveryBudgetMillis * NANOS_PER_MILLI
             val targetBytes = request.swarmKey.toByteArray()
-            val frontier = ArrayDeque<QueryCandidate>()
-            val queuedEndpoints = HashSet<String>()
+            val frontier = PriorityQueue(queryCandidateComparator(targetBytes))
+            val queuedEndpoints = HashMap<String, AceLiveDhtNodeId?>()
             val queriedEndpoints = HashSet<String>()
             val peers = LinkedHashMap<String, AceLiveTcpPeerEndpoint>()
             var rejected = 0
@@ -100,14 +106,17 @@ class AceLiveDhtDiscovery(
 
             for (bootstrap in request.bootstrapNodes.distinct().take(policy.maxBootstrapNodes)) {
                 currentCoroutineContext().ensureActive()
+                if (remainingBudgetMillis(deadlineNanos) <= 0) break
                 val addresses = try {
-                    addressResolver(bootstrap.host)
+                    resolveBootstrap(bootstrap.host, deadlineNanos)
                         .asSequence()
                         .distinctBy { it.hostAddress }
                         .take(policy.maxResolvedAddressesPerBootstrap)
                         .toList()
                 } catch (cancelled: CancellationException) {
                     throw cancelled
+                } catch (_: DiscoveryBudgetExhaustedException) {
+                    break
                 } catch (_: Exception) {
                     emptyList()
                 }
@@ -118,8 +127,9 @@ class AceLiveDhtDiscovery(
                     }
                     val endpoint = AceLiveTcpPeerEndpoint(address.hostAddress ?: continue, bootstrap.port)
                     val key = endpointKey(endpoint)
-                    if (queuedEndpoints.add(key)) {
-                        frontier.addLast(QueryCandidate(endpoint = endpoint, nodeId = null))
+                    if (!queuedEndpoints.containsKey(key)) {
+                        queuedEndpoints[key] = null
+                        frontier.add(QueryCandidate(endpoint = endpoint, nodeId = null))
                     }
                 }
             }
@@ -127,7 +137,7 @@ class AceLiveDhtDiscovery(
             while (frontier.isNotEmpty() && queries < policy.maxQueries && peers.size < policy.maxTotalPeers) {
                 currentCoroutineContext().ensureActive()
                 if (remainingBudgetMillis(deadlineNanos) <= 0) break
-                val candidate = frontier.removeFirst()
+                val candidate = frontier.remove()
                 val candidateKey = endpointKey(candidate.endpoint)
                 if (!queriedEndpoints.add(candidateKey)) continue
 
@@ -162,22 +172,23 @@ class AceLiveDhtDiscovery(
                 }
                 if (peers.size >= policy.maxTotalPeers) break
 
-                val nextNodes = response.nodes
-                    .asSequence()
-                    .filter { contact -> endpointKey(contact.endpoint) !in queriedEndpoints }
-                    .sortedWith { left, right ->
-                        compareXorDistance(left.nodeId.toByteArray(), right.nodeId.toByteArray(), targetBytes)
-                    }
-                    .toList()
-
-                for (contact in nextNodes) {
+                for (contact in response.nodes) {
                     if (!isAllowedNodeEndpoint(contact.endpoint)) {
                         rejected += 1
                         continue
                     }
                     val key = endpointKey(contact.endpoint)
-                    if (queuedEndpoints.add(key)) {
-                        frontier.addLast(QueryCandidate(endpoint = contact.endpoint, nodeId = contact.nodeId))
+                    if (key in queriedEndpoints) continue
+                    val previousNodeId = queuedEndpoints[key]
+                    if (!queuedEndpoints.containsKey(key)) {
+                        queuedEndpoints[key] = contact.nodeId
+                        frontier.add(QueryCandidate(contact.endpoint, contact.nodeId))
+                    } else if (previousNodeId == null) {
+                        // Upgrade an unresolved bootstrap endpoint to a distance-sortable DHT contact.
+                        // The older null-id candidate may remain in the heap but is skipped after the
+                        // upgraded candidate queries the endpoint.
+                        queuedEndpoints[key] = contact.nodeId
+                        frontier.add(QueryCandidate(contact.endpoint, contact.nodeId))
                     }
                 }
             }
@@ -189,6 +200,26 @@ class AceLiveDhtDiscovery(
                 rejectedEndpoints = rejected
             )
         }
+
+    private suspend fun resolveBootstrap(
+        host: String,
+        deadlineNanos: Long
+    ): List<Inet4Address> {
+        val remaining = remainingBudgetMillis(deadlineNanos)
+        if (remaining <= 0) throw DiscoveryBudgetExhaustedException()
+        val future = RESOLVER_EXECUTOR.submit<List<Inet4Address>> { addressResolver(host) }
+        return try {
+            runInterruptible {
+                future.get(remaining, TimeUnit.MILLISECONDS)
+            }
+        } catch (timeout: TimeoutException) {
+            emptyList()
+        } catch (execution: ExecutionException) {
+            emptyList()
+        } finally {
+            if (!future.isDone) future.cancel(true)
+        }
+    }
 
     private suspend fun queryGetPeers(
         endpoint: AceLiveTcpPeerEndpoint,
@@ -205,18 +236,27 @@ class AceLiveDhtDiscovery(
         val address = InetSocketAddress(endpoint.host, endpoint.port)
 
         DatagramSocket().use { socket ->
-            socket.connect(address)
-            socket.soTimeout = receiveTimeoutMillis(deadlineNanos)
-            socket.send(DatagramPacket(query, query.size))
-            currentCoroutineContext().ensureActive()
-            val responseBytes = receiveBounded(socket)
-            return AceLiveDhtCodec.decodeGetPeersResponse(
-                bytes = responseBytes,
-                expectedTransactionId = transactionId,
-                maxPeers = policy.maxPeersPerResponse,
-                maxNodes = policy.maxNodesPerResponse,
-                maxPacketBytes = policy.maxPacketBytes
-            )
+            val job = currentCoroutineContext()[Job]
+            val cancellationHandle = job?.invokeOnCompletion { cause ->
+                if (cause is CancellationException) runCatching { socket.close() }
+            }
+            try {
+                socket.connect(address)
+                socket.soTimeout = receiveTimeoutMillis(deadlineNanos)
+                socket.send(DatagramPacket(query, query.size))
+                currentCoroutineContext().ensureActive()
+                val responseBytes = receiveBounded(socket)
+                currentCoroutineContext().ensureActive()
+                return AceLiveDhtCodec.decodeGetPeersResponse(
+                    bytes = responseBytes,
+                    expectedTransactionId = transactionId,
+                    maxPeers = policy.maxPeersPerResponse,
+                    maxNodes = policy.maxNodesPerResponse,
+                    maxPacketBytes = policy.maxPacketBytes
+                )
+            } finally {
+                cancellationHandle?.dispose()
+            }
         }
     }
 
@@ -247,6 +287,26 @@ class AceLiveDhtDiscovery(
 
     private fun remainingBudgetMillis(deadlineNanos: Long): Long =
         ((deadlineNanos - System.nanoTime()) / NANOS_PER_MILLI).coerceAtLeast(0)
+
+    private fun queryCandidateComparator(target: ByteArray): Comparator<QueryCandidate> =
+        Comparator { left, right ->
+            val leftId = left.nodeId
+            val rightId = right.nodeId
+            when {
+                leftId == null && rightId == null -> endpointKey(left.endpoint).compareTo(endpointKey(right.endpoint))
+                leftId == null -> 1
+                rightId == null -> -1
+                else -> {
+                    val distanceOrder = compareXorDistance(
+                        leftId.toByteArray(),
+                        rightId.toByteArray(),
+                        target
+                    )
+                    if (distanceOrder != 0) distanceOrder
+                    else endpointKey(left.endpoint).compareTo(endpointKey(right.endpoint))
+                }
+            }
+        }
 
     private fun isAllowedNodeEndpoint(endpoint: AceLiveTcpPeerEndpoint): Boolean {
         val address = parseIpv4(endpoint.host) ?: return false
@@ -305,6 +365,9 @@ class AceLiveDhtDiscovery(
         val DEFAULT_RANDOM_INT: () -> Int = { random.nextInt() }
         val DEFAULT_ADDRESS_RESOLVER: (String) -> List<Inet4Address> = { host ->
             InetAddress.getAllByName(host).filterIsInstance<Inet4Address>()
+        }
+        val RESOLVER_EXECUTOR = Executors.newCachedThreadPool { runnable ->
+            Thread(runnable, "ace-live-dht-dns").apply { isDaemon = true }
         }
 
         val SPECIAL_USE_IPV4_RANGES = listOf(
