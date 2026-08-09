@@ -17,6 +17,11 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlin.math.min
 
+private data class AceLiveIpv4Cidr(
+    val network: Long,
+    val prefixBits: Int
+)
+
 /** Local safety bounds for descriptor-provided UDP tracker discovery. */
 data class AceLiveUdpTrackerPolicy(
     val requestTimeoutMillis: Int = 2_000,
@@ -211,29 +216,8 @@ class AceLiveUdpTrackerDiscovery(
     }
 
     private fun isGloballyRoutableIpv4(address: Inet4Address): Boolean {
-        if (
-            address.isAnyLocalAddress ||
-            address.isLoopbackAddress ||
-            address.isLinkLocalAddress ||
-            address.isSiteLocalAddress ||
-            address.isMulticastAddress
-        ) {
-            return false
-        }
-
-        val octets = address.address.map { it.toInt() and 0xFF }
-        val first = octets[0]
-        val second = octets[1]
-        val third = octets[2]
-        if (first == 0 || first >= 224) return false
-        if (first == 100 && second in 64..127) return false // shared/CGNAT space
-        if (first == 192 && second == 0 && third == 0) return false // protocol assignments
-        if (first == 192 && second == 0 && third == 2) return false // TEST-NET-1
-        if (first == 192 && second == 88 && third == 99) return false // deprecated 6to4 relay anycast
-        if (first == 198 && second in 18..19) return false // benchmark network
-        if (first == 198 && second == 51 && third == 100) return false // TEST-NET-2
-        if (first == 203 && second == 0 && third == 113) return false // TEST-NET-3
-        return true
+        val value = ipv4ToLong(address.address)
+        return SPECIAL_USE_IPV4_RANGES.none { cidr -> containsIpv4(cidr, value) }
     }
 
     private suspend fun announce(
@@ -349,10 +333,48 @@ class AceLiveUdpTrackerDiscovery(
 
     private companion object {
         const val NANOS_PER_MILLI: Long = 1_000_000
+        const val IPV4_MASK: Long = 0xFFFF_FFFFL
+
+        val SPECIAL_USE_IPV4_RANGES: List<AceLiveIpv4Cidr> = listOf(
+            cidr(0, 0, 0, 0, 8),
+            cidr(10, 0, 0, 0, 8),
+            cidr(100, 64, 0, 0, 10),
+            cidr(127, 0, 0, 0, 8),
+            cidr(169, 254, 0, 0, 16),
+            cidr(172, 16, 0, 0, 12),
+            cidr(192, 0, 0, 0, 24),
+            cidr(192, 0, 2, 0, 24),
+            cidr(192, 31, 196, 0, 24),
+            cidr(192, 52, 193, 0, 24),
+            cidr(192, 88, 99, 0, 24),
+            cidr(192, 168, 0, 0, 16),
+            cidr(192, 175, 48, 0, 24),
+            cidr(198, 18, 0, 0, 15),
+            cidr(198, 51, 100, 0, 24),
+            cidr(203, 0, 113, 0, 24),
+            cidr(224, 0, 0, 0, 4),
+            cidr(240, 0, 0, 0, 4)
+        )
+
         val RANDOM = SecureRandom()
         val DEFAULT_RANDOM_INT: () -> Int = { RANDOM.nextInt() }
         val DEFAULT_ADDRESS_RESOLVER: (String) -> List<Inet4Address> = { host ->
             InetAddress.getAllByName(host).filterIsInstance<Inet4Address>()
+        }
+
+        fun cidr(a: Int, b: Int, c: Int, d: Int, prefixBits: Int): AceLiveIpv4Cidr =
+            AceLiveIpv4Cidr(
+                network = ((a.toLong() shl 24) or (b.toLong() shl 16) or (c.toLong() shl 8) or d.toLong()) and IPV4_MASK,
+                prefixBits = prefixBits
+            )
+
+        fun ipv4ToLong(bytes: ByteArray): Long = bytes.fold(0L) { value, byte ->
+            ((value shl 8) or (byte.toLong() and 0xFFL)) and IPV4_MASK
+        }
+
+        fun containsIpv4(cidr: AceLiveIpv4Cidr, value: Long): Boolean {
+            val mask = (IPV4_MASK shl (32 - cidr.prefixBits)) and IPV4_MASK
+            return (value and mask) == (cidr.network and mask)
         }
     }
 }
