@@ -5,6 +5,7 @@ import com.iptv.tv.core.engine.data.AceContentTransportResolver
 import com.iptv.tv.core.engine.data.AceStreamServiceConnector
 import com.iptv.tv.core.engine.data.EngineStreamClient
 import com.iptv.tv.core.engine.data.ExternalAceContentTransportResolver
+import com.iptv.tv.core.engine.data.LoopbackFirstAceContentTransportResolver
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -59,5 +60,11 @@ object EngineModule {
     @Singleton
     fun provideAceContentTransportResolver(
         client: EngineStreamClient
-    ): AceContentTransportResolver = ExternalAceContentTransportResolver(client)
+    ): AceContentTransportResolver {
+        val external = ExternalAceContentTransportResolver(client)
+        return LoopbackFirstAceContentTransportResolver(
+            client = client,
+            delegate = external
+        )
+    }
 }
