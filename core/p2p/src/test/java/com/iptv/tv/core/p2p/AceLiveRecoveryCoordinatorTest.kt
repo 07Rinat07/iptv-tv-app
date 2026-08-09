@@ -15,7 +15,7 @@ class AceLiveRecoveryCoordinatorTest {
         assertEquals(listOf(10L), coordinator.assign(10, 30, nowMillis = 0).map { it.piece })
         assertEquals(1L, coordinator.ownerOf(10))
 
-        val early = coordinator.evaluate(10, nowMillis = 3_999)
+        val early = coordinator.evaluate(10, nowMillis = 3_000)
         assertTrue(early.timedOutRequests.isEmpty())
         assertEquals(1L, coordinator.ownerOf(10))
 
@@ -49,7 +49,7 @@ class AceLiveRecoveryCoordinatorTest {
         coordinator.updatePeer(peer(id = 1, min = 105, max = 140, unchoked = true))
 
         assertTrue(coordinator.assign(100, 140, nowMillis = 0).isEmpty())
-        assertNull(coordinator.evaluate(100, nowMillis = 3_999).cursorAdvance)
+        assertNull(coordinator.evaluate(100, nowMillis = 3_000).cursorAdvance)
 
         val plan = coordinator.evaluate(100, nowMillis = 4_000)
 
@@ -141,9 +141,10 @@ class AceLiveRecoveryCoordinatorTest {
         coordinator.updatePeer(peer(id = 1, min = 5, max = 20, unchoked = true))
         coordinator.assign(5, 20, nowMillis = 0)
 
-        assertTrue(coordinator.evaluate(5, nowMillis = 500).timedOutRequests.isEmpty())
         assertTrue(coordinator.evaluate(5, nowMillis = 1_000).timedOutRequests.isEmpty())
-        assertTrue(coordinator.evaluate(5, nowMillis = 3_999).timedOutRequests.isEmpty())
+        assertTrue(coordinator.evaluate(5, nowMillis = 1_500).timedOutRequests.isEmpty())
+        assertTrue(coordinator.evaluate(5, nowMillis = 2_000).timedOutRequests.isEmpty())
+        assertTrue(coordinator.evaluate(5, nowMillis = 3_000).timedOutRequests.isEmpty())
 
         val timedOut = coordinator.evaluate(5, nowMillis = 4_000)
         assertEquals(listOf(5L, 6L), timedOut.timedOutRequests.map { it.piece })
