@@ -58,6 +58,32 @@ class AceLivePeerConnectionStateMachineTest {
     }
 
     @Test
+    fun coalescedFramesCanExceedSingleFrameCapWithoutDisconnect() {
+        val session = session(wireCodec = AceLivePeerWireCodec(maxFrameLengthBytes = 16))
+        val connection = connected(session)
+        val maxSizedFrame = frame(id = 99, payload = ByteArray(15))
+        val batch = maxSizedFrame + byteArrayOf(0, 0, 0, 0)
+
+        val result = connection.consumePeerBytes(batch, nowMillis = 0)
+
+        assertEquals(2, result.decodedFrames)
+        assertFalse(result.disconnectRecommended)
+    }
+
+    @Test
+    fun manySmallFramesInOneReadAreConsumedWithoutAggregateCap() {
+        val session = session(wireCodec = AceLivePeerWireCodec(maxFrameLengthBytes = 16))
+        val connection = connected(session)
+        val keepAliveCount = 5_000
+        val batch = ByteArray(keepAliveCount * 4)
+
+        val result = connection.consumePeerBytes(batch, nowMillis = 0)
+
+        assertEquals(keepAliveCount, result.decodedFrames)
+        assertFalse(result.disconnectRecommended)
+    }
+
+    @Test
     fun chokeStopsOutboundSelectionWithoutDroppingWindow() {
         val session = session()
         val connection = connected(session)
@@ -73,6 +99,28 @@ class AceLivePeerConnectionStateMachineTest {
         assertFalse(connection.isReadyForRequests())
         assertTrue(connection.selectOutboundRequestFrames(scheduled).isEmpty())
         assertEquals(12L, connection.advertisedHead())
+    }
+
+    @Test
+    fun windowRefreshSuppressesQueuedRequestsThatWereRequeued() {
+        val session = session()
+        val connection = connected(session)
+        connection.consumePeerBytes(
+            frame(id = 99, payload = ascii("d9:max_piecei12e9:min_piecei10ee")) + frame(id = 1),
+            nowMillis = 0
+        )
+        val scheduled = session.schedule(head = 12, nowMillis = 1)
+        assertEquals(3, connection.selectOutboundRequestFrames(scheduled).size)
+        assertEquals(7L, session.ownerOf(10))
+
+        val refreshed = connection.consumePeerBytes(
+            frame(id = 99, payload = ascii("d9:max_piecei12e9:min_piecei11ee")),
+            nowMillis = 2
+        )
+
+        assertEquals(listOf(10L), refreshed.requeuedPieces)
+        assertEquals(null, session.ownerOf(10))
+        assertTrue(connection.selectOutboundRequestFrames(scheduled).isEmpty())
     }
 
     @Test
