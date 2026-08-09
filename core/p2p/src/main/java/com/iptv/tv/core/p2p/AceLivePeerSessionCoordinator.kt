@@ -16,9 +16,35 @@ data class AceLivePeerMessageResult(
     val emittedPieces: List<AceLiveReassembledPiece> = emptyList()
 )
 
+/**
+ * Explicit boundary event emitted only when recovery intentionally skips an evicted live gap.
+ *
+ * The P2P layer does not decide how MPEG-TS/HLS should re-gate after the jump. A future playback
+ * adapter can consume this event to flush decoder state, wait for a keyframe, or start a new HLS
+ * discontinuity sequence without trying to infer a jump from non-contiguous piece numbers.
+ */
+data class AceLiveOutputDiscontinuity(
+    val fromPiece: Long,
+    val toPiece: Long,
+    val reason: AceLiveOutputDiscontinuityReason
+) {
+    init {
+        require(fromPiece >= 0) { "fromPiece must be non-negative" }
+        require(toPiece > fromPiece) { "toPiece must be greater than fromPiece" }
+    }
+
+    val skippedPieces: Long
+        get() = toPiece - fromPiece
+}
+
+enum class AceLiveOutputDiscontinuityReason {
+    RECOVERY_EVICTED_GAP
+}
+
 data class AceLiveRecoveryApplicationResult(
     val emittedPieces: List<AceLiveReassembledPiece>,
-    val nextNeededPiece: Long?
+    val nextNeededPiece: Long?,
+    val outputDiscontinuity: AceLiveOutputDiscontinuity? = null
 )
 
 /**
@@ -34,6 +60,7 @@ data class AceLiveRecoveryApplicationResult(
  * - peer-loss/window/timeout requeue discards partial bytes from the old owner;
  * - reassembler contiguous progress is immediately reflected into active-peer recovery state;
  * - a recovery discontinuity is applied to ownership and reassembly as one serialized operation;
+ * - an applied recovery discontinuity is surfaced explicitly to the future media-output boundary;
  * - the active scheduling horizon cannot exceed the number of whole piece buffers allowed by the
  *   configured memory budget.
  */
@@ -127,7 +154,11 @@ class AceLivePeerSessionCoordinator(
         return plan
     }
 
-    /** Applies only a decision previously returned by [evaluateRecovery]. */
+    /**
+     * Applies only a decision previously returned by [evaluateRecovery]. The returned
+     * [AceLiveRecoveryApplicationResult.outputDiscontinuity] is the sole explicit signal that the
+     * output cursor jumped; normal contiguous piece emission never synthesizes one.
+     */
     fun applyRecoveryAdvance(
         advance: AceLiveCursorAdvance,
         nowMillis: Long
@@ -144,7 +175,12 @@ class AceLivePeerSessionCoordinator(
         synchronizeContiguousCursor(nowMillis, expectedAtLeast = advance.toPiece)
         return AceLiveRecoveryApplicationResult(
             emittedPieces = emitted,
-            nextNeededPiece = reassembler.nextNeededPiece()
+            nextNeededPiece = reassembler.nextNeededPiece(),
+            outputDiscontinuity = AceLiveOutputDiscontinuity(
+                fromPiece = advance.fromPiece,
+                toPiece = advance.toPiece,
+                reason = AceLiveOutputDiscontinuityReason.RECOVERY_EVICTED_GAP
+            )
         )
     }
 
