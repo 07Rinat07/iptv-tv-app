@@ -4,7 +4,7 @@
 
 The app already has an embedded libtorrent path for ordinary BitTorrent and keeps Ace Live on an explicit compatibility boundary. A 40-character Ace `content_id` is a transport identity, not a BitTorrent infohash. `.acelive` descriptors must not enter the ordinary libtorrent pipeline.
 
-## Current increment
+## Completed compatibility increment
 
 1. Keep `HybridEngineRepositoryImpl` as the player-facing routing boundary.
 2. Make the external compatibility backend match the current Ace Engine playback control contract: `GET /ace/getstream?format=json...` followed by `response.playback_url`.
@@ -13,10 +13,18 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 5. Reject malformed control responses instead of handing the JSON control endpoint to Media3/LibVLC.
 6. Cover the control request, descriptor normalization and failure behavior with unit tests.
 
+## Current metadata-provider increment
+
+1. Introduce `AceContentMetadataProvider` as a backend-neutral content-id metadata boundary.
+2. Use `ChainedAceContentMetadataProvider` so the first successful provider wins and failures can fall through to compatibility backends.
+3. Keep `ExternalEngineAceContentMetadataProvider` as the current installed-engine provider.
+4. Keep transport classification independent from the metadata backend so a future autonomous resolver does not change player-facing routing.
+5. Do not embed reverse-engineered signing secrets or copy AGPL/proprietary resolver code into this application. Public protocol behavior may be independently implemented only when its inputs and licensing are appropriate for this project.
+
 ## Next autonomous increments
 
 1. Run hardware acceptance with the current AceStream Core Live package and several real `acestream://content_id`/`.acelive` sources; record service discovery, HTTP port, control response and startup failures.
-2. Finish an independent content-id metadata provider using only a verified public protocol or open implementation. Keep transport-file data, content id and BitTorrent infohash as separate fields.
+2. Add an autonomous content-id metadata provider ahead of the external provider when a verified public, independently implementable resolution contract is available. Keep transport-file data, content id and BitTorrent infohash as separate fields.
 3. Extend the explicit `.acelive` model with verified transport-descriptor metadata and diagnostics.
 4. Implement live-window, piece/chunk scheduling, peer discovery, recovery and live seek only from public specifications or license-compatible open implementations; do not copy closed APK/native code.
 5. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
@@ -28,3 +36,4 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 - No `content_id -> BTIH` guessing.
 - No hard-coded `127.0.0.1:6878` as the normal installed-engine endpoint.
 - No direct reuse of proprietary/AOT/native implementation code extracted from APKs.
+- No embedded reverse-engineered catalog signing secret.
