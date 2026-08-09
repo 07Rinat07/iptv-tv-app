@@ -17,8 +17,8 @@ enum class AceRuntimeStage {
  * Safe, value-free runtime diagnostics for Ace playback/metadata resolution.
  *
  * Content ids, magnets, transport descriptor query strings and access tokens are deliberately not
- * stored here. Playback URLs are sanitized before being exposed so query parameters/fragments are
- * never shown on the diagnostics screen.
+ * stored here. Playback URLs are sanitized before being exposed so query parameters/fragments and
+ * identifier-like path segments are never shown on the diagnostics screen.
  */
 data class AceRuntimeDiagnostics(
     val stage: AceRuntimeStage = AceRuntimeStage.IDLE,
@@ -64,9 +64,23 @@ internal fun sanitizeAceHttpUrl(raw: String?): String? {
             null,
             host,
             uri.port,
-            uri.path?.takeIf { it.isNotBlank() } ?: "/",
+            sanitizePath(uri.path),
             null,
             null
         ).toString()
     }.getOrNull()
 }
+
+private fun sanitizePath(rawPath: String?): String {
+    val path = rawPath?.takeIf { it.isNotBlank() } ?: return "/"
+    return path.split('/').joinToString("/") { segment ->
+        when {
+            segment.length > MAX_SAFE_PATH_SEGMENT -> "redacted"
+            CONTENT_ID_SEGMENT.matches(segment) -> "redacted"
+            else -> segment
+        }
+    }
+}
+
+private const val MAX_SAFE_PATH_SEGMENT = 24
+private val CONTENT_ID_SEGMENT = Regex("^[a-fA-F0-9]{40}$")
