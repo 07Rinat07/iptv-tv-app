@@ -50,6 +50,7 @@ class LoopbackFirstAceContentTransportResolver(
         val primary = delegate.resolve(rawSource)
         if (primary !is AppResult.Error) return primary
 
+        client.recordCompatibilityFallback(loopbackEndpoint)
         val loopback = client.connect(loopbackEndpoint)
         if (loopback !is AppResult.Success) return primary
 
