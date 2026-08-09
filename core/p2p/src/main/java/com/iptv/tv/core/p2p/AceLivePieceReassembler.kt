@@ -49,9 +49,12 @@ data class AceLiveReassemblyResult(
  * - duplicate chunks are idempotent and never count twice;
  * - piece numbers never wrap implicitly at the u32 wire boundary.
  *
- * The caller should invoke [appendAcceptedChunk] only when the active-peer coordinator returned an
- * accepted chunk result. Geometry/header checks are intentionally repeated here because this class
- * is also a memory-safety boundary.
+ * [preflightAcceptedChunk] is a non-mutating guard for the session orchestration layer. It lets the
+ * caller reject memory/header/geometry problems before mutating active-peer ownership state.
+ * [discardPieces] is the matching conservative boundary for peer-loss/timeout requeue: partial
+ * bytes from an old owner are dropped before another peer owns the same piece.
+ *
+ * This class is intentionally single-threaded. The session coordinator serializes peer events.
  */
 class AceLivePieceReassembler(
     private val geometry: AceLiveTransportGeometry,
@@ -78,41 +81,53 @@ class AceLivePieceReassembler(
         }
     }
 
-    fun appendAcceptedChunk(chunk: AceLiveIncomingChunk): AceLiveReassemblyResult {
-        if (exhausted) return result(AceLiveReassemblyDisposition.STALE)
+    /** Returns null when [appendAcceptedChunk] can mutate safely without changing state here. */
+    fun preflightAcceptedChunk(chunk: AceLiveIncomingChunk): AceLiveReassemblyDisposition? {
+        if (exhausted) return AceLiveReassemblyDisposition.STALE
         if (chunk.piece !in 0..MAX_ACE_LIVE_REASSEMBLY_PIECE) {
-            return result(AceLiveReassemblyDisposition.INVALID_PIECE)
+            return AceLiveReassemblyDisposition.INVALID_PIECE
         }
         if (chunk.piece < nextNeeded) {
-            return result(AceLiveReassemblyDisposition.STALE)
+            return AceLiveReassemblyDisposition.STALE
         }
         if (chunk.piece - nextNeeded >= maxPiecesAhead) {
-            return result(AceLiveReassemblyDisposition.TOO_FAR_AHEAD)
+            return AceLiveReassemblyDisposition.TOO_FAR_AHEAD
         }
         if (chunk.chunkIndex !in 0 until geometry.chunksPerPiece) {
-            return result(AceLiveReassemblyDisposition.INVALID_CHUNK_INDEX)
+            return AceLiveReassemblyDisposition.INVALID_CHUNK_INDEX
         }
 
-        val expectedPayloadBytes = expectedPayloadBytes(chunk.chunkIndex)
-        if (chunk.data.size != expectedPayloadBytes) {
-            return result(AceLiveReassemblyDisposition.INVALID_PAYLOAD_SIZE)
+        if (chunk.data.size != expectedPayloadBytes(chunk.chunkIndex)) {
+            return AceLiveReassemblyDisposition.INVALID_PAYLOAD_SIZE
         }
         if (AceLivePieceHeaderCodec.decodeUnixSeconds(chunk.pieceHeader) == null) {
-            return result(AceLiveReassemblyDisposition.INVALID_HEADER)
+            return AceLiveReassemblyDisposition.INVALID_HEADER
         }
 
         val existing = pieces[chunk.piece]
-        if (existing != null && !existing.pieceHeader.contentEquals(chunk.pieceHeader)) {
-            return result(AceLiveReassemblyDisposition.PIECE_HEADER_MISMATCH)
+        if (existing != null) {
+            if (!existing.pieceHeader.contentEquals(chunk.pieceHeader)) {
+                return AceLiveReassemblyDisposition.PIECE_HEADER_MISMATCH
+            }
+            if (existing.receivedChunks[chunk.chunkIndex]) {
+                return AceLiveReassemblyDisposition.DUPLICATE
+            }
+            return null
         }
 
-        val piece = existing ?: allocatePiece(chunk)
-            ?: return result(AceLiveReassemblyDisposition.BUFFER_LIMIT_REACHED)
+        val pieceBytes = geometry.pieceLengthBytes.toLong()
+        if (allocatedPayloadBytes > maxBufferedBytes - pieceBytes) {
+            return AceLiveReassemblyDisposition.BUFFER_LIMIT_REACHED
+        }
+        return null
+    }
 
-        if (piece.receivedChunks[chunk.chunkIndex]) {
-            return result(AceLiveReassemblyDisposition.DUPLICATE)
+    fun appendAcceptedChunk(chunk: AceLiveIncomingChunk): AceLiveReassemblyResult {
+        preflightAcceptedChunk(chunk)?.let { disposition ->
+            return result(disposition)
         }
 
+        val piece = pieces[chunk.piece] ?: allocatePiece(chunk)
         val begin = chunk.chunkIndex.toLong() * geometry.chunkLengthBytes.toLong()
         chunk.data.copyInto(
             destination = piece.bytes,
@@ -128,6 +143,18 @@ class AceLivePieceReassembler(
             disposition = AceLiveReassemblyDisposition.ACCEPTED,
             emittedPieces = drainContiguous()
         )
+    }
+
+    /**
+     * Drops selected buffered pieces without moving the authoritative cursor. Used when active-peer
+     * ownership is requeued after peer loss, a window shift or timeout.
+     */
+    fun discardPieces(pieceNumbers: Iterable<Long>): List<Long> {
+        val discarded = mutableListOf<Long>()
+        pieceNumbers.distinct().forEach { piece ->
+            if (removePiece(piece) != null) discarded += piece
+        }
+        return discarded
     }
 
     /**
@@ -160,9 +187,11 @@ class AceLivePieceReassembler(
 
     fun bufferedPieces(): List<Long> = pieces.keys.toList()
 
-    private fun allocatePiece(chunk: AceLiveIncomingChunk): PieceBuffer? {
+    private fun allocatePiece(chunk: AceLiveIncomingChunk): PieceBuffer {
         val pieceBytes = geometry.pieceLengthBytes.toLong()
-        if (allocatedPayloadBytes > maxBufferedBytes - pieceBytes) return null
+        check(allocatedPayloadBytes <= maxBufferedBytes - pieceBytes) {
+            "Ace Live reassembler allocation must be preflighted"
+        }
 
         return PieceBuffer(
             pieceHeader = chunk.pieceHeader.copyOf(),
