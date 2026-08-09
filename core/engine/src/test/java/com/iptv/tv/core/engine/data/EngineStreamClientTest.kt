@@ -64,6 +64,7 @@ class EngineStreamClientTest {
         assertEquals("0", api.lastResolveOptions["stream_id"])
         assertEquals(magnet, api.lastResolveOptions["magnet"])
         assertEquals("1", api.lastResolveOptions["auto_start_stream"])
+        assertEquals("10", api.lastResolveOptions["manifest_p2p_wait_timeout"])
         assertTrue(api.lastResolveOptions["sid"].orEmpty().startsWith("engineProxy-"))
         assertTrue(api.lastResolveOptions["client_session_id"]?.toIntOrNull() != null)
     }
