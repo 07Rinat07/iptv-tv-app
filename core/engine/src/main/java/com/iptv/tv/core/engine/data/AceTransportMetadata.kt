@@ -20,6 +20,19 @@ data class AceTransportMetadata(
     val isLive: Boolean
         get() = mediaType == MEDIA_TYPE_LIVE || files.any { it.mediaType == MEDIA_TYPE_LIVE }
 
+    /**
+     * Verified 40-hex swarm identity returned for live metadata.
+     *
+     * This is intentionally separate from [embeddedBitTorrentInfoHash]: callers may convert it to
+     * the Ace Live 20-byte peer/discovery swarm key, but must not route it through ordinary
+     * libtorrent merely because both identities have the same hexadecimal width.
+     */
+    val liveSwarmInfoHash: String?
+        get() {
+            if (!isLive) return null
+            return infoHash ?: files.firstNotNullOfOrNull { it.infoHash }
+        }
+
     val embeddedBitTorrentInfoHash: String?
         get() {
             if (isLive) return null
