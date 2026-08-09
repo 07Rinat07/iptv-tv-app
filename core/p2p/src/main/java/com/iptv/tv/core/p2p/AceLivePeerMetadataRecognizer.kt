@@ -15,6 +15,12 @@ data class AceLivePeerAdvertisedWindow(
     init {
         require(minPiece in 0..MAX_ACE_LIVE_METADATA_PIECE) { "minPiece must fit u32" }
         require(maxPiece in minPiece..MAX_ACE_LIVE_METADATA_PIECE) { "maxPiece must fit u32 and cover minPiece" }
+        require(position == null || position in 0..MAX_ACE_LIVE_METADATA_PIECE) {
+            "position must fit u32 when present"
+        }
+        require(distanceFromSource == null || distanceFromSource in 0..MAX_ACE_LIVE_METADATA_PIECE) {
+            "distanceFromSource must fit u32 when present"
+        }
     }
 }
 
@@ -98,12 +104,10 @@ class AceLivePeerMetadataRecognizer(
         val position = (source.values["position"] as? BValue.IntValue)?.value
         val distance = (source.values["distance_from_source"] as? BValue.IntValue)?.value
 
-        if (maxPiece !in 0..MAX_ACE_LIVE_METADATA_PIECE) {
-            return invalidWindow()
-        }
-        if (explicitMin != null && explicitMin !in 0..maxPiece) {
-            return invalidWindow()
-        }
+        if (maxPiece !in 0..MAX_ACE_LIVE_METADATA_PIECE) return invalidWindow()
+        if (explicitMin != null && explicitMin !in 0..maxPiece) return invalidWindow()
+        if (position != null && position !in 0..MAX_ACE_LIVE_METADATA_PIECE) return invalidWindow()
+        if (distance != null && distance !in 0..MAX_ACE_LIVE_METADATA_PIECE) return invalidWindow()
 
         val safeMin = explicitMin ?: maxPiece
         return AceLivePeerMetadataRecognition.Recognized(
