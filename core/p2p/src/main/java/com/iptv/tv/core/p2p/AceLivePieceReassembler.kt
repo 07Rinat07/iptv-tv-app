@@ -15,6 +15,7 @@ enum class AceLiveReassemblyDisposition {
     DUPLICATE,
     STALE,
     TOO_FAR_AHEAD,
+    BUFFER_LIMIT_REACHED,
     INVALID_PIECE,
     INVALID_CHUNK_INDEX,
     INVALID_HEADER,
@@ -42,6 +43,7 @@ data class AceLiveReassemblyResult(
  * - a completed future piece stays buffered until every earlier piece is emitted or [skipTo] is
  *   called explicitly by recovery policy;
  * - stale and far-future chunks are rejected before a new piece buffer is allocated;
+ * - total allocated piece payload memory is capped by [maxBufferedBytes];
  * - every chunk must match verified geometry and all chunks of a piece must carry one identical
  *   valid 8-byte live header;
  * - duplicate chunks are idempotent and never count twice;
@@ -54,19 +56,25 @@ data class AceLiveReassemblyResult(
 class AceLivePieceReassembler(
     private val geometry: AceLiveTransportGeometry,
     initialNextNeededPiece: Long,
-    val maxPiecesAhead: Long = AceLiveActivePeerCoordinator.DEFAULT_MAX_REASSEMBLER_AHEAD_PIECES
+    val maxPiecesAhead: Long = AceLiveActivePeerCoordinator.DEFAULT_MAX_REASSEMBLER_AHEAD_PIECES,
+    val maxBufferedBytes: Long = DEFAULT_MAX_BUFFERED_BYTES
 ) {
     private val pieces = sortedMapOf<Long, PieceBuffer>()
     private var nextNeeded = initialNextNeededPiece
     private var exhausted = false
+    private var allocatedPayloadBytes = 0L
 
     init {
         require(initialNextNeededPiece in 0..MAX_ACE_LIVE_REASSEMBLY_PIECE) {
             "initialNextNeededPiece must fit Ace Live u32 wire field"
         }
         require(maxPiecesAhead > 0) { "maxPiecesAhead must be positive" }
+        require(maxBufferedBytes > 0) { "maxBufferedBytes must be positive" }
         require(geometry.chunksPerPiece in 1..MAX_ACE_LIVE_REASSEMBLY_CHUNKS_PER_PIECE) {
             "Ace Live chunksPerPiece must fit the u16 chunk index space"
+        }
+        require(geometry.pieceLengthBytes.toLong() <= maxBufferedBytes) {
+            "maxBufferedBytes must fit at least one complete Ace Live piece"
         }
     }
 
@@ -98,11 +106,8 @@ class AceLivePieceReassembler(
             return result(AceLiveReassemblyDisposition.PIECE_HEADER_MISMATCH)
         }
 
-        val piece = existing ?: PieceBuffer(
-            pieceHeader = chunk.pieceHeader.copyOf(),
-            bytes = ByteArray(geometry.pieceLengthBytes),
-            receivedChunks = BooleanArray(geometry.chunksPerPiece)
-        ).also { pieces[chunk.piece] = it }
+        val piece = existing ?: allocatePiece(chunk)
+            ?: return result(AceLiveReassemblyDisposition.BUFFER_LIMIT_REACHED)
 
         if (piece.receivedChunks[chunk.chunkIndex]) {
             return result(AceLiveReassemblyDisposition.DUPLICATE)
@@ -142,7 +147,7 @@ class AceLivePieceReassembler(
         pieces.keys
             .takeWhile { it < newNextNeededPiece }
             .toList()
-            .forEach { pieces.remove(it) }
+            .forEach(::removePiece)
         nextNeeded = newNextNeededPiece
         return drainContiguous()
     }
@@ -151,7 +156,23 @@ class AceLivePieceReassembler(
 
     fun bufferedPieceCount(): Int = pieces.size
 
+    fun bufferedPayloadBytes(): Long = allocatedPayloadBytes
+
     fun bufferedPieces(): List<Long> = pieces.keys.toList()
+
+    private fun allocatePiece(chunk: AceLiveIncomingChunk): PieceBuffer? {
+        val pieceBytes = geometry.pieceLengthBytes.toLong()
+        if (allocatedPayloadBytes > maxBufferedBytes - pieceBytes) return null
+
+        return PieceBuffer(
+            pieceHeader = chunk.pieceHeader.copyOf(),
+            bytes = ByteArray(geometry.pieceLengthBytes),
+            receivedChunks = BooleanArray(geometry.chunksPerPiece)
+        ).also { piece ->
+            pieces[chunk.piece] = piece
+            allocatedPayloadBytes += pieceBytes
+        }
+    }
 
     private fun drainContiguous(): List<AceLiveReassembledPiece> {
         val emitted = mutableListOf<AceLiveReassembledPiece>()
@@ -159,11 +180,12 @@ class AceLivePieceReassembler(
             val piece = pieces[nextNeeded] ?: break
             if (!piece.complete) break
 
-            pieces.remove(nextNeeded)
+            val emittedPieceNumber = nextNeeded
+            val completed = removePiece(emittedPieceNumber) ?: break
             emitted += AceLiveReassembledPiece(
-                piece = nextNeeded,
-                pieceHeader = piece.pieceHeader.copyOf(),
-                data = piece.bytes.copyOf()
+                piece = emittedPieceNumber,
+                pieceHeader = completed.pieceHeader.copyOf(),
+                data = completed.bytes.copyOf()
             )
 
             if (nextNeeded == MAX_ACE_LIVE_REASSEMBLY_PIECE) {
@@ -173,6 +195,13 @@ class AceLivePieceReassembler(
             }
         }
         return emitted
+    }
+
+    private fun removePiece(piece: Long): PieceBuffer? {
+        val removed = pieces.remove(piece) ?: return null
+        allocatedPayloadBytes -= geometry.pieceLengthBytes.toLong()
+        check(allocatedPayloadBytes >= 0) { "Ace Live reassembler byte accounting underflow" }
+        return removed
     }
 
     private fun expectedPayloadBytes(chunkIndex: Int): Int {
@@ -197,4 +226,8 @@ class AceLivePieceReassembler(
         var receivedCount: Int = 0,
         var complete: Boolean = false
     )
+
+    companion object {
+        const val DEFAULT_MAX_BUFFERED_BYTES: Long = 32L * 1024L * 1024L
+    }
 }
