@@ -13,7 +13,7 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 5. Reject malformed control responses instead of handing the JSON control endpoint to Media3/LibVLC.
 6. Cover the control request, descriptor normalization and failure behavior with unit tests.
 
-## Current metadata-provider increment
+## Completed metadata-provider increment
 
 1. Introduce `AceContentMetadataProvider` as a backend-neutral content-id metadata boundary.
 2. Use `ChainedAceContentMetadataProvider` so the first successful provider wins and failures can fall through to compatibility backends.
@@ -21,9 +21,18 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 4. Keep transport classification independent from the metadata backend so a future autonomous resolver does not change player-facing routing.
 5. Do not embed reverse-engineered signing secrets or copy AGPL/proprietary resolver code into this application. Public protocol behavior may be independently implemented only when its inputs and licensing are appropriate for this project.
 
+## Current runtime-diagnostics increment
+
+1. Track Ace resolution stages separately from ordinary engine health: endpoint discovery, metadata request, playback request, compatibility fallback, ready and error.
+2. Expose only safe diagnostic attributes: descriptor kind, provider, route, engine package, loopback endpoint, transport type/live flag and a sanitized playback target.
+3. Never store or display content-id values, magnets, access tokens, transport descriptor query strings, URL query/fragment data or identifier-like playback path segments.
+4. Preserve a successful `loopback_compatibility` fallback reason separately from real request failure codes.
+5. Mirror the runtime summary into the existing `EngineStatus.message` so the current Diagnostics screen can show hardware-acceptance state without a parallel UI/domain contract.
+6. Cover redaction, live metadata, playback resolution and loopback fallback with unit tests.
+
 ## Next autonomous increments
 
-1. Run hardware acceptance with the current AceStream Core Live package and several real `acestream://content_id`/`.acelive` sources; record service discovery, HTTP port, control response and startup failures.
+1. Run hardware acceptance with the current AceStream Core Live package and several real `acestream://content_id`/`.acelive` sources; record service discovery, HTTP port, runtime route, control response and startup failures.
 2. Add an autonomous content-id metadata provider ahead of the external provider when a verified public, independently implementable resolution contract is available. Keep transport-file data, content id and BitTorrent infohash as separate fields.
 3. Extend the explicit `.acelive` model with verified transport-descriptor metadata and diagnostics.
 4. Implement live-window, piece/chunk scheduling, peer discovery, recovery and live seek only from public specifications or license-compatible open implementations; do not copy closed APK/native code.

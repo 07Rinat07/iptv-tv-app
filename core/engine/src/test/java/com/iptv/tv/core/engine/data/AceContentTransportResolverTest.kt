@@ -124,6 +124,15 @@ class AceContentTransportResolverTest {
         )
         assertEquals("http://127.0.0.1:6878/webui/api/service", api.lastStatusUrl)
         assertEquals("http://127.0.0.1:6878/server/api", api.lastResolveUrl)
+
+        val runtime = client.observeRuntimeDiagnostics().value
+        assertEquals(AceRuntimeStage.METADATA_READY, runtime.stage)
+        assertEquals("loopback_compatibility", runtime.route)
+        assertEquals("loopback_http", runtime.enginePackage)
+        assertEquals("http://127.0.0.1:6878", runtime.endpoint)
+        assertEquals("primary_metadata_failed", runtime.fallbackReason)
+        assertEquals(null, runtime.failureCode)
+        assertTrue(!runtime.toSummary().contains(contentId, ignoreCase = true))
     }
 
     private fun metadata(

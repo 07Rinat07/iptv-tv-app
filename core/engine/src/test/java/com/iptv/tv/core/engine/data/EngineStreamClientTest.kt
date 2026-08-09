@@ -41,11 +41,12 @@ class EngineStreamClientTest {
             "https://cdn.example/live.m3u8",
             (result as AppResult.Success).data
         )
+        assertEquals(AceRuntimeStage.IDLE, client.observeRuntimeDiagnostics().value.stage)
     }
 
     @Test
     fun resolve_magnetUsesCurrentGetStreamControlApiAndPlaybackUrl() = runTest {
-        val playbackUrl = "http://127.0.0.1:6878/ace/stream/resolved"
+        val playbackUrl = "http://127.0.0.1:6878/ace/stream/resolved?token=private#fragment"
         val api = FakeApi(
             statusPayload = mapOf("response" to mapOf("peers" to 1, "speed" to 10)),
             resolvePayload = playbackPayload(playbackUrl)
@@ -67,6 +68,17 @@ class EngineStreamClientTest {
         assertEquals("10", api.lastResolveOptions["manifest_p2p_wait_timeout"])
         assertTrue(api.lastResolveOptions["sid"].orEmpty().startsWith("engineProxy-"))
         assertTrue(api.lastResolveOptions["client_session_id"]?.toIntOrNull() != null)
+
+        val runtime = client.observeRuntimeDiagnostics().value
+        assertEquals(AceRuntimeStage.PLAYBACK_READY, runtime.stage)
+        assertEquals("magnet", runtime.descriptorKind)
+        assertEquals("external_engine", runtime.provider)
+        assertEquals("manual_endpoint", runtime.route)
+        assertEquals("http://127.0.0.1:6878", runtime.endpoint)
+        assertEquals("http://127.0.0.1:6878/ace/stream/resolved", runtime.playbackTarget)
+        assertTrue(!runtime.toSummary().contains("token=private"))
+        assertTrue(!runtime.toSummary().contains("fragment"))
+        assertEquals(runtime.toSummary(), client.observeStatus().value.message)
     }
 
     @Test
@@ -85,6 +97,9 @@ class EngineStreamClientTest {
 
         assertTrue(result is AppResult.Error)
         assertTrue((result as AppResult.Error).message.contains("playback_url"))
+        val runtime = client.observeRuntimeDiagnostics().value
+        assertEquals(AceRuntimeStage.ERROR, runtime.stage)
+        assertEquals("illegalstateexception", runtime.failureCode)
     }
 
     @Test
@@ -109,7 +124,7 @@ class EngineStreamClientTest {
     }
 
     @Test
-    fun resolve_aceSchemeUsesHexContentIdParameter() = runTest {
+    fun resolve_aceSchemeUsesHexContentIdParameterWithoutLeakingValueToDiagnostics() = runTest {
         val playbackUrl = "http://127.0.0.1:6878/ace/stream/content-id"
         val api = FakeApi(
             statusPayload = mapOf("response" to mapOf("peers" to 2, "speed" to 20)),
@@ -125,6 +140,31 @@ class EngineStreamClientTest {
         assertEquals(playbackUrl, (result as AppResult.Success).data)
         assertEquals(contentId.lowercase(), api.lastResolveOptions["content_id"])
         assertTrue("id" !in api.lastResolveOptions)
+
+        val runtime = client.observeRuntimeDiagnostics().value
+        assertEquals(AceRuntimeStage.PLAYBACK_READY, runtime.stage)
+        assertEquals("content_id", runtime.descriptorKind)
+        assertTrue(!runtime.toSummary().contains(contentId, ignoreCase = true))
+    }
+
+    @Test
+    fun resolve_aceliveUrlReportsDescriptorKindWithoutExposingDescriptor() = runTest {
+        val playbackUrl = "http://127.0.0.1:6878/ace/stream/live"
+        val api = FakeApi(
+            statusPayload = mapOf("response" to mapOf("peers" to 1, "speed" to 10)),
+            resolvePayload = playbackPayload(playbackUrl)
+        )
+        val client = EngineStreamClient(api)
+        client.connect("127.0.0.1:6878")
+
+        val source = "acestream:?url=https%3A%2F%2Fexample.org%2Fprivate%2Fchannel.acelive%3Fsignature%3Dsecret"
+        val result = client.resolveStream(source)
+
+        assertTrue(result is AppResult.Success)
+        val runtime = client.observeRuntimeDiagnostics().value
+        assertEquals("acelive_url", runtime.descriptorKind)
+        assertTrue(!runtime.toSummary().contains("example.org/private"))
+        assertTrue(!runtime.toSummary().contains("signature=secret"))
     }
 
     @Test
@@ -140,6 +180,7 @@ class EngineStreamClientTest {
 
         assertTrue(result is AppResult.Error)
         assertTrue((result as AppResult.Error).message.contains("missing content descriptor"))
+        assertEquals(AceRuntimeStage.ERROR, client.observeRuntimeDiagnostics().value.stage)
     }
 
     @Test
@@ -170,10 +211,18 @@ class EngineStreamClientTest {
         assertEquals("full", api.lastResolveOptions["mode"])
         assertEquals("1", api.lastResolveOptions["expand_wrapper"])
         assertEquals("1", api.lastResolveOptions["dump_transport_file"])
+
+        val runtime = client.observeRuntimeDiagnostics().value
+        assertEquals(AceRuntimeStage.METADATA_READY, runtime.stage)
+        assertEquals("content_id", runtime.descriptorKind)
+        assertEquals("bt", runtime.transportType)
+        assertEquals(false, runtime.isLive)
+        assertTrue(!runtime.toSummary().contains(contentId, ignoreCase = true))
+        assertTrue(!runtime.toSummary().contains(infoHash, ignoreCase = true))
     }
 
     @Test
-    fun resolveContentIdInfoHash_rejectsAceLiveTransport() = runTest {
+    fun resolveContentIdInfoHash_rejectsAceLiveTransportAndReportsLiveMetadata() = runTest {
         val contentId = "11223344556677889900AABBCCDDEEFF00112233"
         val api = FakeApi(
             statusPayload = mapOf("response" to mapOf("peers" to 1, "speed" to 10)),
@@ -192,6 +241,10 @@ class EngineStreamClientTest {
 
         assertTrue(result is AppResult.Error)
         assertTrue((result as AppResult.Error).message.contains("Ace live protocol"))
+        val runtime = client.observeRuntimeDiagnostics().value
+        assertEquals(AceRuntimeStage.METADATA_READY, runtime.stage)
+        assertEquals("bt", runtime.transportType)
+        assertEquals(true, runtime.isLive)
     }
 
     @Test
