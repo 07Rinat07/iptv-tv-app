@@ -9,27 +9,22 @@ import kotlin.math.ceil
  *
  * This model intentionally starts after descriptor decoding. It does not embed the proprietary
  * transport-file decryption secret and makes no attempt to guess encrypted `.acelive` bodies.
+ * `bitrate` is kept as the raw positive protocol value until its exact unit semantics are verified
+ * well enough to make scheduling calculations from it.
  */
 data class AceLiveTransportGeometry(
     val pieceLengthBytes: Int,
     val chunkLengthBytes: Int,
-    val bitrateBitsPerSecond: Long
+    val bitrate: Long
 ) {
     init {
         require(pieceLengthBytes > 0) { "pieceLengthBytes must be positive" }
         require(chunkLengthBytes > 0) { "chunkLengthBytes must be positive" }
-        require(bitrateBitsPerSecond > 0) { "bitrateBitsPerSecond must be positive" }
+        require(bitrate > 0) { "bitrate must be positive" }
     }
 
     val chunksPerPiece: Int
         get() = ceil(pieceLengthBytes.toDouble() / chunkLengthBytes.toDouble()).toInt()
-
-    val nominalPieceDurationSeconds: Double
-        get() = pieceLengthBytes.toDouble() * BITS_PER_BYTE / bitrateBitsPerSecond.toDouble()
-
-    private companion object {
-        const val BITS_PER_BYTE = 8.0
-    }
 }
 
 /**
@@ -50,7 +45,7 @@ data class AceLiveTransportMetadata(
         append("Ace live descriptor: piece_bytes=").append(geometry.pieceLengthBytes)
         append(" chunk_bytes=").append(geometry.chunkLengthBytes)
         append(" chunks_per_piece=").append(geometry.chunksPerPiece)
-        append(" bitrate_bps=").append(geometry.bitrateBitsPerSecond)
+        append(" bitrate=").append(geometry.bitrate)
         append(" auth=").append(authMethod?.takeIf { it.isNotBlank() } ?: "unknown")
         append(" pubkey=").append(if (publicKeyDerBase64.isNullOrBlank()) "absent" else "present")
         append(" trackers=").append(trackers.count { it.isNotBlank() })
