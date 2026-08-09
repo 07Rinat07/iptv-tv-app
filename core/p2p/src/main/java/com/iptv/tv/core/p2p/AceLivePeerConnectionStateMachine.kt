@@ -83,9 +83,7 @@ class AceLivePeerConnectionStateMachine(
         return session.wireCodec.encodeInterestedFrame()
     }
 
-    /**
-     * Drops all connection-local state and releases scheduler ownership for this peer.
-     */
+    /** Drops all connection-local state and releases scheduler ownership for this peer. */
     fun onTransportDisconnected(): AceLivePeerEventResult {
         val requeued = if (phase == AceLivePeerConnectionPhase.DISCONNECTED) {
             AceLivePeerEventResult()
@@ -102,6 +100,10 @@ class AceLivePeerConnectionStateMachine(
 
     /**
      * Incrementally consumes framed peer bytes after the outer handshake is accepted.
+     *
+     * Complete coalesced frames are walked with a cursor over one backing array. Only an incomplete
+     * trailing frame is copied into [receiveBuffer], so a batch of many small frames stays linear and
+     * aggregate TCP read size is not confused with the per-frame protocol cap.
      */
     fun consumePeerBytes(bytes: ByteArray, nowMillis: Long): AceLivePeerIngressResult {
         require(phase == AceLivePeerConnectionPhase.HANDSHAKE_ACCEPTED) {
@@ -112,24 +114,41 @@ class AceLivePeerConnectionStateMachine(
         }
         if (bytes.isEmpty()) return AceLivePeerIngressResult()
 
-        val maxBuffered = session.wireCodec.maxFrameLengthBytes.toLong() + LENGTH_PREFIX_BYTES
-        val combinedSize = receiveBuffer.size.toLong() + bytes.size.toLong()
-        if (combinedSize > maxBuffered) {
-            receiveBuffer = byteArrayOf()
-            protocolBlocked = true
-            return AceLivePeerIngressResult(disconnectRecommended = true)
-        }
-        receiveBuffer += bytes
+        val workingBuffer = if (receiveBuffer.isEmpty()) bytes else receiveBuffer + bytes
+        receiveBuffer = byteArrayOf()
 
+        var cursor = 0
         var decodedFrames = 0
         val metadataUpdates = mutableListOf<AceLivePeerAdvertisedWindow>()
         val metadataRejections = mutableListOf<AceLivePeerMetadataRejectReason>()
         val requeuedPieces = mutableListOf<Long>()
         val emittedPieces = mutableListOf<AceLiveReassembledPiece>()
 
-        while (receiveBuffer.isNotEmpty()) {
-            when (val decoded = session.decodeNext(receiveBuffer)) {
-                is AceLivePeerFrameDecodeResult.NeedMoreData -> break
+        while (cursor < workingBuffer.size) {
+            when (
+                val decoded = session.wireCodec.decodeNext(
+                    buffer = workingBuffer,
+                    offset = cursor,
+                    limit = workingBuffer.size
+                )
+            ) {
+                is AceLivePeerFrameDecodeResult.NeedMoreData -> {
+                    val trailingBytes = workingBuffer.size - cursor
+                    val maxRetainedBytes = session.wireCodec.maxFrameLengthBytes.toLong() + LENGTH_PREFIX_BYTES
+                    if (trailingBytes.toLong() > maxRetainedBytes) {
+                        protocolBlocked = true
+                        return AceLivePeerIngressResult(
+                            decodedFrames = decodedFrames,
+                            metadataUpdates = metadataUpdates,
+                            metadataRejections = metadataRejections,
+                            requeuedPieces = requeuedPieces,
+                            emittedPieces = emittedPieces,
+                            disconnectRecommended = true
+                        )
+                    }
+                    receiveBuffer = workingBuffer.copyOfRange(cursor, workingBuffer.size)
+                    break
+                }
 
                 is AceLivePeerFrameDecodeResult.Rejected -> {
                     receiveBuffer = byteArrayOf()
@@ -146,7 +165,7 @@ class AceLivePeerConnectionStateMachine(
 
                 is AceLivePeerFrameDecodeResult.Decoded -> {
                     decodedFrames += 1
-                    receiveBuffer = receiveBuffer.copyOfRange(decoded.consumedBytes, receiveBuffer.size)
+                    cursor += decoded.consumedBytes
                     when (val message = decoded.message) {
                         AceLivePeerWireMessage.Choke -> {
                             peerUnchoked = false
@@ -211,9 +230,15 @@ class AceLivePeerConnectionStateMachine(
         scheduled: List<AceLiveOutboundPeerFrame>
     ): List<ByteArray> {
         if (!isReadyForRequests()) return emptyList()
+        val window = latestWindow ?: return emptyList()
         return scheduled
             .asSequence()
-            .filter { it.request.peerId == peerId }
+            .filter { outbound ->
+                val request = outbound.request
+                request.peerId == peerId &&
+                    request.piece in window.minPiece..window.maxPiece &&
+                    session.ownerOf(request.piece) == peerId
+            }
             .map { it.bytes }
             .toList()
     }
