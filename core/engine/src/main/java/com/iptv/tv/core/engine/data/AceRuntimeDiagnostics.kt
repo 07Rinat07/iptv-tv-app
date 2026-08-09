@@ -30,6 +30,7 @@ data class AceRuntimeDiagnostics(
     val transportType: String? = null,
     val isLive: Boolean? = null,
     val playbackTarget: String? = null,
+    val fallbackReason: String? = null,
     val failureCode: String? = null
 ) {
     fun toSummary(): String = buildString {
@@ -43,6 +44,7 @@ data class AceRuntimeDiagnostics(
         transportType?.let { append(" transport=").append(it) }
         isLive?.let { append(" live=").append(it) }
         playbackTarget?.let { append(" target=").append(it) }
+        fallbackReason?.let { append(" fallback=").append(it) }
         failureCode?.let { append(" failure=").append(it) }
     }
 }
@@ -62,7 +64,7 @@ internal fun sanitizeAceHttpUrl(raw: String?): String? {
             null,
             host,
             uri.port,
-            uri.rawPath?.takeIf { it.isNotBlank() } ?: "/",
+            uri.path?.takeIf { it.isNotBlank() } ?: "/",
             null,
             null
         ).toString()
