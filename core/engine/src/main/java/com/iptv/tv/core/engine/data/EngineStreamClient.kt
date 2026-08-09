@@ -178,6 +178,7 @@ class EngineStreamClient(
                 },
                 enginePackage = if (preserveFallback) previousRuntime.enginePackage else connectedPackageName,
                 endpoint = if (preserveFallback) previousRuntime.endpoint else diagnosticEndpoint(connectedEndpoint),
+                fallbackReason = if (preserveFallback) previousRuntime.fallbackReason else null,
                 failureCode = if (preserveFallback) previousRuntime.failureCode else null
             )
         )
@@ -288,7 +289,7 @@ class EngineStreamClient(
     suspend fun resolveStream(rawSource: String): AppResult<String> {
         val descriptor = AceStreamDescriptorParser.parse(rawSource)
         if (descriptor is AceStreamDescriptor.Direct) {
-            runtimeDiagnostics.value = AceRuntimeDiagnostics()
+            publishRuntime(AceRuntimeDiagnostics())
             return if (descriptor.value.isBlank()) {
                 AppResult.Error("Empty stream source")
             } else {
@@ -396,7 +397,8 @@ class EngineStreamClient(
                 route = "loopback_compatibility",
                 enginePackage = null,
                 endpoint = diagnosticEndpoint(loopbackEndpoint),
-                failureCode = "primary_metadata_failed"
+                fallbackReason = "primary_metadata_failed",
+                failureCode = null
             )
         )
     }
