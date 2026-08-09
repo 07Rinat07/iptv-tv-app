@@ -50,7 +50,7 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 7. Prefer peers with fewer outstanding assignments, then a fresher advertised head, without making network/address policy part of the scheduler.
 8. Keep this layer independent of `bitrate` timing assumptions and proprietary `.acelive` decryption.
 
-## Current recovery-coordinator increment
+## Completed recovery-coordinator increment
 
 1. Add `AceLiveRecoveryCoordinator` around the pure window scheduler without adding sockets or peer discovery.
 2. Timestamp outstanding piece assignments and requeue requests that remain unresolved past the local request timeout.
@@ -62,15 +62,29 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 8. Keep timeout/check/stale thresholds as validated local policy values and do not derive them from the unverified raw descriptor bitrate.
 9. Cover timeout requeue, gap recovery, stale-pool signaling, progress reset, peer removal, sweep throttling and stale cursor decisions with unit tests.
 
+## Current active-peer coordinator increment
+
+1. Add a pure `AceLiveActivePeerCoordinator` that consumes already-decoded window/choke/drop/chunk events and delegates piece ownership/recovery to `AceLiveRecoveryCoordinator`.
+2. Expand every piece assignment into the verified Ace Live message-id 6 chunk coordinates: `[stream u32=0][piece u32][chunk u16]` in big-endian wire order.
+3. Derive chunk offsets only from verified transport geometry: `begin = chunkIndex * chunkLength`; keep the final chunk bounded by `pieceLength`.
+4. Keep peer sockets, tracker/DHT discovery, handshake/authentication and media buffering outside this coordinator.
+5. Reject wrong-stream, wrong-owner, unsolicited, stale and too-far-ahead chunks before they can enter future reassembly.
+6. Bound both scheduling and inbound acceptance to a configurable reassembler-ahead window so hostile peer indices cannot create unbounded work.
+7. Require all chunks of one piece to carry a valid, identical verified 8-byte live header; duplicates do not advance piece completion.
+8. Release scheduler ownership only after every expected chunk has arrived; completing a future piece still does not advance the contiguous playback cursor.
+9. Clear chunk tracking when peer/window loss or timeout requeues a piece, and when an explicit recovery cursor advance makes older work stale.
+10. Keep source-signature verification and decrypted descriptor credentials out of this increment; those require a separately verified/public implementation boundary.
+
 ## Next autonomous increments
 
 1. Run hardware acceptance with the current AceStream Core Live package and several real `acestream://content_id`/`.acelive` sources; record service discovery, HTTP port, runtime route, control response and startup failures.
 2. Add an autonomous content-id metadata provider ahead of the external provider when a verified public, independently implementable resolution contract is available.
 3. Feed verified decoded live metadata into `AceLiveDescriptor` when a lawful/public decoder or provider is available.
-4. Build the active-peer I/O coordinator that feeds window/choke/drop/completion events into `AceLiveRecoveryCoordinator` and emits chunk requests only from verified peer-wire behavior.
-5. Add an explicit discontinuity event boundary for future TS keyframe regating/HLS handling when the transport layer actually begins applying recovery jumps.
-6. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
-7. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
+4. Add a bounded pure Ace Live piece reassembler that consumes only accepted chunk events, emits completed pieces strictly from authoritative `nextNeeded`, and exposes an explicit skip boundary for recovery.
+5. Add the peer-wire/session adapter that decodes verified live window/choke/drop/piece messages and sends only requests produced by `AceLiveActivePeerCoordinator`; keep discovery and transport connection policy separate.
+6. Add an explicit discontinuity event boundary for future TS keyframe regating/HLS handling when the transport layer actually begins applying recovery jumps.
+7. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
+8. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
 
 ## Non-goals
 
