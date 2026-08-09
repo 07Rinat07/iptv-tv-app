@@ -157,7 +157,7 @@ class AceLivePeerSessionCoordinatorTest {
 
     @Test
     fun explicitRecoveryAdvanceMovesOwnershipAndReassemblyTogether() {
-        val session = session(maxInFlightPerPeer = 1)
+        val session = recoverySession(maxInFlightPerPeer = 1)
         session.onPeerWindow(peerWindow(id = 1, min = 105, max = 130, unchoked = true))
         assertTrue(session.schedule(head = 130, nowMillis = 0).isEmpty())
         assertNull(session.evaluateRecovery(nowMillis = 3_000).cursorAdvance)
