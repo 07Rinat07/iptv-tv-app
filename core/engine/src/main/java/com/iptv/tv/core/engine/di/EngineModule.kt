@@ -24,9 +24,12 @@ object EngineModule {
     @EngineHttpClient
     fun provideEngineOkHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
+            // The endpoint is loopback, so connection establishment should still be immediate.
             .connectTimeout(2, TimeUnit.SECONDS)
-            .readTimeout(3, TimeUnit.SECONDS)
-            .callTimeout(5, TimeUnit.SECONDS)
+            // Ace live startup may legitimately spend up to ~10 s waiting for P2P manifest data.
+            // Keep the client deadline above that engine-side window instead of failing at 3-5 s.
+            .readTimeout(15, TimeUnit.SECONDS)
+            .callTimeout(20, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
     }

@@ -3,6 +3,8 @@
         <intent>
             <action android:name="org.acestream.engine.service.v0.IAceStreamEngine" />
         </intent>
+        <package android:name="org.acestream.node" />
+        <package android:name="org.acestream.live" />
         <package android:name="org.acestream.media" />
         <package android:name="org.acestream.media.atv" />
         <package android:name="org.acestream.core" />

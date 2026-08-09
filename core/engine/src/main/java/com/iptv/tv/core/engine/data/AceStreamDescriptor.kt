@@ -1,6 +1,8 @@
 package com.iptv.tv.core.engine.data
 
 import java.net.URI
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 
 /**
  * Normalized source accepted by the official Ace Stream Engine HTTP/API layer.
@@ -45,6 +47,8 @@ object AceStreamDescriptorParser {
         val value = raw.trim()
         if (value.isBlank()) return AceStreamDescriptor.Direct(raw, value)
 
+        parseAceQueryDescriptor(raw, value)?.let { return it }
+
         extractInfoHash(value)?.let { infoHash ->
             val magnet = "magnet:?xt=urn:btih:$infoHash"
             return AceStreamDescriptor.Magnet(raw, magnet)
@@ -70,12 +74,69 @@ object AceStreamDescriptorParser {
     }
 
     fun toEngineRequest(descriptor: AceStreamDescriptor): Map<String, String> = when (descriptor) {
-        is AceStreamDescriptor.ContentId -> mapOf("id" to descriptor.value)
-        is AceStreamDescriptor.Magnet -> mapOf("url" to descriptor.value)
+        is AceStreamDescriptor.ContentId -> mapOf("content_id" to descriptor.value)
+        is AceStreamDescriptor.Magnet -> mapOf("magnet" to descriptor.value)
         is AceStreamDescriptor.TransportFile -> mapOf("url" to descriptor.value)
         is AceStreamDescriptor.LocalEngineUrl -> mapOf("url" to descriptor.value)
         is AceStreamDescriptor.Direct -> emptyMap()
     }
+
+    private fun parseAceQueryDescriptor(
+        original: String,
+        value: String
+    ): AceStreamDescriptor? {
+        if (
+            !value.startsWith("acestream:", ignoreCase = true) &&
+            !value.startsWith("ace:", ignoreCase = true)
+        ) {
+            return null
+        }
+
+        queryParameter(value, "content_id")
+            ?.takeIf(contentIdRegex::matches)
+            ?.let { return AceStreamDescriptor.ContentId(original, it.lowercase()) }
+        queryParameter(value, "id")
+            ?.takeIf(contentIdRegex::matches)
+            ?.let { return AceStreamDescriptor.ContentId(original, it.lowercase()) }
+
+        queryParameter(value, "infohash")
+            ?.takeIf(contentIdRegex::matches)
+            ?.let { infoHash ->
+                return AceStreamDescriptor.Magnet(
+                    original,
+                    "magnet:?xt=urn:btih:$infoHash"
+                )
+            }
+
+        queryParameter(value, "magnet")
+            ?.takeIf { it.startsWith("magnet:", ignoreCase = true) }
+            ?.let { return AceStreamDescriptor.Magnet(original, it) }
+
+        queryParameter(value, "url")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return AceStreamDescriptor.TransportFile(original, it) }
+
+        return null
+    }
+
+    private fun queryParameter(value: String, name: String): String? {
+        val query = value.substringAfter('?', missingDelimiterValue = "")
+        if (query.isBlank()) return null
+
+        return query.split('&').firstNotNullOfOrNull { pair ->
+            val key = decodeQueryValue(pair.substringBefore('=', missingDelimiterValue = pair).trim())
+            if (!key.equals(name, ignoreCase = true)) {
+                null
+            } else {
+                decodeQueryValue(pair.substringAfter('=', missingDelimiterValue = "").trim())
+                    .takeIf { it.isNotBlank() }
+            }
+        }
+    }
+
+    private fun decodeQueryValue(value: String): String = runCatching {
+        URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+    }.getOrDefault(value)
 
     private fun extractInfoHash(value: String): String? {
         if (!value.startsWith(INFO_HASH_PREFIX, ignoreCase = true)) return null
@@ -94,16 +155,21 @@ object AceStreamDescriptorParser {
 
         if (isLocalAceEngineUrl(value)) {
             val uri = runCatching { URI(value) }.getOrNull() ?: return null
-            val query = uri.rawQuery.orEmpty()
-            query.split('&').forEach { pair ->
-                val key = pair.substringBefore('=').lowercase()
-                val candidate = pair.substringAfter('=', "")
-                if (key in setOf("id", "content_id", "content-id") && contentIdRegex.matches(candidate)) {
-                    return candidate
-                }
-            }
+            extractContentIdFromQuery(uri.rawQuery.orEmpty())?.let { return it }
         }
 
+        return null
+    }
+
+    private fun extractContentIdFromQuery(query: String): String? {
+        if (query.isBlank()) return null
+        query.split('&').forEach { pair ->
+            val key = pair.substringBefore('=').trim().lowercase()
+            val candidate = pair.substringAfter('=', "").trim()
+            if (key in setOf("id", "content_id", "content-id") && contentIdRegex.matches(candidate)) {
+                return candidate
+            }
+        }
         return null
     }
 

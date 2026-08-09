@@ -5,6 +5,8 @@
 ## Основное
 
 - [`ROADMAP.md`](ROADMAP.md) — выполненные и следующие этапы.
+- [`ACE_LIVE_IMPLEMENTATION_PLAN.md`](ACE_LIVE_IMPLEMENTATION_PLAN.md) — текущий план совместимости и автономного Ace Live backend.
+- [`P2P_CONTENT_TRANSPORT.md`](P2P_CONTENT_TRANSPORT.md) — границы content-id, BitTorrent transport и Ace Live.
 - [`architecture.md`](architecture.md) — структура модулей и границы ответственности.
 - [`features/player.md`](features/player.md) — стартовый сценарий и плеер.
 - [`features/scanner-import-editor.md`](features/scanner-import-editor.md) — сканер, импорт и редактор.
