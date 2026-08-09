@@ -24,19 +24,39 @@ class AceLiveSwarmMetadataTest {
             mediaType = null,
             transportType = null,
             files = listOf(
-                AceTransportFile(
-                    index = 0,
+                file(
                     infoHash = "ffeeddccbbaa99887766554433221100ffeeddcc",
                     mediaType = "live",
-                    transportType = "live",
-                    filename = null,
-                    mime = null,
-                    size = null
+                    transportType = "live"
                 )
             )
         )
 
         assertEquals("ffeeddccbbaa99887766554433221100ffeeddcc", metadata.liveSwarmInfoHash)
+        assertNull(metadata.embeddedBitTorrentInfoHash)
+    }
+
+    @Test
+    fun `mixed metadata selects hash belonging to live entry`() {
+        val metadata = metadata(
+            infoHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            mediaType = "vod",
+            transportType = null,
+            files = listOf(
+                file(
+                    infoHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    mediaType = "vod",
+                    transportType = "bt"
+                ),
+                file(
+                    infoHash = "cccccccccccccccccccccccccccccccccccccccc",
+                    mediaType = "live",
+                    transportType = "live"
+                )
+            )
+        )
+
+        assertEquals("cccccccccccccccccccccccccccccccccccccccc", metadata.liveSwarmInfoHash)
         assertNull(metadata.embeddedBitTorrentInfoHash)
     }
 
@@ -66,5 +86,19 @@ class AceLiveSwarmMetadataTest {
         transportFileData = null,
         transportFileCacheKey = null,
         wrapperData = null
+    )
+
+    private fun file(
+        infoHash: String,
+        mediaType: String,
+        transportType: String
+    ): AceTransportFile = AceTransportFile(
+        index = 0,
+        infoHash = infoHash,
+        mediaType = mediaType,
+        transportType = transportType,
+        filename = null,
+        mime = null,
+        size = null
     )
 }
