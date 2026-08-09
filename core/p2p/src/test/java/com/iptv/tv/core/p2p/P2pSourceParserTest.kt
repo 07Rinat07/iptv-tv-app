@@ -1,5 +1,7 @@
 package com.iptv.tv.core.p2p
 
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -86,6 +88,61 @@ class P2pSourceParserTest {
             P2pSource.InfoHash(hash),
             (source as P2pResult.Success).data
         )
+    }
+
+    @Test
+    fun parsesOfficialAceQueryContentIdSeparatelyFromBitTorrent() {
+        val contentId = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+        val source = P2pSourceParser.parse("acestream:?content_id=$contentId")
+        assertTrue(source is P2pResult.Success)
+        assertEquals(
+            P2pSource.AceContentId(contentId),
+            (source as P2pResult.Success).data
+        )
+    }
+
+    @Test
+    fun parsesOfficialAceQueryMagnetAsBitTorrent() {
+        val magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+        val encoded = URLEncoder.encode(magnet, StandardCharsets.UTF_8.name())
+        val source = P2pSourceParser.parse("acestream:?magnet=$encoded")
+        assertTrue(source is P2pResult.Success)
+        assertEquals(
+            P2pSource.Magnet(magnet),
+            (source as P2pResult.Success).data
+        )
+    }
+
+    @Test
+    fun parsesOfficialAceQueryTorrentUrlAsBitTorrent() {
+        val torrentUrl = "https://example.test/catalog/channel.torrent"
+        val encoded = URLEncoder.encode(torrentUrl, StandardCharsets.UTF_8.name())
+        val source = P2pSourceParser.parse("acestream:?url=$encoded")
+        assertTrue(source is P2pResult.Success)
+        assertEquals(
+            P2pSource.TorrentUrl(torrentUrl),
+            (source as P2pResult.Success).data
+        )
+    }
+
+    @Test
+    fun parsesOfficialAceQueryLocalTorrentDataAsBitTorrent() {
+        val path = "/storage/emulated/0/Download/channel.torrent"
+        val encoded = URLEncoder.encode(path, StandardCharsets.UTF_8.name())
+        val source = P2pSourceParser.parse("acestream:?data=$encoded")
+        assertTrue(source is P2pResult.Success)
+        assertEquals(
+            P2pSource.LocalTorrentUri("file://$path"),
+            (source as P2pResult.Success).data
+        )
+    }
+
+    @Test
+    fun officialAceLiveUrlIsNotReinterpretedAsBitTorrent() {
+        val liveUrl = "https://example.test/live/channel.acelive"
+        val encoded = URLEncoder.encode(liveUrl, StandardCharsets.UTF_8.name())
+        val source = P2pSourceParser.parse("acestream:?url=$encoded")
+        assertTrue(source is P2pResult.Error)
     }
 
     @Test

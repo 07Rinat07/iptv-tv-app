@@ -1,5 +1,7 @@
 package com.iptv.tv.core.p2p
 
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 object P2pSourceParser {
@@ -15,6 +17,34 @@ object P2pSourceParser {
             return normalizeInfoHash(hash)?.let { normalized ->
                 P2pResult.Success(P2pSource.InfoHash(normalized))
             } ?: P2pResult.Error("Invalid BitTorrent infohash in Ace Stream descriptor")
+        }
+
+        aceQueryParameter(value, "magnet")?.let { magnet ->
+            return if (magnet.startsWith("magnet:?", ignoreCase = true)) {
+                P2pResult.Success(P2pSource.Magnet(magnet))
+            } else {
+                P2pResult.Error("Invalid magnet URI in Ace Stream descriptor")
+            }
+        }
+
+        aceQueryParameter(value, "url")?.let { nested ->
+            parseNestedAceBitTorrentSource(nested)?.let { return it }
+        }
+
+        aceQueryParameter(value, "data")?.let { nested ->
+            parseNestedAceBitTorrentSource(nested)?.let { return it }
+        }
+
+        aceQueryParameter(value, "content_id")?.let { contentId ->
+            if (contentId.isNotBlank()) {
+                return P2pResult.Success(P2pSource.AceContentId(contentId))
+            }
+        }
+
+        aceQueryParameter(value, "id")?.let { contentId ->
+            if (contentId.isNotBlank()) {
+                return P2pResult.Success(P2pSource.AceContentId(contentId))
+            }
         }
 
         return when {
@@ -73,6 +103,35 @@ object P2pSourceParser {
         else -> null
     }
 
+    private fun parseNestedAceBitTorrentSource(value: String): P2pResult<P2pSource>? {
+        val nested = value.trim()
+        return when {
+            nested.startsWith("magnet:?", ignoreCase = true) -> {
+                P2pResult.Success(P2pSource.Magnet(nested))
+            }
+
+            nested.startsWith("http://", ignoreCase = true) ||
+                nested.startsWith("https://", ignoreCase = true) -> {
+                if (looksLikeTorrentUrl(nested)) {
+                    P2pResult.Success(P2pSource.TorrentUrl(nested))
+                } else {
+                    null
+                }
+            }
+
+            nested.startsWith("content://", ignoreCase = true) ||
+                nested.startsWith("file://", ignoreCase = true) -> {
+                P2pResult.Success(P2pSource.LocalTorrentUri(nested))
+            }
+
+            nested.startsWith("/") && nested.endsWith(".torrent", ignoreCase = true) -> {
+                P2pResult.Success(P2pSource.LocalTorrentUri("file://$nested"))
+            }
+
+            else -> null
+        }
+    }
+
     private fun aceQueryParameter(value: String, name: String): String? {
         if (
             !value.startsWith("acestream:", ignoreCase = true) &&
@@ -85,14 +144,18 @@ object P2pSourceParser {
         if (query.isBlank()) return null
 
         return query.split('&').firstNotNullOfOrNull { part ->
-            val key = part.substringBefore('=', missingDelimiterValue = part).trim()
+            val key = decodeQueryValue(part.substringBefore('=', missingDelimiterValue = part).trim())
             if (!key.equals(name, ignoreCase = true)) {
                 null
             } else {
-                part.substringAfter('=', missingDelimiterValue = "").trim()
+                decodeQueryValue(part.substringAfter('=', missingDelimiterValue = "").trim())
             }
         }
     }
+
+    private fun decodeQueryValue(value: String): String = runCatching {
+        URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+    }.getOrDefault(value)
 
     private fun isInfoHash(value: String): Boolean =
         sha1InfoHashHex.matches(value) || sha1InfoHashBase32.matches(value)
