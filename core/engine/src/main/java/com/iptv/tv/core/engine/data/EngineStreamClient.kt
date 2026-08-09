@@ -329,6 +329,8 @@ class EngineStreamClient(
             putAll(AceStreamDescriptorParser.toEngineRequest(descriptor))
             put("auto_start_stream", "1")
             put("client_session_id", clientSessionIds.incrementAndGet().toString())
+            // Current Ace Engine clients allow the live manifest/P2P startup path this window.
+            put("manifest_p2p_wait_timeout", "10")
         }
 
     private fun buildPlaybackControlUrl(endpoint: String): String =
