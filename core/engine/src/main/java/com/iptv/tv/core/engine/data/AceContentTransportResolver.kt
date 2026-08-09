@@ -28,6 +28,35 @@ sealed interface AceContentTransportResolution {
 }
 
 /**
+ * Compatibility recovery wrapper for Android installations where the Ace HTTP engine is already
+ * listening on the conventional loopback endpoint but its bound service is unavailable or hidden.
+ *
+ * The normal resolver is attempted first so a healthy bound-service connection and its access
+ * token remain authoritative. Only an error triggers a direct loopback status probe and one retry.
+ * This does not make pure content-id resolution autonomous: the loopback process is still an
+ * external Ace Engine compatibility backend.
+ */
+class LoopbackFirstAceContentTransportResolver(
+    private val client: EngineStreamClient,
+    private val delegate: AceContentTransportResolver,
+    private val loopbackEndpoint: String = DEFAULT_LOOPBACK_ENDPOINT
+) : AceContentTransportResolver {
+    override suspend fun resolve(rawSource: String): AppResult<AceContentTransportResolution> {
+        val primary = delegate.resolve(rawSource)
+        if (primary !is AppResult.Error) return primary
+
+        val loopback = client.connect(loopbackEndpoint)
+        if (loopback !is AppResult.Success) return primary
+
+        return delegate.resolve(rawSource)
+    }
+
+    private companion object {
+        const val DEFAULT_LOOPBACK_ENDPOINT = "http://127.0.0.1:6878"
+    }
+}
+
+/**
  * Current compatibility resolver backed by the external Ace Engine metadata API.
  *
  * This class intentionally exposes the dependency boundary: successful non-live BitTorrent

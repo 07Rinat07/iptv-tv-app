@@ -1,6 +1,8 @@
 package com.iptv.tv.core.engine.data
 
+import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.engine.api.EngineStreamApi
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -58,6 +60,46 @@ class AceContentTransportResolverTest {
         )
     }
 
+    @Test
+    fun loopbackRecovery_resolvesWhenBoundServiceIsUnavailableButHttpEngineIsRunning() = runTest {
+        val contentId = "11223344556677889900aabbccddeeff00112233"
+        val infoHash = "0a4848271c91ce2d8965ce416267c25047dc8141"
+        val api = FakeApi(
+            statusPayload = mapOf(
+                "response" to mapOf(
+                    "status" to "ok",
+                    "peers" to 3,
+                    "speed" to 1200
+                )
+            ),
+            resolvePayload = mapOf(
+                "result" to mapOf(
+                    "infohash" to infoHash,
+                    "transport_type" to "bt",
+                    "type" to "vod"
+                )
+            )
+        )
+        val client = EngineStreamClient(api)
+        val external = ExternalAceContentTransportResolver(client)
+        val recovering = LoopbackFirstAceContentTransportResolver(
+            client = client,
+            delegate = external
+        )
+
+        val result = recovering.resolve("acestream://$contentId")
+
+        assertTrue(result is AppResult.Success)
+        val resolution = (result as AppResult.Success).data
+        assertTrue(resolution is AceContentTransportResolution.EmbeddedBitTorrent)
+        assertEquals(
+            infoHash,
+            (resolution as AceContentTransportResolution.EmbeddedBitTorrent).infoHash
+        )
+        assertEquals("http://127.0.0.1:6878/webui/api/service", api.lastStatusUrl)
+        assertEquals("http://127.0.0.1:6878/server/api", api.lastResolveUrl)
+    }
+
     private fun metadata(
         infoHash: String?,
         mediaType: String?,
@@ -83,5 +125,29 @@ class AceContentTransportResolverTest {
             url: String,
             options: Map<String, String>
         ): Map<String, Any?> = emptyMap()
+    }
+
+    private class FakeApi(
+        private val statusPayload: Map<String, Any?>,
+        private val resolvePayload: Map<String, Any?>
+    ) : EngineStreamApi {
+        var lastStatusUrl: String? = null
+        var lastResolveUrl: String? = null
+
+        override suspend fun status(
+            url: String,
+            options: Map<String, String>
+        ): Map<String, Any?> {
+            lastStatusUrl = url
+            return statusPayload
+        }
+
+        override suspend fun resolve(
+            url: String,
+            options: Map<String, String>
+        ): Map<String, Any?> {
+            lastResolveUrl = url
+            return resolvePayload
+        }
     }
 }
