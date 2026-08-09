@@ -5,16 +5,26 @@ import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.SocketTimeoutException
 import java.net.URI
 import java.security.SecureRandom
+import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlin.math.min
 
 /** Local safety bounds for descriptor-provided UDP tracker discovery. */
 data class AceLiveUdpTrackerPolicy(
-    val requestTimeoutMillis: Int = 4_000,
+    val requestTimeoutMillis: Int = 2_000,
+    val maxRequestAttempts: Int = 2,
+    val retryBaseDelayMillis: Long = 200,
+    val discoveryBudgetMillis: Long = 20_000,
     val maxTrackers: Int = 32,
+    val maxResolvedAddressesPerTracker: Int = 4,
     val maxTrackerUrlLength: Int = 256,
     val maxResponseBytes: Int = 8 * 1024,
     val maxPeersPerTracker: Int = 128,
@@ -25,7 +35,11 @@ data class AceLiveUdpTrackerPolicy(
 ) {
     init {
         require(requestTimeoutMillis in 100..30_000)
+        require(maxRequestAttempts in 1..5)
+        require(retryBaseDelayMillis in 0..5_000)
+        require(discoveryBudgetMillis in requestTimeoutMillis.toLong()..120_000L)
         require(maxTrackers in 1..128)
+        require(maxResolvedAddressesPerTracker in 1..16)
         require(maxTrackerUrlLength in 16..2_048)
         require(maxResponseBytes in AceLiveUdpTrackerCodec.ANNOUNCE_RESPONSE_HEADER_BYTES..65_507)
         require(maxPeersPerTracker in 1..AceLiveUdpTrackerCodec.MAX_PARSED_PEERS)
@@ -77,7 +91,8 @@ internal data class AceLiveUdpTrackerEndpoint(
 class AceLiveUdpTrackerDiscovery(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val policy: AceLiveUdpTrackerPolicy = AceLiveUdpTrackerPolicy(),
-    private val randomInt: () -> Int = DEFAULT_RANDOM_INT
+    private val randomInt: () -> Int = DEFAULT_RANDOM_INT,
+    private val addressResolver: (String) -> List<Inet4Address> = DEFAULT_ADDRESS_RESOLVER
 ) {
     suspend fun discover(request: AceLiveUdpTrackerDiscoveryRequest): AceLiveUdpTrackerDiscoveryResult =
         withContext(ioDispatcher) {
@@ -85,6 +100,7 @@ class AceLiveUdpTrackerDiscovery(
             var attempted = 0
             var failed = 0
             var rejected = 0
+            val deadlineNanos = System.nanoTime() + policy.discoveryBudgetMillis * NANOS_PER_MILLI
 
             val trackerValues = request.trackers
                 .asSequence()
@@ -94,7 +110,10 @@ class AceLiveUdpTrackerDiscovery(
                 .take(policy.maxTrackers)
                 .toList()
 
-            for (rawTracker in trackerValues) {
+            trackerLoop@ for (rawTracker in trackerValues) {
+                currentCoroutineContext().ensureActive()
+                if (remainingBudgetMillis(deadlineNanos) <= 0) break
+
                 if (rawTracker.length > policy.maxTrackerUrlLength) {
                     rejected += 1
                     continue
@@ -105,36 +124,60 @@ class AceLiveUdpTrackerDiscovery(
                     continue
                 }
 
-                val address = try {
-                    InetAddress.getAllByName(endpoint.host)
-                        .filterIsInstance<Inet4Address>()
-                        .firstOrNull(::isAllowedTrackerAddress)
+                val addresses = try {
+                    addressResolver(endpoint.host)
+                        .asSequence()
+                        .filter(::isAllowedTrackerAddress)
+                        .distinctBy { it.hostAddress }
+                        .take(policy.maxResolvedAddressesPerTracker)
+                        .toList()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (_: Exception) {
-                    null
+                    emptyList()
                 }
-                if (address == null) {
+                if (addresses.isEmpty()) {
                     rejected += 1
                     continue
                 }
 
                 attempted += 1
-                val discovered = try {
-                    announce(
-                        endpoint = InetSocketAddress(address, endpoint.port),
-                        request = request
-                    )
-                } catch (_: Exception) {
-                    failed += 1
-                    emptyList()
+                var trackerSucceeded = false
+                var budgetExhausted = false
+                for (address in addresses) {
+                    currentCoroutineContext().ensureActive()
+                    if (remainingBudgetMillis(deadlineNanos) <= 0) {
+                        budgetExhausted = true
+                        break
+                    }
+
+                    val discovered = try {
+                        announce(
+                            endpoint = InetSocketAddress(address, endpoint.port),
+                            request = request,
+                            deadlineNanos = deadlineNanos
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: DiscoveryBudgetExhaustedException) {
+                        budgetExhausted = true
+                        break
+                    } catch (_: Exception) {
+                        continue
+                    }
+
+                    trackerSucceeded = true
+                    for (peer in discovered) {
+                        if (!isAllowedPeerEndpoint(peer)) continue
+                        val key = "${peer.host}:${peer.port}"
+                        peers.putIfAbsent(key, peer)
+                        if (peers.size >= policy.maxTotalPeers) break
+                    }
+                    break
                 }
 
-                for (peer in discovered) {
-                    if (!isAllowedPeerEndpoint(peer)) continue
-                    val key = "${peer.host}:${peer.port}"
-                    peers.putIfAbsent(key, peer)
-                    if (peers.size >= policy.maxTotalPeers) break
-                }
-                if (peers.size >= policy.maxTotalPeers) break
+                if (!trackerSucceeded && !budgetExhausted) failed += 1
+                if (budgetExhausted || peers.size >= policy.maxTotalPeers) break@trackerLoop
             }
 
             AceLiveUdpTrackerDiscoveryResult(
@@ -163,7 +206,7 @@ class AceLiveUdpTrackerDiscovery(
             part.toIntOrNull()?.takeIf { it in 0..255 }
         }
         if (octets.size != 4) return false
-        val address = InetAddress.getByAddress(octets.map(Int::toByte).toByteArray()) as Inet4Address
+        val address = InetAddress.getByAddress(octets.map { it.toByte() }.toByteArray()) as Inet4Address
         return isGloballyRoutableIpv4(address)
     }
 
@@ -184,53 +227,109 @@ class AceLiveUdpTrackerDiscovery(
         val third = octets[2]
         if (first == 0 || first >= 224) return false
         if (first == 100 && second in 64..127) return false // shared/CGNAT space
+        if (first == 192 && second == 0 && third == 0) return false // protocol assignments
+        if (first == 192 && second == 0 && third == 2) return false // TEST-NET-1
+        if (first == 192 && second == 88 && third == 99) return false // deprecated 6to4 relay anycast
         if (first == 198 && second in 18..19) return false // benchmark network
-        if (first == 192 && second == 0 && third == 2) return false
-        if (first == 198 && second == 51 && third == 100) return false
-        if (first == 203 && second == 0 && third == 113) return false
+        if (first == 198 && second == 51 && third == 100) return false // TEST-NET-2
+        if (first == 203 && second == 0 && third == 113) return false // TEST-NET-3
         return true
     }
 
-    private fun announce(
+    private suspend fun announce(
         endpoint: InetSocketAddress,
-        request: AceLiveUdpTrackerDiscoveryRequest
+        request: AceLiveUdpTrackerDiscoveryRequest,
+        deadlineNanos: Long
     ): List<AceLiveTcpPeerEndpoint> {
         DatagramSocket().use { socket ->
-            socket.soTimeout = policy.requestTimeoutMillis
             socket.connect(endpoint)
-
-            val connectTransactionId = randomInt()
-            socket.send(
-                DatagramPacket(
-                    AceLiveUdpTrackerCodec.encodeConnectRequest(connectTransactionId),
-                    AceLiveUdpTrackerCodec.CONNECT_REQUEST_BYTES
-                )
-            )
-            val connectResponse = receiveBounded(socket)
-            val connectionId = AceLiveUdpTrackerCodec.decodeConnectResponse(
-                connectResponse,
-                connectTransactionId
-            )
-
-            val announceTransactionId = randomInt()
-            val announceBytes = AceLiveUdpTrackerCodec.encodeAnnounceRequest(
-                connectionId = connectionId,
-                transactionId = announceTransactionId,
-                swarmKey = request.swarmKey,
-                peerId = request.peerId,
-                announcePort = request.announcePort,
-                key = randomInt(),
-                numWant = policy.numWant
-            )
-            socket.send(DatagramPacket(announceBytes, announceBytes.size))
-            val announceResponse = receiveBounded(socket)
-            return AceLiveUdpTrackerCodec.decodeAnnounceResponse(
-                bytes = announceResponse,
-                expectedTransactionId = announceTransactionId,
-                maxPeers = policy.maxPeersPerTracker,
-                maxResponseBytes = policy.maxResponseBytes
-            )
+            val connectionId = connectWithRetry(socket, deadlineNanos)
+            return announceWithRetry(socket, connectionId, request, deadlineNanos)
         }
+    }
+
+    private suspend fun connectWithRetry(
+        socket: DatagramSocket,
+        deadlineNanos: Long
+    ): Long {
+        val transactionId = randomInt()
+        val request = AceLiveUdpTrackerCodec.encodeConnectRequest(transactionId)
+        var lastTimeout: SocketTimeoutException? = null
+
+        repeat(policy.maxRequestAttempts) { attempt ->
+            currentCoroutineContext().ensureActive()
+            socket.soTimeout = receiveTimeoutMillis(deadlineNanos)
+            socket.send(DatagramPacket(request, request.size))
+            try {
+                val response = receiveBounded(socket)
+                return AceLiveUdpTrackerCodec.decodeConnectResponse(response, transactionId)
+            } catch (timeout: SocketTimeoutException) {
+                lastTimeout = timeout
+                currentCoroutineContext().ensureActive()
+                if (attempt + 1 < policy.maxRequestAttempts) {
+                    delayBeforeRetry(attempt, deadlineNanos)
+                }
+            }
+        }
+
+        throw lastTimeout ?: SocketTimeoutException("BEP-15 connect timed out")
+    }
+
+    private suspend fun announceWithRetry(
+        socket: DatagramSocket,
+        connectionId: Long,
+        request: AceLiveUdpTrackerDiscoveryRequest,
+        deadlineNanos: Long
+    ): List<AceLiveTcpPeerEndpoint> {
+        val transactionId = randomInt()
+        val announceBytes = AceLiveUdpTrackerCodec.encodeAnnounceRequest(
+            connectionId = connectionId,
+            transactionId = transactionId,
+            swarmKey = request.swarmKey,
+            peerId = request.peerId,
+            announcePort = request.announcePort,
+            key = randomInt(),
+            numWant = policy.numWant
+        )
+        var lastTimeout: SocketTimeoutException? = null
+
+        repeat(policy.maxRequestAttempts) { attempt ->
+            currentCoroutineContext().ensureActive()
+            socket.soTimeout = receiveTimeoutMillis(deadlineNanos)
+            socket.send(DatagramPacket(announceBytes, announceBytes.size))
+            try {
+                val response = receiveBounded(socket)
+                return AceLiveUdpTrackerCodec.decodeAnnounceResponse(
+                    bytes = response,
+                    expectedTransactionId = transactionId,
+                    maxPeers = policy.maxPeersPerTracker,
+                    maxResponseBytes = policy.maxResponseBytes
+                )
+            } catch (timeout: SocketTimeoutException) {
+                lastTimeout = timeout
+                currentCoroutineContext().ensureActive()
+                if (attempt + 1 < policy.maxRequestAttempts) {
+                    delayBeforeRetry(attempt, deadlineNanos)
+                }
+            }
+        }
+
+        throw lastTimeout ?: SocketTimeoutException("BEP-15 announce timed out")
+    }
+
+    private suspend fun delayBeforeRetry(attempt: Int, deadlineNanos: Long) {
+        val remaining = remainingBudgetMillis(deadlineNanos)
+        if (remaining <= 0) throw DiscoveryBudgetExhaustedException()
+        val multiplier = 1L shl attempt.coerceAtMost(10)
+        val backoff = min(policy.retryBaseDelayMillis * multiplier, remaining)
+        if (backoff > 0) delay(backoff)
+        currentCoroutineContext().ensureActive()
+    }
+
+    private fun receiveTimeoutMillis(deadlineNanos: Long): Int {
+        val remaining = remainingBudgetMillis(deadlineNanos)
+        if (remaining <= 0) throw DiscoveryBudgetExhaustedException()
+        return min(policy.requestTimeoutMillis.toLong(), remaining).coerceAtLeast(1).toInt()
     }
 
     private fun receiveBounded(socket: DatagramSocket): ByteArray {
@@ -243,8 +342,17 @@ class AceLiveUdpTrackerDiscovery(
         return packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
     }
 
+    private fun remainingBudgetMillis(deadlineNanos: Long): Long =
+        ((deadlineNanos - System.nanoTime()) / NANOS_PER_MILLI).coerceAtLeast(0)
+
+    private class DiscoveryBudgetExhaustedException : Exception()
+
     private companion object {
+        const val NANOS_PER_MILLI: Long = 1_000_000
         val RANDOM = SecureRandom()
         val DEFAULT_RANDOM_INT: () -> Int = { RANDOM.nextInt() }
+        val DEFAULT_ADDRESS_RESOLVER: (String) -> List<Inet4Address> = { host ->
+            InetAddress.getAllByName(host).filterIsInstance<Inet4Address>()
+        }
     }
 }
