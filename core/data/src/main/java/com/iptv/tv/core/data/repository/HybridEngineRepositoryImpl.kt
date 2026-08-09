@@ -1,6 +1,8 @@
 package com.iptv.tv.core.data.repository
 
 import android.content.Context
+import android.net.Uri
+import android.util.Base64
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.SyncLogEntity
@@ -14,6 +16,8 @@ import com.iptv.tv.core.p2p.P2pResult
 import com.iptv.tv.core.p2p.P2pSource
 import com.iptv.tv.core.p2p.P2pSourceParser
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
@@ -30,9 +34,9 @@ import okhttp3.OkHttpClient
  *
  * BitTorrent metadata is resolved by the in-process libtorrent backend first. True Ace content
  * ids are never reinterpreted as infohashes. When an Ace Engine endpoint is available, the
- * repository may ask it only for transport metadata and then hand a proven BitTorrent infohash
- * to the embedded backend. Ace Live transport has an explicit compatibility route so `.acelive`
- * descriptors never enter standard libtorrent accidentally.
+ * repository may ask it only for transport metadata and then hand a proven BitTorrent infohash or
+ * validated transport-file payload to the embedded backend. Ace Live transport has an explicit
+ * compatibility route so `.acelive` descriptors never enter standard libtorrent accidentally.
  */
 @Singleton
 class HybridEngineRepositoryImpl @Inject constructor(
@@ -42,8 +46,9 @@ class HybridEngineRepositoryImpl @Inject constructor(
     private val syncLogDao: SyncLogDao,
     okHttpClient: OkHttpClient
 ) : EngineRepository {
+    private val appContext = context.applicationContext
     private val embeddedEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        LibtorrentEmbeddedEngine(context, okHttpClient)
+        LibtorrentEmbeddedEngine(appContext, okHttpClient)
     }
     private val streamEpoch = AtomicLong(0L)
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -214,9 +219,35 @@ class HybridEngineRepositoryImpl @Inject constructor(
         val resolution = contentTransportResolver.resolve(rawSource)
         if (streamEpoch.get() != epoch) return supersededResult()
 
-        val infoHash = when (resolution) {
+        val embeddedSource = when (resolution) {
             is AppResult.Success -> when (val transport = resolution.data) {
-                is AceContentTransportResolution.EmbeddedBitTorrent -> transport.infoHash
+                is AceContentTransportResolution.EmbeddedBitTorrent -> {
+                    log(
+                        "engine_content_id_metadata_resolved",
+                        "Ace content id mapped to proven non-live BitTorrent infohash ${transport.infoHash}"
+                    )
+                    P2pSource.InfoHash(transport.infoHash)
+                }
+                is AceContentTransportResolution.EmbeddedTorrentFile -> {
+                    when (
+                        val materialized = materializeAceTransportFile(
+                            rawSource = rawSource,
+                            encoded = transport.transportFileDataBase64
+                        )
+                    ) {
+                        is P2pResult.Success -> {
+                            log(
+                                "engine_content_id_transport_file_resolved",
+                                "Ace content id supplied non-live BitTorrent transport-file data"
+                            )
+                            materialized.data
+                        }
+                        is P2pResult.Error -> {
+                            log("engine_content_id_transport_file_error", materialized.message)
+                            return resolveExternalIfCurrent(rawSource, epoch)
+                        }
+                    }
+                }
                 is AceContentTransportResolution.AceLive -> {
                     log(
                         "engine_content_id_live_transport",
@@ -236,13 +267,8 @@ class HybridEngineRepositoryImpl @Inject constructor(
             AppResult.Loading -> return resolveExternalIfCurrent(rawSource, epoch)
         }
 
-        log(
-            "engine_content_id_metadata_resolved",
-            "Ace content id mapped to proven non-live BitTorrent infohash $infoHash"
-        )
-
         embeddedEngineUsed.set(true)
-        val embedded = embeddedEngine.prepareStream(P2pSource.InfoHash(infoHash))
+        val embedded = embeddedEngine.prepareStream(embeddedSource)
         if (streamEpoch.get() != epoch) return supersededResult()
 
         return when (embedded) {
@@ -259,6 +285,47 @@ class HybridEngineRepositoryImpl @Inject constructor(
             }
         }
     }
+
+    private fun materializeAceTransportFile(
+        rawSource: String,
+        encoded: String
+    ): P2pResult<P2pSource.LocalTorrentUri> {
+        return runCatching {
+            require(encoded.length <= MAX_ACE_TRANSPORT_FILE_BASE64_CHARS) {
+                "Ace transport-file payload is too large"
+            }
+
+            val bytes = Base64.decode(encoded, Base64.DEFAULT)
+            require(bytes.isNotEmpty()) { "Ace transport-file payload is empty" }
+            require(bytes.size <= MAX_ACE_TRANSPORT_FILE_BYTES) {
+                "Ace transport-file payload exceeds the embedded metadata limit"
+            }
+
+            val directory = File(appContext.cacheDir, "p2p/ace-transport").apply {
+                if (!exists() && !mkdirs()) {
+                    error("Unable to create Ace transport metadata cache")
+                }
+            }
+            val cacheKey = sha256Hex(rawSource)
+            val file = File(directory, "$cacheKey.torrent")
+            file.writeBytes(bytes)
+            P2pSource.LocalTorrentUri(Uri.fromFile(file).toString())
+        }.fold(
+            onSuccess = { P2pResult.Success(it) },
+            onFailure = {
+                P2pResult.Error(
+                    it.message ?: "Unable to materialize Ace transport-file payload",
+                    it
+                )
+            }
+        )
+    }
+
+    private fun sha256Hex(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString(separator = "") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
 
     private suspend fun resolveExternalIfCurrent(
         rawSource: String,
@@ -301,5 +368,10 @@ class HybridEngineRepositoryImpl @Inject constructor(
                 createdAt = System.currentTimeMillis()
             )
         )
+    }
+
+    private companion object {
+        const val MAX_ACE_TRANSPORT_FILE_BYTES = 8 * 1024 * 1024
+        const val MAX_ACE_TRANSPORT_FILE_BASE64_CHARS = 12 * 1024 * 1024
     }
 }
