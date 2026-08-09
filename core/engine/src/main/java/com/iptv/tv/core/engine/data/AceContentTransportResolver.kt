@@ -17,6 +17,11 @@ sealed interface AceContentTransportResolution {
         val metadata: AceTransportMetadata
     ) : AceContentTransportResolution
 
+    data class EmbeddedTorrentFile(
+        val transportFileDataBase64: String,
+        val metadata: AceTransportMetadata
+    ) : AceContentTransportResolution
+
     data class AceLive(
         val metadata: AceTransportMetadata
     ) : AceContentTransportResolution
@@ -90,9 +95,16 @@ class ExternalAceContentTransportResolver(
 
         val transport = metadata.transportType
             ?: metadata.files.firstNotNullOfOrNull { it.transportType }
-            ?: "unknown"
+        val transportFileData = metadata.transportFileData?.takeIf { it.isNotBlank() }
+        if (transportFileData != null && (transport == null || transport == "bt")) {
+            return AceContentTransportResolution.EmbeddedTorrentFile(
+                transportFileDataBase64 = transportFileData,
+                metadata = metadata
+            )
+        }
+
         return AceContentTransportResolution.Unsupported(
-            reason = "Ace content metadata is not a supported non-live BitTorrent transport: $transport",
+            reason = "Ace content metadata is not a supported non-live BitTorrent transport: ${transport ?: "unknown"}",
             metadata = metadata
         )
     }
