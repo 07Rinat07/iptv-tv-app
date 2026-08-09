@@ -20,6 +20,18 @@ class AceStreamDescriptorParserTest {
     }
 
     @Test
+    fun parsesOfficialAceQueryAsContentId() {
+        val result = AceStreamDescriptorParser.parse("acestream:?content_id=$contentId")
+
+        assertTrue(result is AceStreamDescriptor.ContentId)
+        assertEquals(contentId, (result as AceStreamDescriptor.ContentId).value)
+        assertEquals(
+            mapOf("content_id" to contentId),
+            AceStreamDescriptorParser.toEngineRequest(result)
+        )
+    }
+
+    @Test
     fun parsesLegacyAceSchemeAsContentId() {
         val result = AceStreamDescriptorParser.parse("ace://$contentId")
 
