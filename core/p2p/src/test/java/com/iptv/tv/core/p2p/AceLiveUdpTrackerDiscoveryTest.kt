@@ -2,17 +2,22 @@ package com.iptv.tv.core.p2p
 
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class AceLiveUdpTrackerDiscoveryTest {
@@ -39,14 +44,9 @@ class AceLiveUdpTrackerDiscoveryTest {
         assertEquals(0, intAt(request, 8))
         assertEquals(0x11223344, intAt(request, 12))
 
-        val response = ByteBuffer.allocate(16)
-            .order(ByteOrder.BIG_ENDIAN)
-            .putInt(0)
-            .putInt(0x11223344)
-            .putLong(0x0102030405060708L)
-            .array()
+        val response = connectResponse(0x11223344)
         assertEquals(
-            0x0102030405060708L,
+            CONNECTION_ID,
             AceLiveUdpTrackerCodec.decodeConnectResponse(response, 0x11223344)
         )
         expectProtocolFailure {
@@ -56,13 +56,12 @@ class AceLiveUdpTrackerDiscoveryTest {
 
     @Test
     fun `announce codec places swarm peer id and explicit peer port at standard offsets`() {
-        val swarm = AceLiveSwarmKey.parseHex("00112233445566778899aabbccddeeff00112233")!!
-        val peerId = ByteArray(20) { (it + 1).toByte() }
+        val swarm = AceLiveSwarmKey.parseHex(SWARM_HEX)!!
         val request = AceLiveUdpTrackerCodec.encodeAnnounceRequest(
-            connectionId = 0x0102030405060708L,
+            connectionId = CONNECTION_ID,
             transactionId = 0x11223344,
             swarmKey = swarm,
-            peerId = peerId,
+            peerId = PEER_ID,
             announcePort = 8621,
             key = 0x55667788,
             numWant = 50
@@ -72,7 +71,7 @@ class AceLiveUdpTrackerDiscoveryTest {
         assertEquals(1, intAt(request, 8))
         assertEquals(0x11223344, intAt(request, 12))
         assertArrayEquals(swarm.toByteArray(), request.copyOfRange(16, 36))
-        assertArrayEquals(peerId, request.copyOfRange(36, 56))
+        assertArrayEquals(PEER_ID, request.copyOfRange(36, 56))
         assertEquals(2, intAt(request, 80))
         assertEquals(0x55667788, intAt(request, 88))
         assertEquals(50, intAt(request, 92))
@@ -127,22 +126,159 @@ class AceLiveUdpTrackerDiscoveryTest {
     }
 
     @Test
-    fun `default policy refuses loopback descriptor tracker`() = runBlocking {
-        DatagramSocket(InetSocketAddress("127.0.0.1", 0)).use { tracker ->
-            val discovery = AceLiveUdpTrackerDiscovery()
-            val result = discovery.discover(
-                request(tracker.localPort)
+    fun `default policy refuses loopback and special-use descriptor trackers`() = runBlocking {
+        val discovery = AceLiveUdpTrackerDiscovery()
+        val result = discovery.discover(
+            request(
+                trackers = listOf(
+                    "udp://127.0.0.1:2710/announce",
+                    "udp://192.0.0.1:2710/announce",
+                    "udp://192.88.99.1:2710/announce",
+                    "udp://198.51.100.7:2710/announce"
+                )
             )
+        )
 
-            assertTrue(result.peers.isEmpty())
-            assertEquals(0, result.attemptedTrackers)
-            assertEquals(0, result.failedTrackers)
-            assertEquals(1, result.rejectedTrackers)
+        assertTrue(result.peers.isEmpty())
+        assertEquals(0, result.attemptedTrackers)
+        assertEquals(0, result.failedTrackers)
+        assertEquals(4, result.rejectedTrackers)
+    }
+
+    @Test
+    fun `cancellation after a blocked receive stops before retry or next tracker`() = runBlocking {
+        DatagramSocket(InetSocketAddress("127.0.0.1", 0)).use { tracker ->
+            tracker.soTimeout = 1_000
+            val firstPacket = async(Dispatchers.IO) { receive(tracker) }
+            val discovery = AceLiveUdpTrackerDiscovery(
+                policy = localPolicy(
+                    requestTimeoutMillis = 100,
+                    maxRequestAttempts = 2,
+                    retryBaseDelayMillis = 10
+                )
+            )
+            val job = async {
+                discovery.discover(
+                    request(
+                        trackers = listOf(
+                            "udp://127.0.0.1:${tracker.localPort}/one",
+                            "udp://127.0.0.1:${tracker.localPort}/two",
+                            "udp://127.0.0.1:${tracker.localPort}/three"
+                        )
+                    )
+                )
+            }
+
+            firstPacket.await()
+            job.cancelAndJoin()
+
+            tracker.soTimeout = 250
+            try {
+                receive(tracker)
+                fail("cancelled discovery sent a retry or advanced to another tracker")
+            } catch (_: SocketTimeoutException) {
+                Unit
+            }
         }
     }
 
     @Test
-    fun `local fake tracker completes connect announce and returns deduped peers`() = runBlocking {
+    fun `lost connect and announce datagrams are retransmitted with bounded attempts`() = runBlocking {
+        DatagramSocket(InetSocketAddress("127.0.0.1", 0)).use { tracker ->
+            tracker.soTimeout = 5_000
+            val server = async(Dispatchers.IO) {
+                val firstConnect = receive(tracker)
+                val secondConnect = receive(tracker)
+                assertEquals(intAt(firstConnect.data, firstConnect.offset + 12), intAt(secondConnect.data, secondConnect.offset + 12))
+                send(tracker, connectResponse(intAt(secondConnect.data, secondConnect.offset + 12)), secondConnect)
+
+                val firstAnnounce = receive(tracker)
+                val secondAnnounce = receive(tracker)
+                assertEquals(intAt(firstAnnounce.data, firstAnnounce.offset + 12), intAt(secondAnnounce.data, secondAnnounce.offset + 12))
+                send(
+                    tracker,
+                    announceResponse(
+                        transactionId = intAt(secondAnnounce.data, secondAnnounce.offset + 12),
+                        peers = listOf("9.9.9.9" to 1234)
+                    ),
+                    secondAnnounce
+                )
+            }
+
+            val randomValues = intArrayOf(0x11223344, 0x22334455, 0x33445566)
+            var randomIndex = 0
+            val discovery = AceLiveUdpTrackerDiscovery(
+                policy = localPolicy(
+                    requestTimeoutMillis = 100,
+                    maxRequestAttempts = 2,
+                    retryBaseDelayMillis = 10
+                ),
+                randomInt = { randomValues[randomIndex++] }
+            )
+            val result = discovery.discover(request(tracker.localPort))
+            server.await()
+
+            assertEquals(listOf(AceLiveTcpPeerEndpoint("9.9.9.9", 1234)), result.peers)
+            assertEquals(1, result.attemptedTrackers)
+            assertEquals(0, result.failedTrackers)
+        }
+    }
+
+    @Test
+    fun `tracker hostname falls through to later allowed address`() = runBlocking {
+        DatagramSocket(InetSocketAddress("127.0.0.1", 0)).use { tracker ->
+            tracker.soTimeout = 5_000
+            val server = async(Dispatchers.IO) {
+                val connectPacket = receive(tracker)
+                val connectTx = intAt(connectPacket.data, connectPacket.offset + 12)
+                send(tracker, connectResponse(connectTx), connectPacket)
+
+                val announcePacket = receive(tracker)
+                val announceTx = intAt(announcePacket.data, announcePacket.offset + 12)
+                send(
+                    tracker,
+                    announceResponse(
+                        transactionId = announceTx,
+                        peers = listOf("8.8.8.8" to 4321)
+                    ),
+                    announcePacket
+                )
+            }
+
+            val randomValues = intArrayOf(
+                0x11223344,
+                0x22334455,
+                0x33445566,
+                0x44556677
+            )
+            var randomIndex = 0
+            val discovery = AceLiveUdpTrackerDiscovery(
+                policy = localPolicy(
+                    requestTimeoutMillis = 100,
+                    maxRequestAttempts = 1,
+                    maxResolvedAddressesPerTracker = 2
+                ),
+                randomInt = { randomValues[randomIndex++] },
+                addressResolver = {
+                    listOf(
+                        InetAddress.getByName("127.0.0.2") as Inet4Address,
+                        InetAddress.getByName("127.0.0.1") as Inet4Address
+                    )
+                }
+            )
+            val result = discovery.discover(
+                request(trackers = listOf("udp://tracker.test:${tracker.localPort}/announce"))
+            )
+            server.await()
+
+            assertEquals(listOf(AceLiveTcpPeerEndpoint("8.8.8.8", 4321)), result.peers)
+            assertEquals(1, result.attemptedTrackers)
+            assertEquals(0, result.failedTrackers)
+        }
+    }
+
+    @Test
+    fun `local fake tracker completes connect announce dedupes peers and drops private peers`() = runBlocking {
         DatagramSocket(InetSocketAddress("127.0.0.1", 0)).use { tracker ->
             tracker.soTimeout = 5_000
             val server = async(Dispatchers.IO) {
@@ -150,16 +286,7 @@ class AceLiveUdpTrackerDiscoveryTest {
                 assertEquals(16, connectPacket.length)
                 assertEquals(0, intAt(connectPacket.data, connectPacket.offset + 8))
                 assertEquals(0x11223344, intAt(connectPacket.data, connectPacket.offset + 12))
-                send(
-                    tracker,
-                    ByteBuffer.allocate(16)
-                        .order(ByteOrder.BIG_ENDIAN)
-                        .putInt(0)
-                        .putInt(0x11223344)
-                        .putLong(0x0102030405060708L)
-                        .array(),
-                    connectPacket
-                )
+                send(tracker, connectResponse(0x11223344), connectPacket)
 
                 val announcePacket = receive(tracker)
                 val announce = announcePacket.data.copyOfRange(
@@ -185,6 +312,7 @@ class AceLiveUdpTrackerDiscoveryTest {
                         peers = listOf(
                             "9.9.9.9" to 1234,
                             "9.9.9.9" to 1234,
+                            "10.0.0.8" to 9999,
                             "8.8.8.8" to 4321
                         )
                     ),
@@ -195,10 +323,7 @@ class AceLiveUdpTrackerDiscoveryTest {
             val randomValues = intArrayOf(0x11223344, 0x22334455, 0x33445566)
             var randomIndex = 0
             val discovery = AceLiveUdpTrackerDiscovery(
-                policy = AceLiveUdpTrackerPolicy(
-                    requestTimeoutMillis = 2_000,
-                    allowNonGlobalTrackerAddresses = true
-                ),
+                policy = localPolicy(requestTimeoutMillis = 2_000),
                 randomInt = { randomValues[randomIndex++] }
             )
             val result = discovery.discover(request(tracker.localPort))
@@ -217,10 +342,27 @@ class AceLiveUdpTrackerDiscoveryTest {
         }
     }
 
+    private fun localPolicy(
+        requestTimeoutMillis: Int,
+        maxRequestAttempts: Int = 2,
+        retryBaseDelayMillis: Long = 0,
+        maxResolvedAddressesPerTracker: Int = 4
+    ): AceLiveUdpTrackerPolicy = AceLiveUdpTrackerPolicy(
+        requestTimeoutMillis = requestTimeoutMillis,
+        maxRequestAttempts = maxRequestAttempts,
+        retryBaseDelayMillis = retryBaseDelayMillis,
+        discoveryBudgetMillis = 5_000,
+        maxResolvedAddressesPerTracker = maxResolvedAddressesPerTracker,
+        allowNonGlobalTrackerAddresses = true
+    )
+
     private fun request(port: Int): AceLiveUdpTrackerDiscoveryRequest =
+        request(trackers = listOf("udp://127.0.0.1:$port/announce"))
+
+    private fun request(trackers: List<String>): AceLiveUdpTrackerDiscoveryRequest =
         AceLiveUdpTrackerDiscoveryRequest(
             swarmKey = AceLiveSwarmKey.parseHex(SWARM_HEX)!!,
-            trackers = listOf("udp://127.0.0.1:$port/announce"),
+            trackers = trackers,
             peerId = PEER_ID,
             announcePort = 8621
         )
@@ -233,6 +375,14 @@ class AceLiveUdpTrackerDiscoveryTest {
     private fun send(socket: DatagramSocket, bytes: ByteArray, request: DatagramPacket) {
         socket.send(DatagramPacket(bytes, bytes.size, request.socketAddress))
     }
+
+    private fun connectResponse(transactionId: Int): ByteArray =
+        ByteBuffer.allocate(16)
+            .order(ByteOrder.BIG_ENDIAN)
+            .putInt(0)
+            .putInt(transactionId)
+            .putLong(CONNECTION_ID)
+            .array()
 
     private fun announceResponse(
         transactionId: Int,
@@ -268,6 +418,7 @@ class AceLiveUdpTrackerDiscoveryTest {
 
     private companion object {
         const val SWARM_HEX = "00112233445566778899aabbccddeeff00112233"
+        const val CONNECTION_ID = 0x0102030405060708L
         val PEER_ID = ByteArray(20) { (it + 1).toByte() }
     }
 }
