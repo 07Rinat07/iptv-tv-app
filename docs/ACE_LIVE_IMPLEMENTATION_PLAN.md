@@ -88,13 +88,13 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 9. Treat the maximum u32 piece as terminal; do not wrap the contiguous cursor back to zero implicitly.
 10. Cover out-of-order chunks/pieces, contiguous drain, short tail, duplicate/header mismatch, explicit skip, memory bounds and u32 boundary behavior with unit tests.
 
-## Current peer-wire/session increment
+## Completed peer-wire/session increment
 
 1. Add a bounded incremental peer-frame codec for `<u32 BE length><u8 id><payload>` with `length=0` keep-alive and a local 2 MiB frame cap.
 2. Decode standard empty-payload choke/unchoke and the verified Ace live id=7 piece layout: `[stream u32][piece u32][8B header][chunk u16][data]`.
 3. Encode only chunk requests already produced by `AceLiveActivePeerCoordinator` as full id=6 peer frames; do not invent request coordinates in the network layer.
 4. Preserve unknown/vendor messages instead of disconnecting solely because a standard id carries a non-standard Ace payload.
-5. Do not bind live-window `myinfo` updates to an unverified numeric message id. A future bounded bencode recognizer must classify them by payload content (`max_piece` plus optional `min_piece`/`position`).
+5. Do not bind live-window `myinfo` updates to an unverified numeric message id.
 6. Add a single-threaded `AceLivePeerSessionCoordinator` that serializes decoded peer events, active-peer ownership, recovery and reassembly without owning sockets.
 7. Run reassembly preflight before mutating active chunk state so header/geometry/memory rejection cannot strand ownership.
 8. Discard partial reassembly for every piece requeued by peer loss/window movement or request timeout before reassignment to another peer.
@@ -102,16 +102,31 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 10. Derive an effective scheduling horizon from both the configured ahead limit and the number of whole piece buffers allowed by `maxBufferedBytes`.
 11. Cover frame vectors, partial/oversized frames, tolerant unknown ids, choke/unchoke, future-piece buffering, wrong-peer rejection, header preflight, peer-drop/timeout cleanup, recovery advance and memory-capped scheduling with unit tests.
 
+## Completed peer-metadata/connection-state increment
+
+1. Add `AceLivePeerMetadataRecognizer`, a bounded bencode recognizer that classifies live metadata by payload content instead of a guessed vendor numeric message id.
+2. Accept either a direct bencoded dictionary or a single-byte extended/submessage envelope followed by a dictionary; recognize `mi.max_piece` plus optional `min_piece`, `position` and `distance_from_source`.
+3. Bound payload bytes, nesting, container entries, string bytes and total parsed nodes before decoded metadata can affect scheduler state.
+4. When `min_piece` is absent, conservatively expose only `[max_piece..max_piece]` instead of assuming historical piece availability.
+5. Add the standard interested peer-frame encoder without adding proprietary handshake identity/signing fields.
+6. Add `AceLivePeerConnectionStateMachine` for one transport-neutral peer lifecycle: transport connected, externally validated handshake, interested emission, incremental frame consumption, choke state and metadata-window refresh.
+7. Keep partial peer-frame receive buffering capped by the verified frame limit and surface oversized framing as a disconnect recommendation instead of allocating unbounded memory.
+8. Route recognized windows into `AceLivePeerSessionCoordinator` with the current choke state; malformed metadata is reported but does not by itself tear down a valid framed connection.
+9. Keep global piece assignment in `AceLivePeerSessionCoordinator`; each connection state machine only selects already-scheduled request frames owned by its peer.
+10. On transport disconnect, release peer ownership and partial reassembly through the existing peer-drop boundary before resetting local connection state.
+11. Cover content-based metadata recognition, conservative missing-min behavior, malformed/oversized input, interested/unchoke gating, partial-frame buffering, request routing and disconnect requeue with unit tests.
+
 ## Next autonomous increments
 
 1. Run hardware acceptance with the current AceStream Core Live package and several real `acestream://content_id`/`.acelive` sources; record service discovery, HTTP port, runtime route, control response and startup failures.
 2. Add an autonomous content-id metadata provider ahead of the external provider when a verified public, independently implementable resolution contract is available.
 3. Feed verified decoded live metadata into `AceLiveDescriptor` when a lawful/public decoder or provider is available.
-4. Add a small bounded bencode payload recognizer for live `myinfo` window updates and verified extended-handshake fields; classify by content, not guessed vendor message ids.
-5. Add a socket-neutral peer connection state machine for interested/unchoke/request emission and frame-buffer consumption; tracker/DHT discovery and TCP ownership remain separate adapters.
-6. Add an explicit discontinuity event boundary for future TS keyframe regating/HLS handling when recovery jumps are actually applied to output.
-7. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
-8. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
+4. Add an outer peer-handshake parser/validator boundary that can verify standard transport framing/capabilities without inventing Ace identity/signature fields; keep signed identity generation separate until its contract is independently implementable.
+5. Add a bounded TCP connection-pool adapter that owns connect/read/write/reconnect and feeds bytes into `AceLivePeerConnectionStateMachine`; route scheduled request frames by peer id.
+6. Add tracker/DHT or other independently verified peer discovery adapters separately from the TCP/session layer.
+7. Add an explicit discontinuity event boundary for future TS keyframe regating/HLS handling when recovery jumps are actually applied to output.
+8. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
+9. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
 
 ## Non-goals
 
