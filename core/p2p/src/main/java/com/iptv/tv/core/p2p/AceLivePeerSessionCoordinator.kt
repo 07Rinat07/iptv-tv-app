@@ -2,6 +2,8 @@ package com.iptv.tv.core.p2p
 
 import kotlin.math.min
 
+private const val MAX_ACE_LIVE_SESSION_PIECE = 0xffff_ffffL
+
 class AceLiveOutboundPeerFrame(
     val request: AceLiveChunkRequest,
     val bytes: ByteArray
@@ -133,6 +135,9 @@ class AceLivePeerSessionCoordinator(
         val current = reassembler.nextNeededPiece()
             ?: error("Ace Live session is exhausted at the u32 piece boundary")
         require(advance.fromPiece == current) { "Cursor advance is stale for reassembler" }
+        require(advance.toPiece in 0..MAX_ACE_LIVE_SESSION_PIECE) {
+            "Cursor advance must fit Ace Live u32 wire field"
+        }
 
         activePeers.applyCursorAdvance(advance, nowMillis)
         val emitted = reassembler.skipTo(advance.toPiece)
@@ -173,22 +178,37 @@ class AceLivePeerSessionCoordinator(
             )
         }
 
-        val activeResult = activePeers.onChunk(
-            chunk = chunk,
-            nextNeeded = reassembler.nextNeededPiece() ?: return AceLivePeerMessageResult(handled = true)
-        )
+        val nextNeeded = reassembler.nextNeededPiece()
+            ?: return AceLivePeerMessageResult(handled = true)
 
         if (preflight == AceLiveReassemblyDisposition.DUPLICATE) {
-            check(activeResult.disposition == AceLiveChunkDisposition.DUPLICATE) {
-                "Active-peer and reassembly duplicate state diverged"
+            val owner = activePeers.ownerOf(chunk.piece)
+            if (owner == null) {
+                return AceLivePeerMessageResult(
+                    handled = true,
+                    reassemblyDisposition = AceLiveReassemblyDisposition.DUPLICATE
+                )
             }
-            return AceLivePeerMessageResult(
-                handled = true,
-                activeChunkDisposition = activeResult.disposition,
-                reassemblyDisposition = preflight
-            )
+
+            val activeDuplicate = activePeers.onChunk(chunk = chunk, nextNeeded = nextNeeded)
+            return if (activeDuplicate.disposition == AceLiveChunkDisposition.DUPLICATE) {
+                AceLivePeerMessageResult(
+                    handled = true,
+                    activeChunkDisposition = activeDuplicate.disposition,
+                    reassemblyDisposition = AceLiveReassemblyDisposition.DUPLICATE
+                )
+            } else {
+                AceLivePeerMessageResult(
+                    handled = true,
+                    activeChunkDisposition = activeDuplicate.disposition
+                )
+            }
         }
 
+        val activeResult = activePeers.onChunk(
+            chunk = chunk,
+            nextNeeded = nextNeeded
+        )
         if (!activeResult.accepted) {
             return AceLivePeerMessageResult(
                 handled = true,
