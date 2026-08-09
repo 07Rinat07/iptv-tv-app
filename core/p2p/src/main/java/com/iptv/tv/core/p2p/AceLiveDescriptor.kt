@@ -9,10 +9,15 @@ import java.nio.charset.StandardCharsets
  * Ace Live transport files use a protocol that is distinct from standard BitTorrent metadata.
  * Detecting them before generic P2P parsing prevents `.acelive` sources from accidentally entering
  * the embedded libtorrent path while keeping the raw descriptor intact for the compatibility engine.
+ *
+ * [metadata] is intentionally optional: URL/data detection does not decrypt the proprietary
+ * transport body. A future verified metadata provider can attach independently decoded public live
+ * fields without changing this routing contract.
  */
 data class AceLiveDescriptor(
     val original: String,
-    val transport: String
+    val transport: String,
+    val metadata: AceLiveTransportMetadata? = null
 )
 
 object AceLiveDescriptorParser {
