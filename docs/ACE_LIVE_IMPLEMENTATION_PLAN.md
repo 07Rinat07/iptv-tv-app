@@ -116,17 +116,41 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 10. On transport disconnect, release peer ownership and partial reassembly through the existing peer-drop boundary before resetting local connection state.
 11. Cover content-based metadata recognition, conservative missing-min behavior, malformed/oversized input, interested/unchoke gating, partial-frame buffering, request routing and disconnect requeue with unit tests.
 
+## Completed TCP connection-pool increment
+
+1. Add a bounded TCP adapter that owns connect/read/write/close and finite reconnect attempts for already-discovered Ace Live peer endpoints.
+2. Perform the independently verified outer Ace transport handshake before peer-frame ingress; keep proprietary signed identity generation outside the pool.
+3. Feed post-handshake bytes into `AceLivePeerConnectionStateMachine` and serialize access to the shared `AceLivePeerSessionCoordinator`.
+4. Route only already-scheduled request frames to the connection that owns their peer id.
+5. Bound connect, read, handshake and write timing; close a stalled socket so one peer cannot hold a write slot indefinitely.
+6. Requeue ownership and partial reassembly on disconnect before retrying the endpoint.
+7. Keep tracker/DHT discovery, descriptor decryption, peer scoring and playback output outside the transport pool.
+8. Cover timeout, cancellation, reconnect, handshake, routing and peer-lifecycle failure paths with unit tests.
+
+## Completed UDP tracker-discovery increment
+
+1. Keep a live swarm identity explicitly separate from both `content_id` and ordinary BitTorrent routing: external metadata exposes `liveSwarmInfoHash`, while `core:p2p` converts only validated 40-hex input to an immutable 20-byte `AceLiveSwarmKey`.
+2. Add a pure BEP-15 codec for UDP tracker connect/announce framing, transaction-id validation and compact IPv4 peer responses.
+3. Require an explicit caller-owned peer announce port; never substitute the Ace HTTP API port or invent a self-announce endpoint when no peer listener owns one.
+4. Consume only descriptor-provided `udp://` tracker endpoints. Bound tracker count, URL length, request timeout, response bytes, peers per tracker and total returned peers.
+5. Treat tracker metadata as untrusted network input: reject loopback/private/link-local/multicast/reserved tracker destinations by default and require an explicit policy opt-in for controlled local deployments/tests.
+6. Treat compact peer results as untrusted too: reject non-global peer endpoints by default before they can reach the TCP connection pool.
+7. Deduplicate returned `AceLiveTcpPeerEndpoint` values across tracker responses and keep tracker failures best-effort and isolated.
+8. Keep Mainline DHT, LSD, peer scoring/refill, inbound listener/NAT mapping and autonomous runtime wiring as separate later increments.
+9. Cover wire offsets, malformed/oversized responses, swarm-key ownership, tracker URL policy, unsafe destination rejection and a complete local fake-tracker connect/announce exchange with unit tests.
+
 ## Next autonomous increments
 
 1. Run hardware acceptance with the current AceStream Core Live package and several real `acestream://content_id`/`.acelive` sources; record service discovery, HTTP port, runtime route, control response and startup failures.
 2. Add an autonomous content-id metadata provider ahead of the external provider when a verified public, independently implementable resolution contract is available.
 3. Feed verified decoded live metadata into `AceLiveDescriptor` when a lawful/public decoder or provider is available.
 4. Add an outer peer-handshake parser/validator boundary that can verify standard transport framing/capabilities without inventing Ace identity/signature fields; keep signed identity generation separate until its contract is independently implementable.
-5. Add a bounded TCP connection-pool adapter that owns connect/read/write/reconnect and feeds bytes into `AceLivePeerConnectionStateMachine`; route scheduled request frames by peer id.
-6. Add tracker/DHT or other independently verified peer discovery adapters separately from the TCP/session layer.
-7. Add an explicit discontinuity event boundary for future TS keyframe regating/HLS handling when recovery jumps are actually applied to output.
-8. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
-9. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
+5. Connect the completed UDP tracker adapter to peer-pool orchestration only when a real local peer-listener/announce-port lifecycle is present; do not advertise the HTTP API endpoint.
+6. Add Mainline DHT (BEP-5) and, if useful for LAN operation, LSD as independently verified discovery sources; keep discovery source aggregation/deduplication separate from peer scoring.
+7. Add peer scoring/background refill after multiple discovery sources exist, preserving stale-pool recovery semantics without automatically banning reachable peers.
+8. Add an explicit discontinuity event boundary for future TS keyframe regating/HLS handling when recovery jumps are actually applied to output.
+9. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
+10. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
 
 ## Non-goals
 
