@@ -3,6 +3,7 @@ package com.iptv.tv.core.p2p
 import java.io.IOException
 import java.util.ArrayDeque
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -203,6 +204,106 @@ class AceLiveTcpConnectionPoolTest {
         pool.stopPeer(11)
     }
 
+    @Test
+    fun silentPreHandshakePeerTimesOutAndReleasesPoolSlot() = runBlocking {
+        val silent = FakeTransport(listOf(ReadAction.Timeout))
+        val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
+        val pool = pool(
+            factory = FakeTransportFactory(silent),
+            events = events,
+            policy = policy(
+                maxConcurrentPeers = 1,
+                handshakeTimeoutMillis = 100
+            )
+        )
+
+        pool.startPeer(
+            peerId = 13,
+            endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9006),
+            swarmKey = swarmKey,
+            localPeerId = localPeerId
+        )
+
+        awaitCondition {
+            events.filterIsInstance<AceLiveTcpPoolEvent.Disconnected>().any {
+                it.peerId == 13L && it.reason == AceLiveTcpDisconnectReason.HANDSHAKE_TIMEOUT
+            }
+        }
+        awaitCondition { pool.activePeerIds().isEmpty() }
+
+        assertFalse(events.any { it is AceLiveTcpPoolEvent.HandshakeAccepted })
+    }
+
+    @Test
+    fun stalledPeerWriteDoesNotBlockHealthyPeerDispatch() = runBlocking {
+        val peerPayload = handshakeCodec.encode(swarmKey, remotePeerId) +
+            frame(id = 99, payload = ascii("d9:max_piecei11e9:min_piecei10ee")) +
+            frame(id = 1)
+        val stalled = FakeTransport(
+            initialReads = listOf(ReadAction.Data(peerPayload)),
+            blockWritesAfterCount = 2
+        )
+        val healthy = FakeTransport(listOf(ReadAction.Data(peerPayload)))
+        val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
+        val pool = pool(
+            factory = FakeTransportFactory(stalled, healthy),
+            events = events,
+            policy = policy(writeTimeoutMillis = 100)
+        )
+
+        pool.startPeer(
+            peerId = 20,
+            endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9010),
+            swarmKey = swarmKey,
+            localPeerId = localPeerId
+        )
+        pool.startPeer(
+            peerId = 21,
+            endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9011),
+            swarmKey = swarmKey,
+            localPeerId = localPeerId
+        )
+        awaitCondition {
+            events.filterIsInstance<AceLiveTcpPoolEvent.HandshakeAccepted>()
+                .map { it.peerId }.toSet().containsAll(setOf(20L, 21L))
+        }
+        awaitCondition {
+            events.filterIsInstance<AceLiveTcpPoolEvent.Ingress>()
+                .filter { it.result.metadataUpdates.isNotEmpty() }
+                .map { it.peerId }.toSet().containsAll(setOf(20L, 21L))
+        }
+
+        val dispatch = withTimeout(1_000) {
+            pool.scheduleAndDispatch(head = 11, nowMillis = 1)
+        }
+
+        assertTrue(20L in dispatch.failedPeerIds)
+        assertTrue(dispatch.sentFrames >= 3)
+        assertTrue(healthy.writes.drop(2).any { it.size >= 5 && (it[4].toInt() and 0xff) == 6 })
+
+        pool.close()
+    }
+
+    @Test
+    fun immediateStopReleasesRegisteredPeerSlot() = runBlocking {
+        val transport = FakeTransport(emptyList())
+        val pool = pool(
+            factory = FakeTransportFactory(transport),
+            events = CopyOnWriteArrayList(),
+            policy = policy(maxConcurrentPeers = 1)
+        )
+
+        pool.startPeer(
+            peerId = 30,
+            endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9020),
+            swarmKey = swarmKey,
+            localPeerId = localPeerId
+        )
+        pool.stopPeer(30)
+
+        assertTrue(pool.activePeerIds().isEmpty())
+    }
+
     private fun pool(
         factory: AceLiveTcpTransportFactory,
         events: CopyOnWriteArrayList<AceLiveTcpPoolEvent>,
@@ -219,10 +320,14 @@ class AceLiveTcpConnectionPoolTest {
     private fun policy(
         maxConcurrentPeers: Int = 4,
         maxReconnectAttempts: Int = 0,
-        reconnectDelayMillis: Long = 0
+        reconnectDelayMillis: Long = 0,
+        handshakeTimeoutMillis: Int = 1_000,
+        writeTimeoutMillis: Int = 1_000
     ) = AceLiveTcpConnectionPolicy(
         connectTimeoutMillis = 1_000,
         readTimeoutMillis = 1_000,
+        handshakeTimeoutMillis = handshakeTimeoutMillis,
+        writeTimeoutMillis = writeTimeoutMillis,
         readBufferBytes = 4 * 1024,
         maxConcurrentPeers = maxConcurrentPeers,
         maxReconnectAttempts = maxReconnectAttempts,
@@ -267,7 +372,8 @@ class AceLiveTcpConnectionPoolTest {
     }
 
     private class FakeTransport(
-        initialReads: List<ReadAction>
+        initialReads: List<ReadAction>,
+        private val blockWritesAfterCount: Int? = null
     ) : AceLiveTcpTransport {
         private val reads = Channel<ReadAction>(Channel.UNLIMITED)
         val writes = CopyOnWriteArrayList<ByteArray>()
@@ -297,6 +403,10 @@ class AceLiveTcpConnectionPoolTest {
         }
 
         override suspend fun write(bytes: ByteArray) {
+            if (closed) throw IOException("fake transport is closed")
+            if (blockWritesAfterCount != null && writes.size >= blockWritesAfterCount) {
+                awaitCancellation()
+            }
             if (closed) throw IOException("fake transport is closed")
             writes += bytes.copyOf()
         }
