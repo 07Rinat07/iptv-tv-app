@@ -91,7 +91,7 @@ class AceLivePeerMetadataRecognizer(
             )
         }
 
-        val source = (root["mi"] as? BValue.DictValue) ?: root
+        val source = (root.values["mi"] as? BValue.DictValue) ?: root
         val maxPiece = (source.values["max_piece"] as? BValue.IntValue)?.value
             ?: return AceLivePeerMetadataRecognition.NotRecognized
         val explicitMin = (source.values["min_piece"] as? BValue.IntValue)?.value
