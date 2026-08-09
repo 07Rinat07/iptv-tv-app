@@ -1,7 +1,6 @@
 package com.iptv.tv.core.p2p
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -30,7 +29,7 @@ class AceLiveOutputDiscontinuityTest {
         val advance = requireNotNull(session.evaluateRecovery(nowMillis = 4_000).cursorAdvance)
 
         val applied = session.applyRecoveryAdvance(advance, nowMillis = 4_000)
-        val discontinuity = assertNotNull(applied.outputDiscontinuity)
+        val discontinuity = requireNotNull(applied.outputDiscontinuity)
 
         assertEquals(100L, discontinuity.fromPiece)
         assertEquals(105L, discontinuity.toPiece)
