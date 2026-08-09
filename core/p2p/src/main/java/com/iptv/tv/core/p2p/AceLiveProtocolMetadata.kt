@@ -31,7 +31,9 @@ data class AceLiveTransportGeometry(
  * Public/live descriptor metadata that can be consumed by future peer-wire and scheduling code.
  *
  * Public-key material is represented as base64 text so data-class equality remains value based.
- * Diagnostics expose only its presence, never the key or tracker values themselves.
+ * [swarmKey] is a verified 20-byte live swarm identity; it is deliberately not modeled as an
+ * ordinary BitTorrent routing id or inferred from `content_id`.
+ * Diagnostics expose only presence/count, never key or tracker values themselves.
  */
 data class AceLiveTransportMetadata(
     val geometry: AceLiveTransportGeometry,
@@ -39,7 +41,8 @@ data class AceLiveTransportMetadata(
     val publicKeyDerBase64: String?,
     val trackers: List<String>,
     val allowPublicTrackers: Boolean?,
-    val permanent: Boolean?
+    val permanent: Boolean?,
+    val swarmKey: AceLiveSwarmKey? = null
 ) {
     fun diagnosticSummary(): String = buildString {
         append("Ace live descriptor: piece_bytes=").append(geometry.pieceLengthBytes)
@@ -48,6 +51,7 @@ data class AceLiveTransportMetadata(
         append(" bitrate=").append(geometry.bitrate)
         append(" auth=").append(authMethod?.takeIf { it.isNotBlank() } ?: "unknown")
         append(" pubkey=").append(if (publicKeyDerBase64.isNullOrBlank()) "absent" else "present")
+        append(" swarm_key=").append(if (swarmKey == null) "absent" else "present")
         append(" trackers=").append(trackers.count { it.isNotBlank() })
         allowPublicTrackers?.let { append(" public_trackers=").append(it) }
         permanent?.let { append(" permanent=").append(it) }
