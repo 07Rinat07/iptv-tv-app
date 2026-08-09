@@ -12,22 +12,31 @@ class AceLiveRecoveryCoordinatorTest {
         val coordinator = coordinator()
         coordinator.updatePeer(peer(id = 1, min = 10, max = 30, unchoked = true))
 
-        assertEquals(listOf(10L), coordinator.assign(10, 30, nowMillis = 0).map { it.piece })
+        assertEquals(listOf(10L, 11L), coordinator.assign(10, 30, nowMillis = 0).map { it.piece })
         assertEquals(1L, coordinator.ownerOf(10))
+        assertEquals(1L, coordinator.ownerOf(11))
 
         val early = coordinator.evaluate(10, nowMillis = 3_000)
         assertTrue(early.timedOutRequests.isEmpty())
         assertEquals(1L, coordinator.ownerOf(10))
+        assertEquals(1L, coordinator.ownerOf(11))
 
         val timeout = coordinator.evaluate(10, nowMillis = 4_000)
         assertEquals(
-            listOf(AceLiveTimedOutRequest(piece = 10, previousPeerId = 1)),
+            listOf(
+                AceLiveTimedOutRequest(piece = 10, previousPeerId = 1),
+                AceLiveTimedOutRequest(piece = 11, previousPeerId = 1)
+            ),
             timeout.timedOutRequests
         )
         assertNull(coordinator.ownerOf(10))
+        assertNull(coordinator.ownerOf(11))
         assertEquals(0, coordinator.inFlightCount())
 
-        assertEquals(listOf(10L), coordinator.assign(10, 30, nowMillis = 4_000).map { it.piece })
+        assertEquals(
+            listOf(10L, 11L),
+            coordinator.assign(10, 30, nowMillis = 4_000).map { it.piece }
+        )
     }
 
     @Test
