@@ -62,18 +62,16 @@ class LoopbackFirstAceContentTransportResolver(
 }
 
 /**
- * Current compatibility resolver backed by the external Ace Engine metadata API.
+ * Transport classifier backed by an abstract metadata provider.
  *
- * This class intentionally exposes the dependency boundary: successful non-live BitTorrent
- * metadata may be handed to the embedded libtorrent backend, while live/wrapper/HLS transports
- * stay outside standard libtorrent. Replacing this resolver with an in-process implementation is
- * therefore isolated from player-facing routing.
+ * The provider boundary lets an autonomous/public-protocol metadata resolver be inserted ahead of
+ * the external Ace Engine compatibility backend without changing transport classification.
  */
 class ExternalAceContentTransportResolver(
-    private val client: EngineStreamClient
+    private val metadataProvider: AceContentMetadataProvider
 ) : AceContentTransportResolver {
     override suspend fun resolve(rawSource: String): AppResult<AceContentTransportResolution> {
-        return when (val result = client.resolveContentIdMetadata(rawSource)) {
+        return when (val result = metadataProvider.resolve(rawSource)) {
             is AppResult.Success -> AppResult.Success(classify(result.data))
             is AppResult.Error -> result
             AppResult.Loading -> AppResult.Loading
