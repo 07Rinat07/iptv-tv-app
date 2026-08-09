@@ -27,6 +27,8 @@ data class AceLiveTcpPeerEndpoint(
 data class AceLiveTcpConnectionPolicy(
     val connectTimeoutMillis: Int = 5_000,
     val readTimeoutMillis: Int = 15_000,
+    val handshakeTimeoutMillis: Int = 10_000,
+    val writeTimeoutMillis: Int = 5_000,
     val readBufferBytes: Int = 64 * 1024,
     val maxConcurrentPeers: Int = 16,
     val maxReconnectAttempts: Int = 2,
@@ -38,6 +40,12 @@ data class AceLiveTcpConnectionPolicy(
         }
         require(readTimeoutMillis in 100..60_000) {
             "readTimeoutMillis must be in 100..60000"
+        }
+        require(handshakeTimeoutMillis in 100..60_000) {
+            "handshakeTimeoutMillis must be in 100..60000"
+        }
+        require(writeTimeoutMillis in 100..60_000) {
+            "writeTimeoutMillis must be in 100..60000"
         }
         require(readBufferBytes in 1_024..MAX_READ_BUFFER_BYTES) {
             "readBufferBytes must be in 1024..$MAX_READ_BUFFER_BYTES"
@@ -80,6 +88,10 @@ fun interface AceLiveTcpTransportFactory {
 
 /**
  * Android/JVM raw-socket implementation. Tracker/DHT discovery and peer selection stay outside.
+ *
+ * Write deadlines are enforced by [AceLiveTcpConnectionPool]. On timeout the pool closes this
+ * socket, which also interrupts a blocking OutputStream write without requiring vendor-specific
+ * socket options.
  */
 class JvmAceLiveTcpTransportFactory(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
