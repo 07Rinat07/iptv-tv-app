@@ -20,7 +20,8 @@ data class AceLiveUdpTrackerPolicy(
     val maxPeersPerTracker: Int = 128,
     val maxTotalPeers: Int = 256,
     val numWant: Int = 50,
-    val allowNonGlobalTrackerAddresses: Boolean = false
+    val allowNonGlobalTrackerAddresses: Boolean = false,
+    val allowNonGlobalPeerAddresses: Boolean = false
 ) {
     init {
         require(requestTimeoutMillis in 100..30_000)
@@ -108,7 +109,7 @@ class AceLiveUdpTrackerDiscovery(
                     InetAddress.getAllByName(endpoint.host)
                         .filterIsInstance<Inet4Address>()
                         .firstOrNull(::isAllowedTrackerAddress)
-                } catch (_: Throwable) {
+                } catch (_: Exception) {
                     null
                 }
                 if (address == null) {
@@ -122,12 +123,13 @@ class AceLiveUdpTrackerDiscovery(
                         endpoint = InetSocketAddress(address, endpoint.port),
                         request = request
                     )
-                } catch (_: Throwable) {
+                } catch (_: Exception) {
                     failed += 1
                     emptyList()
                 }
 
                 for (peer in discovered) {
+                    if (!isAllowedPeerEndpoint(peer)) continue
                     val key = "${peer.host}:${peer.port}"
                     peers.putIfAbsent(key, peer)
                     if (peers.size >= policy.maxTotalPeers) break
@@ -152,8 +154,20 @@ class AceLiveUdpTrackerDiscovery(
         return AceLiveUdpTrackerEndpoint(host = host, port = port)
     }
 
-    private fun isAllowedTrackerAddress(address: Inet4Address): Boolean {
-        if (policy.allowNonGlobalTrackerAddresses) return true
+    private fun isAllowedTrackerAddress(address: Inet4Address): Boolean =
+        policy.allowNonGlobalTrackerAddresses || isGloballyRoutableIpv4(address)
+
+    private fun isAllowedPeerEndpoint(peer: AceLiveTcpPeerEndpoint): Boolean {
+        if (policy.allowNonGlobalPeerAddresses) return true
+        val octets = peer.host.split('.').mapNotNull { part ->
+            part.toIntOrNull()?.takeIf { it in 0..255 }
+        }
+        if (octets.size != 4) return false
+        val address = InetAddress.getByAddress(octets.map(Int::toByte).toByteArray()) as Inet4Address
+        return isGloballyRoutableIpv4(address)
+    }
+
+    private fun isGloballyRoutableIpv4(address: Inet4Address): Boolean {
         if (
             address.isAnyLocalAddress ||
             address.isLoopbackAddress ||
