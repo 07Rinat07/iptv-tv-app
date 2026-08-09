@@ -2,14 +2,22 @@ package com.iptv.tv.core.p2p
 
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface AceLiveTcpPoolEvent {
     val peerId: Long
@@ -49,6 +57,7 @@ sealed interface AceLiveTcpPoolEvent {
 enum class AceLiveTcpDisconnectReason {
     REMOTE_CLOSED,
     IO_ERROR,
+    HANDSHAKE_TIMEOUT,
     HANDSHAKE_REJECTED,
     PROTOCOL_REJECTED
 }
@@ -87,6 +96,7 @@ class AceLiveTcpConnectionPool(
 ) {
     private val poolMutex = Mutex()
     private val sessionMutex = Mutex()
+    private val dispatchMutex = Mutex()
     private val peers = LinkedHashMap<Long, PeerRuntime>()
 
     suspend fun startPeer(
@@ -110,30 +120,62 @@ class AceLiveTcpConnectionPool(
             localPeerId = localPeerId.copyOf(),
             connection = AceLivePeerConnectionStateMachine(peerId = peerId, session = session)
         )
-        poolMutex.withLock {
-            require(peerId !in peers) { "peerId $peerId is already active" }
-            require(peers.size < policy.maxConcurrentPeers) {
-                "Ace Live TCP peer pool is full"
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            runPeer(runtime)
+        }
+        runtime.job = job
+
+        try {
+            poolMutex.withLock {
+                require(peerId !in peers) { "peerId $peerId is already active" }
+                require(peers.size < policy.maxConcurrentPeers) {
+                    "Ace Live TCP peer pool is full"
+                }
+                peers[peerId] = runtime
             }
-            peers[peerId] = runtime
+        } catch (error: Throwable) {
+            job.cancel()
+            throw error
         }
 
-        runtime.job = scope.launch {
-            runPeer(runtime)
+        if (!job.start()) {
+            poolMutex.withLock {
+                if (peers[peerId] === runtime) peers.remove(peerId)
+            }
         }
     }
 
     suspend fun stopPeer(peerId: Long) {
         val runtime = poolMutex.withLock { peers[peerId] } ?: return
         runtime.transport?.close()
+        runtime.writeJob?.cancel()
         runtime.job?.cancelAndJoin()
+        poolMutex.withLock {
+            if (
+                peers[peerId] === runtime &&
+                runtime.connection.phase() == AceLivePeerConnectionPhase.DISCONNECTED
+            ) {
+                peers.remove(peerId)
+            }
+        }
     }
 
     suspend fun close() {
         val runtimes = poolMutex.withLock { peers.values.toList() }
         runtimes.forEach { runtime ->
             runtime.transport?.close()
+            runtime.writeJob?.cancel()
             runtime.job?.cancelAndJoin()
+        }
+        poolMutex.withLock {
+            runtimes.forEach { runtime ->
+                if (
+                    peers[runtime.peerId] === runtime &&
+                    runtime.connection.phase() == AceLivePeerConnectionPhase.DISCONNECTED
+                ) {
+                    peers.remove(runtime.peerId)
+                }
+            }
         }
     }
 
@@ -142,11 +184,14 @@ class AceLiveTcpConnectionPool(
 
     /**
      * Runs one serialized scheduling tick and writes selected request frames to matching peers.
+     *
+     * Routes are dispatched concurrently. Each peer has at most one in-flight socket write and a
+     * bounded write deadline; a stalled peer is closed without delaying healthy peers.
      */
     suspend fun scheduleAndDispatch(
         head: Long,
         nowMillis: Long = clockMillis()
-    ): AceLiveTcpDispatchResult {
+    ): AceLiveTcpDispatchResult = dispatchMutex.withLock {
         val runtimes = poolMutex.withLock { peers.values.toList() }
         val scheduledAndRoutes = sessionMutex.withLock {
             val scheduled = session.schedule(head = head, nowMillis = nowMillis)
@@ -159,38 +204,19 @@ class AceLiveTcpConnectionPool(
 
         val scheduled = scheduledAndRoutes.first
         val routes = scheduledAndRoutes.second
-        var sentFrames = 0
-        val failedPeers = linkedSetOf<Long>()
-
-        for ((runtime, frames) in routes) {
-            val transport = runtime.transport
-            if (transport == null) {
-                failedPeers += runtime.peerId
-                continue
-            }
-            val sent = runtime.writeMutex.withLock {
-                var count = 0
-                try {
-                    for (frame in frames) {
-                        transport.write(frame)
-                        count += 1
-                    }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Throwable) {
-                    failedPeers += runtime.peerId
-                    runCatching { transport.close() }
+        val outcomes = coroutineScope {
+            routes.map { (runtime, frames) ->
+                async {
+                    dispatchRoute(runtime, frames)
                 }
-                count
-            }
-            sentFrames += sent
+            }.awaitAll()
         }
 
-        return AceLiveTcpDispatchResult(
+        AceLiveTcpDispatchResult(
             scheduledFrames = scheduled.size,
             selectedFrames = routes.sumOf { it.second.size },
-            sentFrames = sentFrames,
-            failedPeerIds = failedPeers
+            sentFrames = outcomes.sumOf { it.sentFrames },
+            failedPeerIds = outcomes.filter { it.failed }.mapTo(linkedSetOf()) { it.peerId }
         )
     }
 
@@ -210,6 +236,73 @@ class AceLiveTcpConnectionPool(
 
     suspend fun nextNeededPiece(): Long? = sessionMutex.withLock {
         session.nextNeededPiece()
+    }
+
+    private suspend fun dispatchRoute(
+        runtime: PeerRuntime,
+        frames: List<ByteArray>
+    ): RouteDispatchResult {
+        val transport = runtime.transport
+            ?: return RouteDispatchResult(runtime.peerId, sentFrames = 0, failed = true)
+
+        var sent = 0
+        for (frame in frames) {
+            if (!writeFrameBounded(runtime, transport, frame)) {
+                return RouteDispatchResult(runtime.peerId, sentFrames = sent, failed = true)
+            }
+            sent += 1
+        }
+        return RouteDispatchResult(runtime.peerId, sentFrames = sent, failed = false)
+    }
+
+    private suspend fun writeFrameBounded(
+        runtime: PeerRuntime,
+        transport: AceLiveTcpTransport,
+        bytes: ByteArray
+    ): Boolean {
+        val writer = runtime.writeStateMutex.withLock {
+            val existing = runtime.writeJob
+            if (existing != null && !existing.isCompleted) {
+                null
+            } else {
+                scope.async {
+                    try {
+                        transport.write(bytes)
+                        true
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Throwable) {
+                        false
+                    }
+                }.also { runtime.writeJob = it }
+            }
+        }
+
+        if (writer == null) {
+            runCatching { transport.close() }
+            return false
+        }
+
+        val success = try {
+            withTimeoutOrNull(policy.writeTimeoutMillis.toLong()) {
+                writer.await()
+            } ?: false
+        } catch (cancelled: CancellationException) {
+            writer.cancel()
+            runCatching { transport.close() }
+            throw cancelled
+        }
+
+        if (!success) {
+            runCatching { transport.close() }
+            writer.cancel()
+        }
+        runtime.writeStateMutex.withLock {
+            if (runtime.writeJob === writer && writer.isCompleted) {
+                runtime.writeJob = null
+            }
+        }
+        return success
     }
 
     private suspend fun runPeer(runtime: PeerRuntime) {
@@ -264,18 +357,21 @@ class AceLiveTcpConnectionPool(
                 delay(policy.reconnectDelayMillis)
             }
         } finally {
-            runtime.transport?.let { transport ->
-                runCatching { transport.close() }
-            }
-            runtime.transport = null
-            sessionMutex.withLock {
-                if (runtime.connection.phase() != AceLivePeerConnectionPhase.DISCONNECTED) {
-                    runtime.connection.onTransportDisconnected()
+            withContext(NonCancellable) {
+                runtime.transport?.let { transport ->
+                    runCatching { transport.close() }
                 }
-            }
-            poolMutex.withLock {
-                if (peers[runtime.peerId] === runtime) {
-                    peers.remove(runtime.peerId)
+                runtime.transport = null
+                runtime.writeJob?.cancel()
+                sessionMutex.withLock {
+                    if (runtime.connection.phase() != AceLivePeerConnectionPhase.DISCONNECTED) {
+                        runtime.connection.onTransportDisconnected()
+                    }
+                }
+                poolMutex.withLock {
+                    if (peers[runtime.peerId] === runtime) {
+                        peers.remove(runtime.peerId)
+                    }
                 }
             }
         }
@@ -291,69 +387,18 @@ class AceLiveTcpConnectionPool(
         }
         emit(AceLiveTcpPoolEvent.TransportConnected(runtime.peerId, reconnectAttempt))
 
-        transport.write(
-            handshakeCodec.encode(
-                swarmKey = runtime.swarmKey,
-                peerId = runtime.localPeerId
-            )
+        val localHandshake = handshakeCodec.encode(
+            swarmKey = runtime.swarmKey,
+            peerId = runtime.localPeerId
         )
+        if (!writeFrameBounded(runtime, transport, localHandshake)) {
+            return ConnectionExit(AceLiveTcpDisconnectReason.IO_ERROR, retryable = true)
+        }
 
         val readBuffer = ByteArray(policy.readBufferBytes)
-        var handshakeBuffer = byteArrayOf()
-        var handshakeAccepted = false
-
-        while (currentCoroutineContext().isActive && !handshakeAccepted) {
-            val count = transport.read(readBuffer)
-            if (count < 0) {
-                return ConnectionExit(AceLiveTcpDisconnectReason.REMOTE_CLOSED, retryable = true)
-            }
-            if (count == 0) continue
-            require(count <= readBuffer.size) { "transport returned more bytes than requested" }
-
-            handshakeBuffer += readBuffer.copyOf(count)
-            when (
-                val decoded = handshakeCodec.decode(
-                    buffer = handshakeBuffer,
-                    expectedSwarmKey = runtime.swarmKey
-                )
-            ) {
-                is AceLivePeerHandshakeDecodeResult.NeedMoreData -> {
-                    check(handshakeBuffer.size < AceLivePeerHandshakeCodec.HANDSHAKE_BYTES) {
-                        "handshake decoder requested more data after complete handshake length"
-                    }
-                }
-
-                is AceLivePeerHandshakeDecodeResult.Rejected -> {
-                    emit(AceLiveTcpPoolEvent.HandshakeRejected(runtime.peerId, decoded.reason))
-                    return ConnectionExit(
-                        AceLiveTcpDisconnectReason.HANDSHAKE_REJECTED,
-                        retryable = false
-                    )
-                }
-
-                is AceLivePeerHandshakeDecodeResult.Decoded -> {
-                    val interested = sessionMutex.withLock {
-                        runtime.connection.onHandshakeAccepted()
-                    }
-                    transport.write(interested)
-                    emit(AceLiveTcpPoolEvent.HandshakeAccepted(runtime.peerId))
-                    handshakeAccepted = true
-
-                    if (handshakeBuffer.size > decoded.consumedBytes) {
-                        val remainder = handshakeBuffer.copyOfRange(
-                            decoded.consumedBytes,
-                            handshakeBuffer.size
-                        )
-                        if (!consumeIngress(runtime, remainder)) {
-                            return ConnectionExit(
-                                AceLiveTcpDisconnectReason.PROTOCOL_REJECTED,
-                                retryable = false
-                            )
-                        }
-                    }
-                    handshakeBuffer = byteArrayOf()
-                }
-            }
+        when (val handshake = awaitHandshake(runtime, transport, readBuffer)) {
+            is HandshakeStageResult.Exit -> return handshake.exit
+            HandshakeStageResult.Accepted -> Unit
         }
 
         while (currentCoroutineContext().isActive) {
@@ -374,6 +419,84 @@ class AceLiveTcpConnectionPool(
 
         return ConnectionExit(AceLiveTcpDisconnectReason.REMOTE_CLOSED, retryable = false)
     }
+
+    private suspend fun awaitHandshake(
+        runtime: PeerRuntime,
+        transport: AceLiveTcpTransport,
+        readBuffer: ByteArray
+    ): HandshakeStageResult =
+        withTimeoutOrNull(policy.handshakeTimeoutMillis.toLong()) {
+            var handshakeBuffer = byteArrayOf()
+
+            while (currentCoroutineContext().isActive) {
+                val count = transport.read(readBuffer)
+                if (count < 0) {
+                    return@withTimeoutOrNull HandshakeStageResult.Exit(
+                        ConnectionExit(AceLiveTcpDisconnectReason.REMOTE_CLOSED, retryable = true)
+                    )
+                }
+                if (count == 0) continue
+                require(count <= readBuffer.size) { "transport returned more bytes than requested" }
+
+                handshakeBuffer += readBuffer.copyOf(count)
+                when (
+                    val decoded = handshakeCodec.decode(
+                        buffer = handshakeBuffer,
+                        expectedSwarmKey = runtime.swarmKey
+                    )
+                ) {
+                    is AceLivePeerHandshakeDecodeResult.NeedMoreData -> {
+                        check(handshakeBuffer.size < AceLivePeerHandshakeCodec.HANDSHAKE_BYTES) {
+                            "handshake decoder requested more data after complete handshake length"
+                        }
+                    }
+
+                    is AceLivePeerHandshakeDecodeResult.Rejected -> {
+                        emit(AceLiveTcpPoolEvent.HandshakeRejected(runtime.peerId, decoded.reason))
+                        return@withTimeoutOrNull HandshakeStageResult.Exit(
+                            ConnectionExit(
+                                AceLiveTcpDisconnectReason.HANDSHAKE_REJECTED,
+                                retryable = false
+                            )
+                        )
+                    }
+
+                    is AceLivePeerHandshakeDecodeResult.Decoded -> {
+                        val interested = sessionMutex.withLock {
+                            runtime.connection.onHandshakeAccepted()
+                        }
+                        if (!writeFrameBounded(runtime, transport, interested)) {
+                            return@withTimeoutOrNull HandshakeStageResult.Exit(
+                                ConnectionExit(AceLiveTcpDisconnectReason.IO_ERROR, retryable = true)
+                            )
+                        }
+                        emit(AceLiveTcpPoolEvent.HandshakeAccepted(runtime.peerId))
+
+                        if (handshakeBuffer.size > decoded.consumedBytes) {
+                            val remainder = handshakeBuffer.copyOfRange(
+                                decoded.consumedBytes,
+                                handshakeBuffer.size
+                            )
+                            if (!consumeIngress(runtime, remainder)) {
+                                return@withTimeoutOrNull HandshakeStageResult.Exit(
+                                    ConnectionExit(
+                                        AceLiveTcpDisconnectReason.PROTOCOL_REJECTED,
+                                        retryable = false
+                                    )
+                                )
+                            }
+                        }
+                        return@withTimeoutOrNull HandshakeStageResult.Accepted
+                    }
+                }
+            }
+
+            HandshakeStageResult.Exit(
+                ConnectionExit(AceLiveTcpDisconnectReason.REMOTE_CLOSED, retryable = false)
+            )
+        } ?: HandshakeStageResult.Exit(
+            ConnectionExit(AceLiveTcpDisconnectReason.HANDSHAKE_TIMEOUT, retryable = true)
+        )
 
     private suspend fun consumeIngress(
         runtime: PeerRuntime,
@@ -406,14 +529,28 @@ class AceLiveTcpConnectionPool(
         val localPeerId: ByteArray,
         val connection: AceLivePeerConnectionStateMachine
     ) {
-        val writeMutex = Mutex()
+        val writeStateMutex = Mutex()
 
         @Volatile
         var transport: AceLiveTcpTransport? = null
 
         @Volatile
         var job: Job? = null
+
+        @Volatile
+        var writeJob: Deferred<Boolean>? = null
     }
+
+    private sealed interface HandshakeStageResult {
+        data object Accepted : HandshakeStageResult
+        data class Exit(val exit: ConnectionExit) : HandshakeStageResult
+    }
+
+    private data class RouteDispatchResult(
+        val peerId: Long,
+        val sentFrames: Int,
+        val failed: Boolean
+    )
 
     private data class ConnectionExit(
         val reason: AceLiveTcpDisconnectReason,
