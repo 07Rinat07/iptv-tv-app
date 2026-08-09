@@ -92,18 +92,32 @@ object AceStreamDescriptorParser {
             if (contentIdRegex.matches(candidate)) return candidate
         }
 
-        if (isLocalAceEngineUrl(value)) {
-            val uri = runCatching { URI(value) }.getOrNull() ?: return null
-            val query = uri.rawQuery.orEmpty()
-            query.split('&').forEach { pair ->
-                val key = pair.substringBefore('=').lowercase()
-                val candidate = pair.substringAfter('=', "")
-                if (key in setOf("id", "content_id", "content-id") && contentIdRegex.matches(candidate)) {
-                    return candidate
-                }
+        if (
+            value.startsWith("acestream:", ignoreCase = true) ||
+            value.startsWith("ace:", ignoreCase = true)
+        ) {
+            extractContentIdFromQuery(value.substringAfter('?', missingDelimiterValue = ""))?.let {
+                return it
             }
         }
 
+        if (isLocalAceEngineUrl(value)) {
+            val uri = runCatching { URI(value) }.getOrNull() ?: return null
+            extractContentIdFromQuery(uri.rawQuery.orEmpty())?.let { return it }
+        }
+
+        return null
+    }
+
+    private fun extractContentIdFromQuery(query: String): String? {
+        if (query.isBlank()) return null
+        query.split('&').forEach { pair ->
+            val key = pair.substringBefore('=').trim().lowercase()
+            val candidate = pair.substringAfter('=', "").trim()
+            if (key in setOf("id", "content_id", "content-id") && contentIdRegex.matches(candidate)) {
+                return candidate
+            }
+        }
         return null
     }
 
