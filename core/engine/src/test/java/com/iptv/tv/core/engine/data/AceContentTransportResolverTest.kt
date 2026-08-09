@@ -9,7 +9,10 @@ import org.junit.Test
 
 class AceContentTransportResolverTest {
     private val resolver = ExternalAceContentTransportResolver(
-        EngineStreamClient(EmptyApi())
+        object : AceContentMetadataProvider {
+            override suspend fun resolve(rawSource: String): AppResult<AceTransportMetadata> =
+                AppResult.Error("not used by classification tests")
+        }
     )
 
     @Test
@@ -101,7 +104,10 @@ class AceContentTransportResolverTest {
             )
         )
         val client = EngineStreamClient(api)
-        val external = ExternalAceContentTransportResolver(client)
+        val metadataProvider = ChainedAceContentMetadataProvider(
+            listOf(ExternalEngineAceContentMetadataProvider(client))
+        )
+        val external = ExternalAceContentTransportResolver(metadataProvider)
         val recovering = LoopbackFirstAceContentTransportResolver(
             client = client,
             delegate = external
@@ -135,18 +141,6 @@ class AceContentTransportResolverTest {
         transportFileCacheKey = null,
         wrapperData = null
     )
-
-    private class EmptyApi : EngineStreamApi {
-        override suspend fun status(
-            url: String,
-            options: Map<String, String>
-        ): Map<String, Any?> = emptyMap()
-
-        override suspend fun resolve(
-            url: String,
-            options: Map<String, String>
-        ): Map<String, Any?> = emptyMap()
-    }
 
     private class FakeApi(
         private val statusPayload: Map<String, Any?>,
