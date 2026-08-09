@@ -30,6 +30,25 @@ class AceContentTransportResolverTest {
     }
 
     @Test
+    fun classify_nonLiveBitTorrentTransportFile_isEmbeddedCandidate() {
+        val payload = "ZHVtbXktdG9ycmVudA=="
+        val metadata = metadata(
+            infoHash = null,
+            mediaType = "vod",
+            transportType = "bt",
+            transportFileData = payload
+        )
+
+        val result = resolver.classify(metadata)
+
+        assertTrue(result is AceContentTransportResolution.EmbeddedTorrentFile)
+        assertEquals(
+            payload,
+            (result as AceContentTransportResolution.EmbeddedTorrentFile).transportFileDataBase64
+        )
+    }
+
+    @Test
     fun classify_liveBitTorrent_neverLeaksIntoStandardLibtorrent() {
         val metadata = metadata(
             infoHash = "0a4848271c91ce2d8965ce416267c25047dc8141",
@@ -47,7 +66,8 @@ class AceContentTransportResolverTest {
         val metadata = metadata(
             infoHash = null,
             mediaType = "vod",
-            transportType = "hls"
+            transportType = "hls",
+            transportFileData = "ZHVtbXk="
         )
 
         val result = resolver.classify(metadata)
@@ -103,14 +123,15 @@ class AceContentTransportResolverTest {
     private fun metadata(
         infoHash: String?,
         mediaType: String?,
-        transportType: String?
+        transportType: String?,
+        transportFileData: String? = null
     ) = AceTransportMetadata(
         infoHash = infoHash,
         mediaType = mediaType,
         transportType = transportType,
         name = "test",
         files = emptyList(),
-        transportFileData = null,
+        transportFileData = transportFileData,
         transportFileCacheKey = null,
         wrapperData = null
     )
