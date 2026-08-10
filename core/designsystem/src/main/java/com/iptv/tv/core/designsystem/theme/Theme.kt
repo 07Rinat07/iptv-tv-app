@@ -1,6 +1,5 @@
 package com.iptv.tv.core.designsystem.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
@@ -16,35 +15,35 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 private val DarkColors: ColorScheme = darkColorScheme(
-    primary = Color(0xFF19C37D),
-    onPrimary = Color(0xFF021108),
-    secondary = Color(0xFF6EC7FF),
+    primary = Color(0xFF12D8FF),
+    onPrimary = Color(0xFF00131B),
+    secondary = Color(0xFF65BFFF),
     onSecondary = Color(0xFF03131F),
     tertiary = Color(0xFFFFB547),
-    background = Color(0xFF102234),
-    onBackground = Color(0xFFF0F7FF),
-    surface = Color(0xFF1A2F43),
-    onSurface = Color(0xFFF3F8FF),
-    surfaceVariant = Color(0xFF254056),
-    onSurfaceVariant = Color(0xFFDDEAF7),
-    outline = Color(0xFF7391AA),
-    outlineVariant = Color(0xFF4C667C)
+    background = Color(0xFF02070D),
+    onBackground = Color(0xFFF0F8FF),
+    surface = Color(0xFF06111B),
+    onSurface = Color(0xFFF3FAFF),
+    surfaceVariant = Color(0xFF0A2232),
+    onSurfaceVariant = Color(0xFFC5D9E6),
+    outline = Color(0xFF356077),
+    outlineVariant = Color(0xFF17384A)
 )
 
 private val LightColors: ColorScheme = lightColorScheme(
-    primary = Color(0xFF0D7A4B),
+    primary = Color(0xFF006C86),
     onPrimary = Color.White,
-    secondary = Color(0xFF1B6A97),
+    secondary = Color(0xFF17648F),
     onSecondary = Color.White,
     tertiary = Color(0xFFC2780A),
     background = Color(0xFFF7FAFE),
     onBackground = Color(0xFF0F1A23),
     surface = Color(0xFFFFFFFF),
     onSurface = Color(0xFF111A22),
-    surfaceVariant = Color(0xFFF0F5FB),
-    onSurfaceVariant = Color(0xFF334555),
-    outline = Color(0xFF647F92),
-    outlineVariant = Color(0xFFD5E0EA)
+    surfaceVariant = Color(0xFFEAF3F8),
+    onSurfaceVariant = Color(0xFF334B5A),
+    outline = Color(0xFF607F91),
+    outlineVariant = Color(0xFFD2E0E8)
 )
 
 private val IptvTypography: Typography = Typography(
@@ -108,7 +107,7 @@ private val IptvShapes: Shapes = Shapes(
 
 @Composable
 fun IptvTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
