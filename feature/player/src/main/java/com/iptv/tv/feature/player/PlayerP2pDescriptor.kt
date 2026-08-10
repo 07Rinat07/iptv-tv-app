@@ -26,10 +26,9 @@ internal object PlayerP2pDescriptor {
 
     fun describe(raw: String): String {
         val descriptor = detect(raw) ?: return "IPTV поток (прямой URL)"
-        return if (descriptor.startsWith("acestream://", ignoreCase = true)) {
-            "Ace Stream поток (внешний Engine)"
-        } else {
-            "BitTorrent поток (встроенный P2P)"
+        return when {
+            descriptor.startsWith("acestream://", ignoreCase = true) -> "Ace Stream поток (P2P/Ace)"
+            else -> "BitTorrent поток (встроенный P2P)"
         }
     }
 
@@ -121,7 +120,8 @@ internal object PlayerP2pDescriptor {
             ?.let(::detect)
             ?.let { return it }
 
-        // Ace content_id/id is deliberately NOT treated as a bare BitTorrent infohash.
+        // Ace content_id/id is deliberately NOT treated as a bare BitTorrent infohash. Legacy
+        // 127.0.0.1:6878 playlist URLs are descriptor syntax and normalize through this same path.
         params.firstOrNull { it.first in aceContentIdQueryKeys }
             ?.second
             ?.let(::normalizeAceContentIdParameter)

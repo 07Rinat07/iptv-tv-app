@@ -93,21 +93,47 @@ class PlayerP2pDescriptorTest {
     }
 
     @Test
-    fun contentIdQueryRemainsExternalAceEvenWhenItLooksLikeSha1() {
+    fun localAceGatewayContentIdNormalizesToAceDescriptor() {
         val contentId = "1111111111111111111111111111111111111111"
         val source = "http://127.0.0.1:6878/ace/getstream?id=$contentId"
 
         assertEquals("acestream://$contentId", PlayerP2pDescriptor.detect(source))
-        assertEquals("Ace Stream поток (внешний Engine)", PlayerP2pDescriptor.describe(source))
+        assertEquals("Ace Stream поток (P2P/Ace)", PlayerP2pDescriptor.describe(source))
     }
 
     @Test
-    fun base32ShapedContentIdRemainsExternalAce() {
+    fun localhostAceGatewayContentIdNormalizesToAceDescriptor() {
+        val contentId = "1111111111111111111111111111111111111111"
+        val source = "http://localhost:6878/ace/getstream?id=$contentId"
+
+        assertEquals("acestream://$contentId", PlayerP2pDescriptor.detect(source))
+    }
+
+    @Test
+    fun localAceGatewayInfoHashNormalizesToEmbeddedMagnet() {
+        val infoHash = "2222222222222222222222222222222222222222"
+        val source = "http://127.0.0.1:6878/ace/getstream?infohash=$infoHash&pid=38900686757"
+
+        assertEquals("magnet:?xt=urn:btih:$infoHash", PlayerP2pDescriptor.detect(source))
+        assertEquals("BitTorrent поток (встроенный P2P)", PlayerP2pDescriptor.describe(source))
+    }
+
+    @Test
+    fun remoteContentIdQueryRemainsAceDescriptorEvenWhenItLooksLikeSha1() {
+        val contentId = "1111111111111111111111111111111111111111"
+        val source = "https://example.org/play?id=$contentId"
+
+        assertEquals("acestream://$contentId", PlayerP2pDescriptor.detect(source))
+        assertEquals("Ace Stream поток (P2P/Ace)", PlayerP2pDescriptor.describe(source))
+    }
+
+    @Test
+    fun base32ShapedContentIdRemainsAce() {
         val contentId = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
         val source = "https://example.org/play?content_id=$contentId"
 
         assertEquals("acestream://$contentId", PlayerP2pDescriptor.detect(source))
-        assertEquals("Ace Stream поток (внешний Engine)", PlayerP2pDescriptor.describe(source))
+        assertEquals("Ace Stream поток (P2P/Ace)", PlayerP2pDescriptor.describe(source))
     }
 
     @Test
@@ -155,14 +181,14 @@ class PlayerP2pDescriptorTest {
     }
 
     @Test
-    fun describesEmbeddedBitTorrentAndExternalAceSeparately() {
+    fun describesEmbeddedBitTorrentAndAceSeparately() {
         val hash = "0123456789abcdef0123456789abcdef01234567"
         assertEquals(
             "BitTorrent поток (встроенный P2P)",
             PlayerP2pDescriptor.describe("magnet:?xt=urn:btih:$hash")
         )
         assertEquals(
-            "Ace Stream поток (внешний Engine)",
+            "Ace Stream поток (P2P/Ace)",
             PlayerP2pDescriptor.describe("acestream://$hash")
         )
         assertEquals(
