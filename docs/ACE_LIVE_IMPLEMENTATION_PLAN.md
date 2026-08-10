@@ -170,16 +170,27 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 7. Keep peer scoring, background refill, TCP connection ownership, LSD, inbound listener/NAT mapping and playback output outside this increment.
 8. Cover cross-source deduplication/provenance, optional-tracker behavior, source failure isolation, swarm mismatch rejection and global peer capping with unit tests.
 
+## Completed peer-scoring/background-refill increment
+
+1. Add `AceLivePeerRefillCoordinator` as a pure candidate-state and ranking layer over discovery provenance plus TCP pool lifecycle events.
+2. Rank verified live-window usefulness ahead of DHT/tracker provenance so a peer known to cover the authoritative `nextNeeded` piece is not displaced by a dual-source peer with no verified window.
+3. Keep discovery provenance as a tie-breaker only after window usefulness, bounded failure history and successful-handshake evidence.
+4. Apply bounded temporary exponential backoff after final connection/start failures; never permanently ban a reachable peer from refill policy alone.
+5. Preserve stale-but-reachable recovery semantics by allowing bounded additional probe peers up to `maxActivePeers` instead of evicting active peers.
+6. Reserve planned candidates before start so overlapping refill cycles cannot launch duplicate endpoints, and release reservations on cancellation or skipped starts.
+7. Add a cancellable injected `AceLivePeerRefillLoop` that refreshes discovery only when below the normal active-peer target or when recovery reports a stale pool.
+8. Keep TCP ownership, peer protocol identity, LSD, output/media handling and proprietary metadata/decryption outside this layer.
+9. Cover useful-window ranking, stale probes, backoff expiry, handshake score reset, duplicate-start reservations, healthy no-churn cycles, start-failure isolation and cancellation cleanup with unit tests.
+
 ## Next autonomous increments
 
 1. Run hardware acceptance with the current AceStream Core Live package and several real `acestream://content_id`/`.acelive` sources; record service discovery, HTTP port, runtime route, control response and startup failures.
 2. Add an autonomous content-id metadata provider ahead of the external provider when a verified public, independently implementable resolution contract is available.
 3. Feed verified decoded live metadata into `AceLiveDescriptor` when a lawful/public decoder or provider is available.
-4. Add peer scoring/background refill on top of the discovery orchestrator, preserving stale-pool recovery semantics without automatically banning reachable peers and without allowing discovery-source preference to override verified peer-window usefulness.
-5. Add LSD only if LAN peer discovery provides practical value; keep it independent from public tracker/DHT policy.
-6. Wire output discontinuity events into the future TS keyframe-regating/HLS output layer without moving media-format logic into P2P.
-7. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
-8. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
+4. Add LSD only if LAN peer discovery provides practical value; keep it independent from public tracker/DHT policy.
+5. Wire output discontinuity events into the future TS keyframe-regating/HLS output layer without moving media-format logic into P2P.
+6. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
+7. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
 
 ## Non-goals
 
