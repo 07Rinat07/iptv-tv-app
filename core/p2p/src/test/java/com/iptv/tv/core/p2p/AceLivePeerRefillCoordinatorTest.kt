@@ -1,9 +1,17 @@
 package com.iptv.tv.core.p2p
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -18,9 +26,18 @@ class AceLivePeerRefillCoordinatorTest {
             discovery(useful to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)),
             nowMillis = 1_000
         )
-        val initial = coordinator.planRefill(emptySet(), nextNeededPiece = 105, poolStale = false, nowMillis = 1_000)
+        val initial = coordinator.planRefill(
+            emptySet(),
+            nextNeededPiece = 105,
+            poolStale = false,
+            nowMillis = 1_000
+        )
         coordinator.beginStart(1, initial.candidates.single().endpoint)
         coordinator.markStartAccepted(1)
+        coordinator.onPoolEvent(
+            AceLiveTcpPoolEvent.TransportConnected(peerId = 1, reconnectAttempt = 0),
+            nowMillis = 1_050
+        )
         coordinator.onPoolEvent(
             AceLiveTcpPoolEvent.Ingress(
                 peerId = 1,
@@ -78,7 +95,9 @@ class AceLivePeerRefillCoordinatorTest {
         assertEquals(2, stalePlan.candidates.size)
         assertTrue(stalePlan.staleProbe)
 
-        stalePlan.candidates.forEach(coordinator::releaseReservation)
+        stalePlan.candidates.forEach { candidate ->
+            coordinator.releaseReservation(candidate.endpoint)
+        }
         val healthyPlan = coordinator.planRefill(
             activePeerIds = active,
             nextNeededPiece = 10,
@@ -141,7 +160,10 @@ class AceLivePeerRefillCoordinatorTest {
 
         plan = coordinator.planRefill(emptySet(), null, false, 2_000)
         coordinator.beginStart(2, plan.candidates.single().endpoint)
-        coordinator.onPoolEvent(AceLiveTcpPoolEvent.HandshakeAccepted(peerId = 2), nowMillis = 2_100)
+        coordinator.onPoolEvent(
+            AceLiveTcpPoolEvent.HandshakeAccepted(peerId = 2),
+            nowMillis = 2_100
+        )
 
         val snapshot = assertNotNullSnapshot(coordinator, peer)
         assertEquals(0, snapshot.consecutiveFailures)
@@ -172,6 +194,100 @@ class AceLivePeerRefillCoordinatorTest {
     }
 
     @Test
+    fun `overlapping plans atomically reserve only target capacity`() {
+        val coordinator = coordinator(target = 2, max = 2, maxStarts = 2)
+        coordinator.ingestDiscovery(
+            discovery(
+                endpoint("198.51.100.20", 8110) to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT),
+                endpoint("198.51.100.21", 8111) to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT),
+                endpoint("198.51.100.22", 8112) to setOf(AceLivePeerDiscoverySource.UDP_TRACKER),
+                endpoint("198.51.100.23", 8113) to setOf(AceLivePeerDiscoverySource.UDP_TRACKER)
+            ),
+            nowMillis = 1_000
+        )
+
+        val gate = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val futures = List(2) {
+                executor.submit<List<AceLiveTcpPeerEndpoint>> {
+                    gate.await()
+                    coordinator.planRefill(
+                        activePeerIds = emptySet(),
+                        nextNeededPiece = null,
+                        poolStale = false,
+                        nowMillis = 1_000
+                    ).candidates.map { candidate -> candidate.endpoint }
+                }
+            }
+            gate.countDown()
+            val selected = futures.flatMap { future ->
+                future.get(5, TimeUnit.SECONDS)
+            }
+
+            assertEquals(2, selected.size)
+            assertEquals(2, selected.toSet().size)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `accepted pending start counts against target before active snapshot catches up`() {
+        val coordinator = coordinator(target = 1, max = 2, maxStarts = 1)
+        val first = endpoint("198.51.100.30", 8120)
+        val second = endpoint("198.51.100.31", 8121)
+        coordinator.ingestDiscovery(
+            discovery(
+                first to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT),
+                second to setOf(AceLivePeerDiscoverySource.UDP_TRACKER)
+            ),
+            nowMillis = 1_000
+        )
+
+        val firstPlan = coordinator.planRefill(emptySet(), null, false, 1_000)
+        coordinator.beginStart(40, firstPlan.candidates.single().endpoint)
+        coordinator.markStartAccepted(40)
+
+        val overlapping = coordinator.planRefill(emptySet(), null, false, 1_001)
+
+        assertTrue(overlapping.candidates.isEmpty())
+        assertEquals(40L, assertNotNullSnapshot(coordinator, first).managedPeerId)
+    }
+
+    @Test
+    fun `expired unmanaged candidates are evicted from state`() {
+        val coordinator = AceLivePeerRefillCoordinator(
+            policy = AceLivePeerRefillPolicy(
+                targetActivePeers = 1,
+                maxActivePeers = 1,
+                staleProbePeers = 0,
+                maxStartsPerCycle = 1,
+                refreshIntervalMillis = 1_000,
+                candidateTtlMillis = 1_000,
+                failureBackoffBaseMillis = 1_000,
+                failureBackoffMaxMillis = 8_000
+            )
+        )
+        val peer = endpoint("192.0.2.40", 8500)
+        coordinator.ingestDiscovery(
+            discovery(peer to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)),
+            nowMillis = 0
+        )
+        assertNotNull(coordinator.snapshot(peer))
+
+        coordinator.planRefill(
+            activePeerIds = setOf(99L),
+            nextNeededPiece = null,
+            poolStale = false,
+            nowMillis = 1_001
+        )
+
+        assertNull(coordinator.snapshot(peer))
+        assertTrue(coordinator.snapshots().isEmpty())
+    }
+
+    @Test
     fun `healthy target skips discovery in background cycle`() = runBlocking {
         var discoveryCalls = 0
         val coordinator = coordinator(target = 2, max = 3, maxStarts = 2)
@@ -179,7 +295,10 @@ class AceLivePeerRefillCoordinatorTest {
             coordinator = coordinator,
             discover = {
                 discoveryCalls += 1
-                discovery(endpoint("192.0.2.10", 8200) to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT))
+                discovery(
+                    endpoint("192.0.2.10", 8200) to
+                        setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)
+                )
             },
             activePeerIds = { setOf(1L, 2L) },
             evaluateRecovery = { AceLiveRecoveryPlan(poolStale = false) },
@@ -217,7 +336,8 @@ class AceLivePeerRefillCoordinatorTest {
             startPeer = { peerId, _ ->
                 if (peerId == 10L) error("synthetic immediate start failure")
                 started += peerId
-            }
+            },
+            clockMillis = { 1_000L }
         )
 
         val result = loop.runOneCycle(nowMillis = 1_000)
@@ -232,9 +352,79 @@ class AceLivePeerRefillCoordinatorTest {
     }
 
     @Test
+    fun `cancelling cycle releases current ownership and all later reservations`() = runBlocking {
+        val first = endpoint("192.0.2.30", 8400)
+        val second = endpoint("192.0.2.31", 8401)
+        val coordinator = coordinator(target = 2, max = 2, maxStarts = 2)
+        val enteredStart = CompletableDeferred<Unit>()
+        var nextId = 50L
+        val loop = AceLivePeerRefillLoop(
+            coordinator = coordinator,
+            discover = {
+                discovery(
+                    first to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT),
+                    second to setOf(AceLivePeerDiscoverySource.UDP_TRACKER)
+                )
+            },
+            activePeerIds = { emptySet() },
+            evaluateRecovery = { AceLiveRecoveryPlan(poolStale = false) },
+            nextNeededPiece = { null },
+            allocatePeerId = { nextId++ },
+            startPeer = { _, _ ->
+                enteredStart.complete(Unit)
+                awaitCancellation()
+            }
+        )
+
+        val job = launch { loop.runOneCycle(nowMillis = 1_000) }
+        enteredStart.await()
+        job.cancelAndJoin()
+
+        val retry = coordinator.planRefill(emptySet(), null, false, 1_001)
+        assertEquals(2, retry.candidates.size)
+        assertTrue(coordinator.snapshots().all { snapshot -> snapshot.consecutiveFailures == 0 })
+    }
+
+    @Test
+    fun `immediate start failure backoff uses failure clock not cycle start`() = runBlocking {
+        val peer = endpoint("192.0.2.50", 8600)
+        val coordinator = coordinator(
+            target = 1,
+            max = 1,
+            maxStarts = 1,
+            backoffBase = 5_000,
+            backoffMax = 20_000
+        )
+        var clock = 10_000L
+        val loop = AceLivePeerRefillLoop(
+            coordinator = coordinator,
+            discover = {
+                discovery(peer to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT))
+            },
+            activePeerIds = { emptySet() },
+            evaluateRecovery = { AceLiveRecoveryPlan(poolStale = false) },
+            nextNeededPiece = { null },
+            allocatePeerId = { 60L },
+            startPeer = { _, _ -> error("synthetic failure after discovery") },
+            clockMillis = { clock }
+        )
+
+        val result = loop.runOneCycle(nowMillis = 1_000)
+        assertEquals(1, result.immediateStartFailures)
+        assertEquals(15_000L, assertNotNullSnapshot(coordinator, peer).retryNotBeforeMillis)
+        assertTrue(coordinator.planRefill(emptySet(), null, false, 14_999).candidates.isEmpty())
+
+        clock = 15_000L
+        assertEquals(
+            peer,
+            coordinator.planRefill(emptySet(), null, false, clock).candidates.single().endpoint
+        )
+    }
+
+    @Test
     fun `cancelled start cleanup does not increment peer failure score`() {
         val coordinator = coordinator(target = 1, max = 1, maxStarts = 1)
-        val peer = endpoint("192.0.2.30", 8400)
+        val peer = endpoint("192.0.2.60", 8700)
         coordinator.ingestDiscovery(
             discovery(peer to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)),
             nowMillis = 1_000
