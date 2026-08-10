@@ -23,6 +23,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       ANDROID_HOME: ${{ github.workspace }}/.android-sdk
       ANDROID_SDK_ROOT: ${{ github.workspace }}/.android-sdk
+      ANDROID_AVD_HOME: ${{ runner.temp }}/android-avd
       ANDROID_API_LEVEL: "35"
       ANDROID_BUILD_TOOLS: "35.0.0"
       GRADLE_OPTS: -Dorg.gradle.workers.max=2
@@ -49,9 +50,10 @@ jobs:
 
       - name: Prepare Android SDK directory
         run: |
-          mkdir -p "$ANDROID_SDK_ROOT"
+          mkdir -p "$ANDROID_SDK_ROOT" "$ANDROID_AVD_HOME"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
@@ -74,7 +76,9 @@ jobs:
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME"
           test -d "$ANDROID_SDK_ROOT"
+          test -d "$ANDROID_AVD_HOME"
           command -v sdkmanager
           sdkmanager --list_installed
           test -d "$ANDROID_SDK_ROOT/platforms/android-${ANDROID_API_LEVEL}"
@@ -105,10 +109,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME"
+
           echo "no" | avdmanager create avd \
             --force \
             --name iptv-ci \
             --package "system-images;android-${ANDROID_API_LEVEL};google_apis;x86_64"
+
+          echo "Created AVDs:"
+          "$ANDROID_SDK_ROOT/emulator/emulator" -list-avds
+          test -f "$ANDROID_AVD_HOME/iptv-ci.ini"
 
           sudo chmod 666 /dev/kvm || true
           nohup "$ANDROID_SDK_ROOT/emulator/emulator" \
@@ -120,13 +131,34 @@ jobs:
             -no-snapshot \
             -no-metrics \
             > emulator.log 2>&1 &
+          EMULATOR_PID=$!
 
-          adb wait-for-device
-          timeout 240 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
+          if ! timeout 45 adb wait-for-device; then
+            echo "Emulator did not expose ADB within 45 seconds"
+            tail -n 160 emulator.log || true
+            kill "$EMULATOR_PID" 2>/dev/null || true
+            exit 1
+          fi
+
+          if ! timeout 240 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'; then
+            echo "Emulator did not complete boot within 240 seconds"
+            tail -n 160 emulator.log || true
+            kill "$EMULATOR_PID" 2>/dev/null || true
+            exit 1
+          fi
+
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
           adb shell input keyevent 82 || true
+          echo "Emulator ABI: $(adb shell getprop ro.product.cpu.abi | tr -d '\r')"
+
+          if adb shell pm list packages | grep -qi 'acestream'; then
+            echo "Unexpected Ace Stream package found on clean emulator"
+            adb shell pm list packages | grep -i 'acestream' || true
+            exit 1
+          fi
+          echo "No external Ace Stream package is installed. Running app-owned P2P smoke."
 
           ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest \
             -Pandroid.testInstrumentationRunnerArguments.class=com.iptv.tv.TorrentTvPlaybackSmokeTest
