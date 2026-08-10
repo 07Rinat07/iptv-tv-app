@@ -15,11 +15,13 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.math.min
 
 /** Explicit Mainline DHT bootstrap endpoint. No proprietary bootstrap list is embedded here. */
@@ -236,43 +238,42 @@ class AceLiveDhtDiscovery(
         val address = InetSocketAddress(endpoint.host, endpoint.port)
 
         DatagramSocket().use { socket ->
-            val job = currentCoroutineContext()[Job]
-            val cancellationHandle = job?.invokeOnCompletion { cause ->
-                if (cause is CancellationException) runCatching { socket.close() }
-            }
-            try {
-                socket.connect(address)
-                socket.soTimeout = receiveTimeoutMillis(deadlineNanos)
-                socket.send(DatagramPacket(query, query.size))
-                currentCoroutineContext().ensureActive()
-                val responseBytes = receiveBounded(socket)
-                currentCoroutineContext().ensureActive()
-                return AceLiveDhtCodec.decodeGetPeersResponse(
-                    bytes = responseBytes,
-                    expectedTransactionId = transactionId,
-                    maxPeers = policy.maxPeersPerResponse,
-                    maxNodes = policy.maxNodesPerResponse,
-                    maxPacketBytes = policy.maxPacketBytes
-                )
-            } finally {
-                cancellationHandle?.dispose()
-            }
+            socket.connect(address)
+            socket.soTimeout = receiveTimeoutMillis(deadlineNanos)
+            socket.send(DatagramPacket(query, query.size))
+            currentCoroutineContext().ensureActive()
+            val responseBytes = receiveBounded(socket)
+            currentCoroutineContext().ensureActive()
+            return AceLiveDhtCodec.decodeGetPeersResponse(
+                bytes = responseBytes,
+                expectedTransactionId = transactionId,
+                maxPeers = policy.maxPeersPerResponse,
+                maxNodes = policy.maxNodesPerResponse,
+                maxPacketBytes = policy.maxPacketBytes
+            )
         }
     }
 
-    private fun receiveBounded(socket: DatagramSocket): ByteArray {
-        val buffer = ByteArray(policy.maxPacketBytes + 1)
-        val packet = DatagramPacket(buffer, buffer.size)
-        try {
-            socket.receive(packet)
-        } catch (timeout: SocketTimeoutException) {
-            throw timeout
+    private suspend fun receiveBounded(socket: DatagramSocket): ByteArray =
+        suspendCancellableCoroutine { continuation ->
+            val buffer = ByteArray(policy.maxPacketBytes + 1)
+            val packet = DatagramPacket(buffer, buffer.size)
+
+            continuation.invokeOnCancellation {
+                runCatching { socket.close() }
+            }
+
+            try {
+                socket.receive(packet)
+                if (packet.length > policy.maxPacketBytes) {
+                    throw AceLiveDhtProtocolException("KRPC response exceeds local packet cap")
+                }
+                val bytes = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
+                if (continuation.isActive) continuation.resume(bytes)
+            } catch (error: Throwable) {
+                if (continuation.isActive) continuation.resumeWithException(error)
+            }
         }
-        if (packet.length > policy.maxPacketBytes) {
-            throw AceLiveDhtProtocolException("KRPC response exceeds local packet cap")
-        }
-        return packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
-    }
 
     private fun nextTransactionId(): ByteArray {
         val value = randomInt()
