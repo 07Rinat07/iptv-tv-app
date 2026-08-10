@@ -158,7 +158,7 @@ class TorrentTvPlaybackSmokeTest {
                         remaining -= read
                     }
                     output.toByteArray()
-                }.orEmpty()
+                } ?: ByteArray(0)
                 code to bytes
             } finally {
                 connection.disconnect()
