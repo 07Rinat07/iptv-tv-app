@@ -75,6 +75,18 @@ class HybridEngineRepositoryImpl @Inject constructor(
     override suspend fun resolveTorrentStream(magnetOrAce: String): AppResult<String> {
         val epoch = streamEpoch.incrementAndGet()
         return when (EngineStreamRouting.route(magnetOrAce)) {
+            EngineStreamRoute.LOCAL_ACE_GATEWAY -> {
+                stopEmbeddedForEpoch(epoch)
+                if (streamEpoch.get() != epoch) {
+                    supersededResult()
+                } else {
+                    log(
+                        "engine_loopback_gateway",
+                        "Using playlist-provided local Ace Engine HTTP gateway URL"
+                    )
+                    AppResult.Success(magnetOrAce.trim())
+                }
+            }
             EngineStreamRoute.ACE_LIVE_COMPATIBILITY -> {
                 resolveAceLiveCompatibility(magnetOrAce, epoch)
             }
