@@ -129,7 +129,7 @@ internal fun stableRemoteActionForKey(
     KeyEvent.KEYCODE_MUTE -> StableRemoteAction.TOGGLE_MUTE
 
     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-    KeyEvent.KEYCODE_HEADSETHOOK -> StableRemoteAction.TOGGLE_PLAYBACK
+    KeyEvent.KEYCODE_HEADSETOOK -> StableRemoteAction.TOGGLE_PLAYBACK
 
     else -> StableRemoteAction.NONE
 }
@@ -486,6 +486,15 @@ fun StablePlayerScreen(
                 onOpenAppSettings = onPrimaryAction
             )
         }
+
+        StablePlaybackFeedbackBanner(
+            lastError = state.lastError,
+            isStartingPlayback = state.isStartingPlayback,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(horizontal = 18.dp, vertical = 14.dp)
+        )
     }
 }
 
