@@ -29,29 +29,49 @@ class EngineStreamRoutingTest {
     }
 
     @Test
-    fun legacyLoopbackAceGetStreamUsesLocalGatewayRoute() {
+    fun legacyLoopbackAceContentIdUsesAceContentRoute() {
         assertEquals(
-            EngineStreamRoute.LOCAL_ACE_GATEWAY,
+            EngineStreamRoute.ACE_CONTENT_ID,
             EngineStreamRouting.route(
-                "http://127.0.0.1:6878/ace/getstream?id=0123456789abcdef0123456789abcdef01234567"
+                "http://127.0.0.1:6878/ace/getstream?id=50bc2f512793f1e745fb5bd5b5a6afca199c2d19"
             )
         )
     }
 
     @Test
-    fun localhostAceGatewayUsesLocalGatewayRoute() {
+    fun localhostAceContentIdUsesAceContentRoute() {
         assertEquals(
-            EngineStreamRoute.LOCAL_ACE_GATEWAY,
+            EngineStreamRoute.ACE_CONTENT_ID,
             EngineStreamRouting.route(
-                "http://localhost:6878/ace/getstream?id=0123456789abcdef0123456789abcdef01234567"
+                "http://localhost:6878/ace/getstream?id=50bc2f512793f1e745fb5bd5b5a6afca199c2d19"
             )
         )
     }
 
     @Test
-    fun remoteAceLikeUrlDoesNotUseLocalGatewayRoute() {
+    fun legacyLoopbackAceInfoHashUsesEmbeddedBitTorrent() {
         assertEquals(
-            EngineStreamRoute.EXTERNAL_ACE,
+            EngineStreamRoute.EMBEDDED_BITTORRENT,
+            EngineStreamRouting.route(
+                "http://127.0.0.1:6878/ace/getstream?infohash=881ffab7e64f437d16d2ca4474c291a4a1111bd2"
+            )
+        )
+    }
+
+    @Test
+    fun legacyLoopbackAceInfoHashWithPidUsesEmbeddedBitTorrent() {
+        assertEquals(
+            EngineStreamRoute.EMBEDDED_BITTORRENT,
+            EngineStreamRouting.route(
+                "http://127.0.0.1:6878/ace/getstream?infohash=cd8c7fcc7fb8c597d64b41429e0596887e097e54&pid=38900686757"
+            )
+        )
+    }
+
+    @Test
+    fun remoteAceLikeUrlDoesNotPretendToBeLocalDescriptor() {
+        assertEquals(
+            EngineStreamRoute.EXTERNAL_COMPATIBILITY,
             EngineStreamRouting.route(
                 "https://example.org/ace/getstream?id=0123456789abcdef0123456789abcdef01234567"
             )
@@ -95,17 +115,17 @@ class EngineStreamRoutingTest {
     }
 
     @Test
-    fun acestreamContentIdStaysExternalEvenWhenItLooksLikeInfoHash() {
+    fun acestreamContentIdUsesAceContentRouteEvenWhenItLooksLikeInfoHash() {
         assertEquals(
-            EngineStreamRoute.EXTERNAL_ACE,
+            EngineStreamRoute.ACE_CONTENT_ID,
             EngineStreamRouting.route("acestream://0123456789abcdef0123456789abcdef01234567")
         )
     }
 
     @Test
-    fun legacyAceSchemeStaysExternal() {
+    fun legacyAceSchemeUsesAceContentRoute() {
         assertEquals(
-            EngineStreamRoute.EXTERNAL_ACE,
+            EngineStreamRoute.ACE_CONTENT_ID,
             EngineStreamRouting.route("ace://0123456789abcdef0123456789abcdef01234567")
         )
     }
@@ -113,7 +133,7 @@ class EngineStreamRoutingTest {
     @Test
     fun unknownDescriptorKeepsLegacyCompatibilityPath() {
         assertEquals(
-            EngineStreamRoute.EXTERNAL_ACE,
+            EngineStreamRoute.EXTERNAL_COMPATIBILITY,
             EngineStreamRouting.route("legacy-engine-descriptor")
         )
     }
@@ -121,7 +141,7 @@ class EngineStreamRoutingTest {
     @Test
     fun normalHttpStreamIsNotMisclassifiedAsTorrent() {
         assertEquals(
-            EngineStreamRoute.EXTERNAL_ACE,
+            EngineStreamRoute.EXTERNAL_COMPATIBILITY,
             EngineStreamRouting.route("https://example.org/live/channel.m3u8")
         )
     }
