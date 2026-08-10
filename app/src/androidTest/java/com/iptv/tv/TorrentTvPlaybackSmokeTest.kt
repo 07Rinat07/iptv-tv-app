@@ -28,11 +28,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Network-backed diagnostic smoke for real Torrent TV entries from the Dimonovich playlist.
+ * Network-backed diagnostic smoke using the real Dimonovich playlist URL.
  *
- * This test deliberately runs without installing/running Ace Stream Engine. A passing test means
- * the application itself resolved the playlist descriptor, produced bytes through its embedded P2P
- * pipeline and Media3 reached STATE_READY on the resulting local stream.
+ * The emulator has no Ace Stream Engine installed or running. The test downloads the playlist,
+ * selects one Torrent TV entry with explicit `infohash` and one with Ace `id`, runs each descriptor
+ * through the production EngineRepository, probes the resulting local stream for real bytes and then
+ * asks Media3 to reach STATE_READY.
  */
 @RunWith(AndroidJUnit4::class)
 class TorrentTvPlaybackSmokeTest {
@@ -58,19 +59,52 @@ class TorrentTvPlaybackSmokeTest {
     }
 
     @Test
-    fun explicitInfoHashFromTorrentTvActuallyReachesMedia3Ready() = runBlocking {
-        verifyPlayback(
-            label = "Animal Planet HD / explicit infohash",
-            source = "http://127.0.0.1:6878/ace/getstream?infohash=568159b1059c7bbe3eaf40f123541fef86ef83cb"
+    fun realPlaylistTorrentTvSamplesActuallyReachMedia3ReadyWithoutAceEngine() = runBlocking {
+        val playlist = downloadPlaylist()
+        val lines = playlist.lineSequence().map(String::trim).filter(String::isNotBlank).toList()
+        val infoHashSource = lines.firstOrNull {
+            it.startsWith("http://127.0.0.1:6878/ace/getstream?", ignoreCase = true) &&
+                it.contains("infohash=", ignoreCase = true)
+        }
+        val contentIdSource = lines.firstOrNull {
+            it.startsWith("http://127.0.0.1:6878/ace/getstream?", ignoreCase = true) &&
+                (it.contains("?id=", ignoreCase = true) || it.contains("&id=", ignoreCase = true))
+        }
+
+        assertTrue("Playlist did not contain a Torrent TV infohash entry", !infoHashSource.isNullOrBlank())
+        assertTrue("Playlist did not contain a Torrent TV content-id entry", !contentIdSource.isNullOrBlank())
+
+        val failures = mutableListOf<String>()
+        listOf(
+            "playlist explicit infohash" to infoHashSource!!,
+            "playlist Ace content id" to contentIdSource!!
+        ).forEach { (label, source) ->
+            val failure = runCatching { verifyPlayback(label, source) }.exceptionOrNull()
+            if (failure != null) {
+                val message = "$label failed: ${failure::class.java.simpleName}: ${failure.message}"
+                failures += message
+                println("TORRENT_TV_SMOKE failure $message")
+                Log.e(TAG, message, failure)
+            }
+            runCatching { engineRepository.stopTorrentStream() }
+        }
+
+        assertTrue(
+            "Real Torrent TV playback failures:\n${failures.joinToString("\n")}",
+            failures.isEmpty()
         )
     }
 
-    @Test
-    fun aceContentIdFromTorrentTvActuallyReachesMedia3ReadyWithoutExternalEngine() = runBlocking {
-        verifyPlayback(
-            label = "Первый канал / Ace content id",
-            source = "http://127.0.0.1:6878/ace/getstream?id=50bc2f512793f1e745fb5bd5b5a6afca199c2d19"
-        )
+    private suspend fun downloadPlaylist(): String = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(PLAYLIST_URL).get().build()
+        probeClient.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            println("TORRENT_TV_SMOKE playlist http=${response.code} chars=${text.length}")
+            Log.i(TAG, "playlist http=${response.code} chars=${text.length}")
+            check(response.isSuccessful) { "Playlist HTTP ${response.code}" }
+            check(text.isNotBlank()) { "Playlist response is empty" }
+            text
+        }
     }
 
     private suspend fun verifyPlayback(label: String, source: String) {
@@ -83,11 +117,10 @@ class TorrentTvPlaybackSmokeTest {
         println("TORRENT_TV_SMOKE resolve label=$label result=$resolved")
         Log.i(TAG, "resolve label=$label result=$resolved")
 
-        assertTrue(
-            "$label: engine did not resolve a playable local stream: $resolved",
-            resolved is AppResult.Success
-        )
-        val localUrl = (resolved as AppResult.Success).data
+        check(resolved is AppResult.Success) {
+            "$label: engine did not resolve a playable local stream: $resolved"
+        }
+        val localUrl = resolved.data
 
         val firstBytes = withContext(Dispatchers.IO) {
             val request = Request.Builder()
@@ -96,8 +129,7 @@ class TorrentTvPlaybackSmokeTest {
                 .get()
                 .build()
             probeClient.newCall(request).execute().use { response ->
-                val body = response.body
-                val bytes = body?.bytes().orEmpty()
+                val bytes = response.body?.bytes().orEmpty()
                 println(
                     "TORRENT_TV_SMOKE bytes label=$label http=${response.code} count=${bytes.size} url=$localUrl"
                 )
@@ -106,13 +138,12 @@ class TorrentTvPlaybackSmokeTest {
             }
         }
 
-        assertTrue("$label: embedded stream returned no media bytes", firstBytes.isNotEmpty())
+        check(firstBytes.isNotEmpty()) { "$label: embedded stream returned no media bytes" }
 
         val playerFailure = awaitMedia3Ready(localUrl)
-        assertTrue(
-            "$label: Media3 did not reach STATE_READY: $playerFailure",
-            playerFailure == null
-        )
+        check(playerFailure == null) {
+            "$label: Media3 did not reach STATE_READY: $playerFailure"
+        }
 
         println("TORRENT_TV_SMOKE ready label=$label bytes=${firstBytes.size}")
         Log.i(TAG, "ready label=$label bytes=${firstBytes.size}")
@@ -160,5 +191,6 @@ class TorrentTvPlaybackSmokeTest {
 
     private companion object {
         const val TAG = "TorrentTvSmoke"
+        const val PLAYLIST_URL = "https://raw.githubusercontent.com/Dimonovich/TV/Dimonovich/FREE/TV"
     }
 }
