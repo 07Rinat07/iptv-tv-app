@@ -26,4 +26,18 @@ class DatabaseMigrationsTest {
             MIGRATION_7_8_SQL
         )
     }
+
+    @Test
+    fun migration8To9_addsCatalogOriginAndBackfillsUnambiguousSources() {
+        assertEquals(8, MIGRATION_8_9.startVersion)
+        assertEquals(9, MIGRATION_8_9.endVersion)
+        assertEquals(
+            listOf(
+                "ALTER TABLE playlists ADD COLUMN catalogOrigin TEXT NOT NULL DEFAULT 'USER_IMPORT'",
+                "UPDATE playlists SET catalogOrigin = 'PROVIDER' WHERE sourceType IN ('XTREAM','STALKER','JELLYFIN','PLEX','TVHEADEND','HDHOMERUN')",
+                "UPDATE playlists SET catalogOrigin = 'LOCAL' WHERE sourceType = 'FILE'"
+            ),
+            MIGRATION_8_9_SQL
+        )
+    }
 }

@@ -16,6 +16,7 @@ import com.iptv.tv.core.data.repository.DownloadSourceClassifier
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.ChannelMetadata
+import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.DownloadStatus
 import com.iptv.tv.core.model.DownloadSourceType
 import com.iptv.tv.core.model.DownloadTask
@@ -46,7 +47,9 @@ fun PlaylistEntity.toModel(channelCount: Int = 0): Playlist {
         scheduleHours = scheduleHours,
         lastSyncedAt = lastSyncedAt,
         channelCount = channelCount,
-        isCustom = isCustom
+        isCustom = isCustom,
+        catalogOrigin = runCatching { CatalogOriginKind.valueOf(catalogOrigin) }
+            .getOrDefault(CatalogOriginKind.USER_IMPORT)
     )
 }
 

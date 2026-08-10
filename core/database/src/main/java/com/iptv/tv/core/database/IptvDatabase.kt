@@ -45,7 +45,7 @@ import com.iptv.tv.core.database.entity.TvHomeChannelEntity
         ChannelMetadataEntity::class,
         TvHomeChannelEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class IptvDatabase : RoomDatabase() {

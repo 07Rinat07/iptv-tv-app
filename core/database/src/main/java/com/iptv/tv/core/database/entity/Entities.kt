@@ -21,7 +21,12 @@ data class PlaylistEntity(
     val scheduleHours: Int,
     val lastSyncedAt: Long?,
     val isCustom: Boolean,
-    val createdAt: Long
+    val createdAt: Long,
+    val catalogOrigin: String = when (sourceType) {
+        "XTREAM", "STALKER", "JELLYFIN", "PLEX", "TVHEADEND", "HDHOMERUN" -> "PROVIDER"
+        "FILE" -> "LOCAL"
+        else -> "USER_IMPORT"
+    }
 )
 
 @Entity(

@@ -73,7 +73,8 @@ data class Playlist(
     val scheduleHours: Int,
     val lastSyncedAt: Long?,
     val channelCount: Int,
-    val isCustom: Boolean
+    val isCustom: Boolean,
+    val catalogOrigin: CatalogOriginKind = CatalogOriginKind.USER_IMPORT
 )
 
 data class ChannelPreview(
