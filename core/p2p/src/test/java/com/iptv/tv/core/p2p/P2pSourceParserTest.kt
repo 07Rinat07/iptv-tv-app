@@ -162,6 +162,16 @@ class P2pSourceParserTest {
     }
 
     @Test
+    fun parsesLegacyAceSchemeContentIdSeparatelyFromBitTorrent() {
+        val source = P2pSourceParser.parse("ace://abcdef123456")
+        assertTrue(source is P2pResult.Success)
+        assertEquals(
+            P2pSource.AceContentId("abcdef123456"),
+            (source as P2pResult.Success).data
+        )
+    }
+
+    @Test
     fun base32ShapedAceContentIdRemainsAceWhenSchemeIsExplicit() {
         val contentId = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
         val source = P2pSourceParser.parse("acestream://$contentId")
@@ -170,6 +180,58 @@ class P2pSourceParserTest {
             P2pSource.AceContentId(contentId),
             (source as P2pResult.Success).data
         )
+    }
+
+    @Test
+    fun loopbackAceInfoHashBecomesEmbeddedBitTorrentSource() {
+        val hash = "881ffab7e64f437d16d2ca4474c291a4a1111bd2"
+        val source = P2pSourceParser.parse(
+            "http://127.0.0.1:6878/ace/getstream?infohash=$hash"
+        )
+        assertTrue(source is P2pResult.Success)
+        assertEquals(P2pSource.InfoHash(hash), (source as P2pResult.Success).data)
+    }
+
+    @Test
+    fun loopbackAceInfoHashIgnoresPlaybackOptionsAfterHash() {
+        val hash = "cd8c7fcc7fb8c597d64b41429e0596887e097e54"
+        val source = P2pSourceParser.parse(
+            "http://127.0.0.1:6878/ace/getstream?infohash=$hash&pid=38900686757"
+        )
+        assertTrue(source is P2pResult.Success)
+        assertEquals(P2pSource.InfoHash(hash), (source as P2pResult.Success).data)
+    }
+
+    @Test
+    fun loopbackAceContentIdRemainsAceContentId() {
+        val contentId = "50bc2f512793f1e745fb5bd5b5a6afca199c2d19"
+        val source = P2pSourceParser.parse(
+            "http://127.0.0.1:6878/ace/getstream?id=$contentId"
+        )
+        assertTrue(source is P2pResult.Success)
+        assertEquals(P2pSource.AceContentId(contentId), (source as P2pResult.Success).data)
+    }
+
+    @Test
+    fun localhostAndIpv6LoopbackAceContentIdsAreRecognized() {
+        val contentId = "50bc2f512793f1e745fb5bd5b5a6afca199c2d19"
+        val localhost = P2pSourceParser.parse(
+            "http://localhost:6878/ace/getstream?content_id=$contentId"
+        )
+        val ipv6 = P2pSourceParser.parse(
+            "http://[::1]:6878/ace/getstream?id=$contentId"
+        )
+
+        assertEquals(P2pSource.AceContentId(contentId), (localhost as P2pResult.Success).data)
+        assertEquals(P2pSource.AceContentId(contentId), (ipv6 as P2pResult.Success).data)
+    }
+
+    @Test
+    fun remoteAceLikeHttpUrlIsNotTreatedAsLocalDescriptor() {
+        val source = P2pSourceParser.parse(
+            "https://example.test/ace/getstream?id=50bc2f512793f1e745fb5bd5b5a6afca199c2d19"
+        )
+        assertTrue(source is P2pResult.Error)
     }
 
     @Test
