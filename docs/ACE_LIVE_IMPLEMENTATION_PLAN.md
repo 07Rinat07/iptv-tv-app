@@ -159,17 +159,27 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 8. Keep `announce_peer`, persistent routing tables, LSD, tracker/DHT aggregation, peer scoring/refill, inbound listener/NAT mapping and playback output outside this increment.
 9. Cover canonical query layout, transaction mismatch, compact peer/node decoding, malformed vectors, result caps, iterative local discovery, unsafe-address policy, query cap and timeout isolation with unit tests.
 
+## Completed discovery-orchestration increment
+
+1. Add `AceLivePeerDiscoveryOrchestrator` as the bounded aggregation boundary before the TCP pool.
+2. Accept already-validated source-specific requests rather than rebuilding DHT or tracker parameters inside orchestration.
+3. Keep the UDP tracker source optional; never manufacture an announce request when no real caller-owned peer listener/announce port exists.
+4. Require DHT and tracker requests in one orchestration cycle to target the exact same `AceLiveSwarmKey`.
+5. Run requested discovery sources concurrently under supervisor semantics so an ordinary failure of one source does not cancel the other source, while coroutine cancellation still propagates.
+6. Deduplicate peers by endpoint, preserve DHT/tracker source provenance for the later scoring/refill layer, and cap the final combined peer set.
+7. Keep peer scoring, background refill, TCP connection ownership, LSD, inbound listener/NAT mapping and playback output outside this increment.
+8. Cover cross-source deduplication/provenance, optional-tracker behavior, source failure isolation, swarm mismatch rejection and global peer capping with unit tests.
+
 ## Next autonomous increments
 
 1. Run hardware acceptance with the current AceStream Core Live package and several real `acestream://content_id`/`.acelive` sources; record service discovery, HTTP port, runtime route, control response and startup failures.
 2. Add an autonomous content-id metadata provider ahead of the external provider when a verified public, independently implementable resolution contract is available.
 3. Feed verified decoded live metadata into `AceLiveDescriptor` when a lawful/public decoder or provider is available.
-4. Add a discovery-orchestration boundary that aggregates/deduplicates Mainline DHT and optional UDP-tracker results before feeding the TCP pool. Tracker announce must remain disabled unless a real caller-owned peer-listener/announce port exists; DHT `get_peers` can remain discovery-only.
+4. Add peer scoring/background refill on top of the discovery orchestrator, preserving stale-pool recovery semantics without automatically banning reachable peers and without allowing discovery-source preference to override verified peer-window usefulness.
 5. Add LSD only if LAN peer discovery provides practical value; keep it independent from public tracker/DHT policy.
-6. Add peer scoring/background refill once multiple discovery sources are orchestrated, preserving stale-pool recovery semantics without automatically banning reachable peers.
-7. Wire output discontinuity events into the future TS keyframe-regating/HLS output layer without moving media-format logic into P2P.
-8. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
-9. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
+6. Wire output discontinuity events into the future TS keyframe-regating/HLS output layer without moving media-format logic into P2P.
+7. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
+8. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
 
 ## Non-goals
 
