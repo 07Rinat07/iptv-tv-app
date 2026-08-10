@@ -1,5 +1,6 @@
 package com.iptv.tv.core.database.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -22,6 +23,7 @@ data class PlaylistEntity(
     val lastSyncedAt: Long?,
     val isCustom: Boolean,
     val createdAt: Long,
+    @ColumnInfo(defaultValue = "'USER_IMPORT'")
     val catalogOrigin: String = when (sourceType) {
         "XTREAM", "STALKER", "JELLYFIN", "PLEX", "TVHEADEND", "HDHOMERUN" -> "PROVIDER"
         "FILE" -> "LOCAL"
