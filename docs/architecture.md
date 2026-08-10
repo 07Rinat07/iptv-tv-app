@@ -44,9 +44,13 @@
 
 `core:p2p` обрабатывает только подтверждённый BitTorrent transport: magnet, infohash и `.torrent`. Чистый `acestream://content_id` не считается BitTorrent infohash.
 
-`core:engine` содержит отдельный `AceContentTransportResolver`. Он переводит transport metadata в одно из трёх решений: безопасный non-live BitTorrent для embedded libtorrent, Ace Live transport, либо unsupported transport. Текущая compatibility-реализация получает metadata через внешний Ace Engine API; следующий инкремент может заменить или предварить её собственным in-process resolver без изменения player-facing routing. Live transport намеренно не пропускается в стандартный libtorrent только на основании наличия `infohash`.
+Для автономного Ace bootstrap введён отдельный `AceContentIdDhtKey`: только валидный 20-byte/40-hex Content ID может использоваться как DHT lookup target. Этот тип намеренно не является ни `AceLiveSwarmKey`, ни BitTorrent infohash. На BEP-5 wire значение помещается в стандартное поле `info_hash`, но его доменная семантика не меняется и из него не строится `magnet:?xt=urn:btih:...`.
 
-Это разделение введено после реальной регрессии Torrent-TV, где `acestream://content_id` ошибочно выглядел как «embedded» сценарий, хотя metadata всё ещё требовала внешний Ace Engine. До появления собственного resolver/backend такой путь считается compatibility-only, а не автономным.
+`core:engine` содержит отдельный `AceContentTransportResolver`. Он переводит transport metadata в одно из трёх решений: безопасный non-live BitTorrent для embedded libtorrent, Ace Live transport, либо unsupported transport. Текущая compatibility-реализация получает metadata через внешний Ace Engine API; embedded resolver добавляется перед ней поэтапно, без изменения player-facing routing. Live transport намеренно не пропускается в стандартный libtorrent только на основании наличия `infohash`.
+
+Следующий сетевой шаг после Content-ID DHT identity/codec — отдельный lookup/discovery и transport-metadata bootstrap. Только после верификации transport metadata обычный BT infohash может перейти в libtorrent; Ace Live transport должен использовать существующие Ace Live peer/discovery/window/reassembly компоненты.
+
+Это разделение введено после реальной регрессии Torrent-TV, где `acestream://content_id` ошибочно выглядел как «embedded» сценарий, хотя metadata всё ещё требовала внешний Ace Engine. До завершения собственного resolver/backend внешний Engine остаётся optional compatibility fallback, а не обязательной частью стандартного BitTorrent пути.
 
 ## Порядок зависимостей
 
