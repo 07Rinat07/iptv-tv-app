@@ -93,9 +93,26 @@ class PlayerP2pDescriptorTest {
     }
 
     @Test
-    fun contentIdQueryRemainsExternalAceEvenWhenItLooksLikeSha1() {
+    fun localAceGatewayContentIdKeepsOriginalLoopbackUrl() {
         val contentId = "1111111111111111111111111111111111111111"
         val source = "http://127.0.0.1:6878/ace/getstream?id=$contentId"
+
+        assertEquals(source, PlayerP2pDescriptor.detect(source))
+        assertEquals("Ace Stream поток (локальный Engine)", PlayerP2pDescriptor.describe(source))
+    }
+
+    @Test
+    fun localhostAceGatewayKeepsOriginalLoopbackUrl() {
+        val contentId = "1111111111111111111111111111111111111111"
+        val source = "http://localhost:6878/ace/getstream?id=$contentId"
+
+        assertEquals(source, PlayerP2pDescriptor.detect(source))
+    }
+
+    @Test
+    fun remoteContentIdQueryRemainsExternalAceEvenWhenItLooksLikeSha1() {
+        val contentId = "1111111111111111111111111111111111111111"
+        val source = "https://example.org/play?id=$contentId"
 
         assertEquals("acestream://$contentId", PlayerP2pDescriptor.detect(source))
         assertEquals("Ace Stream поток (внешний Engine)", PlayerP2pDescriptor.describe(source))
