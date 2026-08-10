@@ -39,10 +39,29 @@ class ChainedAceContentMetadataProvider(
 
 /**
  * Compatibility metadata backend using the installed Ace Engine public `get_media_files` API.
+ *
+ * Endpoint discovery failures are promoted to a typed resolver-capability error. Callers can then
+ * distinguish "no Ace content-id resolver exists" from a bad descriptor/metadata response and
+ * avoid repeatedly probing the same missing external engine.
  */
 class ExternalEngineAceContentMetadataProvider(
     private val client: EngineStreamClient
 ) : AceContentMetadataProvider {
-    override suspend fun resolve(rawSource: String): AppResult<AceTransportMetadata> =
-        client.resolveContentIdMetadata(rawSource)
+    override suspend fun resolve(rawSource: String): AppResult<AceTransportMetadata> {
+        val result = client.resolveContentIdMetadata(rawSource)
+        if (result !is AppResult.Error) return result
+
+        val runtime = client.observeRuntimeDiagnostics().value
+        if (runtime.failureCode != FAILURE_ENDPOINT_UNAVAILABLE) return result
+
+        val cause = AceContentIdResolverUnavailableException(
+            message = AceContentIdResolverUnavailableException.DEFAULT_MESSAGE,
+            cause = result.cause
+        )
+        return AppResult.Error(cause.message ?: result.message, cause)
+    }
+
+    private companion object {
+        const val FAILURE_ENDPOINT_UNAVAILABLE = "endpoint_unavailable"
+    }
 }
