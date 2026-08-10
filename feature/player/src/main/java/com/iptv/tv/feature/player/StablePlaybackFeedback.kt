@@ -39,8 +39,7 @@ internal fun stablePlaybackFeedback(
 internal fun StablePlaybackFeedbackBanner(
     lastError: String?,
     isStartingPlayback: Boolean,
-    modifier: Modifier = Modifier,
-    widthFraction: Float = 0.72f
+    modifier: Modifier = Modifier
 ) {
     val feedback = stablePlaybackFeedback(
         lastError = lastError,
@@ -50,7 +49,8 @@ internal fun StablePlaybackFeedbackBanner(
     val colors = MaterialTheme.colorScheme
     Surface(
         modifier = modifier
-            .fillMaxWidth(widthFraction.coerceIn(0.25f, 1f))
+            .padding(top = 96.dp)
+            .fillMaxWidth(0.72f)
             .widthIn(max = 760.dp)
             .semantics {
                 liveRegion = if (feedback.isError) {
