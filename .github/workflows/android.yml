@@ -88,6 +88,62 @@ jobs:
       - name: Ensure Gradle executable
         run: chmod +x ./gradlew
 
+      - name: Compile Android instrumentation tests
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 89
+        run: ./gradlew --no-daemon --stacktrace :app:assembleDebugAndroidTest
+
+      - name: Install emulator image for Torrent TV playback smoke
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 89
+        run: |
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
+            "emulator" \
+            "system-images;android-${ANDROID_API_LEVEL};google_apis;x86_64"
+
+      - name: Run real Torrent TV playback smoke without Ace Engine
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 89
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "no" | avdmanager create avd \
+            --force \
+            --name iptv-ci \
+            --package "system-images;android-${ANDROID_API_LEVEL};google_apis;x86_64"
+
+          sudo chmod 666 /dev/kvm || true
+          nohup "$ANDROID_SDK_ROOT/emulator/emulator" \
+            -avd iptv-ci \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -gpu swiftshader_indirect \
+            -no-snapshot \
+            -no-metrics \
+            > emulator.log 2>&1 &
+
+          adb wait-for-device
+          timeout 240 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb shell input keyevent 82 || true
+
+          ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest \
+            -Pandroid.testInstrumentationRunnerArguments.class=com.iptv.tv.TorrentTvPlaybackSmokeTest
+
+      - name: Print Torrent TV emulator diagnostics
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.number == 89
+        shell: bash
+        run: |
+          echo "::group::Torrent TV smoke markers"
+          grep -R "TORRENT_TV_SMOKE\|TorrentTvSmoke" -n app/build 2>/dev/null || true
+          echo "::endgroup::"
+          if [ -f emulator.log ]; then
+            echo "::group::Emulator tail"
+            tail -n 160 emulator.log
+            echo "::endgroup::"
+          fi
+
       - name: Lint debug
         run: ./gradlew --no-daemon --stacktrace lintDebug
 
@@ -158,60 +214,8 @@ jobs:
       - name: Assemble debug for validation
         run: ./gradlew --no-daemon --stacktrace assembleDebug
 
-      - name: Compile Android instrumentation tests
+      - name: Compile Android instrumentation tests for validation
         run: ./gradlew --no-daemon --stacktrace :app:assembleDebugAndroidTest
-
-      - name: Install emulator image for Torrent TV playback smoke
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 89
-        run: |
-          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
-            "emulator" \
-            "system-images;android-${ANDROID_API_LEVEL};google_apis;x86_64"
-
-      - name: Run real Torrent TV playback smoke without Ace Engine
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 89
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "no" | avdmanager create avd \
-            --force \
-            --name iptv-ci \
-            --package "system-images;android-${ANDROID_API_LEVEL};google_apis;x86_64"
-
-          sudo chmod 666 /dev/kvm || true
-          nohup "$ANDROID_SDK_ROOT/emulator/emulator" \
-            -avd iptv-ci \
-            -no-window \
-            -no-audio \
-            -no-boot-anim \
-            -gpu swiftshader_indirect \
-            -no-snapshot \
-            -no-metrics \
-            > emulator.log 2>&1 &
-
-          adb wait-for-device
-          timeout 240 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
-          adb shell settings put global window_animation_scale 0
-          adb shell settings put global transition_animation_scale 0
-          adb shell settings put global animator_duration_scale 0
-          adb shell input keyevent 82 || true
-
-          ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest \
-            -Pandroid.testInstrumentationRunnerArguments.class=com.iptv.tv.TorrentTvPlaybackSmokeTest
-
-      - name: Print Torrent TV emulator diagnostics
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.number == 89
-        shell: bash
-        run: |
-          echo "::group::Torrent TV smoke markers"
-          grep -R "TORRENT_TV_SMOKE\|TorrentTvSmoke" -n app/build 2>/dev/null || true
-          echo "::endgroup::"
-          if [ -f emulator.log ]; then
-            echo "::group::Emulator tail"
-            tail -n 160 emulator.log
-            echo "::endgroup::"
-          fi
 
       - name: Assemble compact signed ARM TV APKs
         shell: bash
