@@ -29,6 +29,36 @@ class EngineStreamRoutingTest {
     }
 
     @Test
+    fun legacyLoopbackAceGetStreamUsesLocalGatewayRoute() {
+        assertEquals(
+            EngineStreamRoute.LOCAL_ACE_GATEWAY,
+            EngineStreamRouting.route(
+                "http://127.0.0.1:6878/ace/getstream?id=0123456789abcdef0123456789abcdef01234567"
+            )
+        )
+    }
+
+    @Test
+    fun localhostAceGatewayUsesLocalGatewayRoute() {
+        assertEquals(
+            EngineStreamRoute.LOCAL_ACE_GATEWAY,
+            EngineStreamRouting.route(
+                "http://localhost:6878/ace/getstream?id=0123456789abcdef0123456789abcdef01234567"
+            )
+        )
+    }
+
+    @Test
+    fun remoteAceLikeUrlDoesNotUseLocalGatewayRoute() {
+        assertEquals(
+            EngineStreamRoute.EXTERNAL_ACE,
+            EngineStreamRouting.route(
+                "https://example.org/ace/getstream?id=0123456789abcdef0123456789abcdef01234567"
+            )
+        )
+    }
+
+    @Test
     fun directAceLiveUrlUsesCompatibilityRoute() {
         assertEquals(
             EngineStreamRoute.ACE_LIVE_COMPATIBILITY,
