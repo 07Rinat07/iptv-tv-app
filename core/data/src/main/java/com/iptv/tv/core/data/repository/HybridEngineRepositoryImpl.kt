@@ -7,6 +7,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.SyncLogEntity
 import com.iptv.tv.core.domain.repository.EngineRepository
+import com.iptv.tv.core.engine.data.AceContentIdResolverUnavailableException
 import com.iptv.tv.core.engine.data.AceContentTransportResolution
 import com.iptv.tv.core.engine.data.AceContentTransportResolver
 import com.iptv.tv.core.engine.data.EngineStreamClient
@@ -32,11 +33,11 @@ import okhttp3.OkHttpClient
 /**
  * Player-facing engine repository.
  *
- * BitTorrent metadata is resolved by the in-process libtorrent backend first. True Ace content
- * ids are never reinterpreted as infohashes. Ace content ids enter a transport-metadata boundary
- * that can feed proven BitTorrent metadata to the embedded backend and will host the autonomous
- * Ace Live bootstrap. The external Ace Engine remains a compatibility fallback, not a reason to
- * pass playlist-provided localhost URLs directly to the player.
+ * Standard BitTorrent sources (`magnet:`, explicit infohash and `.torrent`) are owned exclusively by
+ * the in-process libtorrent backend and never probe Ace Engine as a fallback. True Ace content ids
+ * are never reinterpreted as infohashes: they enter an Ace-specific metadata resolver boundary.
+ * Today the external Ace Engine is the compatibility implementation of that resolver; if it proves
+ * a non-live BitTorrent identity, playback is handed back to the embedded backend.
  */
 @Singleton
 class HybridEngineRepositoryImpl @Inject constructor(
@@ -90,7 +91,7 @@ class HybridEngineRepositoryImpl @Inject constructor(
                         ?: supersededResult()
                 }
             }
-            EngineStreamRoute.EMBEDDED_BITTORRENT -> resolveEmbeddedWithFallback(magnetOrAce, epoch)
+            EngineStreamRoute.EMBEDDED_BITTORRENT -> resolveEmbeddedOnly(magnetOrAce, epoch)
         }
     }
 
@@ -131,7 +132,11 @@ class HybridEngineRepositoryImpl @Inject constructor(
         }
     }
 
-    private suspend fun resolveEmbeddedWithFallback(
+    /**
+     * Standard BitTorrent is deliberately self-contained. An embedded-engine failure must remain a
+     * BitTorrent failure instead of silently changing protocols and probing Ace Engine.
+     */
+    private suspend fun resolveEmbeddedOnly(
         rawSource: String,
         epoch: Long
     ): AppResult<String> {
@@ -140,8 +145,12 @@ class HybridEngineRepositoryImpl @Inject constructor(
         val parsed = P2pSourceParser.parse(rawSource)
         if (parsed !is P2pResult.Success) {
             if (streamEpoch.get() != epoch) return supersededResult()
-            val fallback = resolveExternal(rawSource)
-            return if (streamEpoch.get() == epoch) fallback else supersededResult()
+            val error = parsed as P2pResult.Error
+            log("embedded_p2p_parse_error", error.message)
+            return AppResult.Error(
+                message = "Embedded BitTorrent source parsing failed: ${error.message}",
+                cause = error.cause
+            )
         }
 
         embeddedEngineUsed.set(true)
@@ -164,25 +173,10 @@ class HybridEngineRepositoryImpl @Inject constructor(
                 if (streamEpoch.get() != epoch) return supersededResult()
 
                 log("embedded_p2p_resolve_error", embedded.message)
-                val fallback = resolveExternal(rawSource)
-                if (streamEpoch.get() != epoch) return supersededResult()
-
-                when (fallback) {
-                    is AppResult.Success -> {
-                        log("embedded_p2p_fallback", "External Ace fallback resolved BitTorrent source")
-                        fallback
-                    }
-                    is AppResult.Error -> AppResult.Error(
-                        message = buildString {
-                            append("Embedded BitTorrent failed: ")
-                            append(embedded.message)
-                            append("; external Ace fallback failed: ")
-                            append(fallback.message)
-                        },
-                        cause = fallback.cause ?: embedded.cause
-                    )
-                    AppResult.Loading -> AppResult.Loading
-                }
+                AppResult.Error(
+                    message = "Embedded BitTorrent failed: ${embedded.message}",
+                    cause = embedded.cause
+                )
             }
         }
     }
@@ -205,8 +199,8 @@ class HybridEngineRepositoryImpl @Inject constructor(
     /**
      * A pure Ace content id is not a BitTorrent hash. Transport discovery is delegated to the
      * resolver boundary so playlist syntax no longer determines the runtime backend. Only a proven
-     * non-live BitTorrent transport may enter standard libtorrent; live transport will move to the
-     * autonomous Ace Live pipeline while external resolution remains available during migration.
+     * non-live BitTorrent transport may enter standard libtorrent. With no Ace-specific resolver
+     * available, the failure is explicit instead of retrying the same missing engine as playback.
      */
     private suspend fun resolveAceContentIdWithEmbeddedMetadata(
         rawSource: String,
@@ -250,7 +244,7 @@ class HybridEngineRepositoryImpl @Inject constructor(
                 is AceContentTransportResolution.AceLive -> {
                     log(
                         "engine_content_id_live_transport",
-                        "Ace content id resolved to live transport; autonomous live bootstrap is not complete, using compatibility fallback"
+                        "Ace content id resolved to live transport; using external Ace compatibility playback"
                     )
                     return resolveExternalIfCurrent(rawSource, epoch)
                 }
@@ -261,9 +255,16 @@ class HybridEngineRepositoryImpl @Inject constructor(
             }
             is AppResult.Error -> {
                 log("engine_content_id_metadata_error", resolution.message)
+                if (resolution.cause is AceContentIdResolverUnavailableException) {
+                    log(
+                        "engine_content_id_resolver_unavailable",
+                        "No Ace-specific content-id resolver is available"
+                    )
+                    return aceContentIdResolverUnavailable(resolution)
+                }
                 return resolveExternalIfCurrent(rawSource, epoch)
             }
-            AppResult.Loading -> return resolveExternalIfCurrent(rawSource, epoch)
+            AppResult.Loading -> return AppResult.Loading
         }
 
         embeddedEngineUsed.set(true)
@@ -284,6 +285,13 @@ class HybridEngineRepositoryImpl @Inject constructor(
             }
         }
     }
+
+    private fun aceContentIdResolverUnavailable(error: AppResult.Error): AppResult.Error =
+        AppResult.Error(
+            message = "Для ссылок Ace Stream content_id сейчас требуется доступный Ace Stream Engine. " +
+                "Magnet, .torrent и BitTorrent infohash воспроизводятся встроенным P2P-движком.",
+            cause = error.cause
+        )
 
     private fun materializeAceTransportFile(
         rawSource: String,
