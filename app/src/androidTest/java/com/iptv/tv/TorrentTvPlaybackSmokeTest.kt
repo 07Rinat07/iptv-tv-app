@@ -14,14 +14,14 @@ import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
-import java.util.concurrent.TimeUnit
+import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -46,12 +46,6 @@ class TorrentTvPlaybackSmokeTest {
             EngineEntryPoint::class.java
         ).engineRepository()
     }
-
-    private val probeClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(35, TimeUnit.SECONDS)
-        .callTimeout(45, TimeUnit.SECONDS)
-        .build()
 
     @After
     fun cleanup() = runBlocking {
@@ -96,14 +90,18 @@ class TorrentTvPlaybackSmokeTest {
     }
 
     private suspend fun downloadPlaylist(): String = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url(PLAYLIST_URL).get().build()
-        probeClient.newCall(request).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            println("TORRENT_TV_SMOKE playlist http=${response.code} chars=${text.length}")
-            Log.i(TAG, "playlist http=${response.code} chars=${text.length}")
-            check(response.isSuccessful) { "Playlist HTTP ${response.code}" }
+        val connection = openHttp(PLAYLIST_URL)
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            println("TORRENT_TV_SMOKE playlist http=$code chars=${text.length}")
+            Log.i(TAG, "playlist http=$code chars=${text.length}")
+            check(code in 200..299) { "Playlist HTTP $code" }
             check(text.isNotBlank()) { "Playlist response is empty" }
             text
+        } finally {
+            connection.disconnect()
         }
     }
 
@@ -121,23 +119,15 @@ class TorrentTvPlaybackSmokeTest {
             "$label: engine did not resolve a playable local stream: $resolved"
         }
         val localUrl = resolved.data
+        val (httpCode, firstBytes) = readRange(localUrl, MAX_PROBE_BYTES)
 
-        val firstBytes = withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url(localUrl)
-                .header("Range", "bytes=0-131071")
-                .get()
-                .build()
-            probeClient.newCall(request).execute().use { response ->
-                val bytes = response.body?.bytes().orEmpty()
-                println(
-                    "TORRENT_TV_SMOKE bytes label=$label http=${response.code} count=${bytes.size} url=$localUrl"
-                )
-                Log.i(TAG, "bytes label=$label http=${response.code} count=${bytes.size}")
-                bytes
-            }
+        println(
+            "TORRENT_TV_SMOKE bytes label=$label http=$httpCode count=${firstBytes.size} url=$localUrl"
+        )
+        Log.i(TAG, "bytes label=$label http=$httpCode count=${firstBytes.size}")
+        check(httpCode == HttpURLConnection.HTTP_OK || httpCode == HttpURLConnection.HTTP_PARTIAL) {
+            "$label: embedded stream HTTP $httpCode"
         }
-
         check(firstBytes.isNotEmpty()) { "$label: embedded stream returned no media bytes" }
 
         val playerFailure = awaitMedia3Ready(localUrl)
@@ -148,6 +138,41 @@ class TorrentTvPlaybackSmokeTest {
         println("TORRENT_TV_SMOKE ready label=$label bytes=${firstBytes.size}")
         Log.i(TAG, "ready label=$label bytes=${firstBytes.size}")
     }
+
+    private suspend fun readRange(url: String, maxBytes: Int): Pair<Int, ByteArray> =
+        withContext(Dispatchers.IO) {
+            val connection = openHttp(url).apply {
+                setRequestProperty("Range", "bytes=0-${maxBytes - 1}")
+            }
+            try {
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                val bytes = stream?.use { input ->
+                    val output = ByteArrayOutputStream(maxBytes)
+                    val buffer = ByteArray(16 * 1024)
+                    var remaining = maxBytes
+                    while (remaining > 0) {
+                        val read = input.read(buffer, 0, minOf(buffer.size, remaining))
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        remaining -= read
+                    }
+                    output.toByteArray()
+                }.orEmpty()
+                code to bytes
+            } finally {
+                connection.disconnect()
+            }
+        }
+
+    private fun openHttp(url: String): HttpURLConnection =
+        (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 10_000
+            readTimeout = 35_000
+            requestMethod = "GET"
+            useCaches = false
+            instanceFollowRedirects = true
+        }
 
     private suspend fun awaitMedia3Ready(url: String): String? {
         val result = CompletableDeferred<String?>()
@@ -192,5 +217,6 @@ class TorrentTvPlaybackSmokeTest {
     private companion object {
         const val TAG = "TorrentTvSmoke"
         const val PLAYLIST_URL = "https://raw.githubusercontent.com/Dimonovich/TV/Dimonovich/FREE/TV"
+        const val MAX_PROBE_BYTES = 128 * 1024
     }
 }
