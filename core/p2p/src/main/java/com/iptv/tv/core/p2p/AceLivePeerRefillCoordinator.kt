@@ -74,12 +74,16 @@ data class AceLivePeerRefillCycleResult(
 )
 
 /**
- * Pure candidate state/ranking for background Ace Live peer refill.
+ * Candidate state/ranking for background Ace Live peer refill.
  *
  * Ranking deliberately gives verified live-window usefulness precedence over discovery provenance.
  * A peer found by both DHT and a tracker only wins a tie after window usefulness, failure history,
  * and successful-handshake history. Final failures use bounded exponential backoff; no candidate is
  * permanently banned by this layer.
+ *
+ * All mutable candidate/reservation/ownership state is serialized under one local monitor. This
+ * keeps selection plus reservation atomic when background refill cycles overlap on different
+ * dispatcher threads without giving this policy layer ownership of coroutines or sockets.
  *
  * This coordinator never evicts an active peer. A stale-but-reachable pool may temporarily request
  * extra probe peers up to [AceLivePeerRefillPolicy.maxActivePeers], preserving the existing recovery
@@ -88,14 +92,16 @@ data class AceLivePeerRefillCycleResult(
 class AceLivePeerRefillCoordinator(
     val policy: AceLivePeerRefillPolicy = AceLivePeerRefillPolicy()
 ) {
+    private val stateLock = Any()
     private val candidates = LinkedHashMap<String, CandidateState>()
     private val peerIdToEndpointKey = HashMap<Long, String>()
 
     fun ingestDiscovery(
         result: AceLivePeerDiscoveryOrchestrationResult,
         nowMillis: Long
-    ) {
+    ) = withStateLock {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
+        pruneExpiredCandidatesLocked(nowMillis)
         for (peer in result.peers) {
             val key = endpointKey(peer.endpoint)
             val state = candidates.getOrPut(key) {
@@ -111,43 +117,41 @@ class AceLivePeerRefillCoordinator(
      * Synchronizes local ownership with the real pool without treating disappearance as a failure.
      * Actual failures are scored only from final pool events or an immediate start rejection.
      */
-    fun syncActivePeerIds(activePeerIds: Set<Long>) {
-        val staleMappings = peerIdToEndpointKey.keys.filter { peerId -> peerId !in activePeerIds }
-        for (peerId in staleMappings) {
-            val key = peerIdToEndpointKey[peerId] ?: continue
-            val state = candidates[key] ?: continue
-            if (state.startInProgress) continue
-            if (state.managedPeerId == peerId) state.managedPeerId = null
-            peerIdToEndpointKey.remove(peerId)
-        }
+    fun syncActivePeerIds(activePeerIds: Set<Long>) = withStateLock {
+        syncActivePeerIdsLocked(activePeerIds)
     }
 
     /**
-     * Produces and reserves a bounded set of candidates. Reservations prevent duplicate planning
-     * when cycles overlap before the caller has attached a concrete pool peer id.
+     * Produces and reserves a bounded set of candidates. Selection and reservation occur under the
+     * same lock, so overlapping cycles cannot reserve the same endpoint. Existing reservations and
+     * managed starts that are not yet visible in [activePeerIds] count against the desired capacity.
      */
     fun planRefill(
         activePeerIds: Set<Long>,
         nextNeededPiece: Long?,
         poolStale: Boolean,
         nowMillis: Long
-    ): AceLivePeerRefillPlan {
+    ): AceLivePeerRefillPlan = withStateLock {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
         require(nextNeededPiece == null || nextNeededPiece >= 0) {
             "nextNeededPiece must be non-negative when present"
         }
-        syncActivePeerIds(activePeerIds)
+        syncActivePeerIdsLocked(activePeerIds)
+        pruneExpiredCandidatesLocked(nowMillis)
 
         val desired = if (poolStale) {
             (policy.targetActivePeers + policy.staleProbePeers).coerceAtMost(policy.maxActivePeers)
         } else {
             policy.targetActivePeers
         }
-        val slots = (desired - activePeerIds.size)
+        val reservedPending = candidates.values.count { state -> state.startReserved }
+        val managedPending = peerIdToEndpointKey.keys.count { peerId -> peerId !in activePeerIds }
+        val committedPeers = activePeerIds.size + reservedPending + managedPending
+        val slots = (desired - committedPeers)
             .coerceAtLeast(0)
             .coerceAtMost(policy.maxStartsPerCycle)
         if (slots == 0) {
-            return AceLivePeerRefillPlan(
+            return@withStateLock AceLivePeerRefillPlan(
                 candidates = emptyList(),
                 activePeers = activePeerIds.size,
                 desiredActivePeers = desired,
@@ -160,13 +164,12 @@ class AceLivePeerRefillCoordinator(
             .filter { state -> state.managedPeerId == null }
             .filter { state -> !state.startReserved && !state.startInProgress }
             .filter { state -> nowMillis >= state.retryNotBeforeMillis }
-            .filter { state -> elapsedSince(state.lastDiscoveredAtMillis, nowMillis) <= policy.candidateTtlMillis }
             .sortedWith(candidateComparator(nextNeededPiece))
             .take(slots)
             .toList()
 
         ranked.forEach { state -> state.startReserved = true }
-        return AceLivePeerRefillPlan(
+        AceLivePeerRefillPlan(
             candidates = ranked.map(CandidateState::toPublicCandidate),
             activePeers = activePeerIds.size,
             desiredActivePeers = desired,
@@ -175,7 +178,7 @@ class AceLivePeerRefillCoordinator(
     }
 
     /** Binds a reserved endpoint to a concrete pool peer id before invoking startPeer. */
-    fun beginStart(peerId: Long, endpoint: AceLiveTcpPeerEndpoint) {
+    fun beginStart(peerId: Long, endpoint: AceLiveTcpPeerEndpoint) = withStateLock {
         require(peerId >= 0) { "peerId must be non-negative" }
         require(peerId !in peerIdToEndpointKey) { "peerId $peerId is already managed" }
         val key = endpointKey(endpoint)
@@ -188,27 +191,32 @@ class AceLivePeerRefillCoordinator(
         peerIdToEndpointKey[peerId] = key
     }
 
-    /** Called after startPeer has returned and the pool now owns the peer id. */
-    fun markStartAccepted(peerId: Long) {
-        stateForPeer(peerId)?.startInProgress = false
+    /**
+     * Called after startPeer has accepted ownership. Keep the start pending until the first pool
+     * lifecycle event so an overlapping active-peer snapshot cannot forget the newly registered id.
+     */
+    fun markStartAccepted(peerId: Long) = withStateLock {
+        stateForPeerLocked(peerId)?.let { state ->
+            check(state.managedPeerId == peerId) { "Accepted start lost managed ownership" }
+        }
     }
 
     /** Immediate registration/start failure; applies temporary backoff, never a permanent ban. */
-    fun markStartRejected(peerId: Long, nowMillis: Long) {
+    fun markStartRejected(peerId: Long, nowMillis: Long) = withStateLock {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
-        val state = stateForPeer(peerId) ?: return
-        recordFailure(state, nowMillis)
-        clearManagedPeer(peerId, state)
+        val state = stateForPeerLocked(peerId) ?: return@withStateLock
+        recordFailureLocked(state, nowMillis)
+        clearManagedPeerLocked(peerId, state)
     }
 
     /** Cancellation is caller lifecycle, not evidence that the peer itself failed. */
-    fun cancelStart(peerId: Long) {
-        val state = stateForPeer(peerId) ?: return
-        clearManagedPeer(peerId, state)
+    fun cancelStart(peerId: Long) = withStateLock {
+        val state = stateForPeerLocked(peerId) ?: return@withStateLock
+        clearManagedPeerLocked(peerId, state)
     }
 
     /** Releases a reservation if the caller elects not to start a planned endpoint. */
-    fun releaseReservation(endpoint: AceLiveTcpPeerEndpoint) {
+    fun releaseReservation(endpoint: AceLiveTcpPeerEndpoint) = withStateLock {
         candidates[endpointKey(endpoint)]?.startReserved = false
     }
 
@@ -216,9 +224,9 @@ class AceLivePeerRefillCoordinator(
      * Pool events update only evidence relevant to refill ranking. Retry-internal failures are not
      * scored until the TCP pool reports that it has exhausted its own retry loop.
      */
-    fun onPoolEvent(event: AceLiveTcpPoolEvent, nowMillis: Long) {
+    fun onPoolEvent(event: AceLiveTcpPoolEvent, nowMillis: Long) = withStateLock {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
-        val state = stateForPeer(event.peerId) ?: return
+        val state = stateForPeerLocked(event.peerId) ?: return@withStateLock
         when (event) {
             is AceLiveTcpPoolEvent.TransportConnected -> {
                 state.startInProgress = false
@@ -239,15 +247,15 @@ class AceLivePeerRefillCoordinator(
 
             is AceLiveTcpPoolEvent.ConnectFailed -> {
                 if (!event.retrying) {
-                    recordFailure(state, nowMillis)
-                    clearManagedPeer(event.peerId, state)
+                    recordFailureLocked(state, nowMillis)
+                    clearManagedPeerLocked(event.peerId, state)
                 }
             }
 
             is AceLiveTcpPoolEvent.Disconnected -> {
                 if (!event.retrying) {
-                    recordFailure(state, nowMillis)
-                    clearManagedPeer(event.peerId, state)
+                    recordFailureLocked(state, nowMillis)
+                    clearManagedPeerLocked(event.peerId, state)
                 }
             }
 
@@ -255,11 +263,41 @@ class AceLivePeerRefillCoordinator(
         }
     }
 
-    fun snapshot(endpoint: AceLiveTcpPeerEndpoint): AceLivePeerRefillSnapshot? =
+    fun snapshot(endpoint: AceLiveTcpPeerEndpoint): AceLivePeerRefillSnapshot? = withStateLock {
         candidates[endpointKey(endpoint)]?.toSnapshot()
+    }
 
-    fun snapshots(): List<AceLivePeerRefillSnapshot> =
+    fun snapshots(): List<AceLivePeerRefillSnapshot> = withStateLock {
         candidates.values.map(CandidateState::toSnapshot)
+    }
+
+    private fun syncActivePeerIdsLocked(activePeerIds: Set<Long>) {
+        val staleMappings = peerIdToEndpointKey.keys.filter { peerId -> peerId !in activePeerIds }
+        for (peerId in staleMappings) {
+            val key = peerIdToEndpointKey[peerId] ?: continue
+            val state = candidates[key] ?: run {
+                peerIdToEndpointKey.remove(peerId)
+                continue
+            }
+            if (state.startInProgress) continue
+            if (state.managedPeerId == peerId) state.managedPeerId = null
+            peerIdToEndpointKey.remove(peerId)
+        }
+    }
+
+    private fun pruneExpiredCandidatesLocked(nowMillis: Long) {
+        val expiredKeys = candidates.entries
+            .asSequence()
+            .filter { (_, state) ->
+                state.managedPeerId == null &&
+                    !state.startReserved &&
+                    !state.startInProgress &&
+                    elapsedSince(state.lastDiscoveredAtMillis, nowMillis) > policy.candidateTtlMillis
+            }
+            .map { (key, _) -> key }
+            .toList()
+        expiredKeys.forEach(candidates::remove)
+    }
 
     private fun candidateComparator(nextNeededPiece: Long?): Comparator<CandidateState> =
         Comparator { left, right ->
@@ -285,8 +323,9 @@ class AceLivePeerRefillCoordinator(
         return if (nextNeededPiece in window.minPiece..window.maxPiece) 0 else 2
     }
 
-    private fun recordFailure(state: CandidateState, nowMillis: Long) {
-        state.consecutiveFailures = (state.consecutiveFailures + 1).coerceAtMost(MAX_FAILURE_EXPONENT + 1)
+    private fun recordFailureLocked(state: CandidateState, nowMillis: Long) {
+        state.consecutiveFailures = (state.consecutiveFailures + 1)
+            .coerceAtMost(MAX_FAILURE_EXPONENT + 1)
         val exponent = (state.consecutiveFailures - 1).coerceIn(0, MAX_FAILURE_EXPONENT)
         val multiplier = 1L shl exponent
         val delayMillis = safeMultiply(policy.failureBackoffBaseMillis, multiplier)
@@ -294,14 +333,14 @@ class AceLivePeerRefillCoordinator(
         state.retryNotBeforeMillis = safeAdd(nowMillis, delayMillis)
     }
 
-    private fun clearManagedPeer(peerId: Long, state: CandidateState) {
+    private fun clearManagedPeerLocked(peerId: Long, state: CandidateState) {
         if (state.managedPeerId == peerId) state.managedPeerId = null
         state.startInProgress = false
         state.startReserved = false
         peerIdToEndpointKey.remove(peerId)
     }
 
-    private fun stateForPeer(peerId: Long): CandidateState? {
+    private fun stateForPeerLocked(peerId: Long): CandidateState? {
         val key = peerIdToEndpointKey[peerId] ?: return null
         return candidates[key]
     }
@@ -317,6 +356,8 @@ class AceLivePeerRefillCoordinator(
 
     private fun safeAdd(left: Long, right: Long): Long =
         if (right <= Long.MAX_VALUE - left) left + right else Long.MAX_VALUE
+
+    private inline fun <T> withStateLock(block: () -> T): T = synchronized(stateLock, block)
 
     private data class CandidateState(
         val endpoint: AceLiveTcpPeerEndpoint,
@@ -401,21 +442,30 @@ class AceLivePeerRefillLoop(
 
         var started = 0
         var failed = 0
-        for (candidate in plan.candidates) {
-            currentCoroutineContext().ensureActive()
-            val peerId = allocatePeerId()
-            require(peerId >= 0) { "allocatePeerId returned a negative peer id" }
-            coordinator.beginStart(peerId, candidate.endpoint)
-            try {
-                startPeer(peerId, candidate.endpoint)
-                coordinator.markStartAccepted(peerId)
-                started += 1
-            } catch (cancelled: CancellationException) {
-                coordinator.cancelStart(peerId)
-                throw cancelled
-            } catch (_: Throwable) {
-                coordinator.markStartRejected(peerId, nowMillis)
-                failed += 1
+        val unstartedReservations = plan.candidates
+            .mapTo(linkedSetOf()) { candidate -> candidate.endpoint }
+        try {
+            for (candidate in plan.candidates) {
+                currentCoroutineContext().ensureActive()
+                val peerId = allocatePeerId()
+                require(peerId >= 0) { "allocatePeerId returned a negative peer id" }
+                coordinator.beginStart(peerId, candidate.endpoint)
+                unstartedReservations.remove(candidate.endpoint)
+                try {
+                    startPeer(peerId, candidate.endpoint)
+                    coordinator.markStartAccepted(peerId)
+                    started += 1
+                } catch (cancelled: CancellationException) {
+                    coordinator.cancelStart(peerId)
+                    throw cancelled
+                } catch (_: Throwable) {
+                    coordinator.markStartRejected(peerId, clockMillis())
+                    failed += 1
+                }
+            }
+        } finally {
+            unstartedReservations.forEach { endpoint ->
+                coordinator.releaseReservation(endpoint)
             }
         }
 
