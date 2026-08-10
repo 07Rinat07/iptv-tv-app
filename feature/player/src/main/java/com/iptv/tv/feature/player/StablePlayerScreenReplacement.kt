@@ -129,7 +129,7 @@ internal fun stableRemoteActionForKey(
     KeyEvent.KEYCODE_MUTE -> StableRemoteAction.TOGGLE_MUTE
 
     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-    KeyEvent.KEYCODE_HEADSETOOK -> StableRemoteAction.TOGGLE_PLAYBACK
+    KeyEvent.KEYCODE_HEADSETHOOK -> StableRemoteAction.TOGGLE_PLAYBACK
 
     else -> StableRemoteAction.NONE
 }
