@@ -1,5 +1,6 @@
 package com.iptv.tv.core.designsystem.theme
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
@@ -17,8 +18,12 @@ import androidx.compose.ui.unit.sp
 private val DarkColors: ColorScheme = darkColorScheme(
     primary = Color(0xFF12D8FF),
     onPrimary = Color(0xFF00131B),
+    primaryContainer = Color(0xFF07354A),
+    onPrimaryContainer = Color(0xFFDDF8FF),
     secondary = Color(0xFF65BFFF),
     onSecondary = Color(0xFF03131F),
+    secondaryContainer = Color(0xFF123A52),
+    onSecondaryContainer = Color(0xFFD9F0FF),
     tertiary = Color(0xFFFFB547),
     background = Color(0xFF02070D),
     onBackground = Color(0xFFF0F8FF),
@@ -33,8 +38,12 @@ private val DarkColors: ColorScheme = darkColorScheme(
 private val LightColors: ColorScheme = lightColorScheme(
     primary = Color(0xFF006C86),
     onPrimary = Color.White,
+    primaryContainer = Color(0xFFB9EAFA),
+    onPrimaryContainer = Color(0xFF001F29),
     secondary = Color(0xFF17648F),
     onSecondary = Color.White,
+    secondaryContainer = Color(0xFFCDE9FB),
+    onSecondaryContainer = Color(0xFF082338),
     tertiary = Color(0xFFC2780A),
     background = Color(0xFFF7FAFE),
     onBackground = Color(0xFF0F1A23),
@@ -107,7 +116,7 @@ private val IptvShapes: Shapes = Shapes(
 
 @Composable
 fun IptvTheme(
-    darkTheme: Boolean = true,
+    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
