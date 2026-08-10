@@ -486,6 +486,15 @@ fun StablePlayerScreen(
                 onOpenAppSettings = onPrimaryAction
             )
         }
+
+        StablePlaybackFeedbackBanner(
+            lastError = state.lastError,
+            isStartingPlayback = state.isStartingPlayback,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(horizontal = 18.dp, vertical = 14.dp)
+        )
     }
 }
 
