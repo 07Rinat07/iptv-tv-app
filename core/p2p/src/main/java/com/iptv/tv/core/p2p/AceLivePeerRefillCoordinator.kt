@@ -3,6 +3,7 @@ package com.iptv.tv.core.p2p
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 
 /** Local-only refill/scoring policy. None of these values are Ace protocol fields. */
@@ -189,8 +190,7 @@ class AceLivePeerRefillCoordinator(
 
     /** Called after startPeer has returned and the pool now owns the peer id. */
     fun markStartAccepted(peerId: Long) {
-        val state = stateForPeer(peerId) ?: return
-        state.startInProgress = false
+        stateForPeer(peerId)?.startInProgress = false
     }
 
     /** Immediate registration/start failure; applies temporary backoff, never a permanent ban. */
@@ -198,6 +198,12 @@ class AceLivePeerRefillCoordinator(
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
         val state = stateForPeer(peerId) ?: return
         recordFailure(state, nowMillis)
+        clearManagedPeer(peerId, state)
+    }
+
+    /** Cancellation is caller lifecycle, not evidence that the peer itself failed. */
+    fun cancelStart(peerId: Long) {
+        val state = stateForPeer(peerId) ?: return
         clearManagedPeer(peerId, state)
     }
 
@@ -405,7 +411,7 @@ class AceLivePeerRefillLoop(
                 coordinator.markStartAccepted(peerId)
                 started += 1
             } catch (cancelled: CancellationException) {
-                coordinator.markStartRejected(peerId, nowMillis)
+                coordinator.cancelStart(peerId)
                 throw cancelled
             } catch (_: Throwable) {
                 coordinator.markStartRejected(peerId, nowMillis)
