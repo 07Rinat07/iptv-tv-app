@@ -1,5 +1,6 @@
 package com.iptv.tv.core.p2p
 
+import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -13,13 +14,13 @@ object P2pSourceParser {
         val value = raw.trim()
         if (value.isBlank()) return P2pResult.Error("P2P source is empty")
 
-        aceQueryParameter(value, "infohash")?.let { hash ->
+        aceDescriptorQueryParameter(value, "infohash")?.let { hash ->
             return normalizeInfoHash(hash)?.let { normalized ->
                 P2pResult.Success(P2pSource.InfoHash(normalized))
             } ?: P2pResult.Error("Invalid BitTorrent infohash in Ace Stream descriptor")
         }
 
-        aceQueryParameter(value, "magnet")?.let { magnet ->
+        aceDescriptorQueryParameter(value, "magnet")?.let { magnet ->
             return if (magnet.startsWith("magnet:?", ignoreCase = true)) {
                 P2pResult.Success(P2pSource.Magnet(magnet))
             } else {
@@ -27,21 +28,21 @@ object P2pSourceParser {
             }
         }
 
-        aceQueryParameter(value, "url")?.let { nested ->
+        aceDescriptorQueryParameter(value, "url")?.let { nested ->
             parseNestedAceBitTorrentSource(nested)?.let { return it }
         }
 
-        aceQueryParameter(value, "data")?.let { nested ->
+        aceDescriptorQueryParameter(value, "data")?.let { nested ->
             parseNestedAceBitTorrentSource(nested)?.let { return it }
         }
 
-        aceQueryParameter(value, "content_id")?.let { contentId ->
+        aceDescriptorQueryParameter(value, "content_id")?.let { contentId ->
             if (contentId.isNotBlank()) {
                 return P2pResult.Success(P2pSource.AceContentId(contentId))
             }
         }
 
-        aceQueryParameter(value, "id")?.let { contentId ->
+        aceDescriptorQueryParameter(value, "id")?.let { contentId ->
             if (contentId.isNotBlank()) {
                 return P2pResult.Success(P2pSource.AceContentId(contentId))
             }
@@ -59,7 +60,8 @@ object P2pSourceParser {
                 } ?: P2pResult.Error("Invalid BitTorrent infohash")
             }
 
-            value.startsWith("acestream://", ignoreCase = true) -> {
+            value.startsWith("acestream://", ignoreCase = true) ||
+                value.startsWith("ace://", ignoreCase = true) -> {
                 val id = value.substringAfter("://").trim().substringBefore('?').substringBefore('#')
                 if (id.isBlank()) {
                     P2pResult.Error("Ace Stream content id is empty")
@@ -132,13 +134,13 @@ object P2pSourceParser {
         }
     }
 
-    private fun aceQueryParameter(value: String, name: String): String? {
-        if (
-            !value.startsWith("acestream:", ignoreCase = true) &&
-            !value.startsWith("ace:", ignoreCase = true)
-        ) {
-            return null
-        }
+    /**
+     * Accept query parameters only from explicit Ace descriptors. Besides `ace:`/`acestream:` this
+     * includes the legacy loopback HTTP shape emitted by many Torrent TV playlists. The loopback
+     * URL is treated as descriptor syntax, not as a requirement that another process owns port 6878.
+     */
+    private fun aceDescriptorQueryParameter(value: String, name: String): String? {
+        if (!isAceDescriptor(value)) return null
 
         val query = value.substringAfter('?', missingDelimiterValue = "")
         if (query.isBlank()) return null
@@ -151,6 +153,24 @@ object P2pSourceParser {
                 decodeQueryValue(part.substringAfter('=', missingDelimiterValue = "").trim())
             }
         }
+    }
+
+    private fun isAceDescriptor(value: String): Boolean =
+        value.startsWith("acestream:", ignoreCase = true) ||
+            value.startsWith("ace:", ignoreCase = true) ||
+            isLoopbackAceGatewayUrl(value)
+
+    private fun isLoopbackAceGatewayUrl(value: String): Boolean {
+        val uri = runCatching { URI(value) }.getOrNull() ?: return false
+        if (!uri.scheme.equals("http", ignoreCase = true) &&
+            !uri.scheme.equals("https", ignoreCase = true)
+        ) {
+            return false
+        }
+
+        val host = uri.host?.lowercase(Locale.ROOT) ?: return false
+        val loopback = host == "127.0.0.1" || host == "localhost" || host == "::1"
+        return loopback && uri.path.orEmpty().startsWith("/ace/", ignoreCase = true)
     }
 
     private fun decodeQueryValue(value: String): String = runCatching {
