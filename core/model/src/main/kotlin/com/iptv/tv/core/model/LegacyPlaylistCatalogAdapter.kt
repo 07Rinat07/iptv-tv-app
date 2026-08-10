@@ -154,15 +154,16 @@ object LegacyPlaylistCatalogAdapter {
 
         return runCatching {
             val uri = URI(trimmed)
-            val scheme = uri.scheme?.lowercase(Locale.ROOT)
-            if (scheme.isNullOrBlank()) return@runCatching normalizePlainSource(trimmed)
+            val scheme = uri.scheme?.lowercase(Locale.ROOT).orEmpty()
+            if (scheme.isBlank()) return@runCatching normalizePlainSource(trimmed)
+            val host = uri.host
 
             buildString {
                 append(scheme)
                 append(':')
-                if (!uri.host.isNullOrBlank()) {
+                if (!host.isNullOrBlank()) {
                     append("//")
-                    append(uri.host.lowercase(Locale.ROOT))
+                    append(host.lowercase(Locale.ROOT))
                     if (uri.port >= 0) append(":${uri.port}")
                 }
                 append(uri.rawPath.orEmpty().trimEnd('/'))
