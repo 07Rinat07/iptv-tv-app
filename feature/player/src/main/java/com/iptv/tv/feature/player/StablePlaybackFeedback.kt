@@ -8,6 +8,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -36,7 +39,8 @@ internal fun stablePlaybackFeedback(
 internal fun StablePlaybackFeedbackBanner(
     lastError: String?,
     isStartingPlayback: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    widthFraction: Float = 0.72f
 ) {
     val feedback = stablePlaybackFeedback(
         lastError = lastError,
@@ -46,8 +50,15 @@ internal fun StablePlaybackFeedbackBanner(
     val colors = MaterialTheme.colorScheme
     Surface(
         modifier = modifier
-            .fillMaxWidth(0.72f)
-            .widthIn(max = 760.dp),
+            .fillMaxWidth(widthFraction.coerceIn(0.25f, 1f))
+            .widthIn(max = 760.dp)
+            .semantics {
+                liveRegion = if (feedback.isError) {
+                    LiveRegionMode.Assertive
+                } else {
+                    LiveRegionMode.Polite
+                }
+            },
         color = if (feedback.isError) colors.errorContainer else colors.surfaceVariant,
         contentColor = if (feedback.isError) colors.onErrorContainer else colors.onSurfaceVariant,
         tonalElevation = 10.dp,
