@@ -168,7 +168,11 @@ object P2pSourceParser {
             return false
         }
 
-        val host = uri.host?.lowercase(Locale.ROOT) ?: return false
+        val host = uri.host
+            ?.lowercase(Locale.ROOT)
+            ?.removePrefix("[")
+            ?.removeSuffix("]")
+            ?: return false
         val loopback = host == "127.0.0.1" || host == "localhost" || host == "::1"
         return loopback && uri.path.orEmpty().startsWith("/ace/", ignoreCase = true)
     }
