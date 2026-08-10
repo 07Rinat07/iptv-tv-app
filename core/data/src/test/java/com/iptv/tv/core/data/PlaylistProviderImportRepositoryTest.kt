@@ -12,6 +12,7 @@ import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.PlaylistEntity
 import com.iptv.tv.core.database.entity.SyncLogEntity
 import com.iptv.tv.core.model.ChannelHealth
+import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.parser.M3uParser
 import io.mockk.CapturingSlot
@@ -98,6 +99,7 @@ class PlaylistProviderImportRepositoryTest {
 
         assertImportSuccess(result)
         assertEquals(PlaylistSourceType.PLEX.name, insertedPlaylist.captured.sourceType)
+        assertEquals(CatalogOriginKind.PROVIDER.name, insertedPlaylist.captured.catalogOrigin)
         assertEquals("${server.url("/").toString().trimEnd('/')}/livetv/dvrs", insertedPlaylist.captured.source)
         assertFalse(insertedPlaylist.captured.source.contains("secret-token"))
         assertEquals(2, insertedChannels.captured.size)
@@ -135,6 +137,7 @@ class PlaylistProviderImportRepositoryTest {
 
         assertImportSuccess(result)
         assertEquals(PlaylistSourceType.JELLYFIN.name, insertedPlaylist.captured.sourceType)
+        assertEquals(CatalogOriginKind.PROVIDER.name, insertedPlaylist.captured.catalogOrigin)
         assertEquals("${server.url("/").toString().trimEnd('/')}/LiveTv/Channels", insertedPlaylist.captured.source)
         assertFalse(insertedPlaylist.captured.source.contains("api-secret"))
         assertEquals(1, insertedChannels.captured.size)
@@ -167,6 +170,7 @@ class PlaylistProviderImportRepositoryTest {
 
         assertImportSuccess(result)
         assertEquals(PlaylistSourceType.HDHOMERUN.name, insertedPlaylist.captured.sourceType)
+        assertEquals(CatalogOriginKind.PROVIDER.name, insertedPlaylist.captured.catalogOrigin)
         assertEquals("${server.url("/").toString().trimEnd('/')}/lineup.json", insertedPlaylist.captured.source)
         assertEquals(1, insertedChannels.captured.size)
         assertEquals("HD News", insertedChannels.captured.single().name)
@@ -196,6 +200,7 @@ class PlaylistProviderImportRepositoryTest {
 
         assertImportSuccess(result)
         assertEquals(PlaylistSourceType.TVHEADEND.name, insertedPlaylist.captured.sourceType)
+        assertEquals(CatalogOriginKind.PROVIDER.name, insertedPlaylist.captured.catalogOrigin)
         assertEquals("${server.url("/").toString().trimEnd('/')}/playlist/channels.m3u", insertedPlaylist.captured.source)
         assertEquals(1, insertedChannels.captured.size)
         assertEquals("TVH News", insertedChannels.captured.single().name)
@@ -203,6 +208,22 @@ class PlaylistProviderImportRepositoryTest {
         val request = server.takeRequest()
         assertEquals("/playlist/channels.m3u", request.path)
         assertEquals("Basic dXNlcjpwYXNz", request.getHeader("Authorization"))
+    }
+
+    @Test
+    fun importFromText_defaultsToUserImportOrigin() = runTest {
+        val result = repository.importFromText(
+            text = """
+                #EXTM3U
+                #EXTINF:-1 tvg-id="manual-news",Manual News
+                https://example.test/live/manual-news
+            """.trimIndent(),
+            name = "Manual"
+        )
+
+        assertImportSuccess(result)
+        assertEquals(PlaylistSourceType.TEXT.name, insertedPlaylist.captured.sourceType)
+        assertEquals(CatalogOriginKind.USER_IMPORT.name, insertedPlaylist.captured.catalogOrigin)
     }
 
     @Test

@@ -32,7 +32,9 @@
 
 У канала намеренно существуют два разных уровня идентичности. `ChannelStableIdentity` отвечает на вопрос «это тот же логический телеканал?» и может совпадать между разными плейлистами/источниками. `CatalogNodeId` отвечает на вопрос «это тот же узел в конкретной иерархии?» и остаётся parent/provenance-scoped. Существующий `GlobalFavoriteIdentity` в `core:data` является compatibility adapter и делегирует общий алгоритм `ChannelStableIdentity`, поэтому Favorites и будущие catalog adapters не развивают две независимые схемы дедупликации.
 
-Адаптер конкретного источника обязан передавать уже нормализованный `stableKey`. Политика Room persistence/migration, unified Favorites storage и UI-навигация намеренно выполняются следующими изолированными PR. Это позволяет менять storage/UI без изменения самой идентичности каталога.
+Адаптер конкретного источника обязан передавать уже нормализованный `stableKey`. `Playlist` и таблица `playlists` теперь также хранят `catalogOrigin`, чтобы provenance можно было безопасно переносить в будущий canonical tree. На текущем persistence-инкременте однозначные provider/file источники получают `PROVIDER`/`LOCAL`, а остальные остаются `USER_IMPORT`. Миграция старых данных следует тому же консервативному правилу: существующие URL нельзя ретроспективно и надёжно разделить на ручной URL, Ready Catalog и Scanner import. Явные adapters для Ready/Scanner и дальнейшая canonical hierarchy добавляются следующими изолированными PR.
+
+Unified Favorites storage и UI-навигация также выполняются следующими изолированными PR. Это позволяет менять storage/UI без изменения самой идентичности каталога.
 
 ## P2P / Ace transport boundary
 

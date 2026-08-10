@@ -41,16 +41,16 @@
 
 `Source/Catalog -> Subcatalog -> Playlist/List -> Group/Subgroup -> Channel`.
 
-1. Ввести в `core/model` стабильные `CatalogNodeId`, `CatalogNodeKind`, `CatalogProvenance` и parent/order contract без зависимости от Room auto-generated id.
-2. Добавить source adapters для user import, ready catalog, Scanner import, provider, local и будущих P2P sources.
-3. Добавить безопасную Room persistence/migration отдельным PR после стабилизации contract.
+1. ✅ Введены в `core/model` стабильные `CatalogNodeId`, `CatalogNodeKind`, `CatalogProvenance` и parent/order contract без зависимости от Room auto-generated id.
+2. ✅ Общий `ChannelStableIdentity` синхронизирует логическую identity канала между canonical catalog и существующим global Favorites.
+3. 🔄 Persist provenance: `catalogOrigin` сохраняется в Room/domain; provider/local источники и migration получают однозначный origin. Следом — явные Ready/Scanner source adapters и canonical tree поверх этих данных.
 4. Построить navigation skeleton с predictable Back, breadcrumb-equivalent context и focus restore.
 5. Перевести Favorites на единый агрегированный слой, сохраняя исходный playlist/group/channel provenance.
 6. Добавить dedup и source variants так, чтобы повторный импорт не плодил безымянные копии.
 7. Добавить virtual views: All channels, Favorites, Recent/History, позднее Now/Next/EPG/archive/P2P filters.
 8. Проверить lazy rendering, кэш подготовленной структуры и non-blocking rebuild больших наборов.
 
-Первый инкремент намеренно не меняет Room/UI/Player/EPG: он фиксирует только canonical identity/provenance contract и unit tests. Это уменьшает риск миграции существующих данных.
+Первый contract-инкремент не менял Room/UI/Player/EPG. Следующий provenance-инкремент добавляет безопасное хранение происхождения и консервативную классификацию однозначных provider/local источников; Scanner search/query semantics, Player и EPG при этом не меняются.
 
 ## Этап 2: встроенный P2P engine и Ace transport
 

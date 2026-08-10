@@ -23,3 +23,15 @@ internal val MIGRATION_7_8 = object : Migration(7, 8) {
         MIGRATION_7_8_SQL.forEach(db::execSQL)
     }
 }
+
+internal val MIGRATION_8_9_SQL = listOf(
+    "ALTER TABLE playlists ADD COLUMN catalogOrigin TEXT NOT NULL DEFAULT 'USER_IMPORT'",
+    "UPDATE playlists SET catalogOrigin = 'PROVIDER' WHERE sourceType IN ('XTREAM','STALKER','JELLYFIN','PLEX','TVHEADEND','HDHOMERUN')",
+    "UPDATE playlists SET catalogOrigin = 'LOCAL' WHERE sourceType = 'FILE'"
+)
+
+internal val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        MIGRATION_8_9_SQL.forEach(db::execSQL)
+    }
+}
