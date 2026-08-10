@@ -192,8 +192,8 @@ class AceLivePeerRefillCoordinator(
     }
 
     /**
-     * Called after startPeer has accepted ownership. Keep the start pending until the first pool
-     * lifecycle event so an overlapping active-peer snapshot cannot forget the newly registered id.
+     * Called after startPeer has accepted ownership. Keep the start pending until either an active
+     * pool snapshot or a pool lifecycle event confirms that ownership is visible to the transport.
      */
     fun markStartAccepted(peerId: Long) = withStateLock {
         stateForPeerLocked(peerId)?.let { state ->
@@ -272,10 +272,15 @@ class AceLivePeerRefillCoordinator(
     }
 
     private fun syncActivePeerIdsLocked(activePeerIds: Set<Long>) {
+        for (peerId in activePeerIds) {
+            stateForPeerLocked(peerId)?.startInProgress = false
+        }
+
         val staleMappings = peerIdToEndpointKey.keys.filter { peerId -> peerId !in activePeerIds }
         for (peerId in staleMappings) {
             val key = peerIdToEndpointKey[peerId] ?: continue
-            val state = candidates[key] ?: run {
+            val state = candidates[key]
+            if (state == null) {
                 peerIdToEndpointKey.remove(peerId)
                 continue
             }
@@ -357,7 +362,7 @@ class AceLivePeerRefillCoordinator(
     private fun safeAdd(left: Long, right: Long): Long =
         if (right <= Long.MAX_VALUE - left) left + right else Long.MAX_VALUE
 
-    private inline fun <T> withStateLock(block: () -> T): T = synchronized(stateLock, block)
+    private fun <T> withStateLock(block: () -> T): T = synchronized(stateLock) { block() }
 
     private data class CandidateState(
         val endpoint: AceLiveTcpPeerEndpoint,
