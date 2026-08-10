@@ -33,10 +33,10 @@ import okhttp3.OkHttpClient
  * Player-facing engine repository.
  *
  * BitTorrent metadata is resolved by the in-process libtorrent backend first. True Ace content
- * ids are never reinterpreted as infohashes. When an Ace Engine endpoint is available, the
- * repository may ask it only for transport metadata and then hand a proven BitTorrent infohash or
- * validated transport-file payload to the embedded backend. Ace Live transport has an explicit
- * compatibility route so `.acelive` descriptors never enter standard libtorrent accidentally.
+ * ids are never reinterpreted as infohashes. Ace content ids enter a transport-metadata boundary
+ * that can feed proven BitTorrent metadata to the embedded backend and will host the autonomous
+ * Ace Live bootstrap. The external Ace Engine remains a compatibility fallback, not a reason to
+ * pass playlist-provided localhost URLs directly to the player.
  */
 @Singleton
 class HybridEngineRepositoryImpl @Inject constructor(
@@ -75,32 +75,19 @@ class HybridEngineRepositoryImpl @Inject constructor(
     override suspend fun resolveTorrentStream(magnetOrAce: String): AppResult<String> {
         val epoch = streamEpoch.incrementAndGet()
         return when (EngineStreamRouting.route(magnetOrAce)) {
-            EngineStreamRoute.LOCAL_ACE_GATEWAY -> {
-                stopEmbeddedForEpoch(epoch)
-                if (streamEpoch.get() != epoch) {
-                    supersededResult()
-                } else {
-                    log(
-                        "engine_loopback_gateway",
-                        "Using playlist-provided local Ace Engine HTTP gateway URL"
-                    )
-                    AppResult.Success(magnetOrAce.trim())
-                }
+            EngineStreamRoute.ACE_CONTENT_ID -> {
+                resolveAceContentIdWithEmbeddedMetadata(magnetOrAce, epoch)
             }
             EngineStreamRoute.ACE_LIVE_COMPATIBILITY -> {
                 resolveAceLiveCompatibility(magnetOrAce, epoch)
             }
-            EngineStreamRoute.EXTERNAL_ACE -> {
-                if (isPureAceContentId(magnetOrAce)) {
-                    resolveAceContentIdWithEmbeddedMetadata(magnetOrAce, epoch)
+            EngineStreamRoute.EXTERNAL_COMPATIBILITY -> {
+                stopEmbeddedForEpoch(epoch)
+                if (streamEpoch.get() != epoch) {
+                    supersededResult()
                 } else {
-                    stopEmbeddedForEpoch(epoch)
-                    if (streamEpoch.get() != epoch) {
-                        supersededResult()
-                    } else {
-                        resolveExternal(magnetOrAce).takeIf { streamEpoch.get() == epoch }
-                            ?: supersededResult()
-                    }
+                    resolveExternal(magnetOrAce).takeIf { streamEpoch.get() == epoch }
+                        ?: supersededResult()
                 }
             }
             EngineStreamRoute.EMBEDDED_BITTORRENT -> resolveEmbeddedWithFallback(magnetOrAce, epoch)
@@ -217,9 +204,9 @@ class HybridEngineRepositoryImpl @Inject constructor(
 
     /**
      * A pure Ace content id is not a BitTorrent hash. Transport discovery is delegated to the
-     * resolver boundary so playback routing no longer depends directly on an external Ace Engine.
-     * Only a proven non-live BitTorrent transport may enter standard libtorrent; live/unsupported
-     * transports and resolver failures keep the existing external compatibility fallback.
+     * resolver boundary so playlist syntax no longer determines the runtime backend. Only a proven
+     * non-live BitTorrent transport may enter standard libtorrent; live transport will move to the
+     * autonomous Ace Live pipeline while external resolution remains available during migration.
      */
     private suspend fun resolveAceContentIdWithEmbeddedMetadata(
         rawSource: String,
@@ -263,7 +250,7 @@ class HybridEngineRepositoryImpl @Inject constructor(
                 is AceContentTransportResolution.AceLive -> {
                     log(
                         "engine_content_id_live_transport",
-                        "Ace content id resolved to live transport; using external compatibility fallback"
+                        "Ace content id resolved to live transport; autonomous live bootstrap is not complete, using compatibility fallback"
                     )
                     return resolveExternalIfCurrent(rawSource, epoch)
                 }
@@ -339,6 +326,10 @@ class HybridEngineRepositoryImpl @Inject constructor(
             (byte.toInt() and 0xff).toString(16).padStart(2, '0')
         }
 
+    private fun supersededResult(): AppResult.Error = AppResult.Error(
+        "P2P playback request was superseded by a newer player action"
+    )
+
     private suspend fun resolveExternalIfCurrent(
         rawSource: String,
         epoch: Long
@@ -347,15 +338,6 @@ class HybridEngineRepositoryImpl @Inject constructor(
         val fallback = resolveExternal(rawSource)
         return if (streamEpoch.get() == epoch) fallback else supersededResult()
     }
-
-    private fun isPureAceContentId(rawSource: String): Boolean {
-        val parsed = P2pSourceParser.parse(rawSource)
-        return parsed is P2pResult.Success && parsed.data is P2pSource.AceContentId
-    }
-
-    private fun supersededResult(): AppResult.Error = AppResult.Error(
-        "P2P playback request was superseded by a newer player action"
-    )
 
     private suspend fun resolveExternal(rawSource: String): AppResult<String> {
         return when (val result = client.resolveStream(rawSource)) {
