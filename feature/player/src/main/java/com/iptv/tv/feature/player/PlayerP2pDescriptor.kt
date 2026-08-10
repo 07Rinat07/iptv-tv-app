@@ -18,9 +18,6 @@ internal object PlayerP2pDescriptor {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return null
 
-        val source = trimmed.substringBefore('|').trim()
-        if (isLocalAceGatewayUrl(source)) return source
-
         val nested = extractDescriptorFromUrl(trimmed)
         if (!nested.isNullOrBlank()) return nested
 
@@ -30,8 +27,7 @@ internal object PlayerP2pDescriptor {
     fun describe(raw: String): String {
         val descriptor = detect(raw) ?: return "IPTV поток (прямой URL)"
         return when {
-            isLocalAceGatewayUrl(descriptor) -> "Ace Stream поток (локальный Engine)"
-            descriptor.startsWith("acestream://", ignoreCase = true) -> "Ace Stream поток (внешний Engine)"
+            descriptor.startsWith("acestream://", ignoreCase = true) -> "Ace Stream поток (P2P/Ace)"
             else -> "BitTorrent поток (встроенный P2P)"
         }
     }
@@ -124,7 +120,8 @@ internal object PlayerP2pDescriptor {
             ?.let(::detect)
             ?.let { return it }
 
-        // Ace content_id/id is deliberately NOT treated as a bare BitTorrent infohash.
+        // Ace content_id/id is deliberately NOT treated as a bare BitTorrent infohash. Legacy
+        // 127.0.0.1:6878 playlist URLs are descriptor syntax and normalize through this same path.
         params.firstOrNull { it.first in aceContentIdQueryKeys }
             ?.second
             ?.let(::normalizeAceContentIdParameter)
@@ -172,18 +169,5 @@ internal object PlayerP2pDescriptor {
             aceContentIdRegex.matches(value) -> "acestream://$value"
             else -> null
         }
-    }
-
-    private fun isLocalAceGatewayUrl(raw: String): Boolean {
-        val uri = runCatching { URI(raw) }.getOrNull() ?: return false
-        if (!uri.scheme.equals("http", ignoreCase = true) &&
-            !uri.scheme.equals("https", ignoreCase = true)
-        ) {
-            return false
-        }
-
-        val host = uri.host?.lowercase(Locale.ROOT) ?: return false
-        val loopback = host == "127.0.0.1" || host == "localhost" || host == "::1"
-        return loopback && uri.path.orEmpty().startsWith("/ace/", ignoreCase = true)
     }
 }
