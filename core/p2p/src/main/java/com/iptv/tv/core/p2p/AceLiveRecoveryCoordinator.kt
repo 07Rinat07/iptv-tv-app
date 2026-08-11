@@ -71,7 +71,7 @@ data class AceLiveRecoveryPlan(
  * - track the contiguous playback/reassembly cursor rather than arbitrary received pieces;
  * - suggest a discontinuous cursor advance only after the current piece has aged past the request
  *   timeout and no unchoked peer advertises it anymore;
- * - cap any suggested discontinuity with [AceLiveRecoveryPolicy.maxPieceAdvance];
+ * - split a large discontinuity into bounded [AceLiveRecoveryPolicy.maxPieceAdvance] steps;
  * - report a stale-but-reachable pool without automatically banning or deleting its peers.
  *
  * The caller must explicitly apply [AceLiveRecoveryPlan.cursorAdvance] through
@@ -202,14 +202,12 @@ class AceLiveRecoveryCoordinator(
             val lowestAvailable = scheduler.lowestAvailablePiece()
             if (lowestAvailable != null && lowestAvailable > nextNeeded) {
                 val distance = lowestAvailable - nextNeeded
-                if (distance <= policy.maxPieceAdvance) {
-                    cursorAdvance = AceLiveCursorAdvance(
-                        fromPiece = nextNeeded,
-                        toPiece = lowestAvailable
-                    )
-                } else {
-                    beyondLimit = true
-                }
+                val boundedDistance = minOf(distance, policy.maxPieceAdvance)
+                cursorAdvance = AceLiveCursorAdvance(
+                    fromPiece = nextNeeded,
+                    toPiece = nextNeeded + boundedDistance
+                )
+                beyondLimit = distance > policy.maxPieceAdvance
             }
         }
 

@@ -106,6 +106,10 @@ internal class AceLiveMediaBuffer(
         Reader(cursor = firstOffset)
     }
 
+    fun retainedBytes(): Int = synchronized(lock) {
+        (nextOffset - firstOffset).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+
     override fun close() {
         synchronized(lock) {
             closed = true

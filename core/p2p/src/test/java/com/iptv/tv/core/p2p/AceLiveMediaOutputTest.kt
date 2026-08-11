@@ -13,6 +13,17 @@ import org.junit.Test
 
 class AceLiveMediaOutputTest {
     @Test
+    fun retainedBytesTracksTheBoundedLiveWindow() {
+        val buffer = AceLiveMediaBuffer(maxBufferedBytes = 188 * 64)
+
+        buffer.append(ByteArray(188 * 40))
+        assertEquals(188 * 40, buffer.retainedBytes())
+
+        buffer.append(ByteArray(188 * 40))
+        assertEquals(188 * 40, buffer.retainedBytes())
+    }
+
+    @Test
     fun directInfoHashStripsStandardSignatureTailWithoutTransportKey() {
         val payload = ByteArray(188 * 8) { index -> (index and 0xff).toByte() }
         val result = AceLiveMediaAuthenticator(publicKeyDer = null)

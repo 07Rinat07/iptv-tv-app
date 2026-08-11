@@ -188,16 +188,15 @@ private fun StableMedia3VideoSurface(
                 .setEnableDecoderFallback(true)
                 .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
 
-            val maxHeapMb = Runtime.getRuntime().maxMemory() / (1024L * 1024L)
             val trackSelector = DefaultTrackSelector(context).apply {
                 val parameters = buildUponParameters()
                     .setAllowVideoMixedMimeTypeAdaptiveness(true)
-                    .setExceedVideoConstraintsIfNecessary(maxHeapMb > 256L)
+                    // The heap limit is not a decoder capability signal. Capping a 256 MB TV box
+                    // at 720p made Media3 discard otherwise supported 1080p video tracks and play
+                    // audio only. MediaCodec owns its native buffers, so keep the primary player
+                    // eligible for the source resolution and let renderer capability checks decide.
+                    .setExceedVideoConstraintsIfNecessary(true)
                     .setTunnelingEnabled(false)
-                when {
-                    maxHeapMb <= 256L -> parameters.setMaxVideoSize(1280, 720)
-                    maxHeapMb <= 512L -> parameters.setMaxVideoSize(1920, 1080)
-                }
                 setParameters(parameters)
             }
 

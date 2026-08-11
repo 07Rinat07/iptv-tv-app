@@ -14,9 +14,17 @@ data class AceLivePeerIngressResult(
     val activeChunkDispositions: List<AceLiveChunkDisposition> = emptyList(),
     val reassemblyDispositions: List<AceLiveReassemblyDisposition> = emptyList(),
     val unknownMessageIds: List<Int> = emptyList(),
+    val unknownMessages: List<AceLiveUnknownMessageObservation> = emptyList(),
     val requeuedPieces: List<Long> = emptyList(),
     val emittedPieces: List<AceLiveReassembledPiece> = emptyList(),
     val disconnectRecommended: Boolean = false
+)
+
+data class AceLiveUnknownMessageObservation(
+    val id: Int,
+    val payloadBytes: Int,
+    val payloadPrefixHex: String,
+    val bencodeSummary: String?
 )
 
 /**
@@ -153,6 +161,7 @@ class AceLivePeerConnectionStateMachine(
         val activeChunkDispositions = mutableListOf<AceLiveChunkDisposition>()
         val reassemblyDispositions = mutableListOf<AceLiveReassemblyDisposition>()
         val unknownMessageIds = mutableListOf<Int>()
+        val unknownMessages = mutableListOf<AceLiveUnknownMessageObservation>()
         val requeuedPieces = mutableListOf<Long>()
         val emittedPieces = mutableListOf<AceLiveReassembledPiece>()
 
@@ -215,10 +224,46 @@ class AceLivePeerConnectionStateMachine(
                             session.onPeerMessage(peerId, message, nowMillis)
                         }
 
+                        is AceLivePeerWireMessage.Have -> {
+                            advanceAdvertisedWindow(message.piece)?.let { window ->
+                                applyAdvertisedWindow(window, metadataUpdates, requeuedPieces)
+                            }
+                        }
+
+                        is AceLivePeerWireMessage.StreamHave -> {
+                            advanceAdvertisedWindow(message.piece)?.let { window ->
+                                applyAdvertisedWindow(window, metadataUpdates, requeuedPieces)
+                            }
+                        }
+
+                        is AceLivePeerWireMessage.LiveStatus -> {
+                            applyAdvertisedWindow(
+                                window = AceLivePeerAdvertisedWindow(
+                                    minPiece = message.minPiece,
+                                    maxPiece = message.maxPiece,
+                                    position = message.position,
+                                    distanceFromSource = null,
+                                    minPieceExplicit = true
+                                ),
+                                metadataUpdates = metadataUpdates,
+                                requeuedPieces = requeuedPieces
+                            )
+                        }
+
                         is AceLivePeerWireMessage.Unknown -> {
                             when (val metadata = metadataRecognizer.recognize(message.payload)) {
                                 AceLivePeerMetadataRecognition.NotRecognized -> {
                                     unknownMessageIds += message.id
+                                    unknownMessages += AceLiveUnknownMessageObservation(
+                                        id = message.id,
+                                        payloadBytes = message.payload.size,
+                                        payloadPrefixHex = message.payload
+                                            .take(MAX_UNKNOWN_PREFIX_BYTES)
+                                            .joinToString(separator = "") { byte ->
+                                                (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+                                            },
+                                        bencodeSummary = summarizeUnknownBencode(message.payload)
+                                    )
                                     session.onPeerMessage(peerId, message, nowMillis)
                                 }
 
@@ -227,17 +272,11 @@ class AceLivePeerConnectionStateMachine(
                                 }
 
                                 is AceLivePeerMetadataRecognition.Recognized -> {
-                                    latestWindow = metadata.window
-                                    metadataUpdates += metadata.window
-                                    val eventResult = session.onPeerWindow(
-                                        AceLivePeerWindow(
-                                            peerId = peerId,
-                                            minPiece = metadata.window.minPiece,
-                                            maxPiece = metadata.window.maxPiece,
-                                            unchoked = peerUnchoked
-                                        )
+                                    applyAdvertisedWindow(
+                                        metadata.window,
+                                        metadataUpdates,
+                                        requeuedPieces
                                     )
-                                    requeuedPieces += eventResult.requeuedPieces
                                 }
                             }
                         }
@@ -260,9 +299,45 @@ class AceLivePeerConnectionStateMachine(
             activeChunkDispositions = activeChunkDispositions,
             reassemblyDispositions = reassemblyDispositions,
             unknownMessageIds = unknownMessageIds,
+            unknownMessages = unknownMessages,
             requeuedPieces = requeuedPieces,
             emittedPieces = emittedPieces
         )
+    }
+
+    private fun applyAdvertisedWindow(
+        window: AceLivePeerAdvertisedWindow,
+        metadataUpdates: MutableList<AceLivePeerAdvertisedWindow>,
+        requeuedPieces: MutableList<Long>
+    ) {
+        latestWindow = window
+        metadataUpdates += window
+        val eventResult = session.onPeerWindow(
+            AceLivePeerWindow(
+                peerId = peerId,
+                minPiece = window.minPiece,
+                maxPiece = window.maxPiece,
+                unchoked = peerUnchoked
+            )
+        )
+        requeuedPieces += eventResult.requeuedPieces
+    }
+
+    private fun advanceAdvertisedWindow(piece: Long): AceLivePeerAdvertisedWindow? {
+        val current = latestWindow ?: return null
+        if (piece <= current.maxPiece) return null
+
+        val advanced = piece - current.maxPiece
+        val minPiece = if (current.minPieceExplicit) {
+            (current.minPiece + advanced).coerceAtMost(piece)
+        } else {
+            piece
+        }
+        return current.copy(
+            minPiece = minPiece,
+            maxPiece = piece,
+            position = current.position?.let { position -> maxOf(position, piece) } ?: piece
+        ).also { updated -> latestWindow = updated }
     }
 
     /**
@@ -289,5 +364,20 @@ class AceLivePeerConnectionStateMachine(
 
     companion object {
         private const val LENGTH_PREFIX_BYTES = 4L
+        private const val MAX_UNKNOWN_PREFIX_BYTES = 24
     }
+}
+
+private fun summarizeUnknownBencode(payload: ByteArray): String? = runCatching {
+    val root = AceBoundedBencodeParser(payload).parseRootDictionary()
+    root.values.entries.joinToString(separator = ";") { (key, value) ->
+        "$key=${value.toBoundedDiagnosticValue()}"
+    }
+}.getOrNull()
+
+private fun AceBencodeValue.toBoundedDiagnosticValue(): String = when (this) {
+    is AceBencodeValue.Integer -> value.toString()
+    is AceBencodeValue.Bytes -> "bytes[${value.size}]"
+    is AceBencodeValue.ListValue -> "list[${values.size}]"
+    is AceBencodeValue.Dictionary -> "dict[${values.keys.take(12).joinToString(",")}]"
 }

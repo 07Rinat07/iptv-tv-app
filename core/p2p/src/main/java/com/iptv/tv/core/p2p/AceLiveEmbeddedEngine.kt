@@ -1,6 +1,8 @@
 package com.iptv.tv.core.p2p
 
+import android.util.Log
 import java.io.Closeable
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
@@ -27,6 +29,18 @@ data class AceLivePreparedStream(
     val url: String,
     val name: String
 )
+
+internal fun aceLiveMediaIsStalled(
+    startupComplete: Boolean,
+    lastMediaAtMillis: Long,
+    nowMillis: Long,
+    timeoutMillis: Long
+): Boolean {
+    require(timeoutMillis > 0L) { "Ace Live stall timeout must be positive" }
+    return startupComplete &&
+        lastMediaAtMillis > 0L &&
+        nowMillis - lastMediaAtMillis >= timeoutMillis
+}
 
 /** End-to-end autonomous playback for public Ace Live content IDs. */
 class AceLiveEmbeddedEngine(
@@ -183,12 +197,17 @@ class AceLiveEmbeddedEngine(
         private val eventObserver: (AceLiveTcpPoolEvent) -> Unit
     ) : Closeable {
         val startup = CompletableDeferred<Unit>()
-        val mediaBuffer = AceLiveMediaBuffer()
+        val mediaBuffer = AceLiveMediaBuffer(maxBufferedBytes = LIVE_OUTPUT_BUFFER_BYTES)
         val server = LoopbackHttpLiveServer(mediaBuffer)
 
         private val closed = AtomicBoolean(false)
         private val latestHead = AtomicLong(-1L)
         private val peerIds = AtomicLong(1L)
+        private val emittedBytes = AtomicLong(0L)
+        private val lastMediaAppendAt = AtomicLong(0L)
+        private val lastProgressLogAt = AtomicLong(0L)
+        private val lastWindowLogAt = AtomicLong(0L)
+        private val loggedUnknownMessageIds = ConcurrentHashMap.newKeySet<Int>()
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private val authenticator = AceLiveMediaAuthenticator(transport.publicKeyDer)
         private val resynchronizer = AceLiveMpegTsResynchronizer()
@@ -214,10 +233,10 @@ class AceLiveEmbeddedEngine(
         )
         private val refillCoordinator = AceLivePeerRefillCoordinator(
             AceLivePeerRefillPolicy(
-                targetActivePeers = MAX_ACTIVE_PEERS,
+                targetActivePeers = TARGET_ACTIVE_PEERS,
                 maxActivePeers = MAX_ACTIVE_PEERS,
-                staleProbePeers = 0,
-                maxStartsPerCycle = MAX_ACTIVE_PEERS,
+                staleProbePeers = STALE_PROBE_PEERS,
+                maxStartsPerCycle = MAX_PEER_STARTS_PER_CYCLE,
                 refreshIntervalMillis = PEER_REFRESH_INTERVAL_MILLIS
             )
         )
@@ -255,6 +274,7 @@ class AceLiveEmbeddedEngine(
                     }
                 } catch (error: Throwable) {
                     if (!closed.get()) {
+                        Log.e(LOG_TAG, "event=runtime_failed reason=${error.javaClass.simpleName}", error)
                         startup.completeExceptionally(error)
                         mediaBuffer.fail(error)
                     }
@@ -294,17 +314,33 @@ class AceLiveEmbeddedEngine(
 
         private suspend fun driveSession() {
             while (currentCoroutineContext().isActive) {
+                val now = System.currentTimeMillis()
+                if (
+                    aceLiveMediaIsStalled(
+                        startupComplete = startup.isCompleted,
+                        lastMediaAtMillis = lastMediaAppendAt.get(),
+                        nowMillis = now,
+                        timeoutMillis = MEDIA_STALL_TIMEOUT_MILLIS
+                    )
+                ) {
+                    error(
+                        "Ace Live swarm stopped publishing media for " +
+                            "$MEDIA_STALL_TIMEOUT_MILLIS ms"
+                    )
+                }
                 val head = latestHead.get()
                 if (head >= 0L) {
                     pool.scheduleAndDispatch(head)
                     val recovery = pool.evaluateRecovery()
                     recovery.cursorAdvance?.let { advance ->
                         val applied = pool.applyRecoveryAdvance(advance)
+                        Log.w(
+                            LOG_TAG,
+                            "event=recovery_advance from=${advance.fromPiece} to=${advance.toPiece} " +
+                                "gap_beyond_limit=${recovery.gapBeyondAdvanceLimit}"
+                        )
                         if (applied.outputDiscontinuity != null) resynchronizer.reset()
                         emitPieces(applied.emittedPieces)
-                    }
-                    if (recovery.gapBeyondAdvanceLimit) {
-                        error("Ace Live peer window moved beyond the safe recovery limit")
                     }
                 }
                 delay(SCHEDULER_TICK_MILLIS)
@@ -315,12 +351,87 @@ class AceLiveEmbeddedEngine(
             refillCoordinator.onPoolEvent(event, System.currentTimeMillis())
             runCatching { eventObserver(event) }
             if (closed.get()) return
-            if (event !is AceLiveTcpPoolEvent.Ingress) return
+            if (event !is AceLiveTcpPoolEvent.Ingress) {
+                when (event) {
+                    is AceLiveTcpPoolEvent.TransportConnected -> Log.i(
+                        LOG_TAG,
+                        "event=peer_connected peer=${event.peerId} reconnect=${event.reconnectAttempt}"
+                    )
+                    is AceLiveTcpPoolEvent.HandshakeAccepted -> Log.i(
+                        LOG_TAG,
+                        "event=peer_ready peer=${event.peerId}"
+                    )
+                    is AceLiveTcpPoolEvent.HandshakeRejected -> Log.w(
+                        LOG_TAG,
+                        "event=peer_handshake_rejected peer=${event.peerId} reason=${event.reason}"
+                    )
+                    is AceLiveTcpPoolEvent.ConnectFailed -> Log.w(
+                        LOG_TAG,
+                        "event=peer_connect_failed peer=${event.peerId} retrying=${event.retrying}"
+                    )
+                    is AceLiveTcpPoolEvent.Disconnected -> Log.w(
+                        LOG_TAG,
+                        "event=peer_disconnected peer=${event.peerId} reason=${event.reason} " +
+                            "retrying=${event.retrying} requeued=${event.requeuedPieces.size}"
+                    )
+                    is AceLiveTcpPoolEvent.Ingress -> Unit
+                }
+                return
+            }
 
             event.result.metadataUpdates.forEach { window ->
                 latestHead.accumulateAndGet(window.maxPiece) { current, update -> maxOf(current, update) }
             }
+            if (
+                event.result.metadataUpdates.isNotEmpty() &&
+                claimThrottledLog(lastWindowLogAt)
+            ) {
+                val window = event.result.metadataUpdates.last()
+                Log.i(
+                    LOG_TAG,
+                    "event=window_update peer=${event.peerId} min=${window.minPiece} " +
+                        "max=${window.maxPiece} position=${window.position}"
+                )
+            }
+            val hasNewUnknownMessageId = event.result.unknownMessageIds
+                .any(loggedUnknownMessageIds::add)
+            if (hasNewUnknownMessageId) {
+                Log.i(
+                    LOG_TAG,
+                    "event=unknown_messages peer=${event.peerId} " +
+                        "details=${event.result.unknownMessages.distinctBy { item -> item.id }
+                            .joinToString(",") { item ->
+                                "${item.id}:${item.payloadBytes}:${item.payloadPrefixHex}:" +
+                                    (item.bencodeSummary ?: "-")
+                            }}"
+                )
+            }
+            logProgress(event)
             emitPieces(event.result.emittedPieces)
+        }
+
+        private fun logProgress(event: AceLiveTcpPoolEvent.Ingress) {
+            val pieces = event.result.emittedPieces
+            if (pieces.isEmpty()) return
+            val totalBytes = emittedBytes.addAndGet(pieces.sumOf { piece -> piece.data.size.toLong() })
+            val now = System.currentTimeMillis()
+            val previous = lastProgressLogAt.get()
+            if (previous != 0L && now - previous < PROGRESS_LOG_INTERVAL_MILLIS) return
+            if (!lastProgressLogAt.compareAndSet(previous, now)) return
+            Log.i(
+                LOG_TAG,
+                "event=media_progress peer=${event.peerId} pieces=${pieces.size} " +
+                    "piece_first=${pieces.first().piece} piece_last=${pieces.last().piece} " +
+                    "total_bytes=$totalBytes retained_bytes=${mediaBuffer.retainedBytes()} " +
+                    "advertised_head=${latestHead.get()}"
+            )
+        }
+
+        private fun claimThrottledLog(lastLogAt: AtomicLong): Boolean {
+            val now = System.currentTimeMillis()
+            val previous = lastLogAt.get()
+            if (previous != 0L && now - previous < PROGRESS_LOG_INTERVAL_MILLIS) return false
+            return lastLogAt.compareAndSet(previous, now)
         }
 
         private fun emitPieces(pieces: List<AceLiveReassembledPiece>) {
@@ -330,7 +441,10 @@ class AceLiveEmbeddedEngine(
                         val media = resynchronizer.consume(verified.data)
                         if (media.isNotEmpty()) {
                             mediaBuffer.append(media)
-                            startup.complete(Unit)
+                            lastMediaAppendAt.set(System.currentTimeMillis())
+                            if (mediaBuffer.retainedBytes() >= STARTUP_BUFFER_BYTES) {
+                                startup.complete(Unit)
+                            }
                         }
                     }
 
@@ -352,15 +466,23 @@ class AceLiveEmbeddedEngine(
         const val DEFAULT_ACE_TRACKER = AceLiveNetworkDefaults.publicTracker
         const val DEFAULT_DIRECT_PIECE_BYTES = 512 * 1024
         const val DEFAULT_DIRECT_CHUNK_BYTES = 16 * 1024
-        const val MAX_ACTIVE_PEERS = 6
-        const val MAX_IN_FLIGHT_PER_PEER = 1
-        const val REQUEST_TIMEOUT_MILLIS = 15_000L
-        const val STALE_UPSTREAM_TIMEOUT_MILLIS = 45_000L
+        const val TARGET_ACTIVE_PEERS = 6
+        const val MAX_ACTIVE_PEERS = 10
+        const val STALE_PROBE_PEERS = 2
+        const val MAX_PEER_STARTS_PER_CYCLE = 4
+        const val MAX_IN_FLIGHT_PER_PEER = 2
+        const val REQUEST_TIMEOUT_MILLIS = 6_000L
+        const val STALE_UPSTREAM_TIMEOUT_MILLIS = 18_000L
         const val REQUEST_CHECK_INTERVAL_MILLIS = 1_000L
         const val MAX_REASSEMBLY_PIECES = 12L
         const val MAX_REASSEMBLY_BYTES = 12L * 1024L * 1024L
         const val SCHEDULER_TICK_MILLIS = 200L
         const val STARTUP_TIMEOUT_MILLIS = 60_000L
         const val PEER_REFRESH_INTERVAL_MILLIS = 10_000L
+        const val LIVE_OUTPUT_BUFFER_BYTES = 16 * 1024 * 1024
+        const val STARTUP_BUFFER_BYTES = 4 * 1024 * 1024
+        const val MEDIA_STALL_TIMEOUT_MILLIS = 20_000L
+        const val PROGRESS_LOG_INTERVAL_MILLIS = 5_000L
+        const val LOG_TAG = "P2P/AceLive"
     }
 }

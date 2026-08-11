@@ -52,6 +52,73 @@ class AceLivePeerWireCodecTest {
     }
 
     @Test
+    fun haveDecodesUnsignedLivePiece() {
+        val decoded = codec.decodeNext(
+            frame(id = 4, payload = byteArrayOf(0xf1.toByte(), 0x23, 0x45, 0x67))
+        ) as AceLivePeerFrameDecodeResult.Decoded
+
+        assertEquals(0xf1234567L, (decoded.message as AceLivePeerWireMessage.Have).piece)
+    }
+
+    @Test
+    fun streamHaveDecodesStreamAndUnsignedLivePiece() {
+        val decoded = codec.decodeNext(
+            frame(
+                id = 10,
+                payload = byteArrayOf(
+                    0, 0, 0, 2,
+                    0xf1.toByte(), 0x23, 0x45, 0x67
+                )
+            )
+        ) as AceLivePeerFrameDecodeResult.Decoded
+        val have = decoded.message as AceLivePeerWireMessage.StreamHave
+
+        assertEquals(2L, have.streamIndex)
+        assertEquals(0xf1234567L, have.piece)
+    }
+
+    @Test
+    fun extendedHaveAlsoDecodesStreamAndLivePiece() {
+        val decoded = codec.decodeNext(
+            frame(
+                id = 4,
+                payload = byteArrayOf(0, 0, 0, 0, 0x08, 0x54, 0x5a, 0xd5.toByte())
+            )
+        ) as AceLivePeerFrameDecodeResult.Decoded
+        val have = decoded.message as AceLivePeerWireMessage.StreamHave
+
+        assertEquals(0L, have.streamIndex)
+        assertEquals(139_746_005L, have.piece)
+    }
+
+    @Test
+    fun compactLiveStatusDecodesAvailabilityWindow() {
+        val payload = ascii(
+            "d1:ai1e1:bi0e1:ci42095e1:di0e1:ei4931992e1:fi0e" +
+                "1:gi149337677e1:hi1029e1:ii149337257e1:ji149337676e" +
+                "1:ki0e1:li6735e1:mi-1e1:ni2e1:oi0e1:pi0e1:qi1e" +
+                "1:ri149337677e1:si149337677e1:ti-1e1:ui1ee"
+        )
+
+        val decoded = codec.decodeNext(frame(id = 11, payload = payload)) as
+            AceLivePeerFrameDecodeResult.Decoded
+        val status = decoded.message as AceLivePeerWireMessage.LiveStatus
+
+        assertEquals(149_337_257L, status.minPiece)
+        assertEquals(149_337_676L, status.maxPiece)
+        assertEquals(149_337_677L, status.position)
+    }
+
+    @Test
+    fun unrelatedStatusIdPayloadRemainsUnknown() {
+        val decoded = codec.decodeNext(
+            frame(id = 11, payload = ascii("d1:ii10e1:ji12ee"))
+        ) as AceLivePeerFrameDecodeResult.Decoded
+
+        assertTrue(decoded.message is AceLivePeerWireMessage.Unknown)
+    }
+
+    @Test
     fun livePieceDecodesAceCoordinatesHeaderAndData() {
         val header = AceLivePieceHeaderCodec.encodeUnixSeconds(1_782_925_464.8243976)
         val payload = byteArrayOf(
@@ -156,4 +223,6 @@ class AceLivePeerWireCodecTest {
             id.toByte()
         ) + payload
     }
+
+    private fun ascii(value: String): ByteArray = value.toByteArray(Charsets.US_ASCII)
 }

@@ -40,6 +40,16 @@ class LibVlcFallbackPolicyTest {
     }
 
     @Test
+    fun networkSourceFailureDoesNotRestartTheSameStreamWithLibVlc() {
+        val decision = LibVlcFallbackPolicy.evaluate(
+            "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED: Source error"
+        )
+
+        assertFalse(decision.shouldFallback)
+        assertEquals(LibVlcFallbackReason.NOT_ELIGIBLE, decision.reason)
+    }
+
+    @Test
     fun unknownMedia3FailureGetsSingleFallbackChance() {
         val decision = LibVlcFallbackPolicy.evaluate("Unexpected Media3 playback failure")
 

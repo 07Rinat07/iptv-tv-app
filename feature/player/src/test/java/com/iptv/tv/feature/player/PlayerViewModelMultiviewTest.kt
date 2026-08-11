@@ -257,6 +257,34 @@ class PlayerViewModelMultiviewTest {
         assertEquals(0, state.retryAttempt)
     }
 
+    @Test
+    fun p2pSourceErrorRebuildsEngineSessionInsteadOfRetryingDeadLoopbackUrl() = runTest(dispatcher) {
+        val contentId = "50bc2f512793f1e745fb5bd5b5a6afca199c2d19"
+        val source = "http://127.0.0.1:6878/ace/getstream?id=$contentId"
+        val engineRepository = FakeEngineRepository()
+        val viewModel = createViewModel(
+            channels = listOf(testChannel(id = 10L, name = "Torrent TV", streamUrl = source)),
+            engineRepository = engineRepository
+        )
+        advanceUntilIdle()
+
+        viewModel.playSelectedInternal()
+        advanceUntilIdle()
+        val firstSession = requireNotNull(viewModel.uiState.value.internalSession)
+
+        viewModel.onInternalPlaybackError(
+            message = "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED: Source error",
+            sessionId = firstSession.sessionId
+        )
+        advanceUntilIdle()
+
+        val restarted = requireNotNull(viewModel.uiState.value.internalSession)
+        assertEquals(2, engineRepository.resolveCount)
+        assertTrue(restarted.streamUrl != firstSession.streamUrl)
+        assertEquals(1, viewModel.uiState.value.retryAttempt)
+        assertTrue(viewModel.uiState.value.lastInfo?.startsWith("P2P-сессия переподключена") == true)
+    }
+
     private fun createViewModel(
         channels: List<Channel>,
         supportedPaneCount: Int = 4,
@@ -439,6 +467,8 @@ class PlayerViewModelMultiviewTest {
     private class FakeEngineRepository : EngineRepository {
         var lastResolvedSource: String? = null
             private set
+        var resolveCount: Int = 0
+            private set
 
         override suspend fun connect(endpoint: String): AppResult<Unit> = AppResult.Success(Unit)
         override suspend fun refreshStatus(): AppResult<EngineStatus> = AppResult.Success(
@@ -449,7 +479,8 @@ class PlayerViewModelMultiviewTest {
         )
         override suspend fun resolveTorrentStream(magnetOrAce: String): AppResult<String> {
             lastResolvedSource = magnetOrAce
-            return AppResult.Success("https://example.com/resolved.m3u8")
+            resolveCount += 1
+            return AppResult.Success("http://127.0.0.1:${62_000 + resolveCount}/live.ts")
         }
     }
 

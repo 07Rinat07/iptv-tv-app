@@ -1253,7 +1253,9 @@ class PlayerViewModel @Inject constructor(
             )
             return
         }
-        val errorKind = classifyPlaybackError(message)
+        val sourceChannel = state.channels.firstOrNull { channel -> channel.id == session.channelId }
+        val isP2pPlayback = sourceChannel?.streamUrl?.let(::detectAceDescriptor) != null
+        val errorKind = classifyPlaybackError(message, isP2pPlayback)
         if (!errorKind.retryable || state.retryAttempt >= MAX_AUTO_RETRIES) {
             viewModelScope.launch {
                 diagnosticsRepository.addLog(
@@ -1267,7 +1269,7 @@ class PlayerViewModel @Inject constructor(
                     playlistId = state.selectedPlaylistId
                 )
             }
-            val canSuggestVlc = context != null && vlcLauncher.isVlcInstalled(context)
+            val canSuggestVlc = !isP2pPlayback && context != null && vlcLauncher.isVlcInstalled(context)
             _uiState.update {
                 it.copy(
                     isStartingPlayback = false,
@@ -1298,6 +1300,41 @@ class PlayerViewModel @Inject constructor(
             delay(delayMs)
             val latestSession = _uiState.value.internalSession
             if (latestSession == null || latestSession.sessionId != session.sessionId) {
+                return@launch
+            }
+            if (sourceChannel != null && isP2pPlayback) {
+                when (val resolved = resolvePlayableChannel(sourceChannel)) {
+                    is AppResult.Success -> {
+                        val current = _uiState.value.internalSession
+                        if (current == null || current.sessionId != session.sessionId) return@launch
+                        startInternalPlayback(
+                            channel = sourceChannel.copy(streamUrl = resolved.data),
+                            infoMessage = "P2P-сессия переподключена",
+                            retryAttempt = nextAttempt
+                        )
+                    }
+
+                    is AppResult.Error -> {
+                        val current = _uiState.value.internalSession
+                        if (current == null || current.sessionId != session.sessionId) return@launch
+                        diagnosticsRepository.addLog(
+                            status = "player_p2p_restart_error",
+                            message = "P2P restart failed: ${resolved.message.take(MAX_LOG_MESSAGE)}",
+                            playlistId = sourceChannel.playlistId
+                        )
+                        _uiState.update {
+                            it.copy(
+                                internalSession = null,
+                                isStartingPlayback = false,
+                                retryAttempt = 0,
+                                lastError = "P2P-источник не публикует новые данные или сейчас не имеет доступных пиров",
+                                lastInfo = null
+                            )
+                        }
+                    }
+
+                    AppResult.Loading -> Unit
+                }
                 return@launch
             }
             _uiState.update {
@@ -1954,7 +1991,12 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private fun startInternalPlayback(channel: Channel, infoMessage: String, requestId: Long? = null) {
+    private fun startInternalPlayback(
+        channel: Channel,
+        infoMessage: String,
+        requestId: Long? = null,
+        retryAttempt: Int = 0
+    ) {
         if (requestId != null && !isCurrentPrimaryPlaybackRequest(requestId)) {
             logAsync(
                 status = "player_start_ignored",
@@ -1989,7 +2031,7 @@ class PlayerViewModel @Inject constructor(
                 ),
                 adaptiveBufferSummary = plan.summary,
                 isStartingPlayback = true,
-                retryAttempt = 0,
+                retryAttempt = retryAttempt,
                 lastInfo = if (preparedStream.headers.isEmpty()) {
                     infoMessage
                 } else {
@@ -2300,9 +2342,21 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private fun classifyPlaybackError(message: String): PlaybackErrorKind {
+    private fun classifyPlaybackError(
+        message: String,
+        isP2pPlayback: Boolean = false
+    ): PlaybackErrorKind {
         val lowered = message.lowercase()
         return when {
+            isP2pPlayback && (
+                lowered.contains("source error") ||
+                    lowered.contains("io_network_connection_failed") ||
+                    lowered.contains("поток не отвечает") ||
+                    lowered.contains("stopped publishing")
+                ) -> PlaybackErrorKind(
+                code = "p2p_stalled",
+                hint = "P2P-источник перестал публиковать данные. Движок заново найдёт пиры и live-окно."
+            )
             lowered.contains("unknownhostexception") || lowered.contains("unable to resolve host") ->
                 PlaybackErrorKind(
                     code = "dns",

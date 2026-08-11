@@ -124,6 +124,73 @@ class AceLivePeerConnectionStateMachineTest {
     }
 
     @Test
+    fun haveAdvancesTheSlidingLiveWindow() {
+        val session = session()
+        val connection = connected(session)
+        connection.consumePeerBytes(
+            frame(id = 99, payload = ascii("d9:max_piecei12e9:min_piecei10e8:positioni12ee")) +
+                frame(id = 1),
+            nowMillis = 0
+        )
+
+        val result = connection.consumePeerBytes(
+            frame(id = 4, payload = byteArrayOf(0, 0, 0, 13)),
+            nowMillis = 1
+        )
+
+        val window = result.metadataUpdates.single()
+        assertEquals(11L, window.minPiece)
+        assertEquals(13L, window.maxPiece)
+        assertEquals(13L, window.position)
+        assertEquals(13L, connection.advertisedHead())
+    }
+
+    @Test
+    fun compactLiveStatusRefreshesPeerAvailabilityWindow() {
+        val session = session()
+        val connection = connected(session)
+        connection.consumePeerBytes(
+            frame(id = 99, payload = ascii("d9:max_piecei12e9:min_piecei10e8:positioni12ee")) +
+                frame(id = 1),
+            nowMillis = 0
+        )
+
+        val status = compactLiveStatus(minPiece = 11, maxPiece = 13, position = 14)
+        val result = connection.consumePeerBytes(frame(id = 11, payload = status), nowMillis = 1)
+
+        val window = result.metadataUpdates.single()
+        assertEquals(11L, window.minPiece)
+        assertEquals(13L, window.maxPiece)
+        assertEquals(14L, window.position)
+        assertEquals(13L, connection.advertisedHead())
+        assertTrue(connection.isReadyForRequests())
+    }
+
+    @Test
+    fun streamHaveAdvancesTheSlidingLiveWindow() {
+        val session = session()
+        val connection = connected(session)
+        connection.consumePeerBytes(
+            frame(id = 99, payload = ascii("d9:max_piecei12e9:min_piecei10e8:positioni12ee")) +
+                frame(id = 1),
+            nowMillis = 0
+        )
+
+        val result = connection.consumePeerBytes(
+            frame(
+                id = 10,
+                payload = byteArrayOf(0, 0, 0, 0, 0, 0, 0, 13)
+            ),
+            nowMillis = 1
+        )
+
+        val window = result.metadataUpdates.single()
+        assertEquals(11L, window.minPiece)
+        assertEquals(13L, window.maxPiece)
+        assertEquals(13L, window.position)
+    }
+
+    @Test
     fun disconnectRequeuesOwnedPiecesAndResetsConnectionState() {
         val session = session()
         val connection = connected(session)
@@ -208,4 +275,12 @@ class AceLivePeerConnectionStateMachineTest {
     }
 
     private fun ascii(value: String): ByteArray = value.toByteArray(Charsets.US_ASCII)
+
+    private fun compactLiveStatus(minPiece: Long, maxPiece: Long, position: Long): ByteArray =
+        ascii(
+            "d1:ai1e1:bi0e1:ci1e1:di0e1:ei1e1:fi0e" +
+                "1:gi${position}e1:hi1e1:ii${minPiece}e1:ji${maxPiece}e" +
+                "1:ki0e1:li1e1:mi-1e1:ni2e1:oi0e1:pi0e1:qi1e" +
+                "1:ri${position}e1:si${position}e1:ti-1e1:ui1ee"
+        )
 }

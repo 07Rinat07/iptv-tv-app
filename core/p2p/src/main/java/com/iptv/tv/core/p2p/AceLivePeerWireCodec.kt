@@ -6,8 +6,11 @@ import java.nio.ByteOrder
 private const val ACE_LIVE_WIRE_ID_CHOKE = 0
 private const val ACE_LIVE_WIRE_ID_UNCHOKE = 1
 private const val ACE_LIVE_WIRE_ID_INTERESTED = 2
+private const val ACE_LIVE_WIRE_ID_HAVE = 4
 private const val ACE_LIVE_WIRE_ID_REQUEST = 6
 private const val ACE_LIVE_WIRE_ID_PIECE = 7
+private const val ACE_LIVE_WIRE_ID_STREAM_HAVE = 10
+private const val ACE_LIVE_WIRE_ID_STATUS = 11
 private const val ACE_LIVE_WIRE_PIECE_FIXED_PAYLOAD_BYTES = 18
 
 /** Decoded peer-wire messages that are safe to consume without owning a socket. */
@@ -15,6 +18,20 @@ sealed interface AceLivePeerWireMessage {
     data object KeepAlive : AceLivePeerWireMessage
     data object Choke : AceLivePeerWireMessage
     data object Unchoke : AceLivePeerWireMessage
+
+    data class Have(val piece: Long) : AceLivePeerWireMessage
+
+    data class StreamHave(
+        val streamIndex: Long,
+        val piece: Long
+    ) : AceLivePeerWireMessage
+
+    /** Periodic compact Ace Live availability window advertised by current peers. */
+    data class LiveStatus(
+        val minPiece: Long,
+        val maxPiece: Long,
+        val position: Long
+    ) : AceLivePeerWireMessage
 
     class LiveChunk(
         val streamIndex: Long,
@@ -109,8 +126,23 @@ class AceLivePeerWireCodec(
         val message = when {
             id == ACE_LIVE_WIRE_ID_CHOKE && payloadLength == 0 -> AceLivePeerWireMessage.Choke
             id == ACE_LIVE_WIRE_ID_UNCHOKE && payloadLength == 0 -> AceLivePeerWireMessage.Unchoke
+            id == ACE_LIVE_WIRE_ID_HAVE && payloadLength == 4 -> AceLivePeerWireMessage.Have(
+                piece = readU32(buffer, payloadStart)
+            )
+            id == ACE_LIVE_WIRE_ID_HAVE && payloadLength == 8 -> decodeStreamHave(
+                buffer = buffer,
+                payloadStart = payloadStart
+            )
             id == ACE_LIVE_WIRE_ID_PIECE && payloadLength >= ACE_LIVE_WIRE_PIECE_FIXED_PAYLOAD_BYTES ->
                 decodeLiveChunk(buffer, payloadStart, payloadEnd)
+            id == ACE_LIVE_WIRE_ID_STREAM_HAVE && payloadLength == 8 ->
+                decodeStreamHave(buffer = buffer, payloadStart = payloadStart)
+            id == ACE_LIVE_WIRE_ID_STATUS -> decodeLiveStatus(
+                buffer.copyOfRange(payloadStart, payloadEnd)
+            ) ?: AceLivePeerWireMessage.Unknown(
+                id = id,
+                payload = buffer.copyOfRange(payloadStart, payloadEnd)
+            )
             else -> AceLivePeerWireMessage.Unknown(
                 id = id,
                 payload = buffer.copyOfRange(payloadStart, payloadEnd)
@@ -162,6 +194,43 @@ class AceLivePeerWireCodec(
         )
     }
 
+    private fun decodeStreamHave(
+        buffer: ByteArray,
+        payloadStart: Int
+    ): AceLivePeerWireMessage.StreamHave = AceLivePeerWireMessage.StreamHave(
+        streamIndex = readU32(buffer, payloadStart),
+        piece = readU32(buffer, payloadStart + 4)
+    )
+
+    private fun decodeLiveStatus(payload: ByteArray): AceLivePeerWireMessage.LiveStatus? =
+        runCatching {
+            val values = AceBoundedBencodeParser(payload).parseRootDictionary().values
+
+            // Real Ace Live peers use this compact a..u dictionary. Fields i/j are the currently
+            // available piece range; g/r/s advance with the source head. Keep the recognition
+            // strict so an unrelated vendor message with id 11 remains an opaque Unknown frame.
+            if (('a'..'u').any { key -> key.toString() !in values }) return@runCatching null
+            if (values.integer("a") != 1L || values.integer("u") != 1L) {
+                return@runCatching null
+            }
+
+            val minPiece = values.unsignedPiece("i") ?: return@runCatching null
+            val maxPiece = values.unsignedPiece("j") ?: return@runCatching null
+            val sourceHeads = listOfNotNull(
+                values.unsignedPiece("g"),
+                values.unsignedPiece("r"),
+                values.unsignedPiece("s")
+            )
+            val position = sourceHeads.maxOrNull() ?: return@runCatching null
+            if (minPiece > maxPiece || maxPiece > position) return@runCatching null
+
+            AceLivePeerWireMessage.LiveStatus(
+                minPiece = minPiece,
+                maxPiece = maxPiece,
+                position = position
+            )
+        }.getOrNull()
+
     private fun readU32(buffer: ByteArray, offset: Int): Long {
         val signed = ByteBuffer.wrap(buffer, offset, 4)
             .order(ByteOrder.BIG_ENDIAN)
@@ -177,3 +246,9 @@ class AceLivePeerWireCodec(
         private const val LENGTH_PREFIX_BYTES = 4
     }
 }
+
+private fun Map<String, AceBencodeValue>.integer(key: String): Long? =
+    (get(key) as? AceBencodeValue.Integer)?.value
+
+private fun Map<String, AceBencodeValue>.unsignedPiece(key: String): Long? =
+    integer(key)?.takeIf { value -> value in 0L..0xffff_ffffL }

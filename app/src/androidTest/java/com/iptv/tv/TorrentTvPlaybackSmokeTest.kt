@@ -66,39 +66,35 @@ class TorrentTvPlaybackSmokeTest {
             }
         )
 
-        val providerLines = downloadPlaylist(PROVIDER_PLAYLIST_URL)
-            .lineSequence()
-            .map(String::trim)
-            .filter(String::isNotBlank)
-            .toList()
-        val dimonovichLines = downloadPlaylist(DIMONOVICH_PLAYLIST_URL)
-            .lineSequence()
-            .map(String::trim)
-            .filter(String::isNotBlank)
-            .toList()
-        assertTrue(
-            "Dimonovich playlist did not contain Torrent TV descriptors",
-            dimonovichLines.any { line ->
-                line.startsWith("http://127.0.0.1:6878/ace/getstream?", ignoreCase = true)
-            }
-        )
-        val infoHashSource = providerLines.firstOrNull {
-            it.contains("infohash=$ANIMAL_PLANET_INFO_HASH", ignoreCase = true)
+        val arguments = InstrumentationRegistry.getArguments()
+        val requestedSample = arguments
+            .getString("torrentSample")
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+        val stabilityMillis = arguments
+            .getString("torrentStabilityMs")
+            ?.toLongOrNull()
+            ?.coerceIn(MIN_CONFIGURABLE_STABILITY_MS, MAX_CONFIGURABLE_STABILITY_MS)
+            ?: PLAYBACK_STABILITY_MS
+        val customContentIdText = arguments.getString("torrentContentId")?.trim().orEmpty()
+        require(customContentIdText.isEmpty() || CONTENT_ID_PATTERN.matches(customContentIdText)) {
+            "torrentContentId must be a 40-character hexadecimal value"
         }
-        val contentIdSource = dimonovichLines.firstOrNull {
-            it.contains("id=$VIJU_PLANET_CONTENT_ID", ignoreCase = true)
+        val samples = if (customContentIdText.isNotEmpty()) {
+            listOf(
+                "custom Ace content id" to
+                    "$ACE_LOOPBACK_DESCRIPTOR_PREFIX${customContentIdText.lowercase()}"
+            )
+        } else {
+            defaultPlaylistSamples(requestedSample)
         }
-
-        assertTrue("Playlist did not contain a Torrent TV infohash entry", !infoHashSource.isNullOrBlank())
-        assertTrue("Playlist did not contain a Torrent TV content-id entry", !contentIdSource.isNullOrBlank())
+        assertTrue("No Torrent TV smoke sample matched '$requestedSample'", samples.isNotEmpty())
 
         val failures = mutableListOf<String>()
-        listOf(
-            "provider Animal Planet HD infohash" to infoHashSource!!,
-            "Dimonovich Viju+ Planet Ace content id" to contentIdSource!!,
-            "provider Animal Planet HD restart" to infoHashSource
-        ).forEach { (label, source) ->
-            val failure = runCatching { verifyPlayback(label, source) }.exceptionOrNull()
+        samples.forEach { (label, source) ->
+            val failure = runCatching {
+                verifyPlayback(label, source, stabilityMillis)
+            }.exceptionOrNull()
             if (failure != null) {
                 val message = "$label failed: ${failure::class.java.simpleName}: ${failure.message}"
                 failures += message
@@ -117,6 +113,42 @@ class TorrentTvPlaybackSmokeTest {
         )
     }
 
+    private suspend fun defaultPlaylistSamples(requestedSample: String?): List<Pair<String, String>> {
+        val providerLines = downloadPlaylist(PROVIDER_PLAYLIST_URL)
+            .lineSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .toList()
+        val dimonovichLines = downloadPlaylist(DIMONOVICH_PLAYLIST_URL)
+            .lineSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .toList()
+        assertTrue(
+            "Dimonovich playlist did not contain Torrent TV descriptors",
+            dimonovichLines.any { line ->
+                line.startsWith(ACE_LOOPBACK_DESCRIPTOR_PREFIX, ignoreCase = true)
+            }
+        )
+        val infoHashSource = providerLines.firstOrNull {
+            it.contains("infohash=$ANIMAL_PLANET_INFO_HASH", ignoreCase = true)
+        }
+        val contentIdSource = dimonovichLines.firstOrNull {
+            it.contains("id=$VIJU_PLANET_CONTENT_ID", ignoreCase = true)
+        }
+
+        assertTrue("Playlist did not contain a Torrent TV infohash entry", !infoHashSource.isNullOrBlank())
+        assertTrue("Playlist did not contain a Torrent TV content-id entry", !contentIdSource.isNullOrBlank())
+
+        return listOf(
+            "provider Animal Planet HD infohash" to infoHashSource!!,
+            "Dimonovich Viju+ Planet Ace content id" to contentIdSource!!,
+            "provider Animal Planet HD restart" to infoHashSource
+        ).filter { (label, _) ->
+            requestedSample == null || label.contains(requestedSample, ignoreCase = true)
+        }
+    }
+
     private suspend fun downloadPlaylist(url: String): String = withContext(Dispatchers.IO) {
         val connection = openHttp(url)
         try {
@@ -133,7 +165,7 @@ class TorrentTvPlaybackSmokeTest {
         }
     }
 
-    private suspend fun verifyPlayback(label: String, source: String) {
+    private suspend fun verifyPlayback(label: String, source: String, stabilityMillis: Long) {
         println("TORRENT_TV_SMOKE start label=$label source=$source")
         Log.i(TAG, "start label=$label source=$source")
 
@@ -158,7 +190,7 @@ class TorrentTvPlaybackSmokeTest {
         }
         check(firstBytes.isNotEmpty()) { "$label: embedded stream returned no media bytes" }
 
-        val playerFailure = awaitMedia3Stable(localUrl)
+        val playerFailure = awaitMedia3Stable(localUrl, stabilityMillis)
         check(playerFailure == null) {
             "$label: Media3 playback was not stable: $playerFailure"
         }
@@ -202,15 +234,25 @@ class TorrentTvPlaybackSmokeTest {
             instanceFollowRedirects = true
         }
 
-    private suspend fun awaitMedia3Stable(url: String): String? {
+    private suspend fun awaitMedia3Stable(url: String, stabilityMillis: Long): String? {
         val ready = CompletableDeferred<Unit>()
         val failure = CompletableDeferred<String>()
         lateinit var player: ExoPlayer
+        var rebufferCount = 0
+        var lastPlaybackState = Player.STATE_IDLE
 
         withContext(Dispatchers.Main) {
             player = ExoPlayer.Builder(context).build()
             player.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (
+                        playbackState == Player.STATE_BUFFERING &&
+                        lastPlaybackState != Player.STATE_BUFFERING &&
+                        ready.isCompleted
+                    ) {
+                        rebufferCount += 1
+                    }
+                    lastPlaybackState = playbackState
                     if (playbackState == Player.STATE_READY && !ready.isCompleted) {
                         ready.complete(Unit)
                     }
@@ -238,15 +280,20 @@ class TorrentTvPlaybackSmokeTest {
             if (startupResult.isNotEmpty()) return startupResult
 
             val startPosition = withContext(Dispatchers.Main) { player.currentPosition }
-            val runtimeFailure = withTimeoutOrNull(PLAYBACK_STABILITY_MS) { failure.await() }
+            val runtimeFailure = withTimeoutOrNull(stabilityMillis) { failure.await() }
             if (runtimeFailure != null) return runtimeFailure
 
             val (state, endPosition) = withContext(Dispatchers.Main) {
                 player.playbackState to player.currentPosition
             }
-            if (state == Player.STATE_IDLE || state == Player.STATE_ENDED) {
-                "Media3 left the playable state: state=$state"
-            } else if (endPosition - startPosition < MIN_POSITION_ADVANCE_MS) {
+            Log.i(
+                TAG,
+                "stable state=$state startPosition=$startPosition endPosition=$endPosition " +
+                    "advance=${endPosition - startPosition} rebuffers=$rebufferCount"
+            )
+            if (state != Player.STATE_READY) {
+                "Media3 did not remain ready: state=$state"
+            } else if (endPosition - startPosition < stabilityMillis * 2L / 3L) {
                 "Playback position stalled: start=$startPosition end=$endPosition"
             } else {
                 null
@@ -265,11 +312,14 @@ class TorrentTvPlaybackSmokeTest {
         const val PROVIDER_PLAYLIST_URL = "https://iptv.org.ua/iptv/provayder.m3u"
         const val DIMONOVICH_PLAYLIST_URL =
             "https://raw.githubusercontent.com/Dimonovich/TV/Dimonovich/FREE/TV"
+        const val ACE_LOOPBACK_DESCRIPTOR_PREFIX = "http://127.0.0.1:6878/ace/getstream?id="
         const val ANIMAL_PLANET_INFO_HASH = "568159b1059c7bbe3eaf40f123541fef86ef83cb"
         const val VIJU_PLANET_CONTENT_ID = "0d59f0292f9e5569f4dff50ac4c3c89913b32a7a"
+        val CONTENT_ID_PATTERN = Regex("^[0-9a-fA-F]{40}$")
         const val MAX_PROBE_BYTES = 128 * 1024
         const val PLAYER_READY_TIMEOUT_MS = 45_000L
-        const val PLAYBACK_STABILITY_MS = 8_000L
-        const val MIN_POSITION_ADVANCE_MS = 3_000L
+        const val PLAYBACK_STABILITY_MS = 45_000L
+        const val MIN_CONFIGURABLE_STABILITY_MS = 10_000L
+        const val MAX_CONFIGURABLE_STABILITY_MS = 120_000L
     }
 }

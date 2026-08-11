@@ -38,8 +38,9 @@ import okhttp3.OkHttpClient
  * Standard BitTorrent sources (`magnet:`, explicit infohash and `.torrent`) are owned exclusively by
  * the in-process libtorrent backend and never probe Ace Engine as a fallback. True Ace content ids
  * are never reinterpreted as ordinary torrents: content IDs enter an Ace-specific metadata resolver,
- * and legacy gateway `infohash` values enter the direct Ace Live path. The external Ace Engine is a
- * compatibility fallback; proven non-live BitTorrent identities are handed to libtorrent.
+ * and legacy gateway `infohash` values enter the direct Ace Live path. Torrent TV content IDs and
+ * live infohashes never fall back to an installed Ace Engine; proven non-live BitTorrent identities
+ * are handed to libtorrent.
  */
 @Singleton
 class HybridEngineRepositoryImpl @Inject constructor(
@@ -232,15 +233,10 @@ class HybridEngineRepositoryImpl @Inject constructor(
             is P2pResult.Error -> {
                 if (streamEpoch.get() != epoch) return supersededResult()
                 log("embedded_ace_live_infohash_error", live.message)
-                val external = resolveExternalIfCurrent(rawSource, epoch)
-                if (external is AppResult.Success || external is AppResult.Loading) {
-                    external
-                } else {
-                    AppResult.Error(
-                        message = "Встроенный Ace Live не смог подготовить поток: ${live.message}",
-                        cause = live.cause
-                    )
-                }
+                AppResult.Error(
+                    message = "Встроенный Ace Live не смог подготовить поток: ${live.message}",
+                    cause = live.cause
+                )
             }
         }
     }
@@ -262,23 +258,25 @@ class HybridEngineRepositoryImpl @Inject constructor(
         val contentId = (parsedSource as? P2pResult.Success)
             ?.data
             ?.let { source -> (source as? P2pSource.AceContentId)?.contentId }
-        var autonomousLiveFailure: P2pResult.Error? = null
         if (!contentId.isNullOrBlank()) {
             aceLiveEngineUsed.set(true)
-            when (val live = aceLiveEngine.prepareStream(contentId)) {
+            return when (val live = aceLiveEngine.prepareStream(contentId)) {
                 is P2pResult.Success -> {
                     if (streamEpoch.get() != epoch) return supersededResult()
                     log(
                         "embedded_ace_live_resolved",
                         "Autonomous Ace Live stream prepared: ${live.data.name}"
                     )
-                    return AppResult.Success(live.data.url)
+                    AppResult.Success(live.data.url)
                 }
 
                 is P2pResult.Error -> {
                     if (streamEpoch.get() != epoch) return supersededResult()
-                    autonomousLiveFailure = live
                     log("embedded_ace_live_resolve_error", live.message)
+                    AppResult.Error(
+                        message = "Встроенный Ace Live не смог подготовить поток: ${live.message}",
+                        cause = live.cause
+                    )
                 }
             }
         }
@@ -338,14 +336,7 @@ class HybridEngineRepositoryImpl @Inject constructor(
                         "engine_content_id_resolver_unavailable",
                         "No Ace-specific content-id resolver is available"
                     )
-                    val external = resolveExternalIfCurrent(rawSource, epoch)
-                    if (external is AppResult.Success || external is AppResult.Loading) return external
-                    return autonomousLiveFailure?.let { failure ->
-                        AppResult.Error(
-                            message = "Встроенный Ace Live не смог подготовить поток: ${failure.message}",
-                            cause = failure.cause
-                        )
-                    } ?: aceContentIdResolverUnavailable(resolution)
+                    return aceContentIdResolverUnavailable(resolution)
                 }
                 return resolveExternalIfCurrent(rawSource, epoch)
             }

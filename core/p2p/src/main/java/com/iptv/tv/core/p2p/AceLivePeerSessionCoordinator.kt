@@ -136,6 +136,9 @@ class AceLivePeerSessionCoordinator(
             AceLivePeerMessageResult(handled = true)
         }
 
+        is AceLivePeerWireMessage.Have -> AceLivePeerMessageResult(handled = false)
+        is AceLivePeerWireMessage.StreamHave -> AceLivePeerMessageResult(handled = false)
+        is AceLivePeerWireMessage.LiveStatus -> AceLivePeerMessageResult(handled = false)
         is AceLivePeerWireMessage.LiveChunk -> onLiveChunk(peerId, message, nowMillis)
         is AceLivePeerWireMessage.Unknown -> AceLivePeerMessageResult(handled = false)
     }

@@ -79,14 +79,14 @@ class AceLiveRecoveryCoordinatorTest {
     }
 
     @Test
-    fun farEvictedGapRequiresReconnectPolicyInsteadOfLargeSkip() {
+    fun farEvictedGapIsRecoveredThroughBoundedSkip() {
         val coordinator = coordinator(maxPieceAdvance = 8)
         coordinator.updatePeer(peer(id = 1, min = 120, max = 200, unchoked = true))
         coordinator.assign(100, 200, nowMillis = 0)
 
         val plan = coordinator.evaluate(100, nowMillis = 4_000)
 
-        assertNull(plan.cursorAdvance)
+        assertEquals(AceLiveCursorAdvance(fromPiece = 100, toPiece = 108), plan.cursorAdvance)
         assertTrue(plan.gapBeyondAdvanceLimit)
     }
 
