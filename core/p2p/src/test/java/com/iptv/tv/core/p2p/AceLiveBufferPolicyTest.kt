@@ -66,6 +66,8 @@ class AceLiveBufferPolicyTest {
         val policy = AceLiveStartupBufferPolicy(
             AceLiveBufferSettings(
                 autoTargetDurationMillis = 10_000L,
+                autoMinStartupBufferBytes = 4L * 1024L * 1024L,
+                autoMaxStartupBufferBytes = 4L * 1024L * 1024L,
                 forcedStartAfterMillis = 20_000L,
                 forcedStartMinBufferBytes = 512L * 1024L
             )
@@ -76,6 +78,7 @@ class AceLiveBufferPolicyTest {
             elapsedMillis = 20_000L
         )
 
+        assertEquals(4L * 1024L * 1024L, decision.targetBytes)
         assertTrue(decision.ready)
         assertTrue(decision.forced)
     }
