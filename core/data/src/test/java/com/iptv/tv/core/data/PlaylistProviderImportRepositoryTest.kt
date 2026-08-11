@@ -227,6 +227,50 @@ class PlaylistProviderImportRepositoryTest {
     }
 
     @Test
+    fun importFromUrl_persistsReadyCatalogOrigin() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                #EXTM3U
+                #EXTINF:-1 tvg-id="ready-news",Ready News
+                https://example.test/live/ready-news
+                """.trimIndent()
+            )
+        )
+
+        val result = repository.importFromUrl(
+            url = server.url("/ready.m3u").toString(),
+            name = "Ready catalog",
+            catalogOrigin = CatalogOriginKind.READY_CATALOG
+        )
+
+        assertImportSuccess(result)
+        assertEquals(CatalogOriginKind.READY_CATALOG.name, insertedPlaylist.captured.catalogOrigin)
+    }
+
+    @Test
+    fun importFromUrl_persistsScannerOrigin() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                #EXTM3U
+                #EXTINF:-1 tvg-id="scanner-news",Scanner News
+                https://example.test/live/scanner-news
+                """.trimIndent()
+            )
+        )
+
+        val result = repository.importFromUrl(
+            url = server.url("/scanner.m3u").toString(),
+            name = "Scanner result",
+            catalogOrigin = CatalogOriginKind.SCANNER_IMPORT
+        )
+
+        assertImportSuccess(result)
+        assertEquals(CatalogOriginKind.SCANNER_IMPORT.name, insertedPlaylist.captured.catalogOrigin)
+    }
+
+    @Test
     fun importFailure_logsParserError() = runTest {
         val result = repository.importFromText("not an m3u file", "Broken")
 

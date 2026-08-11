@@ -1,11 +1,13 @@
 package com.iptv.tv.feature.importer
 
+import com.iptv.tv.core.model.CatalogOriginKind
 import java.util.concurrent.atomic.AtomicReference
 
 data class ImportPrefill(
     val url: String,
     val playlistName: String,
-    val autoImport: Boolean
+    val autoImport: Boolean,
+    val catalogOrigin: CatalogOriginKind = CatalogOriginKind.USER_IMPORT
 )
 
 object ImportPrefillBus {

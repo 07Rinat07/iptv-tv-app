@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.PlaylistRepository
+import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.Playlist
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -59,7 +60,13 @@ class HomeViewModel @Inject constructor(
                     lastInfo = "Загрузка списка «${preset.name}»…"
                 )
             }
-            when (val result = playlistRepository.importFromUrl(preset.url, preset.name)) {
+            when (
+                val result = playlistRepository.importFromUrl(
+                    url = preset.url,
+                    name = preset.name,
+                    catalogOrigin = CatalogOriginKind.READY_CATALOG
+                )
+            ) {
                 is AppResult.Success -> {
                     _uiState.update {
                         it.copy(

@@ -35,6 +35,7 @@ import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.engine.data.EngineStreamClient
 import com.iptv.tv.core.model.AppStartDestination
 import com.iptv.tv.core.model.BufferProfile
+import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.ChannelEpgInfo
 import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.Channel
@@ -161,7 +162,11 @@ class PlaylistRepositoryImpl @Inject constructor(
             }
     }
 
-    override suspend fun importFromUrl(url: String, name: String): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
+    override suspend fun importFromUrl(
+        url: String,
+        name: String,
+        catalogOrigin: CatalogOriginKind
+    ): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
         if (url.isBlank()) return@withContext AppResult.Error("URL is empty")
         runCatching {
             val request = Request.Builder().url(url).build()
@@ -173,7 +178,8 @@ class PlaylistRepositoryImpl @Inject constructor(
                 playlistName = name,
                 rawPlaylist = body,
                 sourceType = PlaylistSourceType.URL,
-                source = url
+                source = url,
+                catalogOrigin = catalogOrigin
             )
         }.getOrElse { throwable ->
             AppResult.Error("Unable to import by URL: ${throwable.toLogSummary(maxDepth = 4)}", throwable)
@@ -872,7 +878,8 @@ class PlaylistRepositoryImpl @Inject constructor(
         rawPlaylist: String,
         sourceType: PlaylistSourceType,
         source: String,
-        epgSourceOverride: String? = null
+        epgSourceOverride: String? = null,
+        catalogOrigin: CatalogOriginKind = defaultCatalogOrigin(sourceType)
     ): AppResult<PlaylistImportReport> {
         if (playlistName.isBlank()) return AppResult.Error("Playlist name is empty")
         if (rawPlaylist.isBlank()) return AppResult.Error("Playlist content is empty")
@@ -908,7 +915,8 @@ class PlaylistRepositoryImpl @Inject constructor(
                         scheduleHours = 12,
                         lastSyncedAt = null,
                         isCustom = false,
-                        createdAt = System.currentTimeMillis()
+                        createdAt = System.currentTimeMillis(),
+                        catalogOrigin = catalogOrigin.name
                     )
                 )
 
@@ -947,6 +955,17 @@ class PlaylistRepositoryImpl @Inject constructor(
                 )
             }
         }
+    }
+
+    private fun defaultCatalogOrigin(sourceType: PlaylistSourceType): CatalogOriginKind = when (sourceType) {
+        PlaylistSourceType.XTREAM,
+        PlaylistSourceType.STALKER,
+        PlaylistSourceType.JELLYFIN,
+        PlaylistSourceType.PLEX,
+        PlaylistSourceType.TVHEADEND,
+        PlaylistSourceType.HDHOMERUN -> CatalogOriginKind.PROVIDER
+        PlaylistSourceType.FILE -> CatalogOriginKind.LOCAL
+        else -> CatalogOriginKind.USER_IMPORT
     }
 
     private fun readPlaylistContent(pathOrUri: String): String {
@@ -2021,7 +2040,8 @@ class ProviderAccountRepositoryImpl @Inject constructor(
             )
             ProviderType.M3U -> playlistRepository.importFromUrl(
                 url = provider.baseUrl,
-                name = provider.name
+                name = provider.name,
+                catalogOrigin = CatalogOriginKind.PROVIDER
             )
             ProviderType.HDHOMERUN -> playlistRepository.importFromHdHomeRun(
                 baseUrl = provider.baseUrl,

@@ -10,6 +10,7 @@ import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.AppStartDestination
 import com.iptv.tv.core.model.BufferProfile
+import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelEpgInfo
 import com.iptv.tv.core.model.ChannelHealth
@@ -290,7 +291,11 @@ class PlayerViewModelMultiviewTest {
 
         override fun observePlaylists(): Flow<List<Playlist>> = playlistsFlow
         override fun observeChannels(playlistId: Long): Flow<List<Channel>> = channelsFlow
-        override suspend fun importFromUrl(url: String, name: String): AppResult<PlaylistImportReport> = error("Not used")
+        override suspend fun importFromUrl(
+            url: String,
+            name: String,
+            catalogOrigin: CatalogOriginKind
+        ): AppResult<PlaylistImportReport> = error("Not used")
         override suspend fun importFromXtream(baseUrl: String, username: String, password: String, name: String): AppResult<PlaylistImportReport> = error("Not used")
         override suspend fun importFromStalker(portalUrl: String, macAddress: String, name: String): AppResult<PlaylistImportReport> = error("Not used")
         override suspend fun importFromHdHomeRun(baseUrl: String, name: String): AppResult<PlaylistImportReport> = error("Not used")

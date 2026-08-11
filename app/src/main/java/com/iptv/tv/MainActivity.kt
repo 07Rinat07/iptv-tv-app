@@ -58,6 +58,7 @@ import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.designsystem.theme.IptvTheme
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.AppStartDestination
+import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.feature.editor.EDITOR_PLAYLIST_ID_ARG
 import com.iptv.tv.feature.diagnostics.DiagnosticsScreen
 import com.iptv.tv.feature.downloads.DownloadsScreen
@@ -287,7 +288,8 @@ private fun AppRoot(
                                         ImportPrefill(
                                             url = downloadUrl,
                                             playlistName = playlistName,
-                                            autoImport = true
+                                            autoImport = true,
+                                            catalogOrigin = CatalogOriginKind.SCANNER_IMPORT
                                         )
                                     )
                                     navController.navigate(Routes.IMPORTER)
@@ -305,7 +307,8 @@ private fun AppRoot(
                                         ImportPrefill(
                                             url = url,
                                             playlistName = name,
-                                            autoImport = true
+                                            autoImport = true,
+                                            catalogOrigin = CatalogOriginKind.READY_CATALOG
                                         )
                                     )
                                     navController.navigate(Routes.IMPORTER)

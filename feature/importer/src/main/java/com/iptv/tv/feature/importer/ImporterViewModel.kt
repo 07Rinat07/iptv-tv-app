@@ -7,6 +7,7 @@ import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.domain.repository.ProviderAccountRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
+import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.ProviderAccountStatus
 import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.PlaylistContentSummary
@@ -85,16 +86,20 @@ class ImporterViewModel @Inject constructor(
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(ImporterUiState())
     val uiState: StateFlow<ImporterUiState> = _uiState.asStateFlow()
+    private var urlCatalogOrigin: CatalogOriginKind = CatalogOriginKind.USER_IMPORT
 
     init {
         observeProviders()
         observeProviderSyncHistory()
         observeProviderAutoSyncSettings()
-        applyScannerPrefill()
+        applyPendingPrefill()
     }
 
     fun updatePlaylistName(value: String) = _uiState.update { it.copy(playlistName = value) }
-    fun updateUrl(value: String) = _uiState.update { it.copy(url = value) }
+    fun updateUrl(value: String) {
+        urlCatalogOrigin = CatalogOriginKind.USER_IMPORT
+        _uiState.update { it.copy(url = value) }
+    }
     fun updateXtreamBaseUrl(value: String) = _uiState.update { it.copy(xtreamBaseUrl = value) }
     fun updateXtreamUsername(value: String) = _uiState.update { it.copy(xtreamUsername = value) }
     fun updateXtreamPassword(value: String) = _uiState.update { it.copy(xtreamPassword = value) }
@@ -130,7 +135,11 @@ class ImporterViewModel @Inject constructor(
                     "Безопасный режим: разрешены HTTPS URL. Для HTTP включите настройку 'Разрешить HTTP URL'."
                 )
             }
-            playlistRepository.importFromUrl(url, state.playlistName.trim())
+            playlistRepository.importFromUrl(
+                url = url,
+                name = state.playlistName.trim(),
+                catalogOrigin = urlCatalogOrigin
+            )
         }
     }
 
@@ -947,11 +956,12 @@ class ImporterViewModel @Inject constructor(
         }
     }
 
-    private fun applyScannerPrefill() {
+    private fun applyPendingPrefill() {
         val prefill = ImportPrefillBus.consume() ?: return
         val prefillUrl = prefill.url.trim()
         if (prefillUrl.isBlank()) return
 
+        urlCatalogOrigin = prefill.catalogOrigin
         _uiState.update { state ->
             state.copy(
                 url = prefillUrl,
