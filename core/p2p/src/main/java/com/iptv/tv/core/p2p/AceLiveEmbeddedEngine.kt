@@ -47,6 +47,7 @@ class AceLiveEmbeddedEngine(
     okHttpClient: OkHttpClient,
     private val catalogResolver: AceContentCatalogResolver = AceContentCatalogResolver(okHttpClient),
     private val metadataPeerResolver: AceContentMetadataPeerResolver = AceContentMetadataPeerResolver(),
+    private val bufferSettings: AceLiveBufferSettings = AceLiveBufferSettings(),
     private val eventObserver: (AceLiveTcpPoolEvent) -> Unit = {}
 ) {
     private val operationMutex = Mutex()
@@ -121,7 +122,7 @@ class AceLiveEmbeddedEngine(
             if (generation.get() != token) return@withLock null
             closeActiveLocked()
             runCatching {
-                Runtime(transport, eventObserver).also { created -> activeRuntime = created }
+                Runtime(transport, bufferSettings, eventObserver).also { created -> activeRuntime = created }
             }
         } ?: return superseded()
         val runtime = runtimeCreation.getOrElse { error ->
@@ -133,7 +134,7 @@ class AceLiveEmbeddedEngine(
 
         runtime.start()
         return try {
-            withTimeout(STARTUP_TIMEOUT_MILLIS) {
+            withTimeout(runtime.startupTimeoutMillis) {
                 runtime.startup.await()
             }
             if (generation.get() != token) return superseded()
@@ -194,16 +195,20 @@ class AceLiveEmbeddedEngine(
 
     private class Runtime(
         private val transport: AceResolvedLiveTransport,
+        bufferSettings: AceLiveBufferSettings,
         private val eventObserver: (AceLiveTcpPoolEvent) -> Unit
     ) : Closeable {
+        private val startupBufferPolicy = AceLiveStartupBufferPolicy(bufferSettings)
         val startup = CompletableDeferred<Unit>()
-        val mediaBuffer = AceLiveMediaBuffer(maxBufferedBytes = LIVE_OUTPUT_BUFFER_BYTES)
+        val startupTimeoutMillis = startupBufferPolicy.startupTimeoutMillis()
+        val mediaBuffer = AceLiveMediaBuffer(maxBufferedBytes = startupBufferPolicy.outputBufferBytes())
         val server = LoopbackHttpLiveServer(mediaBuffer)
 
         private val closed = AtomicBoolean(false)
         private val latestHead = AtomicLong(-1L)
         private val peerIds = AtomicLong(1L)
         private val emittedBytes = AtomicLong(0L)
+        private val startupStartedAtMillis = AtomicLong(0L)
         private val lastMediaAppendAt = AtomicLong(0L)
         private val lastProgressLogAt = AtomicLong(0L)
         private val lastWindowLogAt = AtomicLong(0L)
@@ -260,6 +265,7 @@ class AceLiveEmbeddedEngine(
 
         fun start() {
             check(runner == null) { "Ace Live runtime is already started" }
+            startupStartedAtMillis.set(System.currentTimeMillis())
             runner = scope.launch {
                 try {
                     val initialRefill = refillLoop.runOneCycle()
@@ -315,17 +321,18 @@ class AceLiveEmbeddedEngine(
         private suspend fun driveSession() {
             while (currentCoroutineContext().isActive) {
                 val now = System.currentTimeMillis()
+                val stallTimeoutMillis = startupBufferPolicy.mediaStallTimeoutMillis()
                 if (
                     aceLiveMediaIsStalled(
                         startupComplete = startup.isCompleted,
                         lastMediaAtMillis = lastMediaAppendAt.get(),
                         nowMillis = now,
-                        timeoutMillis = MEDIA_STALL_TIMEOUT_MILLIS
+                        timeoutMillis = stallTimeoutMillis
                     )
                 ) {
                     error(
                         "Ace Live swarm stopped publishing media for " +
-                            "$MEDIA_STALL_TIMEOUT_MILLIS ms"
+                            "$stallTimeoutMillis ms"
                     )
                 }
                 val head = latestHead.get()
@@ -441,9 +448,22 @@ class AceLiveEmbeddedEngine(
                         val media = resynchronizer.consume(verified.data)
                         if (media.isNotEmpty()) {
                             mediaBuffer.append(media)
-                            lastMediaAppendAt.set(System.currentTimeMillis())
-                            if (mediaBuffer.retainedBytes() >= STARTUP_BUFFER_BYTES) {
-                                startup.complete(Unit)
+                            val now = System.currentTimeMillis()
+                            lastMediaAppendAt.set(now)
+                            if (!startup.isCompleted) {
+                                val decision = startupBufferPolicy.evaluate(
+                                    bufferedBytes = mediaBuffer.retainedBytes().toLong(),
+                                    elapsedMillis = (now - startupStartedAtMillis.get()).coerceAtLeast(1L)
+                                )
+                                if (decision.ready) {
+                                    Log.i(
+                                        LOG_TAG,
+                                        "event=startup_buffer_ready buffered_bytes=${mediaBuffer.retainedBytes()} " +
+                                            "target_bytes=${decision.targetBytes} " +
+                                            "rate_bps=${decision.observedBytesPerSecond} forced=${decision.forced}"
+                                    )
+                                    startup.complete(Unit)
+                                }
                             }
                         }
                     }
@@ -477,11 +497,7 @@ class AceLiveEmbeddedEngine(
         const val MAX_REASSEMBLY_PIECES = 12L
         const val MAX_REASSEMBLY_BYTES = 12L * 1024L * 1024L
         const val SCHEDULER_TICK_MILLIS = 200L
-        const val STARTUP_TIMEOUT_MILLIS = 60_000L
         const val PEER_REFRESH_INTERVAL_MILLIS = 10_000L
-        const val LIVE_OUTPUT_BUFFER_BYTES = 16 * 1024 * 1024
-        const val STARTUP_BUFFER_BYTES = 4 * 1024 * 1024
-        const val MEDIA_STALL_TIMEOUT_MILLIS = 20_000L
         const val PROGRESS_LOG_INTERVAL_MILLIS = 5_000L
         const val LOG_TAG = "P2P/AceLive"
     }
