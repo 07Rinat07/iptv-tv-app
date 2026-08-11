@@ -62,10 +62,15 @@ class AceLivePeerDiscoveryOrchestrationRequest(
 }
 
 data class AceLivePeerDiscoveryOrchestrationPolicy(
-    val maxTotalPeers: Int = 256
+    val maxTotalPeers: Int = 256,
+    val preferTrackerFastPath: Boolean = true,
+    val trackerFastPathMinPeers: Int = 4
 ) {
     init {
         require(maxTotalPeers in 1..2_048) { "maxTotalPeers must be in 1..2048" }
+        require(trackerFastPathMinPeers in 1..2_048) {
+            "trackerFastPathMinPeers must be in 1..2048"
+        }
     }
 }
 
@@ -77,12 +82,45 @@ data class AceLivePeerDiscoveryOrchestrationResult(
     fun tcpEndpoints(): List<AceLiveTcpPeerEndpoint> = peers.map(AceLiveDiscoveredPeer::endpoint)
 }
 
+internal const val ACE_LIVE_DHT_MIN_HEAP_HEADROOM_BYTES: Long = 32L * 1024L * 1024L
+
+internal fun aceLiveDhtHeapHeadroomBytes(
+    maxMemoryBytes: Long,
+    totalMemoryBytes: Long,
+    freeMemoryBytes: Long
+): Long {
+    val maxMemory = maxMemoryBytes.coerceAtLeast(0L)
+    val allocated = totalMemoryBytes.coerceAtLeast(0L)
+    val freeAllocated = freeMemoryBytes.coerceIn(0L, allocated)
+    val used = (allocated - freeAllocated).coerceAtLeast(0L)
+    return (maxMemory - used).coerceAtLeast(0L)
+}
+
+internal fun aceLiveDhtHasHeapHeadroom(
+    maxMemoryBytes: Long,
+    totalMemoryBytes: Long,
+    freeMemoryBytes: Long,
+    minHeadroomBytes: Long = ACE_LIVE_DHT_MIN_HEAP_HEADROOM_BYTES
+): Boolean {
+    require(minHeadroomBytes >= 0L) { "minHeadroomBytes must be non-negative" }
+    return aceLiveDhtHeapHeadroomBytes(
+        maxMemoryBytes = maxMemoryBytes,
+        totalMemoryBytes = totalMemoryBytes,
+        freeMemoryBytes = freeMemoryBytes
+    ) >= minHeadroomBytes
+}
+
 /**
  * Aggregates independent Ace Live discovery sources before the TCP connection pool.
  *
- * DHT and tracker discovery run concurrently under a supervisor so an ordinary source failure does
- * not cancel the other source. Coroutine cancellation is never converted into a source failure.
- * Deduplication is endpoint-based and keeps source provenance for the later scoring/refill layer.
+ * For live startup, a healthy UDP tracker is intentionally the fast path. If it already returns a
+ * useful first batch of peers, Mainline DHT is not started, avoiding the old 15-second DHT gate
+ * before TCP startup. If the tracker is weak or fails, DHT remains the fallback. DHT is also
+ * suppressed under critical JVM heap pressure so peer discovery fails/refills cleanly instead of
+ * turning a low-memory condition into a process-killing coroutine OOM.
+ *
+ * When the tracker fast path is disabled, DHT and tracker discovery retain the original concurrent
+ * supervisor behavior. Coroutine cancellation is never converted into a source failure.
  */
 class AceLivePeerDiscoveryOrchestrator(
     private val dhtDiscover: suspend (AceLiveDhtDiscoveryRequest) -> AceLiveDhtDiscoveryResult =
@@ -90,21 +128,62 @@ class AceLivePeerDiscoveryOrchestrator(
     private val trackerDiscover: suspend (AceLiveUdpTrackerDiscoveryRequest) -> AceLiveUdpTrackerDiscoveryResult =
         { request -> AceLiveUdpTrackerDiscovery().discover(request) },
     private val policy: AceLivePeerDiscoveryOrchestrationPolicy =
-        AceLivePeerDiscoveryOrchestrationPolicy()
+        AceLivePeerDiscoveryOrchestrationPolicy(),
+    private val dhtHeadroomAvailable: () -> Boolean = {
+        val runtime = Runtime.getRuntime()
+        aceLiveDhtHasHeapHeadroom(
+            maxMemoryBytes = runtime.maxMemory(),
+            totalMemoryBytes = runtime.totalMemory(),
+            freeMemoryBytes = runtime.freeMemory()
+        )
+    }
 ) {
     suspend fun discover(
         request: AceLivePeerDiscoveryOrchestrationRequest
     ): AceLivePeerDiscoveryOrchestrationResult = supervisorScope {
-        val dhtDeferred = request.dhtRequest?.let { sourceRequest ->
-            async { captureSource { dhtDiscover(sourceRequest) } }
+        val dhtRequest = request.dhtRequest
+        val trackerRequest = request.trackerRequest
+        val dhtPermitted = dhtRequest != null && dhtHeadroomAvailable()
+
+        if (policy.preferTrackerFastPath && trackerRequest != null) {
+            val trackerExecution = captureSource { trackerDiscover(trackerRequest) }
+            val trackerPeerCount = when (trackerExecution) {
+                is SourceExecution.Success -> trackerExecution.value.peers.size
+                else -> 0
+            }
+            val fastPathThreshold = minOf(policy.trackerFastPathMinPeers, policy.maxTotalPeers)
+
+            if (trackerPeerCount >= fastPathThreshold || !dhtPermitted) {
+                return@supervisorScope buildResult(
+                    dhtExecution = SourceExecution.NotRequested,
+                    trackerExecution = trackerExecution
+                )
+            }
+
+            val dhtExecution = dhtRequest?.let { sourceRequest ->
+                captureSource { dhtDiscover(sourceRequest) }
+            } ?: SourceExecution.NotRequested
+            return@supervisorScope buildResult(dhtExecution, trackerExecution)
         }
-        val trackerDeferred = request.trackerRequest?.let { sourceRequest ->
+
+        val dhtDeferred = dhtRequest
+            ?.takeIf { dhtPermitted }
+            ?.let { sourceRequest ->
+                async { captureSource { dhtDiscover(sourceRequest) } }
+            }
+        val trackerDeferred = trackerRequest?.let { sourceRequest ->
             async { captureSource { trackerDiscover(sourceRequest) } }
         }
 
         val dhtExecution = dhtDeferred?.await() ?: SourceExecution.NotRequested
         val trackerExecution = trackerDeferred?.await() ?: SourceExecution.NotRequested
+        buildResult(dhtExecution, trackerExecution)
+    }
 
+    private fun buildResult(
+        dhtExecution: SourceExecution<AceLiveDhtDiscoveryResult>,
+        trackerExecution: SourceExecution<AceLiveUdpTrackerDiscoveryResult>
+    ): AceLivePeerDiscoveryOrchestrationResult {
         val discovered = LinkedHashMap<String, MutableDiscoveredPeer>()
         if (dhtExecution is SourceExecution.Success) {
             addPeers(
@@ -121,7 +200,7 @@ class AceLivePeerDiscoveryOrchestrator(
             )
         }
 
-        AceLivePeerDiscoveryOrchestrationResult(
+        return AceLivePeerDiscoveryOrchestrationResult(
             peers = discovered.values.map { value ->
                 AceLiveDiscoveredPeer(
                     endpoint = value.endpoint,
