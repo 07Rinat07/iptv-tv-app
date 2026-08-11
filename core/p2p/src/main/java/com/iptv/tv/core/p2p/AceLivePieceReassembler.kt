@@ -181,6 +181,18 @@ class AceLivePieceReassembler(
 
     fun nextNeededPiece(): Long? = nextNeeded.takeUnless { exhausted }
 
+    /** Sets the first live cursor once, before any request or payload has been accepted. */
+    fun initializeAt(piece: Long) {
+        require(piece in 0..MAX_ACE_LIVE_REASSEMBLY_PIECE) {
+            "initial live piece must fit the u32 wire field"
+        }
+        check(pieces.isEmpty() && allocatedPayloadBytes == 0L) {
+            "Ace Live reassembler already owns buffered data"
+        }
+        check(!exhausted) { "Ace Live reassembler is exhausted" }
+        nextNeeded = piece
+    }
+
     fun bufferedPieceCount(): Int = pieces.size
 
     fun bufferedPayloadBytes(): Long = allocatedPayloadBytes

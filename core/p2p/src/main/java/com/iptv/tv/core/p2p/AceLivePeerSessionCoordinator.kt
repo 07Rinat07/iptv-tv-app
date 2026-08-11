@@ -52,7 +52,7 @@ data class AceLiveRecoveryApplicationResult(
  * recovery and bounded piece reassembly.
  *
  * This class deliberately owns no socket, tracker/DHT discovery, connection retry, handshake
- * signing/authentication or playback muxing. A network adapter feeds decoded messages here and sends
+ * signing/authentication or playback muxing. The network adapter feeds decoded messages here and sends
  * only the frames returned by [schedule].
  *
  * Cross-layer invariants enforced here:
@@ -60,7 +60,7 @@ data class AceLiveRecoveryApplicationResult(
  * - peer-loss/window/timeout requeue discards partial bytes from the old owner;
  * - reassembler contiguous progress is immediately reflected into active-peer recovery state;
  * - a recovery discontinuity is applied to ownership and reassembly as one serialized operation;
- * - an applied recovery discontinuity is surfaced explicitly to the future media-output boundary;
+ * - an applied recovery discontinuity is surfaced explicitly to the media-output boundary;
  * - the active scheduling horizon cannot exceed the number of whole piece buffers allowed by the
  *   configured memory budget.
  */
@@ -68,6 +68,7 @@ class AceLivePeerSessionCoordinator(
     geometry: AceLiveTransportGeometry,
     initialNextNeededPiece: Long,
     maxInFlightPerPeer: Int,
+    maxOutstandingChunksPerPiece: Int = AceLiveActivePeerCoordinator.DEFAULT_MAX_OUTSTANDING_CHUNKS_PER_PIECE,
     recoveryPolicy: AceLiveRecoveryPolicy = AceLiveRecoveryPolicy(),
     requestedMaxAheadPieces: Long = AceLiveActivePeerCoordinator.DEFAULT_MAX_REASSEMBLER_AHEAD_PIECES,
     maxBufferedBytes: Long = AceLivePieceReassembler.DEFAULT_MAX_BUFFERED_BYTES,
@@ -77,6 +78,7 @@ class AceLivePeerSessionCoordinator(
 
     private val activePeers: AceLiveActivePeerCoordinator
     private val reassembler: AceLivePieceReassembler
+    private var initializedFromLiveWindow: Boolean = false
 
     init {
         require(requestedMaxAheadPieces > 0) { "requestedMaxAheadPieces must be positive" }
@@ -91,6 +93,7 @@ class AceLivePeerSessionCoordinator(
         activePeers = AceLiveActivePeerCoordinator(
             geometry = geometry,
             maxInFlightPerPeer = maxInFlightPerPeer,
+            maxOutstandingChunksPerPiece = maxOutstandingChunksPerPiece,
             recoveryPolicy = recoveryPolicy,
             maxReassemblerAheadPieces = effectiveMaxAheadPieces
         )
@@ -186,6 +189,31 @@ class AceLivePeerSessionCoordinator(
 
     fun nextNeededPiece(): Long? = reassembler.nextNeededPiece()
 
+    /**
+     * Selects the initial cursor from the first verified peer window. Subsequent peers reuse the
+     * existing contiguous cursor, so reconnects cannot replay an older live segment.
+     */
+    fun initializeFromLiveWindow(
+        window: AceLivePeerAdvertisedWindow,
+        prefetchPieces: Long,
+        nowMillis: Long
+    ): Long {
+        require(prefetchPieces >= 0) { "prefetchPieces must be non-negative" }
+        if (initializedFromLiveWindow) {
+            return reassembler.nextNeededPiece()
+                ?: error("Ace Live session is exhausted at the u32 piece boundary")
+        }
+        check(activePeers.trackedPieceCount() == 0) {
+            "Ace Live initial cursor cannot change after scheduling starts"
+        }
+        val head = (window.position ?: window.maxPiece).coerceIn(window.minPiece, window.maxPiece)
+        val start = head.saturatingSubtract(prefetchPieces).coerceAtLeast(window.minPiece)
+        reassembler.initializeAt(start)
+        activePeers.onCursorAdvanced(start, nowMillis)
+        initializedFromLiveWindow = true
+        return start
+    }
+
     fun bufferedPieceCount(): Int = reassembler.bufferedPieceCount()
 
     fun bufferedPayloadBytes(): Long = reassembler.bufferedPayloadBytes()
@@ -278,4 +306,7 @@ class AceLivePeerSessionCoordinator(
         }
         activePeers.onCursorAdvanced(nextNeeded, nowMillis)
     }
+
+    private fun Long.saturatingSubtract(delta: Long): Long =
+        if (delta >= this) 0L else this - delta
 }

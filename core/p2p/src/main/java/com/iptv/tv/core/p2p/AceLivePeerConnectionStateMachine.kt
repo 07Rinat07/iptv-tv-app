@@ -11,17 +11,20 @@ data class AceLivePeerIngressResult(
     val decodedFrames: Int = 0,
     val metadataUpdates: List<AceLivePeerAdvertisedWindow> = emptyList(),
     val metadataRejections: List<AceLivePeerMetadataRejectReason> = emptyList(),
+    val activeChunkDispositions: List<AceLiveChunkDisposition> = emptyList(),
+    val reassemblyDispositions: List<AceLiveReassemblyDisposition> = emptyList(),
+    val unknownMessageIds: List<Int> = emptyList(),
     val requeuedPieces: List<Long> = emptyList(),
     val emittedPieces: List<AceLiveReassembledPiece> = emptyList(),
     val disconnectRecommended: Boolean = false
 )
 
 /**
- * Per-peer connection state that can be driven by a future TCP adapter without giving core:p2p
- * ownership of sockets.
+ * Per-peer connection state driven by the TCP pool without giving this state object ownership of
+ * sockets.
  *
- * The outer BitTorrent/Ace handshake bytes and identity/authentication remain separate because the
- * signed Ace identity contract is not implemented here. Once an adapter validates that handshake,
+ * The outer BitTorrent/Ace handshake bytes and identity/authentication remain in the network layer.
+ * Once the adapter validates that handshake,
  * [onHandshakeAccepted] emits the standard interested frame. Peer bytes can then be fed incrementally
  * through [consumePeerBytes]; partial frames remain bounded by the wire codec's frame limit.
  *
@@ -40,6 +43,7 @@ class AceLivePeerConnectionStateMachine(
     private var latestWindow: AceLivePeerAdvertisedWindow? = null
     private var receiveBuffer: ByteArray = byteArrayOf()
     private var protocolBlocked: Boolean = false
+    private var applicationHandshakeSent: Boolean = false
 
     init {
         require(peerId >= 0) { "peerId must be non-negative" }
@@ -56,6 +60,7 @@ class AceLivePeerConnectionStateMachine(
     fun isReadyForRequests(): Boolean =
         phase == AceLivePeerConnectionPhase.HANDSHAKE_ACCEPTED &&
             !protocolBlocked &&
+            applicationHandshakeSent &&
             peerUnchoked &&
             latestWindow != null
 
@@ -69,6 +74,7 @@ class AceLivePeerConnectionStateMachine(
         latestWindow = null
         receiveBuffer = byteArrayOf()
         protocolBlocked = false
+        applicationHandshakeSent = false
     }
 
     /**
@@ -80,8 +86,30 @@ class AceLivePeerConnectionStateMachine(
             "Ace Live peer handshake requires a connected transport"
         }
         phase = AceLivePeerConnectionPhase.HANDSHAKE_ACCEPTED
+        applicationHandshakeSent = true
         return session.wireCodec.encodeInterestedFrame()
     }
+
+    /** Accepts the outer handshake while waiting for the peer's live-window advertisement. */
+    fun onHandshakeAcceptedWithoutInterest() {
+        require(phase == AceLivePeerConnectionPhase.TRANSPORT_CONNECTED) {
+            "Ace Live peer handshake requires a connected transport"
+        }
+        phase = AceLivePeerConnectionPhase.HANDSHAKE_ACCEPTED
+        applicationHandshakeSent = false
+    }
+
+    /** Marks the signed application handshake as sent and returns the following interest frame. */
+    fun onApplicationHandshakeSent(): ByteArray {
+        require(phase == AceLivePeerConnectionPhase.HANDSHAKE_ACCEPTED) {
+            "Ace Live application handshake requires an accepted transport handshake"
+        }
+        check(!applicationHandshakeSent) { "Ace Live application handshake was already sent" }
+        applicationHandshakeSent = true
+        return session.wireCodec.encodeInterestedFrame()
+    }
+
+    fun hasSentApplicationHandshake(): Boolean = applicationHandshakeSent
 
     /** Drops all connection-local state and releases scheduler ownership for this peer. */
     fun onTransportDisconnected(): AceLivePeerEventResult {
@@ -95,6 +123,7 @@ class AceLivePeerConnectionStateMachine(
         latestWindow = null
         receiveBuffer = byteArrayOf()
         protocolBlocked = false
+        applicationHandshakeSent = false
         return requeued
     }
 
@@ -121,6 +150,9 @@ class AceLivePeerConnectionStateMachine(
         var decodedFrames = 0
         val metadataUpdates = mutableListOf<AceLivePeerAdvertisedWindow>()
         val metadataRejections = mutableListOf<AceLivePeerMetadataRejectReason>()
+        val activeChunkDispositions = mutableListOf<AceLiveChunkDisposition>()
+        val reassemblyDispositions = mutableListOf<AceLiveReassemblyDisposition>()
+        val unknownMessageIds = mutableListOf<Int>()
         val requeuedPieces = mutableListOf<Long>()
         val emittedPieces = mutableListOf<AceLiveReassembledPiece>()
 
@@ -141,6 +173,9 @@ class AceLivePeerConnectionStateMachine(
                             decodedFrames = decodedFrames,
                             metadataUpdates = metadataUpdates,
                             metadataRejections = metadataRejections,
+                            activeChunkDispositions = activeChunkDispositions,
+                            reassemblyDispositions = reassemblyDispositions,
+                            unknownMessageIds = unknownMessageIds,
                             requeuedPieces = requeuedPieces,
                             emittedPieces = emittedPieces,
                             disconnectRecommended = true
@@ -157,6 +192,9 @@ class AceLivePeerConnectionStateMachine(
                         decodedFrames = decodedFrames,
                         metadataUpdates = metadataUpdates,
                         metadataRejections = metadataRejections,
+                        activeChunkDispositions = activeChunkDispositions,
+                        reassemblyDispositions = reassemblyDispositions,
+                        unknownMessageIds = unknownMessageIds,
                         requeuedPieces = requeuedPieces,
                         emittedPieces = emittedPieces,
                         disconnectRecommended = true
@@ -180,6 +218,7 @@ class AceLivePeerConnectionStateMachine(
                         is AceLivePeerWireMessage.Unknown -> {
                             when (val metadata = metadataRecognizer.recognize(message.payload)) {
                                 AceLivePeerMetadataRecognition.NotRecognized -> {
+                                    unknownMessageIds += message.id
                                     session.onPeerMessage(peerId, message, nowMillis)
                                 }
 
@@ -205,6 +244,8 @@ class AceLivePeerConnectionStateMachine(
 
                         else -> {
                             val result = session.onPeerMessage(peerId, message, nowMillis)
+                            result.activeChunkDisposition?.let(activeChunkDispositions::add)
+                            result.reassemblyDisposition?.let(reassemblyDispositions::add)
                             emittedPieces += result.emittedPieces
                         }
                     }
@@ -216,6 +257,9 @@ class AceLivePeerConnectionStateMachine(
             decodedFrames = decodedFrames,
             metadataUpdates = metadataUpdates,
             metadataRejections = metadataRejections,
+            activeChunkDispositions = activeChunkDispositions,
+            reassemblyDispositions = reassemblyDispositions,
+            unknownMessageIds = unknownMessageIds,
             requeuedPieces = requeuedPieces,
             emittedPieces = emittedPieces
         )

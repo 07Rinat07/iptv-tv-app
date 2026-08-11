@@ -1,7 +1,5 @@
 package com.iptv.tv.core.p2p
 
-import java.nio.charset.StandardCharsets
-
 private const val MAX_ACE_LIVE_METADATA_PIECE = 0xffff_ffffL
 
 /** Safe subset of a decoded Ace Live peer metadata/window advertisement. */
@@ -83,26 +81,26 @@ class AceLivePeerMetadataRecognizer(
         }
 
         val root = runCatching {
-            BoundedBencodeParser(
+            AceBoundedBencodeParser(
                 data = payload,
                 startOffset = candidateOffset,
                 maxDepth = maxDepth,
                 maxContainerEntries = maxContainerEntries,
                 maxStringBytes = maxStringBytes,
                 maxTotalNodes = maxTotalNodes
-            ).parseRootDict()
+            ).parseRootDictionary()
         }.getOrElse {
             return AceLivePeerMetadataRecognition.Rejected(
                 AceLivePeerMetadataRejectReason.MALFORMED_BENCODE
             )
         }
 
-        val source = (root.values["mi"] as? BValue.DictValue) ?: root
-        val maxPiece = (source.values["max_piece"] as? BValue.IntValue)?.value
+        val source = (root.values["mi"] as? AceBencodeValue.Dictionary) ?: root
+        val maxPiece = (source.values["max_piece"] as? AceBencodeValue.Integer)?.value
             ?: return AceLivePeerMetadataRecognition.NotRecognized
-        val explicitMin = (source.values["min_piece"] as? BValue.IntValue)?.value
-        val position = (source.values["position"] as? BValue.IntValue)?.value
-        val distance = (source.values["distance_from_source"] as? BValue.IntValue)?.value
+        val explicitMin = (source.values["min_piece"] as? AceBencodeValue.Integer)?.value
+        val position = (source.values["position"] as? AceBencodeValue.Integer)?.value
+        val distance = (source.values["distance_from_source"] as? AceBencodeValue.Integer)?.value
 
         if (maxPiece !in 0..MAX_ACE_LIVE_METADATA_PIECE) return invalidWindow()
         if (explicitMin != null && explicitMin !in 0..maxPiece) return invalidWindow()
@@ -126,125 +124,11 @@ class AceLivePeerMetadataRecognizer(
 
     companion object {
         const val DEFAULT_MAX_PAYLOAD_BYTES: Int = 64 * 1024
-        const val DEFAULT_MAX_DEPTH: Int = 8
-        const val DEFAULT_MAX_CONTAINER_ENTRIES: Int = 128
+        const val DEFAULT_MAX_DEPTH: Int = AceBoundedBencodeParser.DEFAULT_MAX_DEPTH
+        const val DEFAULT_MAX_CONTAINER_ENTRIES: Int = AceBoundedBencodeParser.DEFAULT_MAX_CONTAINER_ENTRIES
         const val DEFAULT_MAX_STRING_BYTES: Int = 32 * 1024
         const val DEFAULT_MAX_TOTAL_NODES: Int = 512
 
         private val BENCODE_DICT: Byte = 'd'.code.toByte()
-    }
-}
-
-private sealed interface BValue {
-    data class IntValue(val value: Long) : BValue
-    class BytesValue(val value: ByteArray) : BValue
-    data class ListValue(val values: List<BValue>) : BValue
-    data class DictValue(val values: Map<String, BValue>) : BValue
-}
-
-private class BoundedBencodeParser(
-    private val data: ByteArray,
-    startOffset: Int,
-    private val maxDepth: Int,
-    private val maxContainerEntries: Int,
-    private val maxStringBytes: Int,
-    private val maxTotalNodes: Int
-) {
-    private var index: Int = startOffset
-    private var totalNodes: Int = 0
-
-    fun parseRootDict(): BValue.DictValue {
-        val value = parseValue(depth = 0) as? BValue.DictValue
-            ?: error("root is not a dictionary")
-        require(index == data.size) { "trailing bencode bytes" }
-        return value
-    }
-
-    private fun parseValue(depth: Int): BValue {
-        require(depth <= maxDepth) { "bencode nesting too deep" }
-        require(index < data.size) { "unexpected end of bencode" }
-        totalNodes += 1
-        require(totalNodes <= maxTotalNodes) { "too many bencode nodes" }
-
-        return when (val marker = data[index].toInt() and 0xff) {
-            'i'.code -> BValue.IntValue(parseInteger())
-            'l'.code -> parseList(depth)
-            'd'.code -> parseDict(depth)
-            in '0'.code..'9'.code -> BValue.BytesValue(parseByteString())
-            else -> error("invalid bencode marker: $marker")
-        }
-    }
-
-    private fun parseInteger(): Long {
-        expect('i')
-        val start = index
-        if (peek('-')) index += 1
-        val digitsStart = index
-        while (index < data.size && isDigit(data[index])) index += 1
-        require(index > digitsStart) { "empty bencode integer" }
-        require(index < data.size && data[index] == 'e'.code.toByte()) { "unterminated integer" }
-
-        val token = String(data, start, index - start, StandardCharsets.US_ASCII)
-        index += 1
-        require(token != "-0") { "negative zero is not canonical" }
-        val unsigned = token.removePrefix("-")
-        require(unsigned == "0" || !unsigned.startsWith('0')) { "integer has leading zero" }
-        return token.toLongOrNull() ?: error("integer overflow")
-    }
-
-    private fun parseList(depth: Int): BValue.ListValue {
-        expect('l')
-        val values = ArrayList<BValue>()
-        while (!peek('e')) {
-            require(values.size < maxContainerEntries) { "too many list entries" }
-            values += parseValue(depth + 1)
-        }
-        expect('e')
-        return BValue.ListValue(values)
-    }
-
-    private fun parseDict(depth: Int): BValue.DictValue {
-        expect('d')
-        val values = LinkedHashMap<String, BValue>()
-        while (!peek('e')) {
-            require(values.size < maxContainerEntries) { "too many dictionary entries" }
-            require(index < data.size && isDigit(data[index])) { "dictionary key is not a byte string" }
-            val keyBytes = parseByteString()
-            val key = String(keyBytes, StandardCharsets.US_ASCII)
-            values[key] = parseValue(depth + 1)
-        }
-        expect('e')
-        return BValue.DictValue(values)
-    }
-
-    private fun parseByteString(): ByteArray {
-        val lengthStart = index
-        while (index < data.size && isDigit(data[index])) index += 1
-        require(index > lengthStart) { "missing string length" }
-        require(index < data.size && data[index] == ':'.code.toByte()) { "missing string separator" }
-
-        val lengthText = String(data, lengthStart, index - lengthStart, StandardCharsets.US_ASCII)
-        require(lengthText == "0" || !lengthText.startsWith('0')) { "string length has leading zero" }
-        val length = lengthText.toIntOrNull() ?: error("string length overflow")
-        require(length <= maxStringBytes) { "bencode string too large" }
-        index += 1
-        require(length <= data.size - index) { "truncated bencode string" }
-
-        val value = data.copyOfRange(index, index + length)
-        index += length
-        return value
-    }
-
-    private fun expect(char: Char) {
-        require(index < data.size && data[index] == char.code.toByte()) { "expected $char" }
-        index += 1
-    }
-
-    private fun peek(char: Char): Boolean =
-        index < data.size && data[index] == char.code.toByte()
-
-    private fun isDigit(value: Byte): Boolean {
-        val unsigned = value.toInt() and 0xff
-        return unsigned in '0'.code..'9'.code
     }
 }

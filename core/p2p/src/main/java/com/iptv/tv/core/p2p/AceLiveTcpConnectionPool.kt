@@ -81,7 +81,6 @@ data class AceLiveTcpDispatchResult(
  *
  * Non-responsibilities:
  * - tracker/DHT discovery and peer scoring;
- * - proprietary/signed identity generation;
  * - `.acelive` decryption or content-id metadata resolution;
  * - playback muxing/output.
  */
@@ -97,6 +96,7 @@ class AceLiveTcpConnectionPool(
     private val poolMutex = Mutex()
     private val sessionMutex = Mutex()
     private val dispatchMutex = Mutex()
+    private val nodeIdentity = AceLiveNodeIdentity.generate()
     private val peers = LinkedHashMap<Long, PeerRuntime>()
 
     suspend fun startPeer(
@@ -462,8 +462,21 @@ class AceLiveTcpConnectionPool(
                     }
 
                     is AceLivePeerHandshakeDecodeResult.Decoded -> {
+                        sessionMutex.withLock {
+                            runtime.connection.onHandshakeAcceptedWithoutInterest()
+                        }
+                        val extendedHandshake = nodeIdentity.signedExtendedHandshake(
+                            minPiece = 0L,
+                            maxPiece = 0L,
+                            timestamp = DEFAULT_HANDSHAKE_TIMESTAMP
+                        )
+                        if (!writeFrameBounded(runtime, transport, extendedHandshake)) {
+                            return@withTimeoutOrNull HandshakeStageResult.Exit(
+                                ConnectionExit(AceLiveTcpDisconnectReason.IO_ERROR, retryable = true)
+                            )
+                        }
                         val interested = sessionMutex.withLock {
-                            runtime.connection.onHandshakeAccepted()
+                            runtime.connection.onApplicationHandshakeSent()
                         }
                         if (!writeFrameBounded(runtime, transport, interested)) {
                             return@withTimeoutOrNull HandshakeStageResult.Exit(
@@ -506,6 +519,19 @@ class AceLiveTcpConnectionPool(
             runtime.connection.consumePeerBytes(bytes, nowMillis = clockMillis())
         }
         if (
+            result.metadataUpdates.isNotEmpty()
+        ) {
+            val window = result.metadataUpdates.last()
+            val now = clockMillis()
+            sessionMutex.withLock {
+                session.initializeFromLiveWindow(
+                    window = window,
+                    prefetchPieces = DEFAULT_PREFETCH_PIECES,
+                    nowMillis = now
+                )
+            }
+        }
+        if (
             result.decodedFrames > 0 ||
             result.metadataUpdates.isNotEmpty() ||
             result.metadataRejections.isNotEmpty() ||
@@ -520,6 +546,11 @@ class AceLiveTcpConnectionPool(
 
     private fun emit(event: AceLiveTcpPoolEvent) {
         runCatching { onEvent(event) }
+    }
+
+    private companion object {
+        const val DEFAULT_PREFETCH_PIECES = 8L
+        const val DEFAULT_HANDSHAKE_TIMESTAMP = 5_000L
     }
 
     private class PeerRuntime(

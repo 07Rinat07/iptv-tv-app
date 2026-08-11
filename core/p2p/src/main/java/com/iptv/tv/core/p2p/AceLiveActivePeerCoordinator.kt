@@ -124,6 +124,7 @@ data class AceLiveChunkResult(
 class AceLiveActivePeerCoordinator(
     private val geometry: AceLiveTransportGeometry,
     maxInFlightPerPeer: Int,
+    private val maxOutstandingChunksPerPiece: Int = DEFAULT_MAX_OUTSTANDING_CHUNKS_PER_PIECE,
     recoveryPolicy: AceLiveRecoveryPolicy = AceLiveRecoveryPolicy(),
     val maxReassemblerAheadPieces: Long = DEFAULT_MAX_REASSEMBLER_AHEAD_PIECES
 ) {
@@ -139,6 +140,9 @@ class AceLiveActivePeerCoordinator(
         }
         require(geometry.chunksPerPiece in 1..ACE_LIVE_CHUNK_INDEX_CARDINALITY) {
             "Ace Live chunksPerPiece must fit the u16 chunk index space"
+        }
+        require(maxOutstandingChunksPerPiece > 0) {
+            "maxOutstandingChunksPerPiece must be positive"
         }
     }
 
@@ -178,12 +182,15 @@ class AceLiveActivePeerCoordinator(
         val safeHead = minOf(head, reassemblyHead, MAX_ACE_LIVE_WIRE_PIECE)
         if (safeHead < nextNeeded) return emptyList()
 
-        return recovery.assign(nextNeeded, safeHead, nowMillis).flatMap { assignment ->
+        recovery.assign(nextNeeded, safeHead, nowMillis).forEach { assignment ->
             val state = RequestedPiece(peerId = assignment.peerId)
             check(requestedPieces.put(assignment.piece, state) == null) {
                 "Scheduler assigned an already tracked Ace Live piece ${assignment.piece}"
             }
-            requestsFor(assignment)
+        }
+
+        return requestedPieces.entries.flatMap { (piece, state) ->
+            refillChunkRequests(piece = piece, state = state)
         }
     }
 
@@ -209,7 +216,7 @@ class AceLiveActivePeerCoordinator(
 
     /**
      * Validates one decoded live chunk against current ownership and geometry.
-     * Accepted bytes are not retained here; the future reassembler consumes [AceLiveIncomingChunk]
+     * Accepted bytes are not retained here; the session reassembler consumes [AceLiveIncomingChunk]
      * after this method returns an accepted disposition.
      */
     fun onChunk(chunk: AceLiveIncomingChunk, nextNeeded: Long): AceLiveChunkResult {
@@ -235,6 +242,9 @@ class AceLiveActivePeerCoordinator(
         }
         if (chunk.chunkIndex !in 0 until geometry.chunksPerPiece) {
             return result(AceLiveChunkDisposition.INVALID_CHUNK_INDEX)
+        }
+        if (chunk.chunkIndex !in state.requestedChunks) {
+            return result(AceLiveChunkDisposition.UNSOLICITED)
         }
 
         val expectedPayloadBytes = expectedPayloadBytes(chunk.chunkIndex)
@@ -271,17 +281,32 @@ class AceLiveActivePeerCoordinator(
 
     fun trackedPieceCount(): Int = requestedPieces.size
 
-    private fun requestsFor(assignment: AceLivePieceAssignment): List<AceLiveChunkRequest> =
-        (0 until geometry.chunksPerPiece).map { chunkIndex ->
+    private fun refillChunkRequests(
+        piece: Long,
+        state: RequestedPiece
+    ): List<AceLiveChunkRequest> {
+        val outstanding = state.requestedChunks.size - state.receivedChunks.size
+        val capacity = (maxOutstandingChunksPerPiece - outstanding).coerceAtLeast(0)
+        if (capacity == 0) return emptyList()
+
+        val chunkIndices = (0 until geometry.chunksPerPiece)
+            .asSequence()
+            .filterNot(state.requestedChunks::contains)
+            .take(capacity)
+            .toList()
+        state.requestedChunks += chunkIndices
+
+        return chunkIndices.map { chunkIndex ->
             val begin = chunkIndex.toLong() * geometry.chunkLengthBytes.toLong()
             AceLiveChunkRequest(
-                peerId = assignment.peerId,
-                piece = assignment.piece,
+                peerId = state.peerId,
+                piece = piece,
                 chunkIndex = chunkIndex,
                 beginBytes = begin.toInt(),
                 expectedPayloadBytes = expectedPayloadBytes(chunkIndex)
             )
         }
+    }
 
     private fun expectedPayloadBytes(chunkIndex: Int): Int {
         val begin = chunkIndex.toLong() * geometry.chunkLengthBytes.toLong()
@@ -325,10 +350,12 @@ class AceLiveActivePeerCoordinator(
     private data class RequestedPiece(
         val peerId: Long,
         var pieceHeader: ByteArray? = null,
+        val requestedChunks: MutableSet<Int> = mutableSetOf(),
         val receivedChunks: MutableSet<Int> = mutableSetOf()
     )
 
     companion object {
         const val DEFAULT_MAX_REASSEMBLER_AHEAD_PIECES: Long = 512L
+        const val DEFAULT_MAX_OUTSTANDING_CHUNKS_PER_PIECE: Int = 24
     }
 }

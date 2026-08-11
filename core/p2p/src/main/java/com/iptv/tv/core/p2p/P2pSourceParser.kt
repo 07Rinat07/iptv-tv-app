@@ -105,6 +105,14 @@ object P2pSourceParser {
         else -> null
     }
 
+    /** Returns a direct Ace Live swarm key only when it is carried by explicit Ace syntax. */
+    fun parseAceLiveInfoHash(raw: String): String? {
+        val value = raw.trim()
+        if (!isAceDescriptor(value)) return null
+        val hash = aceDescriptorQueryParameter(value, "infohash") ?: return null
+        return AceLiveSwarmKey.parseHex(hash)?.toHex()
+    }
+
     private fun parseNestedAceBitTorrentSource(value: String): P2pResult<P2pSource>? {
         val nested = value.trim()
         return when {

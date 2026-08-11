@@ -39,6 +39,48 @@ class AceLiveActivePeerCoordinatorTest {
     }
 
     @Test
+    fun chunkRequestWindowRefillsAsPeerDataArrives() {
+        val coordinator = AceLiveActivePeerCoordinator(
+            geometry = AceLiveTransportGeometry(
+                pieceLengthBytes = 64 * 4,
+                chunkLengthBytes = 4,
+                bitrate = 1
+            ),
+            maxInFlightPerPeer = 1,
+            maxOutstandingChunksPerPiece = 8
+        )
+        coordinator.onPeerEvent(window(peerId = 7, min = 10, max = 20, unchoked = true))
+
+        assertEquals(
+            (0 until 8).toList(),
+            coordinator.schedule(nextNeeded = 10, head = 10, nowMillis = 0).map { it.chunkIndex }
+        )
+
+        val header = AceLivePieceHeaderCodec.encodeUnixSeconds(1_000.0)
+        assertEquals(
+            AceLiveChunkDisposition.UNSOLICITED,
+            coordinator.onChunk(
+                chunk(peer = 7, piece = 10, index = 8, header = header, size = 4),
+                nextNeeded = 10
+            ).disposition
+        )
+        repeat(4) { index ->
+            assertEquals(
+                AceLiveChunkDisposition.ACCEPTED,
+                coordinator.onChunk(
+                    chunk(peer = 7, piece = 10, index = index, header = header, size = 4),
+                    nextNeeded = 10
+                ).disposition
+            )
+        }
+
+        assertEquals(
+            (8 until 12).toList(),
+            coordinator.schedule(nextNeeded = 10, head = 10, nowMillis = 1).map { it.chunkIndex }
+        )
+    }
+
+    @Test
     fun chokedPeerReceivesNoWorkUntilUnchokedEvent() {
         val coordinator = coordinator(maxInFlightPerPeer = 1)
         coordinator.onPeerEvent(window(peerId = 1, min = 10, max = 20, unchoked = false))

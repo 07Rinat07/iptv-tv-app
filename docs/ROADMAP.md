@@ -29,7 +29,7 @@
 
 0. **Issue #40 — завершить regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
 1. **Issue #45 — canonical catalog hierarchy + unified Favorites.** Стабильные identity, parent/source provenance, adapters, navigation skeleton, dedup/source variants и единое избранное.
-2. **Master #44 — P2P transport blocker.** После стабильного source provenance завершить собственное разрешение Ace content-id и затем отдельный Ace Live/.acelive backend, не смешивая transport с Player UX.
+2. **Master #44 — P2P transport blocker.** Завершить аппаратную приёмку встроенного Ace Live backend и повысить доступность разрешения Ace content-id, не смешивая transport с Player UX.
 3. **Issue #47 — EPG / Now-Next / real archive.** Строить ingestion/cache/matching и catch-up поверх стабильной channel identity из #45.
 4. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
 5. **Issue #43 — contextual Help + built-in Help + docs baseline.** Завершать после стабилизации основных экранов, чтобы не переписывать подсказки после Catalog/EPG/Player изменений.
@@ -54,7 +54,7 @@
 
 ## Этап 2: встроенный P2P engine и Ace transport
 
-Внешний Ace Stream больше не считается достаточным решением. В APK должен находиться собственный BitTorrent/P2P backend. Ordinary BitTorrent основа уже реализована; следующий приоритет после canonical source identity — transport metadata для Ace content-id и отдельный Ace Live backend.
+Внешний Ace Stream больше не считается достаточным решением. В APK находятся собственные ordinary BitTorrent и Ace Live backends; следующий приоритет после canonical source identity — аппаратная приёмка и повышение доступности transport metadata для Ace content-id.
 
 1. Добавить модуль `core:p2p` на базе libtorrent/libtorrent4j.
 2. Поддержать `magnet:`, infohash, локальный `.torrent` и HTTP(S) URL на `.torrent`.
@@ -71,9 +71,9 @@
 1. Не считать `content_id` эквивалентом BitTorrent infohash. Явный `acestream:?infohash=...` может идти во встроенный BitTorrent backend, а чистый `acestream://content_id` сначала должен быть разрешён через transport metadata.
 2. Использовать публичный контракт официального `acestream/acestream-android-sdk`: `get_media_files` в полном режиме с `expand_wrapper=1` и `dump_transport_file=1`; хранить раздельно `infohash`, `transport_file_data`, `transport_file_cache_key`, `files[]` и `wrapper_data`.
 3. Различать `type=vod|live` и `transport_type=bt|hls|wrapper`. Только подтверждённый non-live BitTorrent transport разрешается передавать стандартному libtorrent.
-4. Добавить явную модель `.acelive`/Ace Live descriptor и отдельную диагностику маршрута. До появления собственного совместимого live backend сохранять внешний Ace как compatibility fallback.
-5. Для Ace Live отдельно исследовать transport descriptor, live window, piece/chunk scheduling, live seek, peer discovery и восстановление после пропусков. Реализацию строить только по публичной спецификации или открытой реализации; бинарные внутренности сторонних APK не копировать.
-6. После стабилизации transport metadata выполнить реальную приёмку на нескольких `acestream://content_id`, обычных magnet/.torrent и `.acelive` источниках.
+4. Поддерживать явную модель `.acelive`/Ace Live descriptor и отдельную диагностику маршрута; внешний Ace сохранять как последний compatibility fallback.
+5. Встроенный Ace Live backend уже покрывает transport descriptor, live window, ограниченный piece/chunk scheduling, DHT/tracker peer discovery, восстановление пула и локальный MPEG-TS output. Следующий шаг — длительная аппаратная проверка переключений и восстановления после пропусков.
+6. Выполнить аппаратную приёмку на нескольких `acestream://content_id`, прямых Ace `infohash`, обычных magnet/.torrent и `.acelive` источниках.
 
 ### Исследовательские ориентиры и лицензионные границы
 
@@ -86,9 +86,9 @@
 
 ### Следующие P2P-инкременты
 
-1. Завершить структурированную full transport-metadata модель и тесты.
-2. Реализовать собственное разрешение transport data для `acestream://content_id` без обязательного внешнего Ace Engine.
-3. Добавить `.acelive` descriptor/routing/backend/diagnostics без ошибочного преобразования в обычный magnet.
+1. Расширить сетевую приёмку автономного `content_id` resolver на metadata swarms с доступными публичными пирами.
+2. Завершить аппаратную проверку встроенного Ace Live runtime без обязательного внешнего Ace Engine.
+3. Расширить `.acelive` routing/diagnostics без ошибочного преобразования в обычный magnet.
 4. Сохранять ordinary BitTorrent regression baseline: magnet/infohash/local/HTTP torrent, read-ahead, seek и local HTTP Range.
 5. Добавить/сохранить измеримые P2P diagnostics: metadata time, first-piece time, startup time, peers, download rate, seek recovery time и fallback reason.
 6. Провести реальные тесты: быстрое переключение каналов, seek, слабая сеть, потеря peers, повторное открытие, долгий просмотр.

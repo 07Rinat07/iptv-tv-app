@@ -10,8 +10,10 @@ import com.iptv.tv.core.domain.repository.EngineRepository
 import com.iptv.tv.core.engine.data.AceContentIdResolverUnavailableException
 import com.iptv.tv.core.engine.data.AceContentTransportResolution
 import com.iptv.tv.core.engine.data.AceContentTransportResolver
+import com.iptv.tv.core.engine.data.AceTransportMetadata
 import com.iptv.tv.core.engine.data.EngineStreamClient
 import com.iptv.tv.core.model.EngineStatus
+import com.iptv.tv.core.p2p.AceLiveEmbeddedEngine
 import com.iptv.tv.core.p2p.LibtorrentEmbeddedEngine
 import com.iptv.tv.core.p2p.P2pResult
 import com.iptv.tv.core.p2p.P2pSource
@@ -35,9 +37,9 @@ import okhttp3.OkHttpClient
  *
  * Standard BitTorrent sources (`magnet:`, explicit infohash and `.torrent`) are owned exclusively by
  * the in-process libtorrent backend and never probe Ace Engine as a fallback. True Ace content ids
- * are never reinterpreted as infohashes: they enter an Ace-specific metadata resolver boundary.
- * Today the external Ace Engine is the compatibility implementation of that resolver; if it proves
- * a non-live BitTorrent identity, playback is handed back to the embedded backend.
+ * are never reinterpreted as ordinary torrents: content IDs enter an Ace-specific metadata resolver,
+ * and legacy gateway `infohash` values enter the direct Ace Live path. The external Ace Engine is a
+ * compatibility fallback; proven non-live BitTorrent identities are handed to libtorrent.
  */
 @Singleton
 class HybridEngineRepositoryImpl @Inject constructor(
@@ -51,9 +53,13 @@ class HybridEngineRepositoryImpl @Inject constructor(
     private val embeddedEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         LibtorrentEmbeddedEngine(appContext, okHttpClient)
     }
+    private val aceLiveEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        AceLiveEmbeddedEngine(okHttpClient)
+    }
     private val streamEpoch = AtomicLong(0L)
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val embeddedEngineUsed = AtomicBoolean(false)
+    private val aceLiveEngineUsed = AtomicBoolean(false)
 
     override suspend fun connect(endpoint: String): AppResult<Unit> {
         return when (val result = client.connect(endpoint)) {
@@ -79,6 +85,9 @@ class HybridEngineRepositoryImpl @Inject constructor(
             EngineStreamRoute.ACE_CONTENT_ID -> {
                 resolveAceContentIdWithEmbeddedMetadata(magnetOrAce, epoch)
             }
+            EngineStreamRoute.ACE_LIVE_INFOHASH -> {
+                resolveAceLiveInfoHash(magnetOrAce, epoch)
+            }
             EngineStreamRoute.ACE_LIVE_COMPATIBILITY -> {
                 resolveAceLiveCompatibility(magnetOrAce, epoch)
             }
@@ -102,7 +111,7 @@ class HybridEngineRepositoryImpl @Inject constructor(
 
     override fun releaseTorrentStream() {
         val epoch = streamEpoch.incrementAndGet()
-        if (!embeddedEngineUsed.get()) return
+        if (!embeddedEngineUsed.get() && !aceLiveEngineUsed.get()) return
 
         cleanupScope.launch {
             stopEmbeddedForEpoch(epoch)
@@ -115,21 +124,29 @@ class HybridEngineRepositoryImpl @Inject constructor(
      * fetch can finish in the background without keeping direct IPTV or a newer P2P request waiting.
      */
     private suspend fun stopEmbeddedForEpoch(epoch: Long): AppResult<Unit> {
-        if (streamEpoch.get() != epoch || !embeddedEngineUsed.get()) {
+        if (
+            streamEpoch.get() != epoch ||
+            (!embeddedEngineUsed.get() && !aceLiveEngineUsed.get())
+        ) {
             return AppResult.Success(Unit)
         }
 
-        return when (val stopped = embeddedEngine.stopStream()) {
-            is P2pResult.Success -> AppResult.Success(Unit)
-            is P2pResult.Error -> {
-                if (streamEpoch.get() != epoch) {
-                    AppResult.Success(Unit)
-                } else {
-                    log("embedded_p2p_stop_error", stopped.message)
-                    AppResult.Error(stopped.message, stopped.cause)
-                }
-            }
+        val failures = mutableListOf<P2pResult.Error>()
+        if (embeddedEngineUsed.get()) {
+            val stopped = embeddedEngine.stopStream()
+            if (stopped is P2pResult.Error) failures += stopped
         }
+        if (aceLiveEngineUsed.get()) {
+            val stopped = aceLiveEngine.stopStream()
+            if (stopped is P2pResult.Error) failures += stopped
+        }
+        if (streamEpoch.get() != epoch || failures.isEmpty()) {
+            return AppResult.Success(Unit)
+        }
+
+        val failure = failures.first()
+        log("embedded_p2p_stop_error", failure.message)
+        return AppResult.Error(failure.message, failure.cause)
     }
 
     /**
@@ -196,6 +213,38 @@ class HybridEngineRepositoryImpl @Inject constructor(
         return if (streamEpoch.get() == epoch) result else supersededResult()
     }
 
+    private suspend fun resolveAceLiveInfoHash(
+        rawSource: String,
+        epoch: Long
+    ): AppResult<String> {
+        stopEmbeddedForEpoch(epoch)
+        if (streamEpoch.get() != epoch) return supersededResult()
+
+        val infoHash = P2pSourceParser.parseAceLiveInfoHash(rawSource)
+            ?: return AppResult.Error("Некорректный Ace Live infohash в ссылке Torrent TV")
+        aceLiveEngineUsed.set(true)
+        return when (val live = aceLiveEngine.prepareInfoHash(infoHash)) {
+            is P2pResult.Success -> {
+                if (streamEpoch.get() != epoch) return supersededResult()
+                log("embedded_ace_live_infohash_resolved", "Direct Ace Live swarm prepared")
+                AppResult.Success(live.data.url)
+            }
+            is P2pResult.Error -> {
+                if (streamEpoch.get() != epoch) return supersededResult()
+                log("embedded_ace_live_infohash_error", live.message)
+                val external = resolveExternalIfCurrent(rawSource, epoch)
+                if (external is AppResult.Success || external is AppResult.Loading) {
+                    external
+                } else {
+                    AppResult.Error(
+                        message = "Встроенный Ace Live не смог подготовить поток: ${live.message}",
+                        cause = live.cause
+                    )
+                }
+            }
+        }
+    }
+
     /**
      * A pure Ace content id is not a BitTorrent hash. Transport discovery is delegated to the
      * resolver boundary so playlist syntax no longer determines the runtime backend. Only a proven
@@ -208,6 +257,31 @@ class HybridEngineRepositoryImpl @Inject constructor(
     ): AppResult<String> {
         stopEmbeddedForEpoch(epoch)
         if (streamEpoch.get() != epoch) return supersededResult()
+
+        val parsedSource = P2pSourceParser.parse(rawSource)
+        val contentId = (parsedSource as? P2pResult.Success)
+            ?.data
+            ?.let { source -> (source as? P2pSource.AceContentId)?.contentId }
+        var autonomousLiveFailure: P2pResult.Error? = null
+        if (!contentId.isNullOrBlank()) {
+            aceLiveEngineUsed.set(true)
+            when (val live = aceLiveEngine.prepareStream(contentId)) {
+                is P2pResult.Success -> {
+                    if (streamEpoch.get() != epoch) return supersededResult()
+                    log(
+                        "embedded_ace_live_resolved",
+                        "Autonomous Ace Live stream prepared: ${live.data.name}"
+                    )
+                    return AppResult.Success(live.data.url)
+                }
+
+                is P2pResult.Error -> {
+                    if (streamEpoch.get() != epoch) return supersededResult()
+                    autonomousLiveFailure = live
+                    log("embedded_ace_live_resolve_error", live.message)
+                }
+            }
+        }
 
         val resolution = contentTransportResolver.resolve(rawSource)
         if (streamEpoch.get() != epoch) return supersededResult()
@@ -244,9 +318,13 @@ class HybridEngineRepositoryImpl @Inject constructor(
                 is AceContentTransportResolution.AceLive -> {
                     log(
                         "engine_content_id_live_transport",
-                        "Ace content id resolved to live transport; using external Ace compatibility playback"
+                        "Ace content id resolved to live transport; preparing it with the embedded Ace Live runtime"
                     )
-                    return resolveExternalIfCurrent(rawSource, epoch)
+                    return prepareResolvedAceLiveMetadata(
+                        rawSource = rawSource,
+                        metadata = transport.metadata,
+                        epoch = epoch
+                    )
                 }
                 is AceContentTransportResolution.Unsupported -> {
                     log("engine_content_id_transport_unsupported", transport.reason)
@@ -260,7 +338,14 @@ class HybridEngineRepositoryImpl @Inject constructor(
                         "engine_content_id_resolver_unavailable",
                         "No Ace-specific content-id resolver is available"
                     )
-                    return aceContentIdResolverUnavailable(resolution)
+                    val external = resolveExternalIfCurrent(rawSource, epoch)
+                    if (external is AppResult.Success || external is AppResult.Loading) return external
+                    return autonomousLiveFailure?.let { failure ->
+                        AppResult.Error(
+                            message = "Встроенный Ace Live не смог подготовить поток: ${failure.message}",
+                            cause = failure.cause
+                        )
+                    } ?: aceContentIdResolverUnavailable(resolution)
                 }
                 return resolveExternalIfCurrent(rawSource, epoch)
             }
@@ -292,6 +377,76 @@ class HybridEngineRepositoryImpl @Inject constructor(
                 "Magnet, .torrent и BitTorrent infohash воспроизводятся встроенным P2P-движком.",
             cause = error.cause
         )
+
+    private suspend fun prepareResolvedAceLiveMetadata(
+        rawSource: String,
+        metadata: AceTransportMetadata,
+        epoch: Long
+    ): AppResult<String> {
+        metadata.transportFileData?.takeIf(String::isNotBlank)?.let { encoded ->
+            when (val decoded = decodeAceTransportFile(encoded)) {
+                is P2pResult.Success -> when (
+                    val prepared = aceLiveEngine.prepareTransportFile(decoded.data)
+                ) {
+                    is P2pResult.Success -> {
+                        if (streamEpoch.get() != epoch) return supersededResult()
+                        log(
+                            "embedded_ace_live_transport_resolved",
+                            "Ace Live transport descriptor prepared by the embedded runtime"
+                        )
+                        return AppResult.Success(prepared.data.url)
+                    }
+
+                    is P2pResult.Error -> log(
+                        "embedded_ace_live_transport_error",
+                        prepared.message
+                    )
+                }
+
+                is P2pResult.Error -> log("engine_content_id_transport_file_error", decoded.message)
+            }
+        }
+
+        metadata.liveSwarmInfoHash?.let { infoHash ->
+            when (val prepared = aceLiveEngine.prepareInfoHash(infoHash)) {
+                is P2pResult.Success -> {
+                    if (streamEpoch.get() != epoch) return supersededResult()
+                    log(
+                        "embedded_ace_live_metadata_infohash_resolved",
+                        "Resolved live swarm prepared by the embedded Ace Live runtime"
+                    )
+                    return AppResult.Success(prepared.data.url)
+                }
+
+                is P2pResult.Error -> log(
+                    "embedded_ace_live_metadata_infohash_error",
+                    prepared.message
+                )
+            }
+        }
+
+        return resolveExternalIfCurrent(rawSource, epoch)
+    }
+
+    private fun decodeAceTransportFile(encoded: String): P2pResult<ByteArray> = runCatching {
+        require(encoded.length <= MAX_ACE_TRANSPORT_FILE_BASE64_CHARS) {
+            "Ace transport-file payload is too large"
+        }
+        val bytes = Base64.decode(encoded, Base64.DEFAULT)
+        require(bytes.isNotEmpty()) { "Ace transport-file payload is empty" }
+        require(bytes.size <= MAX_ACE_TRANSPORT_FILE_BYTES) {
+            "Ace transport-file payload exceeds the embedded metadata limit"
+        }
+        bytes
+    }.fold(
+        onSuccess = { P2pResult.Success(it) },
+        onFailure = { error ->
+            P2pResult.Error(
+                error.message ?: "Unable to decode Ace transport-file payload",
+                error
+            )
+        }
+    )
 
     private fun materializeAceTransportFile(
         rawSource: String,

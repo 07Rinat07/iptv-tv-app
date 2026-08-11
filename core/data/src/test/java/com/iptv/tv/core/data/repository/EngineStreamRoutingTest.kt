@@ -49,9 +49,9 @@ class EngineStreamRoutingTest {
     }
 
     @Test
-    fun legacyLoopbackAceInfoHashUsesEmbeddedBitTorrent() {
+    fun legacyLoopbackAceInfoHashUsesDirectAceLive() {
         assertEquals(
-            EngineStreamRoute.EMBEDDED_BITTORRENT,
+            EngineStreamRoute.ACE_LIVE_INFOHASH,
             EngineStreamRouting.route(
                 "http://127.0.0.1:6878/ace/getstream?infohash=881ffab7e64f437d16d2ca4474c291a4a1111bd2"
             )
@@ -59,9 +59,9 @@ class EngineStreamRoutingTest {
     }
 
     @Test
-    fun legacyLoopbackAceInfoHashWithPidUsesEmbeddedBitTorrent() {
+    fun legacyLoopbackAceInfoHashWithPidUsesDirectAceLive() {
         assertEquals(
-            EngineStreamRoute.EMBEDDED_BITTORRENT,
+            EngineStreamRoute.ACE_LIVE_INFOHASH,
             EngineStreamRouting.route(
                 "http://127.0.0.1:6878/ace/getstream?infohash=cd8c7fcc7fb8c597d64b41429e0596887e097e54&pid=38900686757"
             )
@@ -105,9 +105,9 @@ class EngineStreamRoutingTest {
     }
 
     @Test
-    fun aceDescriptorWithExplicitInfoHashUsesEmbeddedBitTorrent() {
+    fun aceDescriptorWithExplicitInfoHashUsesDirectAceLive() {
         assertEquals(
-            EngineStreamRoute.EMBEDDED_BITTORRENT,
+            EngineStreamRoute.ACE_LIVE_INFOHASH,
             EngineStreamRouting.route(
                 "acestream:?infohash=0123456789abcdef0123456789abcdef01234567"
             )

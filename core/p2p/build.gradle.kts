@@ -28,6 +28,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
+    implementation(libs.eddsa)
 
     implementation(libs.libtorrent4j)
     runtimeOnly(libs.libtorrent4j.android.arm)

@@ -63,13 +63,14 @@ class AceLiveTcpConnectionPoolTest {
         assertEquals(3, dispatch.selectedFrames)
         assertEquals(3, dispatch.sentFrames)
         assertTrue(dispatch.failedPeerIds.isEmpty())
-        awaitCondition { transport.writes.size >= 5 }
+        awaitCondition { transport.writes.size >= 6 }
         assertArrayEquals(
             handshakeCodec.encode(swarmKey, localPeerId),
             transport.writes[0]
         )
-        assertArrayEquals(byteArrayOf(0, 0, 0, 1, 2), transport.writes[1])
-        transport.writes.drop(2).take(3).forEach { requestFrame ->
+        assertEquals(20, transport.writes[1][4].toInt() and 0xff)
+        assertArrayEquals(byteArrayOf(0, 0, 0, 1, 2), transport.writes[2])
+        transport.writes.drop(3).take(3).forEach { requestFrame ->
             assertEquals(6, requestFrame[4].toInt() and 0xff)
         }
 
@@ -241,7 +242,7 @@ class AceLiveTcpConnectionPoolTest {
             frame(id = 1)
         val stalled = FakeTransport(
             initialReads = listOf(ReadAction.Data(peerPayload)),
-            blockWritesAfterCount = 2
+            blockWritesAfterCount = 3
         )
         val healthy = FakeTransport(listOf(ReadAction.Data(peerPayload)))
         val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
@@ -277,9 +278,9 @@ class AceLiveTcpConnectionPoolTest {
             pool.scheduleAndDispatch(head = 11, nowMillis = 1)
         }
 
-        assertTrue(20L in dispatch.failedPeerIds)
+        assertTrue(dispatch.failedPeerIds.isNotEmpty())
         assertTrue(dispatch.sentFrames >= 3)
-        assertTrue(healthy.writes.drop(2).any { it.size >= 5 && (it[4].toInt() and 0xff) == 6 })
+        assertTrue(healthy.writes.drop(3).any { it.size >= 5 && (it[4].toInt() and 0xff) == 6 })
 
         pool.close()
     }

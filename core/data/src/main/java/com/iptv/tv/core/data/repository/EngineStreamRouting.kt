@@ -8,6 +8,7 @@ import com.iptv.tv.core.p2p.P2pSourceParser
 internal enum class EngineStreamRoute {
     EMBEDDED_BITTORRENT,
     ACE_CONTENT_ID,
+    ACE_LIVE_INFOHASH,
     ACE_LIVE_COMPATIBILITY,
     EXTERNAL_COMPATIBILITY
 }
@@ -17,9 +18,10 @@ internal enum class EngineStreamRoute {
  *
  * Legacy Torrent TV playlists frequently encode Ace descriptors as loopback HTTP URLs such as
  * `http://127.0.0.1:6878/ace/getstream?id=...`. P2pSourceParser normalizes those descriptor-shaped
- * URLs before this router sees their transport identity: explicit `infohash` values go to embedded
- * libtorrent, while `id`/`content_id` values stay distinct Ace content ids and enter the metadata
- * resolution boundary. The original loopback URL is never treated as a required player endpoint.
+ * URLs before this router sees their transport identity: gateway `infohash` values identify direct
+ * Ace Live swarms, while `id`/`content_id` values enter the Ace transport-metadata boundary. Bare
+ * infohashes outside the legacy gateway remain standard BitTorrent. The original loopback URL is
+ * never treated as a required player endpoint.
  *
  * `.acelive` transport files remain separate from standard BitTorrent because Ace Live uses a
  * distinct live piece/chunk protocol. Unknown legacy descriptors retain an external compatibility
@@ -30,6 +32,9 @@ internal object EngineStreamRouting {
         val normalized = rawSource.trim()
         if (AceLiveDescriptorParser.parse(normalized) != null) {
             return EngineStreamRoute.ACE_LIVE_COMPATIBILITY
+        }
+        if (P2pSourceParser.parseAceLiveInfoHash(normalized) != null) {
+            return EngineStreamRoute.ACE_LIVE_INFOHASH
         }
 
         return when (val parsed = P2pSourceParser.parse(normalized)) {
