@@ -8,6 +8,7 @@ import com.iptv.tv.core.database.dao.ProviderSyncHistoryDao
 import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.PlaylistProviderEntity
 import com.iptv.tv.core.domain.repository.PlaylistRepository
+import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.ProviderAuthType
 import com.iptv.tv.core.model.ProviderDiagnosticKind
@@ -168,6 +169,43 @@ class ProviderAccountRepositoryImplTest {
         coVerify(exactly = 1) { providerDao.markSynced(9L, 77L, any()) }
         coVerify(exactly = 1) {
             syncLogDao.insert(match { it.status == "provider_sync_item_ok" && it.message.contains("providerId=9") })
+        }
+    }
+
+    @Test
+    fun syncProvider_forM3uPreservesProviderOrigin() = runTest {
+        val provider = m3uProviderEntity()
+        coEvery { providerDao.findById(9L) } returns provider
+        coEvery {
+            playlistRepository.importFromUrl(
+                url = provider.baseUrl,
+                name = provider.name,
+                catalogOrigin = CatalogOriginKind.PROVIDER
+            )
+        } returns AppResult.Success(
+            PlaylistImportReport(
+                playlistId = 78L,
+                totalParsed = 1,
+                totalImported = 1,
+                removedDuplicates = 0,
+                warnings = emptyList(),
+                autoChecked = 0,
+                available = 0,
+                unstable = 0,
+                unavailable = 0
+            )
+        )
+        coEvery { providerDao.markSynced(9L, 78L, any()) } returns 1
+
+        val result = repository.syncProvider(9L)
+
+        assertSuccess(result)
+        coVerify(exactly = 1) {
+            playlistRepository.importFromUrl(
+                url = provider.baseUrl,
+                name = provider.name,
+                catalogOrigin = CatalogOriginKind.PROVIDER
+            )
         }
     }
 

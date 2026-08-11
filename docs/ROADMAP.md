@@ -43,7 +43,7 @@
 
 1. ✅ Введены в `core/model` стабильные `CatalogNodeId`, `CatalogNodeKind`, `CatalogProvenance` и parent/order contract без зависимости от Room auto-generated id.
 2. ✅ Общий `ChannelStableIdentity` синхронизирует логическую identity канала между canonical catalog и существующим global Favorites.
-3. 🔄 Persist provenance: `catalogOrigin` сохраняется в Room/domain; provider/local источники и migration получают однозначный origin. Следом — явные Ready/Scanner source adapters и canonical tree поверх этих данных.
+3. ✅ Persist provenance: `catalogOrigin` сохраняется в Room/domain; provider/local источники, Ready Catalog и Scanner imports получают однозначный origin, который попадает в canonical tree.
 4. Построить navigation skeleton с predictable Back, breadcrumb-equivalent context и focus restore.
 5. Перевести Favorites на единый агрегированный слой, сохраняя исходный playlist/group/channel provenance.
 6. Добавить dedup и source variants так, чтобы повторный импорт не плодил безымянные копии.

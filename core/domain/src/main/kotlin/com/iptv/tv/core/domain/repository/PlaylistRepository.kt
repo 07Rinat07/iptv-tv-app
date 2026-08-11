@@ -3,6 +3,7 @@ package com.iptv.tv.core.domain.repository
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.model.ChannelEpgInfo
 import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistContentSummary
@@ -13,7 +14,11 @@ import kotlinx.coroutines.flow.Flow
 interface PlaylistRepository {
     fun observePlaylists(): Flow<List<Playlist>>
     fun observeChannels(playlistId: Long): Flow<List<Channel>>
-    suspend fun importFromUrl(url: String, name: String): AppResult<PlaylistImportReport>
+    suspend fun importFromUrl(
+        url: String,
+        name: String,
+        catalogOrigin: CatalogOriginKind = CatalogOriginKind.USER_IMPORT
+    ): AppResult<PlaylistImportReport>
     suspend fun importFromXtream(
         baseUrl: String,
         username: String,

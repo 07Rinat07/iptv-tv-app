@@ -13,6 +13,7 @@ import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.domain.repository.ScannerRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
+import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.PlaylistCandidate
 import com.iptv.tv.core.model.ScannerLearnedQuery
 import com.iptv.tv.core.model.ScannerProviderScope
@@ -2000,8 +2001,9 @@ class ScannerViewModel @Inject constructor(
                             val importTimeoutMs = resolveImportTimeoutMs(candidate)
                             val importResult = withTimeoutOrNull(importTimeoutMs) {
                                 playlistRepository.importFromUrl(
-                                    sourceUrl,
-                                    candidate.name.ifBlank { "Imported Playlist" }
+                                    url = sourceUrl,
+                                    name = candidate.name.ifBlank { "Imported Playlist" },
+                                    catalogOrigin = CatalogOriginKind.SCANNER_IMPORT
                                 )
                             }
 
