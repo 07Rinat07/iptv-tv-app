@@ -1947,8 +1947,8 @@ class PlayerViewModel @Inject constructor(
             is AppResult.Success -> resolveResult
             is AppResult.Error -> AppResult.Error(
                 "P2P-поток не подготовлен: ${resolveResult.message}. " +
-                    "Для magnet/.torrent используется встроенный BitTorrent; " +
-                    "для acestream:// требуется официальный Ace Stream Engine."
+                    "Magnet/.torrent обслуживает встроенный BitTorrent, " +
+                    "а Ace-ссылки — встроенный Ace Live. Подробности сохранены в диагностике."
             )
             AppResult.Loading -> AppResult.Loading
         }

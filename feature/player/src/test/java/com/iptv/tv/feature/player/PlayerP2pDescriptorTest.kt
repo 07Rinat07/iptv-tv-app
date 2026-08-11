@@ -110,12 +110,21 @@ class PlayerP2pDescriptorTest {
     }
 
     @Test
-    fun localAceGatewayInfoHashNormalizesToEmbeddedMagnet() {
+    fun localAceGatewayInfoHashPreservesAceLiveTransport() {
         val infoHash = "2222222222222222222222222222222222222222"
         val source = "http://127.0.0.1:6878/ace/getstream?infohash=$infoHash&pid=38900686757"
 
-        assertEquals("magnet:?xt=urn:btih:$infoHash", PlayerP2pDescriptor.detect(source))
-        assertEquals("BitTorrent поток (встроенный P2P)", PlayerP2pDescriptor.describe(source))
+        assertEquals("acestream:?infohash=$infoHash", PlayerP2pDescriptor.detect(source))
+        assertEquals("Ace Stream поток (P2P/Ace)", PlayerP2pDescriptor.describe(source))
+    }
+
+    @Test
+    fun explicitAceInfoHashPreservesAceLiveTransport() {
+        val infoHash = "2222222222222222222222222222222222222222"
+        val source = "acestream:?infohash=$infoHash"
+
+        assertEquals(source, PlayerP2pDescriptor.detect(source))
+        assertEquals("Ace Stream поток (P2P/Ace)", PlayerP2pDescriptor.describe(source))
     }
 
     @Test

@@ -1,7 +1,11 @@
 package com.iptv.tv.core.p2p
 
+import java.io.IOException
 import java.security.KeyPairGenerator
 import java.security.Signature
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -46,6 +50,33 @@ class AceLiveMediaOutputTest {
         assertEquals(256, first.read(firstRead, 0, firstRead.size))
         assertEquals(256, second.read(secondRead, 0, secondRead.size))
         assertArrayEquals(firstRead, secondRead)
+        buffer.close()
+    }
+
+    @Test
+    fun interruptedMediaReaderEndsAsHandledIoFailure() {
+        val buffer = AceLiveMediaBuffer(maxBufferedBytes = 188 * 64)
+        val reader = buffer.openReader()
+        val started = CountDownLatch(1)
+        val completed = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>()
+        val thread = Thread {
+            started.countDown()
+            try {
+                reader.read(ByteArray(188), 0, 188)
+            } catch (error: Throwable) {
+                failure.set(error)
+            } finally {
+                completed.countDown()
+            }
+        }
+
+        thread.start()
+        assertTrue(started.await(1, TimeUnit.SECONDS))
+        thread.interrupt()
+
+        assertTrue(completed.await(1, TimeUnit.SECONDS))
+        assertTrue(failure.get() is IOException)
         buffer.close()
     }
 

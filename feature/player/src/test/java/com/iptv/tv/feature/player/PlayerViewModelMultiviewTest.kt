@@ -153,6 +153,24 @@ class PlayerViewModelMultiviewTest {
     }
 
     @Test
+    fun playSelectedInternal_preservesLegacyAceInfoHashForEmbeddedLiveRuntime() = runTest(dispatcher) {
+        val infoHash = "568159b1059c7bbe3eaf40f123541fef86ef83cb"
+        val source = "http://127.0.0.1:6878/ace/getstream?infohash=$infoHash"
+        val engineRepository = FakeEngineRepository()
+        val viewModel = createViewModel(
+            channels = listOf(testChannel(id = 10L, name = "Animal Planet HD", streamUrl = source)),
+            engineRepository = engineRepository
+        )
+        advanceUntilIdle()
+
+        viewModel.playSelectedInternal()
+        advanceUntilIdle()
+
+        assertEquals("acestream:?infohash=$infoHash", engineRepository.lastResolvedSource)
+        assertNull(viewModel.uiState.value.lastError)
+    }
+
+    @Test
     fun enableFourUpMultiview_enablesFourPanesWhenDeviceSupportsIt() = runTest(dispatcher) {
         val channels = listOf(
             testChannel(id = 10L, name = "News HD", streamUrl = "https://example.com/live/news.m3u8"),
@@ -241,7 +259,8 @@ class PlayerViewModelMultiviewTest {
 
     private fun createViewModel(
         channels: List<Channel>,
-        supportedPaneCount: Int = 4
+        supportedPaneCount: Int = 4,
+        engineRepository: FakeEngineRepository = FakeEngineRepository()
     ): PlayerViewModel {
         val playlist = Playlist(
             id = 1L,
@@ -257,7 +276,7 @@ class PlayerViewModelMultiviewTest {
         return PlayerViewModel(
             playlistRepository = FakePlaylistRepository(playlist = playlist, channels = channels),
             settingsRepository = FakeSettingsRepository(),
-            engineRepository = FakeEngineRepository(),
+            engineRepository = engineRepository,
             favoritesRepository = FakeFavoritesRepository(),
             diagnosticsRepository = FakeDiagnosticsRepository(),
             historyRepository = FakeHistoryRepository(),
@@ -418,6 +437,9 @@ class PlayerViewModelMultiviewTest {
     }
 
     private class FakeEngineRepository : EngineRepository {
+        var lastResolvedSource: String? = null
+            private set
+
         override suspend fun connect(endpoint: String): AppResult<Unit> = AppResult.Success(Unit)
         override suspend fun refreshStatus(): AppResult<EngineStatus> = AppResult.Success(
             EngineStatus(connected = false, peers = 0, speedKbps = 0, message = "idle")
@@ -425,8 +447,10 @@ class PlayerViewModelMultiviewTest {
         override fun observeStatus(): Flow<EngineStatus> = MutableStateFlow(
             EngineStatus(connected = false, peers = 0, speedKbps = 0, message = "idle")
         )
-        override suspend fun resolveTorrentStream(magnetOrAce: String): AppResult<String> =
-            AppResult.Success("https://example.com/resolved.m3u8")
+        override suspend fun resolveTorrentStream(magnetOrAce: String): AppResult<String> {
+            lastResolvedSource = magnetOrAce
+            return AppResult.Success("https://example.com/resolved.m3u8")
+        }
     }
 
     private class FakeFavoritesRepository : FavoritesRepository {

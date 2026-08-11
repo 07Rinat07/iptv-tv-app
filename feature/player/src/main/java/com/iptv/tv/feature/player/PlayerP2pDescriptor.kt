@@ -27,7 +27,8 @@ internal object PlayerP2pDescriptor {
     fun describe(raw: String): String {
         val descriptor = detect(raw) ?: return "IPTV поток (прямой URL)"
         return when {
-            descriptor.startsWith("acestream://", ignoreCase = true) -> "Ace Stream поток (P2P/Ace)"
+            descriptor.startsWith("acestream:", ignoreCase = true) ||
+                descriptor.startsWith("ace:", ignoreCase = true) -> "Ace Stream поток (P2P/Ace)"
             else -> "BitTorrent поток (встроенный P2P)"
         }
     }
@@ -36,8 +37,8 @@ internal object PlayerP2pDescriptor {
         val normalized = raw.trim()
         val lowered = normalized.lowercase(Locale.ROOT)
         return lowered.startsWith("magnet:") ||
-            lowered.startsWith("acestream://") ||
-            lowered.startsWith("ace://") ||
+            lowered.startsWith("acestream:") ||
+            lowered.startsWith("ace:") ||
             lowered.startsWith("infohash:") ||
             lowered.startsWith(URN_BTIH_PREFIX) ||
             hash40Regex.matches(normalized) ||
@@ -104,14 +105,17 @@ internal object PlayerP2pDescriptor {
     private fun extractDescriptorFromUrl(raw: String): String? {
         val source = raw.substringBefore('|').trim()
         val uri = runCatching { URI(source) }.getOrNull() ?: return null
-        val query = uri.rawQuery ?: return null
+        val query = uri.rawQuery
+            ?: source.substringAfter('?', missingDelimiterValue = "").takeIf(String::isNotBlank)
+            ?: return null
         val params = query.split('&').mapNotNull(::decodeQueryPair)
 
-        // A real infohash is usable by the embedded BitTorrent engine and must win even when
-        // the same Ace API URL also carries a separate content_id.
+        // Legacy Ace gateway and explicit Ace descriptors use the same 40-byte value as an Ace
+        // Live swarm key. Preserve that transport identity so the player does not turn the source
+        // into a standard magnet before EngineStreamRouting can select the embedded Ace runtime.
         params.firstOrNull { it.first in infoHashQueryKeys }
             ?.second
-            ?.let(::normalizeInfoHashParameter)
+            ?.let { value -> normalizeInfoHashParameter(value, preserveAceLive = isAceDescriptor(source)) }
             ?.let { return it }
 
         params.firstOrNull { it.first == "url" }
@@ -140,10 +144,14 @@ internal object PlayerP2pDescriptor {
         return key to value
     }
 
-    private fun normalizeInfoHashParameter(raw: String): String? {
+    private fun normalizeInfoHashParameter(raw: String, preserveAceLive: Boolean = false): String? {
         val value = raw.trim()
         normalizeInfoHash(value)?.let { normalized ->
-            return "magnet:?xt=urn:btih:$normalized"
+            return if (preserveAceLive && hash40Regex.matches(normalized)) {
+                "acestream:?infohash=$normalized"
+            } else {
+                "magnet:?xt=urn:btih:$normalized"
+            }
         }
         return when {
             value.startsWith("infohash:", ignoreCase = true) ||
@@ -169,5 +177,22 @@ internal object PlayerP2pDescriptor {
             aceContentIdRegex.matches(value) -> "acestream://$value"
             else -> null
         }
+    }
+
+    private fun isAceDescriptor(raw: String): Boolean {
+        if (raw.startsWith("acestream:", ignoreCase = true) ||
+            raw.startsWith("ace:", ignoreCase = true)
+        ) {
+            return true
+        }
+
+        val uri = runCatching { URI(raw) }.getOrNull() ?: return false
+        val host = uri.host
+            ?.lowercase(Locale.ROOT)
+            ?.removePrefix("[")
+            ?.removeSuffix("]")
+            ?: return false
+        val loopback = host == "127.0.0.1" || host == "localhost" || host == "::1"
+        return loopback && uri.path.orEmpty().startsWith("/ace/", ignoreCase = true)
     }
 }

@@ -141,7 +141,12 @@ internal class AceLiveMediaBuffer(
                     }
                     failure?.let { throw it }
                     if (closed) return -1
-                    lock.wait()
+                    try {
+                        lock.wait()
+                    } catch (error: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw IOException("Ace live media read interrupted", error)
+                    }
                 }
             }
         }

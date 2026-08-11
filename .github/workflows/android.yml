@@ -33,6 +33,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect Torrent TV playback changes
+        id: torrent-tv-smoke
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          changed_files="$(git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}")"
+          printf '%s\n' "$changed_files"
+          if grep -Eq \
+            '^(app/src/androidTest/java/com/iptv/tv/(TorrentTvPlaybackSmokeTest|HiltTestRunner)\.kt|app/src/main/java/com/iptv/tv/ApplicationEngineEntryPoint\.kt|core/(p2p|data|engine)/|feature/player/)' \
+            <<< "$changed_files"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -93,18 +112,18 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Compile Android instrumentation tests
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 89
+        if: steps.torrent-tv-smoke.outputs.run == 'true'
         run: ./gradlew --no-daemon --stacktrace :app:assembleDebugAndroidTest
 
       - name: Install emulator image for Torrent TV playback smoke
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 89
+        if: steps.torrent-tv-smoke.outputs.run == 'true'
         run: |
           sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
             "emulator" \
             "system-images;android-${ANDROID_API_LEVEL};google_apis;x86_64"
 
       - name: Run real Torrent TV playback smoke without Ace Engine
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 89
+        if: steps.torrent-tv-smoke.outputs.run == 'true'
         timeout-minutes: 15
         shell: bash
         run: |
@@ -164,7 +183,7 @@ jobs:
             -Pandroid.testInstrumentationRunnerArguments.class=com.iptv.tv.TorrentTvPlaybackSmokeTest
 
       - name: Print Torrent TV emulator diagnostics
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.number == 89
+        if: always() && steps.torrent-tv-smoke.outputs.run == 'true'
         shell: bash
         run: |
           echo "::group::Torrent TV smoke markers"
