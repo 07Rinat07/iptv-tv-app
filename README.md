@@ -1,6 +1,6 @@
 # Rinat IPTV
 
-**Rinat IPTV** — Android TV / TV Box приложение для просмотра IPTV с интерфейсом, рассчитанным на телевизор, пульт и мышь. Проект активно развивается: обычное IPTV и встроенный BitTorrent/P2P уже работают как отдельные сценарии, а автономная поддержка Ace Live продолжает дорабатываться.
+**Rinat IPTV** — Android TV / TV Box приложение для просмотра IPTV с интерфейсом, рассчитанным на телевизор, пульт и мышь. Проект активно развивается: обычное IPTV, BitTorrent и автономный Ace Live уже имеют рабочие встроенные маршруты, но стабильность воспроизведения на всём наборе источников ещё проходит доводку.
 
 <p align="center">
   <img src="docs/images/rinat-iptv-player-preview.svg" alt="Rinat IPTV — презентационный вид плеера" width="900">
@@ -17,7 +17,7 @@
 - **Избранное, история и EPG**: быстрый доступ к сохранённым каналам, истории просмотра и программе передач, когда она доступна у источника.
 - **Media3 / ExoPlayer как основной плеер** с изолированным **LibVLC fallback**, если поток корректнее воспроизводится через VLC.
 - **Встроенный BitTorrent/P2P backend** для `magnet:`, infohash, локальных `.torrent` и HTTP(S)-ссылок на `.torrent`; поток для плеера отдаётся через локальный HTTP Range.
-- **Встроенный Ace Live backend** для подписанного live peer-протокола и локальной MPEG-TS выдачи; внешний Ace Engine сохранён только как compatibility fallback для источников, чьи transport metadata недоступны публичному resolver-у.
+- **Встроенный Ace Live backend** для подписанного live peer-протокола и локальной MPEG-TS выдачи; Torrent TV `content_id` и live infohash не переключаются автоматически на внешний Ace Engine.
 - **Управление с телевизора**: D-pad, Enter/Center, PageUp/PageDown, ChannelUp/ChannelDown, мышь, колесо, тачпад и сенсорный экран.
 - **TV-first оформление**: в тёмном режиме используется сине-чёрная палитра с голубым акцентом и хорошо заметным focus; светлая системная тема также поддерживается.
 - **TV-friendly навигация**: возврат focus после меню и диалогов, прокрутка сфокусированного элемента в видимую область.
@@ -38,7 +38,9 @@
 
 В проекте уже есть встроенный P2P-движок на libtorrent/libtorrent4j для обычного BitTorrent transport. Он поддерживает подготовку torrent metadata, приоритетную подкачку pieces, seek/read-ahead и локальную HTTP Range выдачу в Media3/LibVLC.
 
-Ace Live обрабатывается отдельным встроенным runtime: DHT/tracker discovery, подписанное рукопожатие, live-window/chunk scheduling, проверка transport descriptor и локальная MPEG-TS выдача. Ace `content_id` не считается BitTorrent infohash. Для публичного live `content_id` сначала используется прямой Ace peer-wire swarm, затем публичный каталог и metadata swarm; установленный Ace Engine остаётся последним metadata/full-playback fallback.
+Ace Live обрабатывается отдельным встроенным runtime: DHT/tracker discovery, подписанное рукопожатие, live-window/chunk scheduling, восстановление ограниченных разрывов и локальная MPEG-TS выдача. Ace `content_id` не считается BitTorrent infohash. Для публичного live `content_id` используется прямой Ace peer-wire swarm, затем публичный каталог и metadata swarm. Повтор после stall создаёт новую P2P-сессию, а не переиспользует остановившийся локальный URL.
+
+Проверочный канал успешно воспроизводился на чистом Android API 34 без установленного Ace Engine, но текущая сборка ещё не считается стабильной: переключение каналов бывает долгим и неуспешным, а встроенная подкачка не всегда удерживает достаточный live-буфер. На большинстве реально запустившихся каналов звук нормальный; редкие audio-дефекты остаются в матрице проверки. Подробный подтверждённый статус, ограничения и критерии следующего этапа описаны в [`docs/PLAYBACK_STATUS.md`](docs/PLAYBACK_STATUS.md).
 
 ## Требования
 
@@ -84,6 +86,8 @@ APK/AAB не хранятся в Git. GitHub Actions прикладывает с
 ## Документация
 
 Актуальная документация находится в [`docs/README.md`](docs/README.md).  
+Текущий статус воспроизведения — в [`docs/PLAYBACK_STATUS.md`](docs/PLAYBACK_STATUS.md).
+
 План развития и оставшиеся проверки — в [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Автор

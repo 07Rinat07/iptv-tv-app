@@ -2,7 +2,15 @@
 
 ## Current boundary
 
-The app already has an embedded libtorrent path for ordinary BitTorrent and keeps Ace Live on an explicit compatibility boundary. A 40-character Ace `content_id` is a transport identity, not a BitTorrent infohash. `.acelive` descriptors must not enter the ordinary libtorrent pipeline.
+The app has separate embedded paths for ordinary BitTorrent and Ace Live. A 40-character Ace `content_id` is a transport identity, not a BitTorrent infohash, and `.acelive` descriptors never enter the ordinary libtorrent pipeline. Torrent TV content IDs and live infohashes are owned by the embedded runtime and do not automatically fall back to an installed Ace Engine.
+
+## Status snapshot — 2026-08-11
+
+- The autonomous route passed a 90-second smoke test for one active public content ID on a clean Android API 34 emulator with no Ace Stream packages installed; a full stop and 30-second replay also passed.
+- The embedded runtime now handles the observed standard/extended HAVE variants, compact live status, sliding windows, bounded recovery and local MPEG-TS output.
+- Player retry rebuilds the P2P session, source/network failures do not invoke LibVLC, and stopping/switching invalidates stale preparation.
+- This is not release acceptance. Current device feedback reports slow or failed channel switching and insufficient sustained live-buffer replenishment on some sources. ARM hardware, weak-network and long-run tests remain open.
+- Most channels that start have normal audio. Audio-track verification remains in the matrix but is not the current primary blocker.
 
 ## Completed compatibility increment
 
@@ -182,15 +190,27 @@ The app already has an embedded libtorrent path for ordinary BitTorrent and keep
 8. Keep TCP ownership, peer protocol identity, LSD, output/media handling and proprietary metadata/decryption outside this layer.
 9. Cover useful-window ranking, stale probes, backoff expiry, handshake score reset, duplicate-start reservations, healthy no-churn cycles, start-failure isolation and cancellation cleanup with unit tests.
 
+## Completed embedded playback-wiring increment
+
+1. Route public Torrent TV content IDs and legacy live infohashes directly to `AceLiveEmbeddedEngine` without automatic external-engine playback fallback.
+2. Decode standard HAVE id 4, the observed extended stream/piece HAVE form, stream HAVE id 10 and bounded compact live-status id 11 payloads.
+3. Keep a 16 MiB sliding output buffer and wait for a 4 MiB startup threshold before publishing the local media stream.
+4. Bound the active peer pool, in-flight requests, request timeout, stale-upstream detection and media-stall watchdog.
+5. Allow only bounded forward recovery when the current live piece has left every usable peer window.
+6. Rebuild the entire P2P session for retry and close the previous session during channel switching.
+7. Keep LibVLC fallback limited to decoder/container/demux failures; a dead network source is not retried through another decoder.
+8. Cover the peer-wire variants, stall handling, retry/session lifecycle and fallback policy with unit and instrumentation tests.
+
 ## Next autonomous increments
 
-1. Run hardware acceptance with the current AceStream Core Live package and several real `acestream://content_id`/`.acelive` sources; record service discovery, HTTP port, runtime route, control response and startup failures.
-2. Add an autonomous content-id metadata provider ahead of the external provider when a verified public, independently implementable resolution contract is available.
-3. Feed verified decoded live metadata into `AceLiveDescriptor` when a lawful/public decoder or provider is available.
-4. Add LSD only if LAN peer discovery provides practical value; keep it independent from public tracker/DHT policy.
-5. Wire output discontinuity events into the future TS keyframe-regating/HLS output layer without moving media-format logic into P2P.
-6. Add live startup/seek/recovery metrics and long-run hardware tests before making the autonomous Ace Live backend primary.
-7. Remove the external Ace compatibility dependency only after real Ace Live channels pass the same acceptance baseline on x86 emulator and ARM TV hardware.
+1. Instrument retained buffer bytes, producer/consumer rates, startup phases, peer usefulness, rebuffer count and final stall reason.
+2. Tune request depth, startup threshold and read-ahead from device measurements so the sliding buffer keeps filling while the player consumes it.
+3. Reduce channel-switch latency with prompt cancellation plus separate discovery, handshake and startup deadlines; verify that the old loopback stream is closed.
+4. Improve bounded recovery for temporarily stale peer windows without hiding a dead swarm behind an endless retry loop.
+5. Feed verified decoded live metadata into `AceLiveDescriptor` when a lawful/public decoder or provider is available.
+6. Add LSD only if LAN peer discovery provides practical value; keep it independent from public tracker/DHT policy.
+7. Wire output discontinuity events into TS keyframe regating/decoder recovery without moving media-format logic into the P2P protocol layer.
+8. Run a fixed IPTV/Torrent TV channel matrix, 20-switch sequence, weak-network checks and 2h/8h tests on x86 and ARM hardware without Ace Engine installed.
 
 ## Non-goals
 

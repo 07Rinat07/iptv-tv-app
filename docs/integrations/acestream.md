@@ -4,7 +4,9 @@
 
 Встроенный Ace Live runtime самостоятельно выполняет DHT/tracker discovery, подписанное peer-handshake, чтение live window, ограниченную очередь chunk-запросов, сборку/проверку pieces и локальную MPEG-TS выдачу. Прямые `infohash` из legacy `127.0.0.1:6878/ace/getstream` URL не отправляются в обычный libtorrent.
 
-Для `content_id` приложение сначала пробует прямой Ace Live swarm с тем же peer-wire ключом, затем публичный transport catalog и metadata swarm. Если оба автономных пути недоступны, Android Service/AIDL integration остаётся совместимым fallback:
+Для `content_id` приложение сначала пробует прямой Ace Live swarm с тем же peer-wire ключом, затем публичный transport catalog и metadata swarm. Ошибка этого маршрута возвращается пользователю и не запускает автоматически установленный Ace Engine. Это позволяет честно проверять собственную реализацию.
+
+Android Service/AIDL integration сохранена только как явный legacy compatibility route для неподдерживаемых descriptor:
 
 1. обнаружение установленного Ace Stream Media/Engine, включая `org.acestream.live`;
 2. `bindService` к `org.acestream.engine.service.v0.IAceStreamEngine`;
@@ -19,6 +21,8 @@
 
 HTTP-клиент локального engine использует короткий 2-секундный connect timeout, но read/call deadlines превышают 10-секундное окно ожидания P2P manifest. Это не даёт приложению оборвать легитимный запуск live transport раньше самого engine.
 
-40-символьный `content_id` остаётся hex-строкой. Decimal-конвертация и автоматическое приравнивание к BTIH запрещены. Ordinary BitTorrent продолжает идти через embedded libtorrent. Полученные через metadata API live descriptor или live swarm передаются встроенному Ace Live runtime; внешний Engine полностью воспроизводит поток только как последний fallback.
+40-символьный `content_id` остаётся hex-строкой. Decimal-конвертация и автоматическое приравнивание к BTIH запрещены. Ordinary BitTorrent продолжает идти через embedded libtorrent. Полученные live descriptor или live swarm передаются встроенному Ace Live runtime; для Torrent TV `content_id` и live infohash внешний Engine не является fallback.
 
-Если движок отсутствует, не виден Android package manager или не отвечает, пользователь получает диагностируемую ошибку без бесконечного цикла повторов. Нормальный installed-engine path использует порт, полученный по AIDL; `127.0.0.1:6878` остаётся только отдельным compatibility probe там, где он явно предусмотрен resolver-ом.
+Если legacy engine отсутствует, не виден Android package manager или не отвечает, compatibility route возвращает диагностируемую ошибку без бесконечного цикла повторов. Installed-engine path использует порт, полученный по AIDL; `127.0.0.1:6878` остаётся только отдельным compatibility probe там, где он явно предусмотрен resolver-ом.
+
+Текущий приоритет — не расширение внешней интеграции, а сокращение времени переключения и стабильное пополнение встроенного live-буфера. Подтверждённый статус и критерии приёмки находятся в `../PLAYBACK_STATUS.md`.

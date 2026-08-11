@@ -46,17 +46,19 @@
 
 Для автономного Ace bootstrap введён отдельный `AceContentIdDhtKey`: только валидный 20-byte/40-hex Content ID может использоваться как DHT lookup target. Этот тип намеренно не является ни `AceLiveSwarmKey`, ни BitTorrent infohash. На BEP-5 wire значение помещается в стандартное поле `info_hash`, но его доменная семантика не меняется и из него не строится `magnet:?xt=urn:btih:...`.
 
-`core:engine` содержит отдельный `AceContentTransportResolver`. Он переводит transport metadata в одно из трёх решений: безопасный non-live BitTorrent для embedded libtorrent, Ace Live transport, либо unsupported transport. Текущая compatibility-реализация получает metadata через внешний Ace Engine API; embedded resolver добавляется перед ней поэтапно, без изменения player-facing routing. Live transport намеренно не пропускается в стандартный libtorrent только на основании наличия `infohash`.
+`core:engine` содержит `AceContentTransportResolver`, который переводит transport metadata в безопасный non-live BitTorrent, Ace Live transport либо unsupported transport. `core:p2p` самостоятельно разрешает публичный `content_id`, выполняет DHT/tracker discovery, подписанное рукопожатие, распознаёт live-window, собирает chunks/pieces и отдаёт MPEG-TS через локальный HTTP stream. Live transport не передаётся стандартному libtorrent только на основании наличия 40-символьного идентификатора.
 
-Следующий сетевой шаг после Content-ID DHT identity/codec — отдельный lookup/discovery и transport-metadata bootstrap. Только после верификации transport metadata обычный BT infohash может перейти в libtorrent; Ace Live transport должен использовать существующие Ace Live peer/discovery/window/reassembly компоненты.
+Peer-wire слой поддерживает стандартный HAVE, расширенный HAVE со stream index, отдельный stream HAVE и ограниченно разбираемый compact live status. Runtime держит ограниченный скользящий output buffer, начинает выдачу после стартового порога, ограничивает число peers и запросов и применяет watchdog для media stall. Retry со стороны Player пересоздаёт всю P2P-сессию, чтобы не переиспользовать остановившийся loopback URL.
 
-Это разделение введено после реальной регрессии Torrent-TV, где `acestream://content_id` ошибочно выглядел как «embedded» сценарий, хотя metadata всё ещё требовала внешний Ace Engine. До завершения собственного resolver/backend внешний Engine остаётся optional compatibility fallback, а не обязательной частью стандартного BitTorrent пути.
+Автоматический внешний Ace fallback для Torrent TV `content_id` и live infohash отключён: успешный тест такого канала должен доказывать работу собственного runtime. AIDL/HTTP integration остаётся изолированным compatibility-кодом для явно неподдерживаемых legacy descriptor, но не скрывает сбой автономного маршрута.
+
+Текущий архитектурный блокер находится уже не в наличии маршрута, а в playback hardening: быстрое переключение, стабильная подкачка live-буфера, классификация недоступных swarm и длительная аппаратная приёмка. Актуальные результаты и критерии собраны в `PLAYBACK_STATUS.md`.
 
 ## Порядок зависимостей
 
 1. завершить кодовую regression-baseline TV navigation (#40), а реальную BlueStacks/TV Box приёмку вести параллельно;
 2. стабилизировать canonical catalog identity/provenance и unified Favorites (#45);
-3. завершить P2P transport contracts/Ace content-id и Ace Live поверх стабильного source provenance (#44);
+3. завершить P2P playback hardening: переключение, непрерывная подкачка, stall recovery и аппаратная приёмка (#44);
 4. построить EPG/Now-Next/real archive поверх стабильной channel identity (#47);
 5. переработать Player UX поверх готовых Catalog + P2P + EPG contracts (#46);
 6. завершить contextual Help и пользовательскую документацию после стабилизации экранов (#43);
