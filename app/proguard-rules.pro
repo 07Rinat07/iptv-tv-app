@@ -25,3 +25,7 @@
 # Optional provider / annotations noise in transitive deps.
 -dontwarn org.conscrypt.**
 -dontwarn javax.annotation.**
+
+# net.i2p.crypto:eddsa:0.3.0 has a JDK-only X509Key compatibility reference
+# that is not available on Android. R8 generates this exact suppression rule.
+-dontwarn sun.security.x509.X509Key
