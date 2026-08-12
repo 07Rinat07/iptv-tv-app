@@ -1,0 +1,56 @@
+name: EPG OOM patch v2 once
+
+on:
+  push:
+    branches:
+      - codex/epg-oom-streaming-guard
+    paths:
+      - .github/workflows/epg-oom-patch-v2-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout patch branch
+        uses: actions/checkout@v4
+        with:
+          ref: codex/epg-oom-streaming-guard
+          fetch-depth: 0
+
+      - name: Apply corrected guarded XMLTV patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/epg-oom-patch-once.yml').read_text(encoding='utf-8')
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "          PY\n\n      - name: Run core data unit tests"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          patch_script = textwrap.dedent(workflow[start:end])
+          patch_script = patch_script.replace(
+              'url !in epgCache',
+              '!epgCache.containsKey(url)'
+          )
+          exec(compile(patch_script, '<epg-oom-patch>', 'exec'))
+          PY
+
+      - name: Run core data unit tests
+        shell: bash
+        run: ./gradlew :core:data:testDebugUnitTest --stacktrace
+
+      - name: Commit guarded EPG implementation and remove one-shot workflows
+        shell: bash
+        run: |
+          rm -f .github/workflows/epg-oom-patch-once.yml
+          rm -f .github/workflows/epg-oom-patch-v2-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(epg): bound XMLTV memory during playback"
+          git push origin HEAD:codex/epg-oom-streaming-guard
