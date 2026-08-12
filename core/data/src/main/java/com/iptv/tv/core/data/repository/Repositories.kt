@@ -89,6 +89,7 @@ import org.xmlpull.v1.XmlPullParserFactory
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -142,7 +143,14 @@ class PlaylistRepositoryImpl @Inject constructor(
         .readTimeout(5, TimeUnit.SECONDS)
         .callTimeout(7, TimeUnit.SECONDS)
         .build()
+    private val epgClient: OkHttpClient = okHttpClient.newBuilder()
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(30, TimeUnit.SECONDS)
+        .build()
     private val epgCache = ConcurrentHashMap<String, EpgCacheEntry>()
+    private val epgFailureBackoff = EpgFailureBackoffCache(MAX_EPG_FAILURE_CACHE_ENTRIES)
+    private val epgLoadLock = Any()
     private val epgDiscoveryAttemptAtMs = ConcurrentHashMap<Long, Long>()
 
     override fun observePlaylists(): Flow<List<Playlist>> {
@@ -616,6 +624,14 @@ class PlaylistRepositoryImpl @Inject constructor(
         val updated = playlistDao.updateEpgSourceUrl(playlistId, normalized)
         if (updated <= 0) return@withContext AppResult.Error("Unable to update EPG source for playlist id=$playlistId")
 
+        listOfNotNull(
+            playlist.epgSourceUrl?.trim()?.ifBlank { null },
+            normalized
+        ).distinct().forEach { source ->
+            epgCache.remove(source)
+            epgFailureBackoff.remove(source)
+        }
+
         syncLogDao.insert(
             SyncLogEntity(
                 playlistId = playlistId,
@@ -716,12 +732,12 @@ class PlaylistRepositoryImpl @Inject constructor(
 
         var lastLoadError: Throwable? = null
         for (epgUrl in candidates) {
-            val loaded = runCatching { getOrLoadXmlTv(epgUrl) }
-            if (loaded.isFailure) {
-                lastLoadError = loaded.exceptionOrNull()
+            val epgData = try {
+                getOrLoadXmlTv(epgUrl)
+            } catch (throwable: Exception) {
+                lastLoadError = throwable
                 continue
             }
-            val epgData = loaded.getOrThrow()
             val match = matchChannelToEpg(
                 channelName = channelEntity.name,
                 tvgId = channelEntity.tvgId,
@@ -788,12 +804,12 @@ class PlaylistRepositoryImpl @Inject constructor(
         var lastLoadError: Throwable? = null
 
         for (epgUrl in candidates) {
-            val loaded = runCatching { getOrLoadXmlTv(epgUrl) }
-            if (loaded.isFailure) {
-                lastLoadError = loaded.exceptionOrNull()
+            val epgData = try {
+                getOrLoadXmlTv(epgUrl)
+            } catch (throwable: Exception) {
+                lastLoadError = throwable
                 continue
             }
-            val epgData = loaded.getOrThrow()
             val result = channels
                 .asSequence()
                 .mapNotNull { channel ->
@@ -1522,151 +1538,350 @@ class PlaylistRepositoryImpl @Inject constructor(
     }
 
     private fun getOrLoadXmlTv(url: String): XmlTvData {
-        val now = System.currentTimeMillis()
-        epgCache[url]?.takeIf { now - it.loadedAtMs <= EPG_CACHE_TTL_MS }?.let { cached ->
-            return cached.data
-        }
-
-        val xmlPayload = okHttpClient.newCall(
-            Request.Builder()
-                .url(url)
-                .get()
-                .build()
-        ).execute().use { response ->
-            if (!response.isSuccessful) error("HTTP ${response.code}")
-            response.body?.bytes() ?: error("Empty EPG body")
-        }
-
-        val parsed = parseXmlTv(xmlPayload)
-        epgCache[url] = EpgCacheEntry(loadedAtMs = now, data = parsed)
-        return parsed
+    val now = System.currentTimeMillis()
+    cachedEpgData(url, now)?.let { return it }
+    epgFailureBackoff.active(url)?.let { failure ->
+        throw IOException("EPG temporarily unavailable: ${failure.reason}")
     }
 
-    private fun parseXmlTv(payload: ByteArray): XmlTvData {
-        val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
-            setInput(ByteArrayInputStream(payload), Charsets.UTF_8.name())
+    return synchronized(epgLoadLock) {
+        val lockedNow = System.currentTimeMillis()
+        cachedEpgData(url, lockedNow)?.let { return@synchronized it }
+        epgFailureBackoff.active(url)?.let { failure ->
+            throw IOException("EPG temporarily unavailable: ${failure.reason}")
         }
 
-        val channelDisplayNames = mutableMapOf<String, MutableSet<String>>()
-        val programsByChannel = mutableMapOf<String, MutableList<EpgProgram>>()
+        purgeExpiredEpgCache(lockedNow)
 
         try {
-            var event = parser.eventType
-            var currentChannelId: String? = null
-            var currentProgrammeChannel: String? = null
-            var currentProgrammeTitle: String? = null
-            var currentProgrammeDesc: String? = null
-            var currentProgrammeCategory: String? = null
-            var currentProgrammeStart: Long? = null
-            var currentProgrammeStop: Long? = null
+            ensureEpgHeapHeadroom(EPG_MIN_START_HEADROOM_BYTES)
+            val parsed = epgClient.newCall(
+                Request.Builder()
+                    .url(url)
+                    .get()
+                    .build()
+            ).execute().use { response ->
+                if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                val body = response.body ?: throw IOException("Empty EPG body")
+                val contentLength = body.contentLength()
+                if (contentLength > MAX_EPG_INPUT_BYTES) {
+                    throw EpgInputLimitExceededException(
+                        maxBytes = MAX_EPG_INPUT_BYTES,
+                        observedBytes = contentLength
+                    )
+                }
+                EpgBoundedInputStream(
+                    input = body.byteStream(),
+                    maxBytes = MAX_EPG_INPUT_BYTES
+                ).use(::parseXmlTv)
+            }
 
-            while (event != XmlPullParser.END_DOCUMENT) {
-                when (event) {
-                    XmlPullParser.START_TAG -> {
-                        when (parser.name) {
-                            "channel" -> {
-                                currentChannelId = parser.getAttributeValue(null, "id")
-                                    ?.trim()
-                                    ?.takeIf { it.isNotEmpty() }
+            epgFailureBackoff.remove(url)
+            putEpgCache(
+                url = url,
+                entry = EpgCacheEntry(
+                    loadedAtMs = lockedNow,
+                    data = parsed
+                )
+            )
+            parsed
+        } catch (_: OutOfMemoryError) {
+            epgCache.clear()
+            epgFailureBackoff.record(
+                url = url,
+                reason = "EPG aborted because heap headroom was exhausted",
+                retryAfterMs = EPG_LOW_MEMORY_BACKOFF_MS
+            )
+            throw IOException("EPG deferred: insufficient heap headroom")
+        } catch (throwable: Exception) {
+            val failure = throwable as? IOException
+                ?: IOException("Unable to load EPG: ${throwable.message ?: throwable.javaClass.simpleName}")
+            epgFailureBackoff.record(
+                url = url,
+                reason = failure.message ?: failure.javaClass.simpleName,
+                retryAfterMs = epgFailureBackoffMs(failure)
+            )
+            throw failure
+        }
+    }
+}
+
+private fun cachedEpgData(url: String, now: Long): XmlTvData? {
+    val cached = epgCache[url] ?: return null
+    if (now - cached.loadedAtMs <= EPG_CACHE_TTL_MS) return cached.data
+    epgCache.remove(url, cached)
+    return null
+}
+
+private fun purgeExpiredEpgCache(now: Long) {
+    epgCache.entries.forEach { entry ->
+        if (now - entry.value.loadedAtMs > EPG_CACHE_TTL_MS) {
+            epgCache.remove(entry.key, entry.value)
+        }
+    }
+}
+
+private fun putEpgCache(url: String, entry: EpgCacheEntry) {
+    while (epgCache.size >= MAX_EPG_CACHE_ENTRIES && !epgCache.containsKey(url)) {
+        val oldest = epgCache.entries.minByOrNull { it.value.loadedAtMs } ?: break
+        epgCache.remove(oldest.key, oldest.value)
+    }
+    epgCache[url] = entry
+}
+
+private fun epgFailureBackoffMs(failure: IOException): Long {
+    val message = failure.message.orEmpty().lowercase(Locale.ROOT)
+    return when {
+        failure is EpgInputLimitExceededException -> EPG_MALFORMED_BACKOFF_MS
+        "invalid xmltv" in message || "xmlpullparser" in message -> EPG_MALFORMED_BACKOFF_MS
+        "heap headroom" in message || "insufficient heap" in message -> EPG_LOW_MEMORY_BACKOFF_MS
+        message.startsWith("http 4") -> EPG_HTTP_BACKOFF_MS
+        else -> EPG_TRANSIENT_BACKOFF_MS
+    }
+}
+
+private fun heapHeadroomBytes(): Long {
+    val runtime = Runtime.getRuntime()
+    val used = runtime.totalMemory() - runtime.freeMemory()
+    return (runtime.maxMemory() - used).coerceAtLeast(0L)
+}
+
+private fun ensureEpgHeapHeadroom(minHeadroomBytes: Long) {
+    val headroom = heapHeadroomBytes()
+    if (headroom < minHeadroomBytes) {
+        throw IOException(
+            "EPG deferred: low heap headroom ${headroom / MIB}MiB, required ${minHeadroomBytes / MIB}MiB"
+        )
+    }
+}
+
+private fun parseXmlTv(input: InputStream): XmlTvData {
+    val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
+        setInput(input, Charsets.UTF_8.name())
+    }
+
+    val channelDisplayNames = mutableMapOf<String, MutableSet<String>>()
+    val programsByChannel = mutableMapOf<String, MutableList<EpgProgram>>()
+    val now = System.currentTimeMillis()
+    val retainFromMs = now - EPG_RETAIN_PAST_MS
+    val retainUntilMs = now + EPG_RETAIN_FUTURE_MS
+    var storedPrograms = 0
+
+    try {
+        var event = parser.eventType
+        var currentChannelId: String? = null
+        var currentProgrammeChannel: String? = null
+        var currentProgrammeTitle: String? = null
+        var currentProgrammeDesc: String? = null
+        var currentProgrammeCategory: String? = null
+        var currentProgrammeStart: Long? = null
+        var currentProgrammeStop: Long? = null
+        var collectCurrentProgramme = false
+
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> {
+                    when (parser.name) {
+                        "channel" -> {
+                            val id = parser.getAttributeValue(null, "id")
+                                ?.trim()
+                                ?.take(MAX_EPG_CHANNEL_ID_CHARS)
+                                ?.takeIf { it.isNotEmpty() }
+                            currentChannelId = id?.takeIf { channelId ->
+                                channelId in channelDisplayNames || channelDisplayNames.size < MAX_EPG_CHANNELS
                             }
-                            "programme" -> {
-                                currentProgrammeChannel = parser.getAttributeValue(null, "channel")
-                                    ?.trim()
-                                    ?.takeIf { it.isNotEmpty() }
-                                currentProgrammeStart = parseXmlTvTime(parser.getAttributeValue(null, "start"))
-                                currentProgrammeStop = parseXmlTvTime(parser.getAttributeValue(null, "stop"))
-                                currentProgrammeTitle = null
-                                currentProgrammeDesc = null
-                                currentProgrammeCategory = null
-                            }
-                            "display-name" -> {
-                                if (!currentChannelId.isNullOrBlank()) {
-                                    val value = parser.nextText().trim()
-                                    if (value.isNotBlank()) {
-                                        channelDisplayNames.getOrPut(currentChannelId) { linkedSetOf() } += value
-                                    }
+                        }
+                        "programme" -> {
+                            val channel = parser.getAttributeValue(null, "channel")
+                                ?.trim()
+                                ?.take(MAX_EPG_CHANNEL_ID_CHARS)
+                                ?.takeIf { it.isNotEmpty() }
+                            val start = parseXmlTvTime(parser.getAttributeValue(null, "start"))
+                            val stop = parseXmlTvTime(parser.getAttributeValue(null, "stop"))
+                            val existingCount = channel?.let { programsByChannel[it]?.size } ?: 0
+                            val channelCapacityAvailable = channel != null &&
+                                (channel in programsByChannel || programsByChannel.size < MAX_EPG_CHANNELS)
+                            collectCurrentProgramme = channelCapacityAvailable &&
+                                start != null &&
+                                stop != null &&
+                                stop > retainFromMs &&
+                                start < retainUntilMs &&
+                                storedPrograms < MAX_EPG_PROGRAMS_TOTAL &&
+                                existingCount < MAX_EPG_PROGRAMS_PER_CHANNEL
+                            currentProgrammeChannel = channel.takeIf { collectCurrentProgramme }
+                            currentProgrammeStart = start
+                            currentProgrammeStop = stop
+                            currentProgrammeTitle = null
+                            currentProgrammeDesc = null
+                            currentProgrammeCategory = null
+                        }
+                        "display-name" -> {
+                            val channelId = currentChannelId
+                            if (channelId != null) {
+                                val names = channelDisplayNames.getOrPut(channelId) { linkedSetOf() }
+                                if (names.size < MAX_EPG_DISPLAY_NAMES_PER_CHANNEL) {
+                                    val value = readBoundedXmlText(parser, MAX_EPG_DISPLAY_NAME_CHARS)
+                                    if (value.isNotBlank()) names += value
+                                } else {
+                                    skipCurrentXmlElement(parser)
                                 }
+                            } else {
+                                skipCurrentXmlElement(parser)
                             }
-                            "title" -> {
-                                if (!currentProgrammeChannel.isNullOrBlank()) {
-                                    currentProgrammeTitle = parser.nextText().trim().takeIf { it.isNotBlank() }
-                                }
+                        }
+                        "title" -> {
+                            if (collectCurrentProgramme) {
+                                currentProgrammeTitle = readBoundedXmlText(parser, MAX_EPG_TITLE_CHARS)
+                                    .takeIf { it.isNotBlank() }
+                            } else {
+                                skipCurrentXmlElement(parser)
                             }
-                            "desc" -> {
-                                if (!currentProgrammeChannel.isNullOrBlank()) {
-                                    currentProgrammeDesc = parser.nextText().trim().takeIf { it.isNotBlank() }
-                                }
+                        }
+                        "desc" -> {
+                            if (collectCurrentProgramme) {
+                                currentProgrammeDesc = readBoundedXmlText(parser, MAX_EPG_DESCRIPTION_CHARS)
+                                    .takeIf { it.isNotBlank() }
+                            } else {
+                                skipCurrentXmlElement(parser)
                             }
-                            "category" -> {
-                                if (!currentProgrammeChannel.isNullOrBlank()) {
-                                    currentProgrammeCategory = parser.nextText().trim().takeIf { it.isNotBlank() }
-                                }
+                        }
+                        "category" -> {
+                            if (collectCurrentProgramme) {
+                                currentProgrammeCategory = readBoundedXmlText(parser, MAX_EPG_CATEGORY_CHARS)
+                                    .takeIf { it.isNotBlank() }
+                            } else {
+                                skipCurrentXmlElement(parser)
                             }
                         }
                     }
-                    XmlPullParser.END_TAG -> {
-                        when (parser.name) {
-                            "channel" -> currentChannelId = null
-                            "programme" -> {
-                                val channel = currentProgrammeChannel
-                                val start = currentProgrammeStart
-                                val stop = currentProgrammeStop
-                                val title = currentProgrammeTitle
-                                if (!channel.isNullOrBlank() && start != null && stop != null && !title.isNullOrBlank()) {
-                                    programsByChannel.getOrPut(channel) { mutableListOf() } += EpgProgram(
+                }
+                XmlPullParser.END_TAG -> {
+                    when (parser.name) {
+                        "channel" -> currentChannelId = null
+                        "programme" -> {
+                            val channel = currentProgrammeChannel
+                            val start = currentProgrammeStart
+                            val stop = currentProgrammeStop
+                            val title = currentProgrammeTitle
+                            if (
+                                collectCurrentProgramme &&
+                                !channel.isNullOrBlank() &&
+                                start != null &&
+                                stop != null &&
+                                !title.isNullOrBlank()
+                            ) {
+                                val items = programsByChannel.getOrPut(channel) { mutableListOf() }
+                                if (
+                                    items.size < MAX_EPG_PROGRAMS_PER_CHANNEL &&
+                                    storedPrograms < MAX_EPG_PROGRAMS_TOTAL
+                                ) {
+                                    items += EpgProgram(
                                         title = title,
                                         description = currentProgrammeDesc,
                                         category = currentProgrammeCategory,
                                         startEpochMs = start,
                                         endEpochMs = stop
                                     )
+                                    storedPrograms += 1
+                                    if (storedPrograms % EPG_HEAP_CHECK_PROGRAM_INTERVAL == 0) {
+                                        ensureEpgHeapHeadroom(EPG_MIN_PARSE_HEADROOM_BYTES)
+                                    }
                                 }
-                                currentProgrammeChannel = null
-                                currentProgrammeStart = null
-                                currentProgrammeStop = null
-                                currentProgrammeTitle = null
-                                currentProgrammeDesc = null
-                                currentProgrammeCategory = null
                             }
+                            currentProgrammeChannel = null
+                            currentProgrammeStart = null
+                            currentProgrammeStop = null
+                            currentProgrammeTitle = null
+                            currentProgrammeDesc = null
+                            currentProgrammeCategory = null
+                            collectCurrentProgramme = false
                         }
                     }
                 }
-                event = parser.next()
             }
-        } catch (throwable: XmlPullParserException) {
-            throw IOException("Invalid XMLTV format: ${throwable.message}", throwable)
+            event = parser.next()
         }
-
-        val normalizedPrograms = programsByChannel
-            .mapValues { (_, items) ->
-                items
-                    .distinctBy { "${it.startEpochMs}:${it.endEpochMs}:${it.title}" }
-                    .sortedBy { it.startEpochMs }
-            }
-
-        val normalizedDisplayNames = channelDisplayNames
-            .mapValues { (_, names) -> names.toSet() }
-        val channelIdByLowercase = normalizedPrograms.keys
-            .associateByFirst { it.trim().lowercase(Locale.ROOT) }
-        val channelIdByTextKey = normalizedPrograms.keys
-            .associateByFirst { normalizeTextKey(it) }
-        val channelIdByDisplayNameKey = normalizedDisplayNames
-            .entries
-            .asSequence()
-            .flatMap { (channelId, names) ->
-                names.asSequence().map { displayName -> normalizeTextKey(displayName) to channelId }
-            }
-            .filter { (key, _) -> key.isNotBlank() }
-            .associateFirst()
-
-        return XmlTvData(
-            channelDisplayNames = normalizedDisplayNames,
-            programsByChannel = normalizedPrograms,
-            channelIdByLowercase = channelIdByLowercase,
-            channelIdByTextKey = channelIdByTextKey,
-            channelIdByDisplayNameKey = channelIdByDisplayNameKey
-        )
+    } catch (throwable: XmlPullParserException) {
+        throw IOException("Invalid XMLTV format: ${throwable.message}", throwable)
     }
+
+    programsByChannel.values.forEach(::sortAndDeduplicateProgramsInPlace)
+    val channelIdByLowercase = programsByChannel.keys
+        .associateByFirst { it.trim().lowercase(Locale.ROOT) }
+    val channelIdByTextKey = programsByChannel.keys
+        .associateByFirst { normalizeTextKey(it) }
+    val channelIdByDisplayNameKey = channelDisplayNames
+        .entries
+        .asSequence()
+        .flatMap { (channelId, names) ->
+            names.asSequence().map { displayName -> normalizeTextKey(displayName) to channelId }
+        }
+        .filter { (key, _) -> key.isNotBlank() }
+        .associateFirst()
+
+    return XmlTvData(
+        channelDisplayNames = channelDisplayNames,
+        programsByChannel = programsByChannel,
+        channelIdByLowercase = channelIdByLowercase,
+        channelIdByTextKey = channelIdByTextKey,
+        channelIdByDisplayNameKey = channelIdByDisplayNameKey
+    )
+}
+
+private fun readBoundedXmlText(parser: XmlPullParser, maxChars: Int): String {
+    val startDepth = parser.depth
+    val result = StringBuilder(minOf(maxChars, 128))
+    var event = parser.next()
+    while (event != XmlPullParser.END_DOCUMENT) {
+        if (event == XmlPullParser.END_TAG && parser.depth == startDepth) break
+        if (
+            event == XmlPullParser.TEXT ||
+            event == XmlPullParser.CDSECT ||
+            event == XmlPullParser.ENTITY_REF ||
+            event == XmlPullParser.IGNORABLE_WHITESPACE
+        ) {
+            val value = parser.text.orEmpty()
+            val remaining = maxChars - result.length
+            if (remaining > 0 && value.isNotEmpty()) {
+                result.append(value, 0, minOf(remaining, value.length))
+            }
+        }
+        event = parser.next()
+    }
+    return result.toString().trim()
+}
+
+private fun skipCurrentXmlElement(parser: XmlPullParser) {
+    val startDepth = parser.depth
+    var event = parser.next()
+    while (event != XmlPullParser.END_DOCUMENT) {
+        if (event == XmlPullParser.END_TAG && parser.depth == startDepth) return
+        event = parser.next()
+    }
+}
+
+private fun sortAndDeduplicateProgramsInPlace(items: MutableList<EpgProgram>) {
+    if (items.size <= 1) return
+    items.sortBy { it.startEpochMs }
+    var writeIndex = 0
+    var previous: EpgProgram? = null
+    for (readIndex in items.indices) {
+        val item = items[readIndex]
+        val duplicate = previous?.let { prior ->
+            prior.startEpochMs == item.startEpochMs &&
+                prior.endEpochMs == item.endEpochMs &&
+                prior.title == item.title
+        } == true
+        if (!duplicate) {
+            if (writeIndex != readIndex) items[writeIndex] = item
+            writeIndex += 1
+            previous = item
+        }
+    }
+    while (items.size > writeIndex) {
+        items.removeAt(items.lastIndex)
+    }
+}
 
     private fun parseXmlTvTime(raw: String?): Long? {
         if (raw.isNullOrBlank()) return null
@@ -1926,6 +2141,28 @@ class PlaylistRepositoryImpl @Inject constructor(
         const val EPG_CACHE_TTL_MS = 15 * 60 * 1000L
         const val EPG_DISCOVERY_RETRY_MS = 10 * 60 * 1000L
         const val MAX_EPG_SOURCE_CANDIDATES = 4
+        const val MAX_EPG_CACHE_ENTRIES = 1
+        const val MAX_EPG_FAILURE_CACHE_ENTRIES = 12
+        const val MIB = 1024L * 1024L
+        const val MAX_EPG_INPUT_BYTES = 64L * MIB
+        const val EPG_MIN_START_HEADROOM_BYTES = 48L * MIB
+        const val EPG_MIN_PARSE_HEADROOM_BYTES = 24L * MIB
+        const val EPG_LOW_MEMORY_BACKOFF_MS = 30 * 1000L
+        const val EPG_TRANSIENT_BACKOFF_MS = 2 * 60 * 1000L
+        const val EPG_HTTP_BACKOFF_MS = 5 * 60 * 1000L
+        const val EPG_MALFORMED_BACKOFF_MS = 10 * 60 * 1000L
+        const val EPG_RETAIN_PAST_MS = 12 * 60 * 60 * 1000L
+        const val EPG_RETAIN_FUTURE_MS = 96 * 60 * 60 * 1000L
+        const val MAX_EPG_CHANNELS = 5_000
+        const val MAX_EPG_PROGRAMS_TOTAL = 30_000
+        const val MAX_EPG_PROGRAMS_PER_CHANNEL = 192
+        const val MAX_EPG_DISPLAY_NAMES_PER_CHANNEL = 4
+        const val MAX_EPG_CHANNEL_ID_CHARS = 256
+        const val MAX_EPG_DISPLAY_NAME_CHARS = 256
+        const val MAX_EPG_TITLE_CHARS = 256
+        const val MAX_EPG_DESCRIPTION_CHARS = 1_024
+        const val MAX_EPG_CATEGORY_CHARS = 128
+        const val EPG_HEAP_CHECK_PROGRAM_INTERVAL = 256
         const val STALKER_USER_AGENT = "Mozilla/5.0 (QtEmbedded; U; Linux; MAG200; en-US) AppleWebKit/533.3"
         val XMLTV_TIME_REGEX =
             Regex("^(\\d{4})(\\d{2})(\\d{2})(\\d{2})(\\d{2})(\\d{2})?\\s*([+\\-]\\d{4})?.*$")
