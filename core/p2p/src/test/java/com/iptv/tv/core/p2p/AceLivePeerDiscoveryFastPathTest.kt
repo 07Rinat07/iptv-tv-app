@@ -1,5 +1,10 @@
 package com.iptv.tv.core.p2p
 
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -57,6 +62,52 @@ class AceLivePeerDiscoveryFastPathTest {
 
         assertTrue(dhtCalled)
         assertEquals(listOf(dhtPeer, trackerPeer), result.tcpEndpoints())
+    }
+
+    @Test
+    fun `concurrent weak tracker startups serialize memory heavy dht walks`() = runBlocking {
+        val activeDht = AtomicInteger(0)
+        val maxActiveDht = AtomicInteger(0)
+        val completedDht = AtomicInteger(0)
+        val dhtDiscover: suspend (AceLiveDhtDiscoveryRequest) -> AceLiveDhtDiscoveryResult = {
+            val active = activeDht.incrementAndGet()
+            maxActiveDht.updateAndGet { previous -> maxOf(previous, active) }
+            try {
+                delay(50)
+                completedDht.incrementAndGet()
+                AceLiveDhtDiscoveryResult(emptyList(), 1, 0, 0)
+            } finally {
+                activeDht.decrementAndGet()
+            }
+        }
+        val trackerDiscover: suspend (AceLiveUdpTrackerDiscoveryRequest) -> AceLiveUdpTrackerDiscoveryResult = {
+            AceLiveUdpTrackerDiscoveryResult(
+                peers = listOf(AceLiveTcpPeerEndpoint("1.1.1.1", 8401)),
+                trackerAttempts = 1,
+                failedTrackers = 0,
+                rejectedEndpoints = 0
+            )
+        }
+        val first = AceLivePeerDiscoveryOrchestrator(
+            dhtDiscover = dhtDiscover,
+            trackerDiscover = trackerDiscover,
+            dhtHeadroomAvailable = { true }
+        )
+        val second = AceLivePeerDiscoveryOrchestrator(
+            dhtDiscover = dhtDiscover,
+            trackerDiscover = trackerDiscover,
+            dhtHeadroomAvailable = { true }
+        )
+
+        coroutineScope {
+            listOf(
+                async { first.discover(request(swarm(24))) },
+                async { second.discover(request(swarm(25))) }
+            ).awaitAll()
+        }
+
+        assertEquals(2, completedDht.get())
+        assertEquals(1, maxActiveDht.get())
     }
 
     @Test
