@@ -4,21 +4,22 @@
 
 Получить реально устанавливаемое Android TV / TV Box приложение, которое без внешних обязательных зависимостей воспроизводит обычные IPTV-потоки и BitTorrent-источники, умеет автоматически переключаться Media3 → LibVLC, показывает EPG при наличии/обнаружении источника и удобно управляется пультом, мышью и тачпадом.
 
-## Текущий срез — 11 августа 2026
+## Текущий срез — 12 августа 2026
 
-Автономный Torrent TV маршрут уже воспроизвёл активный `content_id` на чистом эмуляторе без Ace Engine и повторно запустился после полной остановки. Это закрывает технический bootstrap, но не закрывает стабильность воспроизведения.
+Автономный Torrent TV маршрут уже работает без внешнего Ace Engine. PR #98 добавил first-success/fast-switch стратегию Ace Live и после исправления regression/CI smoke был слит в `main`. PR #99 ранее убрал полное пересоздание Media3/MediaCodec на каждом переключении обычного IPTV и также находится в `main`.
 
-Текущий главный блокер — **playback hardening**:
+Новые пользовательские журналы от 12 августа выявили более приоритетный общий блокер: **EPG OOM может закрывать приложение даже при воспроизведении обычных прямых IPTV URL**. На 256-MiB heap процесс доходил до 224–252 MiB, после чего `OkHttp TaskRunner` получал `OutOfMemoryError`. Отдельный журнал показывает повторную загрузку одного и того же повреждённого XMLTV (`unterminated entity ref`) при последовательном переключении каналов.
 
-1. переключение каналов занимает слишком много времени и иногда завершается ошибкой;
-2. скользящий Ace Live buffer существует, но на части источников не удерживает достаточную непрерывную подкачку;
-3. часть swarm недоступна, закрывает соединения до handshake либо перестаёт публиковать новые pieces;
-4. длительная приёмка и реальные ARM TV Box ещё не пройдены;
-5. звук на большинстве запустившихся каналов нормальный; единичные audio-дефекты остаются отдельной проверкой, а не главным P2P-блокером.
+Поэтому текущий порядок hardening такой:
 
-Актуальные доказательства, ограничения и критерии завершения находятся в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md). До выполнения этих критериев stable release не объявляется.
+1. **EPG OOM hardening** — убрать `ResponseBody.bytes()` из XMLTV path, перейти на streaming parse, ограничить размер/retained data/cache, сериализовать тяжёлые EPG loads, добавить negative-cache malformed source и low-memory headroom guard;
+2. повторить rapid-zap тест обычного IPTV на 256-MiB/аналогичном устройстве и убедиться, что EPG failure больше не может завершить процесс;
+3. после memory fix измерить оставшуюся задержку переключения обычного IPTV;
+4. отдельно продолжить Ace Live startup/stall hardening, включая источники, которые всё ещё могут исчерпывать полный startup budget;
+5. затем перейти к MPEG-TS/decoder discontinuity/PAT-PMT/random-access hardening;
+6. только после этого продолжить длительную аппаратную приёмку и release gate.
 
-Разбор журнала от 16:27 зафиксировал 29 запросов переключения, 6 успешных P2P-подготовок за 21,2–47,3 с, 4 ошибки через 75,9–87,2 с и отсутствие buffer telemetry. План исправления lifecycle, общего deadline, подкачки и EPG находится в [`testing/playback-log-analysis-2026-08-11.md`](testing/playback-log-analysis-2026-08-11.md).
+Актуальные доказательства и критерии находятся в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md). Подробный разбор новых OOM-журналов и точный scope текущего PR сохранены в [`testing/playback-log-analysis-2026-08-12.md`](testing/playback-log-analysis-2026-08-12.md). Исторический P2P-разбор 11 августа остаётся в [`testing/playback-log-analysis-2026-08-11.md`](testing/playback-log-analysis-2026-08-11.md).
 
 ## Завершено
 
@@ -33,6 +34,8 @@
 - прямой peer discovery/handshake, live-window, chunk reassembly и локальная MPEG-TS выдача;
 - пересоздание P2P-сессии при retry, ограниченный stall watchdog и корректная остановка при переключении;
 - улучшенное обнаружение актуального Ace Stream приложения/службы;
+- PR #98: direct Ace Live startup и metadata resolution выполняются конкурентно с first-success semantics; отмена проигравших путей и regression coverage прошли real Torrent TV smoke без внешнего Ace Engine;
+- PR #99: Media3/MediaCodec stack переиспользуется при zapping обычных IPTV-каналов вместо полного `release()/rebuild` на каждый session change;
 - TV-интерфейс, пульт, мышь, тачпад и полноэкранный режим;
 - группы, подгруппы, восстановление фокуса и постраничная прокрутка в основных разделах;
 - Editor использует общий `TvScrollableLazyColumn`: TV-кнопки начала/Page Up/Page Down, PageUp/PageDown и ChannelUp/ChannelDown, mouse wheel/touchpad и scrollbar без изменения операций редактирования;
@@ -45,15 +48,16 @@
 
 ## Актуальный оптимизированный порядок выполнения
 
-Этот порядок имеет приоритет над исторической нумерацией технических блоков ниже. Причина — сначала стабилизировать contracts данных/transport, затем строить зависимые EPG и Player UI, чтобы не переделывать одни и те же экраны несколько раз.
+Этот порядок имеет приоритет над исторической нумерацией технических блоков ниже. Подтверждённый crash/ANR/memory regression всегда получает приоритет над функциональным roadmap.
 
-0. **Issue #40 — завершить regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
-1. **Master #44 — playback/P2P hardening.** Сократить и ограничить время переключения, обеспечить измеримую непрерывную подкачку, улучшить peer/stall recovery и пройти аппаратную приёмку без внешнего Ace Engine.
-2. **Issue #45 — canonical catalog hierarchy + unified Favorites.** После стабилизации критического playback path продолжить identity, navigation skeleton, dedup/source variants и единое избранное.
-3. **Issue #47 — EPG / Now-Next / real archive.** Строить ingestion/cache/matching и catch-up поверх стабильной channel identity из #45.
-4. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
-5. **Issue #43 — contextual Help + built-in Help + docs baseline.** Завершать после стабилизации основных экранов, чтобы не переписывать подсказки после Catalog/EPG/Player изменений.
-6. **Master #44 release gate.** Hardware/playback hardening, P2P acceptance, D-pad-only/mouse-only sessions, weak network, 2h/8h soak, signed release и финальная синхронизация docs. Только после этого закрывать #44 и объявлять stable.
+0. **Issue #40 — regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
+1. **Playback safety hotfix — EPG OOM.** Текущий рабочий инкремент: streaming XMLTV, bounded memory/cache, negative-cache malformed source, single-flight/serialized EPG load и low-memory fail-safe. Критерий: повреждённый/огромный EPG может привести только к отсутствию программы, но не к закрытию playback процесса.
+2. **Master #44 — playback/P2P hardening.** После EPG memory fix сократить и ограничить остаточное время переключения, обеспечить измеримую непрерывную подкачку, улучшить peer/stall recovery и пройти аппаратную приёмку без внешнего Ace Engine.
+3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** После стабилизации критического playback path продолжить identity, navigation skeleton, dedup/source variants и единое избранное.
+4. **Issue #47 — EPG / Now-Next / real archive.** Полноценный ingestion/cache/matching/catch-up redesign строить поверх стабильной channel identity из #45; текущий OOM hotfix не должен превращаться в полный #47 redesign.
+5. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
+6. **Issue #43 — contextual Help + built-in Help + docs baseline.** Завершать после стабилизации основных экранов, чтобы не переписывать подсказки после Catalog/EPG/Player изменений.
+7. **Master #44 release gate.** Hardware/playback hardening, P2P acceptance, D-pad-only/mouse-only sessions, weak network, 2h/8h soak, signed release и финальная синхронизация docs. Только после этого закрывать #44 и объявлять stable.
 
 ## Этап 1: canonical catalog hierarchy и provenance (#45)
 
@@ -74,7 +78,7 @@
 
 ## Этап 2: встроенный P2P engine и Ace transport
 
-Внешний Ace Stream больше не считается достаточным решением. В APK находятся собственные ordinary BitTorrent и Ace Live backends; текущий приоритет — стабильная подкачка, быстрое переключение и аппаратная приёмка автономного playback path.
+Внешний Ace Stream больше не считается достаточным решением. В APK находятся собственные ordinary BitTorrent и Ace Live backends; текущий приоритет — стабильная подкачка, быстрое переключение и аппаратная приёмка автономного playback path после устранения общего EPG memory crash.
 
 1. ✅ Добавлен модуль `core:p2p` на базе libtorrent/libtorrent4j.
 2. ✅ Поддержаны `magnet:`, infohash, локальный `.torrent` и HTTP(S) URL на `.torrent`.
@@ -84,7 +88,8 @@
 6. ✅ Локальный HTTP Range/stream endpoint отдаёт данные Media3/LibVLC.
 7. ✅ `P2pEngineRouter` оставляет embedded backend основным; Torrent TV `content_id` и live infohash не падают автоматически во внешний Ace Engine.
 8. ✅ Отдельная модель Ace Live не смешивает `content_id`, live infohash и BitTorrent BTIH.
-9. ⏳ Завершить playback hardening и приёмку на эмуляторе, затем на ARM TV Box.
+9. ✅ PR #98 сократил serial startup wait: direct swarm и metadata resolution теперь гоняются first-success, проигравшие операции отменяются; regression тест и real Torrent TV smoke прошли перед merge.
+10. ⏳ После EPG OOM hotfix завершить startup/stall/playback hardening и приёмку на эмуляторе, затем на ARM TV Box.
 
 ### Детализация Ace transport / torrent-TV
 
@@ -109,20 +114,22 @@
 1. Добавить метрики retained buffer, download/consume rate, first-media-byte, startup, rebuffer, peer count и stall reason.
 2. Разделить `playbackRequestId` и active `playbackSessionId`; все callbacks обязаны соблюдать `latest request wins`.
 3. Обеспечить непрерывное пополнение live-буфера: adaptive low/target/high-water, feedback-driven request pipeline и ограниченное восстановление после потери peers.
-4. Сократить переключение: cooperative cancellation, общий startup deadline поверх всех фаз и гарантированное освобождение loopback stream.
+4. После memory hotfix измерить остаточную задержку переключения и не возвращать serial 60-second wait, уже устранённый PR #98.
 5. Разделить unavailable source, dead/stale swarm, insufficient buffer, transport timeout и decoder/demux error в UI и экспортируемой диагностике.
-6. Кэшировать одинаковую ошибку XMLTV и не считать штатную EPG-отмену playback error.
+6. Завершить EPG OOM hotfix: negative-cache одинаковой ошибки XMLTV, streaming parse, bounded cache/data и low-memory guard; не считать штатную EPG-отмену playback error.
 7. Расширить `.acelive` routing/diagnostics без ошибочного преобразования в обычный magnet.
 8. Сохранять ordinary BitTorrent regression baseline: magnet/infohash/local/HTTP torrent, read-ahead, seek и local HTTP Range.
 9. Провести матрицу из обычных IPTV и Torrent TV каналов: 20 переключений, повторное открытие, слабая сеть, потеря peers, двухчасовой и восьмичасовой просмотр.
 
 ## Этап 3: EPG, Now/Next и реальный архив (#47)
 
+Текущий EPG OOM hotfix — prerequisite безопасности, а не замена полного #47. Полноценный EPG redesign выполняется только после стабилизации playback и channel identity.
+
 1. Сохранять EPG URL из `url-tvg`, `x-tvg-url`, `tvg-url` и провайдерских API.
 2. Автоматически обнаруживать XMLTV для плейлистов без явного EPG URL.
 3. Добавить управляемый каталог EPG-источников и авто-сопоставление прежде всего по `tvg-id`, затем по контролируемому fallback нормализованного имени/alias/страны.
-4. Добавить локальный cache/TTL/last-valid и очистку устаревших данных.
-5. Показывать диагностику: источник найден/не найден, matched/unmatched channels, время последнего успешного обновления.
+4. Добавить локальный cache/TTL/last-valid и очистку устаревших данных с жёсткими memory/disk bounds.
+5. Показывать диагностику: источник найден/не найден, matched/unmatched channels, время последнего успешного обновления и bounded failure/backoff status.
 6. Реализовать Now/Next, программу на день, переход по датам, описание и progress текущей передачи.
 7. Поддержать catch-up/archive только когда playlist/provider реально предоставляет capability/template; строить корректный playback URL/range и не показывать фиктивный архив.
 8. Интегрировать archive launch с Player только после появления проверенного playback context.
@@ -159,15 +166,16 @@
 
 1. Проверить D-pad, оптическую мышь и тачпад на BlueStacks 5, слабом и среднем TV Box.
 2. Проверить готовые списки и Media3 → LibVLC fallback на реальных потоках.
-3. Проверить magnet/torrent и реальные торрент-ТВ источники через встроенный P2P engine.
-4. Проверить, что Torrent TV live-буфер продолжает пополняться после старта, а rebuffer и stall измеряются.
-5. Выполнить серию из 20 переключений без зависшей старой P2P-сессии; долгое ожидание должно завершаться ограниченной ошибкой.
-6. Проверить EPG на нескольких независимых XMLTV/провайдерских источниках.
-7. Выполнить минимум двухчасовой тест непрерывного просмотра.
-8. Выполнить восьмичасовой soak-тест перед стабильным релизом.
-9. Проверить слабую сеть: 2–5 Мбит/с, задержка 120–250 мс, потеря 1–3%.
-10. Подготовить production keystore, собрать подписанный APK и проверить подпись.
-11. Заполнить отчёт приёмки и создать GitHub Release.
+3. Проверить rapid-zap обычного IPTV на 256-MiB/аналогичном heap: malformed/large EPG не должен вызывать OOM/crash.
+4. Проверить magnet/torrent и реальные торрент-ТВ источники через встроенный P2P engine.
+5. Проверить, что Torrent TV live-буфер продолжает пополняться после старта, а rebuffer и stall измеряются.
+6. Выполнить серию из 20 переключений без зависшей старой P2P-сессии; долгое ожидание должно завершаться ограниченной ошибкой.
+7. Проверить EPG на нескольких независимых XMLTV/провайдерских источниках, включая malformed и oversized fixture.
+8. Выполнить минимум двухчасовой тест непрерывного просмотра.
+9. Выполнить восьмичасовой soak-тест перед стабильным релизом.
+10. Проверить слабую сеть: 2–5 Мбит/с, задержка 120–250 мс, потеря 1–3%.
+11. Подготовить production keystore, собрать подписанный APK и проверить подпись.
+12. Заполнить отчёт приёмки и создать GitHub Release.
 
 ## После релиза
 
