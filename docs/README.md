@@ -12,9 +12,11 @@
 - [`features/player.md`](features/player.md) — стартовый сценарий и плеер.
 - [`features/scanner-import-editor.md`](features/scanner-import-editor.md) — сканер, импорт и редактор.
 - [`features/diagnostics.md`](features/diagnostics.md) — логи, экспорт и сброс ошибок.
+- [`features/EPG_SOURCE_INTEGRATION_PLAN.md`](features/EPG_SOURCE_INTEGRATION_PLAN.md) — встроенный каталог EPG/пиконов, XMLTV/GZIP/JTV adapters, matching и UX-референсы.
 - [`integrations/acestream.md`](integrations/acestream.md) — интеграция Ace Stream.
 - [`testing/device-acceptance.md`](testing/device-acceptance.md) — проверка на TV Box.
-- [`testing/playback-log-analysis-2026-08-11.md`](testing/playback-log-analysis-2026-08-11.md) — разбор долгих переключений, timeout, состояния UI, EPG и отсутствующих buffer-метрик с порядком исправления.
+- [`testing/playback-log-analysis-2026-08-12.md`](testing/playback-log-analysis-2026-08-12.md) — текущий разбор EPG OOM на обычном IPTV и критерии memory-safety hotfix.
+- [`testing/playback-log-analysis-2026-08-11.md`](testing/playback-log-analysis-2026-08-11.md) — исторический разбор долгих переключений, timeout, состояния UI, EPG и отсутствующих buffer-метрик.
 - [`release/release-process.md`](release/release-process.md) — подготовка релиза.
 
 ## Служебное

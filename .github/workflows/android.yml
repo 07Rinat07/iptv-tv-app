@@ -41,17 +41,23 @@ jobs:
         if: github.event_name == 'pull_request'
         shell: bash
         run: |
-          changed_files="$(git diff --name-only \
-            "${{ github.event.pull_request.base.sha }}" \
-            "${{ github.event.pull_request.head.sha }}")"
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
           printf '%s\n' "$changed_files"
+
+          run_smoke=false
           if grep -Eq \
-            '^(app/src/androidTest/java/com/iptv/tv/(TorrentTvPlaybackSmokeTest|HiltTestRunner)\.kt|app/src/main/java/com/iptv/tv/ApplicationEngineEntryPoint\.kt|core/(p2p|data|engine)/|feature/player/)' \
+            '^(app/src/androidTest/java/com/iptv/tv/(TorrentTvPlaybackSmokeTest|HiltTestRunner)\.kt|app/src/main/java/com/iptv/tv/ApplicationEngineEntryPoint\.kt|core/(p2p|engine)/)' \
             <<< "$changed_files"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
+            run_smoke=true
+          elif git diff --unified=0 "$base_sha" "$head_sha" -- \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt \
+            | grep -Eq '^[+-][^+-].*(resolveTorrentStream|stopTorrentStream|prepareStream|torrent|Torrent|P2P|p2p|Ace|acestream|infohash|contentId|EngineRepository|engineRepository|DHT|dht|peer)'; then
+            run_smoke=true
           fi
+
+          echo "run=$run_smoke" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -299,7 +305,7 @@ jobs:
             HEAD
 
       - name: Upload TV Box APKs only
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tv-box-apks
           path: |
@@ -311,7 +317,7 @@ jobs:
           retention-days: 30
 
       - name: Upload clean source archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: iptv-tv-app-updated-source
           path: build-artifacts/source/iptv-tv-app-updated-source.zip
@@ -321,7 +327,7 @@ jobs:
 
       - name: Upload unit/lint/release reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-lint-release-reports
           path: |
