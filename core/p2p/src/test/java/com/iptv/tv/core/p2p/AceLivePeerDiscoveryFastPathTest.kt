@@ -83,9 +83,9 @@ class AceLivePeerDiscoveryFastPathTest {
         val trackerDiscover: suspend (AceLiveUdpTrackerDiscoveryRequest) -> AceLiveUdpTrackerDiscoveryResult = {
             AceLiveUdpTrackerDiscoveryResult(
                 peers = listOf(AceLiveTcpPeerEndpoint("1.1.1.1", 8401)),
-                trackerAttempts = 1,
+                attemptedTrackers = 1,
                 failedTrackers = 0,
-                rejectedEndpoints = 0
+                rejectedTrackers = 0
             )
         }
         val first = AceLivePeerDiscoveryOrchestrator(
