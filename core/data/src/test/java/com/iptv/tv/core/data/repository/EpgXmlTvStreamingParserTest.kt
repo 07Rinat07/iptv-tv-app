@@ -70,6 +70,23 @@ class EpgXmlTvStreamingParserTest {
     }
 
     @Test
+    fun rejectsTotalProgrammeOverflow() {
+        val programmes = (0 until 5).joinToString("") { index ->
+            "<programme channel=\"c$index\" start=\"20260812100000 +0000\" stop=\"20260812110000 +0000\"><title>P$index</title></programme>"
+        }
+        val xml = "<tv>$programmes</tv>"
+
+        val error = assertFailsWith<IOException> {
+            EpgXmlTvStreamingParser.parse(
+                ByteArrayInputStream(xml.toByteArray()),
+                EpgXmlTvLimits(maxProgramsTotal = 3)
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("programme limit exceeded"))
+    }
+
+    @Test
     fun truncatesLargeTextFieldsBeforeRetention() {
         val title = "X".repeat(5_000)
         val xml = "<tv><programme channel=\"demo\" start=\"20260812100000 +0000\" stop=\"20260812110000 +0000\"><title>$title</title></programme></tv>"
