@@ -2,12 +2,12 @@ package com.iptv.tv.core.p2p
 
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -101,14 +101,15 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
 
     var directFailure: P2pResult.Error? = null
     var metadataFailure: P2pResult.Error? = null
+    var completed: P2pResult<T>? = null
 
-    while (true) {
+    while (completed == null) {
         when (val event = events.receive()) {
             is StartupRaceEvent.Direct -> when (val result = event.result) {
                 is P2pResult.Success -> {
                     metadataJob.cancel()
                     metadataJob.join()
-                    return@supervisorScope result
+                    completed = result
                 }
                 is P2pResult.Error -> directFailure = result
             }
@@ -117,8 +118,11 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
                 is P2pResult.Success -> {
                     directJob.cancel()
                     directJob.join()
-                    if (!isCurrent()) return@supervisorScope superseded()
-                    return@supervisorScope metadataAttempt(result.data)
+                    completed = if (!isCurrent()) {
+                        superseded()
+                    } else {
+                        metadataAttempt(result.data)
+                    }
                 }
                 is P2pResult.Error -> metadataFailure = result
             }
@@ -126,13 +130,15 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
 
         val directError = directFailure
         val metadataError = metadataFailure
-        if (directError != null && metadataError != null) {
-            return@supervisorScope P2pResult.Error(
+        if (completed == null && directError != null && metadataError != null) {
+            completed = P2pResult.Error(
                 message = combinedFailureMessage(directError, metadataError),
                 cause = directError.cause ?: metadataError.cause
             )
         }
     }
+
+    completed ?: error("Ace Live startup race ended without a result")
 }
 
 private suspend fun <T> runP2pAttempt(
