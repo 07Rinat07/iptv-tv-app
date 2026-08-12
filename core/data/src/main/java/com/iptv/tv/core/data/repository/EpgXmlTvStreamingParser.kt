@@ -79,27 +79,27 @@ internal object EpgXmlTvStreamingParser {
                             currentProgrammeCategory = null
                         }
 
-                        "display-name" -> if (!currentChannelId.isNullOrBlank()) {
-                            val value = parser.nextText().trim().take(limits.maxTextChars)
-                            if (value.isNotBlank()) {
-                                val names = channelDisplayNames.getOrPut(currentChannelId!!) { linkedSetOf() }
-                                if (names.size < limits.maxDisplayNamesPerChannel) names += value
+                        "display-name" -> {
+                            val channelId = currentChannelId
+                            if (!channelId.isNullOrBlank()) {
+                                val value = parser.nextText().trim().take(limits.maxTextChars)
+                                if (value.isNotBlank()) {
+                                    val names = channelDisplayNames.getOrPut(channelId) { linkedSetOf() }
+                                    if (names.size < limits.maxDisplayNamesPerChannel) names += value
+                                }
                             }
                         }
 
                         "title" -> if (!currentProgrammeChannel.isNullOrBlank()) {
-                            currentProgrammeTitle = parser.nextText().trim().take(limits.maxTextChars)
-                                .takeIf(String::isNotBlank)
+                            currentProgrammeTitle = parser.nextText().trim().take(limits.maxTextChars).takeIf(String::isNotBlank)
                         }
 
                         "desc" -> if (!currentProgrammeChannel.isNullOrBlank()) {
-                            currentProgrammeDesc = parser.nextText().trim().take(limits.maxTextChars)
-                                .takeIf(String::isNotBlank)
+                            currentProgrammeDesc = parser.nextText().trim().take(limits.maxTextChars).takeIf(String::isNotBlank)
                         }
 
                         "category" -> if (!currentProgrammeChannel.isNullOrBlank()) {
-                            currentProgrammeCategory = parser.nextText().trim().take(limits.maxTextChars)
-                                .takeIf(String::isNotBlank)
+                            currentProgrammeCategory = parser.nextText().trim().take(limits.maxTextChars).takeIf(String::isNotBlank)
                         }
                     }
 
@@ -111,24 +111,19 @@ internal object EpgXmlTvStreamingParser {
                             val stop = currentProgrammeStop
                             val title = currentProgrammeTitle
                             if (!channel.isNullOrBlank() && start != null && stop != null && !title.isNullOrBlank()) {
-                                val items = programsByChannel.getOrPut(channel) { mutableListOf() }
-                                if (items.size < limits.maxProgramsPerChannel) {
-                                    if (totalPrograms >= limits.maxProgramsTotal) {
-                                        throw IOException("XMLTV programme limit exceeded: ${limits.maxProgramsTotal}")
-                                    }
-                                    val duplicate = items.lastOrNull()?.let {
-                                        it.startEpochMs == start && it.endEpochMs == stop && it.title == title
-                                    } == true
-                                    if (!duplicate) {
-                                        items += EpgProgram(
-                                            title = title,
-                                            description = currentProgrammeDesc,
-                                            category = currentProgrammeCategory,
-                                            startEpochMs = start,
-                                            endEpochMs = stop
-                                        )
-                                        totalPrograms += 1
-                                    }
+                                if (totalPrograms >= limits.maxProgramsTotal) {
+                                    throw IOException("XMLTV programme limit exceeded: ${limits.maxProgramsTotal}")
+                                }
+                                val programs = programsByChannel.getOrPut(channel) { mutableListOf() }
+                                if (programs.size < limits.maxProgramsPerChannel) {
+                                    programs += EpgProgram(
+                                        title = title,
+                                        description = currentProgrammeDesc,
+                                        category = currentProgrammeCategory,
+                                        startEpochMs = start,
+                                        endEpochMs = stop
+                                    )
+                                    totalPrograms += 1
                                 }
                             }
                             currentProgrammeChannel = null
@@ -146,31 +141,31 @@ internal object EpgXmlTvStreamingParser {
             throw IOException("Invalid XMLTV format: ${throwable.message}", throwable)
         }
 
-        programsByChannel.values.forEach { it.sortBy(EpgProgram::startEpochMs) }
-
-        val channelIdByLowercase = linkedMapOf<String, String>()
-        val channelIdByTextKey = linkedMapOf<String, String>()
-        programsByChannel.keys.forEach { channelId ->
-            channelId.trim().lowercase(Locale.ROOT).takeIf(String::isNotBlank)?.let { key ->
-                channelIdByLowercase.putIfAbsent(key, channelId)
-            }
-            normalizeTextKey(channelId).takeIf(String::isNotBlank)?.let { key ->
-                channelIdByTextKey.putIfAbsent(key, channelId)
+        val programSnapshot = linkedMapOf<String, List<EpgProgram>>()
+        programsByChannel.forEach { (channelId, items) ->
+            if (items.isNotEmpty()) {
+                items.sortBy(EpgProgram::startEpochMs)
+                programSnapshot[channelId] = items
             }
         }
-
-        val channelIdByDisplayNameKey = linkedMapOf<String, String>()
+        val displaySnapshot = linkedMapOf<String, Set<String>>()
         channelDisplayNames.forEach { (channelId, names) ->
-            names.forEach { displayName ->
-                normalizeTextKey(displayName).takeIf(String::isNotBlank)?.let { key ->
-                    channelIdByDisplayNameKey.putIfAbsent(key, channelId)
-                }
+            displaySnapshot[channelId] = names
+        }
+
+        val channelIdByLowercase = programSnapshot.keys.associateByFirst { it.trim().lowercase(Locale.ROOT) }
+        val channelIdByTextKey = programSnapshot.keys.associateByFirst(::normalizeTextKey)
+        val channelIdByDisplayNameKey = linkedMapOf<String, String>()
+        displaySnapshot.forEach { (channelId, names) ->
+            names.forEach { name ->
+                val key = normalizeTextKey(name)
+                if (key.isNotBlank() && key !in channelIdByDisplayNameKey) channelIdByDisplayNameKey[key] = channelId
             }
         }
 
         return EpgXmlTvData(
-            channelDisplayNames = channelDisplayNames,
-            programsByChannel = programsByChannel,
+            channelDisplayNames = displaySnapshot,
+            programsByChannel = programSnapshot,
             channelIdByLowercase = channelIdByLowercase,
             channelIdByTextKey = channelIdByTextKey,
             channelIdByDisplayNameKey = channelIdByDisplayNameKey
@@ -187,7 +182,6 @@ internal object EpgXmlTvStreamingParser {
         val minute = matcher.groupValues[5].toIntOrNull() ?: return null
         val second = matcher.groupValues[6].toIntOrNull() ?: 0
         val zoneRaw = matcher.groupValues.getOrNull(7).orEmpty().trim()
-
         val utcMs = runCatching {
             GregorianCalendar(TimeZone.getTimeZone("UTC")).apply {
                 isLenient = false
@@ -195,44 +189,49 @@ internal object EpgXmlTvStreamingParser {
                 set(year, month - 1, day, hour, minute, second)
             }.timeInMillis
         }.getOrNull() ?: return null
-
         if (zoneRaw.isBlank()) return utcMs
         val zoneSign = if (zoneRaw.startsWith("-")) -1 else 1
         val zoneDigits = zoneRaw.removePrefix("+").removePrefix("-").replace(":", "")
         val hh = zoneDigits.take(2).toIntOrNull() ?: 0
         val mm = zoneDigits.drop(2).take(2).toIntOrNull() ?: 0
-        val offsetMs = ((hh * 60L) + mm) * 60_000L * zoneSign
-        return utcMs - offsetMs
+        return utcMs - (((hh * 60L) + mm) * 60_000L * zoneSign)
     }
 
     private fun normalizeTextKey(raw: String): String = raw
         .trim()
         .lowercase(Locale.ROOT)
         .replace(Regex("[^\\p{L}\\p{N}]"), "")
+
+    private fun <T> Iterable<T>.associateByFirst(keySelector: (T) -> String): Map<String, T> {
+        val result = linkedMapOf<String, T>()
+        forEach { value ->
+            val key = keySelector(value)
+            if (key.isNotBlank() && key !in result) result[key] = value
+        }
+        return result
+    }
 }
 
 private class CountingBoundedInputStream(
     input: InputStream,
     private val maxBytes: Long
 ) : FilterInputStream(input) {
-    private var consumed = 0L
+    private var count = 0L
 
     override fun read(): Int {
         val value = super.read()
-        if (value >= 0) account(1)
+        if (value >= 0) record(1)
         return value
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-        val count = super.read(buffer, offset, length)
-        if (count > 0) account(count.toLong())
-        return count
+        val read = super.read(buffer, offset, length)
+        if (read > 0) record(read.toLong())
+        return read
     }
 
-    private fun account(count: Long) {
-        consumed += count
-        if (consumed > maxBytes) {
-            throw IOException("XMLTV response exceeded ${maxBytes} bytes")
-        }
+    private fun record(delta: Long) {
+        count += delta
+        if (count > maxBytes) throw IOException("XMLTV input exceeded $maxBytes bytes")
     }
 }
