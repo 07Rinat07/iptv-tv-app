@@ -4,11 +4,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 
 /** Resolves an Ace content ID through its public metadata swarm and BEP-9 `ut_metadata`. */
@@ -33,22 +30,13 @@ class AceContentMetadataPeerResolver(
                     return@use P2pResult.Error("Ace metadata swarm returned no peer candidates")
                 }
 
-                val attempts = supervisorScope {
-                    peers.map { endpoint ->
-                        async(Dispatchers.IO) {
-                            fetchFromPeer(endpoint, swarmKey, peerId, identity)
-                        }
-                    }.awaitAll()
+                firstSuccessfulP2p(
+                    items = peers,
+                    maxConcurrency = MAX_CONCURRENT_METADATA_PEERS,
+                    failureMessage = "No usable Ace metadata peer among ${peers.size} candidates"
+                ) { endpoint ->
+                    fetchFromPeer(endpoint, swarmKey, peerId, identity)
                 }
-                attempts.filterIsInstance<P2pResult.Success<AceResolvedLiveTransport>>()
-                    .firstOrNull()
-                    ?: attempts.filterIsInstance<P2pResult.Error>().lastOrNull()?.let { failure ->
-                        P2pResult.Error(
-                            message = "No usable Ace metadata peer among ${peers.size} candidates: ${failure.message}",
-                            cause = failure.cause
-                        )
-                    }
-                    ?: P2pResult.Error("Ace metadata peers did not return a transport descriptor")
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -265,6 +253,7 @@ class AceContentMetadataPeerResolver(
         const val MAX_METADATA_BYTES = 1024 * 1024
         const val MAX_METADATA_FRAME_BYTES = MAX_METADATA_BYTES + 64 * 1024
         const val MAX_METADATA_PEERS = 24
+        const val MAX_CONCURRENT_METADATA_PEERS = 4
         const val MAX_HANDSHAKE_FRAMES = 32
         const val MAX_FRAMES_PER_METADATA_PIECE = 4
         const val READ_BUFFER_BYTES = 64 * 1024

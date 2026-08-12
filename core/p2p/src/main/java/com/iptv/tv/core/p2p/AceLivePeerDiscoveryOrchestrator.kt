@@ -3,6 +3,8 @@ package com.iptv.tv.core.p2p
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Public discovery source identity kept with a peer for later scoring/refill policy. */
 enum class AceLivePeerDiscoverySource {
@@ -84,6 +86,11 @@ data class AceLivePeerDiscoveryOrchestrationResult(
 
 internal const val ACE_LIVE_DHT_MIN_HEAP_HEADROOM_BYTES: Long = 32L * 1024L * 1024L
 
+// Direct content-id startup and metadata resolution may legitimately race. They share the same
+// process heap, so only one memory-heavy Mainline DHT walk is allowed at a time. Tracker fast paths
+// remain fully concurrent and a queued DHT walk re-checks heap headroom immediately before starting.
+private val ACE_LIVE_DHT_EXECUTION_MUTEX = Mutex()
+
 internal fun aceLiveDhtHeapHeadroomBytes(
     maxMemoryBytes: Long,
     totalMemoryBytes: Long,
@@ -118,6 +125,10 @@ internal fun aceLiveDhtHasHeapHeadroom(
  * before TCP startup. If the tracker is weak or fails, DHT remains the fallback. DHT is also
  * suppressed under critical JVM heap pressure so peer discovery fails/refills cleanly instead of
  * turning a low-memory condition into a process-killing coroutine OOM.
+ *
+ * Multiple orchestrator instances may be active while content-id startup races metadata resolution.
+ * Their DHT fallbacks are process-wide serialized and re-check heap headroom after acquiring the
+ * gate, preventing two expensive DHT walks from racing each other on low-memory TV devices.
  *
  * When the tracker fast path is disabled, DHT and tracker discovery retain the original concurrent
  * supervisor behavior. Coroutine cancellation is never converted into a source failure.
@@ -161,7 +172,7 @@ class AceLivePeerDiscoveryOrchestrator(
             }
 
             val dhtExecution = dhtRequest?.let { sourceRequest ->
-                captureSource { dhtDiscover(sourceRequest) }
+                runDhtSource(sourceRequest)
             } ?: SourceExecution.NotRequested
             return@supervisorScope buildResult(dhtExecution, trackerExecution)
         }
@@ -169,7 +180,7 @@ class AceLivePeerDiscoveryOrchestrator(
         val dhtDeferred = dhtRequest
             ?.takeIf { dhtPermitted }
             ?.let { sourceRequest ->
-                async { captureSource { dhtDiscover(sourceRequest) } }
+                async { runDhtSource(sourceRequest) }
             }
         val trackerDeferred = trackerRequest?.let { sourceRequest ->
             async { captureSource { trackerDiscover(sourceRequest) } }
@@ -178,6 +189,16 @@ class AceLivePeerDiscoveryOrchestrator(
         val dhtExecution = dhtDeferred?.await() ?: SourceExecution.NotRequested
         val trackerExecution = trackerDeferred?.await() ?: SourceExecution.NotRequested
         buildResult(dhtExecution, trackerExecution)
+    }
+
+    private suspend fun runDhtSource(
+        request: AceLiveDhtDiscoveryRequest
+    ): SourceExecution<AceLiveDhtDiscoveryResult> = ACE_LIVE_DHT_EXECUTION_MUTEX.withLock {
+        if (!dhtHeadroomAvailable()) {
+            SourceExecution.NotRequested
+        } else {
+            captureSource { dhtDiscover(request) }
+        }
     }
 
     private fun buildResult(

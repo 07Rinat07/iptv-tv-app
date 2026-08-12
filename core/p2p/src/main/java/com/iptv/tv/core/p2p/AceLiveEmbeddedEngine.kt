@@ -2,6 +2,7 @@ package com.iptv.tv.core.p2p
 
 import android.util.Log
 import java.io.Closeable
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -9,9 +10,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -19,9 +19,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 
@@ -58,25 +58,54 @@ class AceLiveEmbeddedEngine(
         val token = generation.incrementAndGet()
         val swarmKey = AceLiveSwarmKey.parseHex(contentId)
             ?: return P2pResult.Error("Ace content ID must contain exactly 40 hexadecimal characters")
+        val totalStartedAt = System.currentTimeMillis()
 
-        // Current public live channels may publish their content ID directly as the Ace peer-wire
-        // swarm key. This stays inside Ace Live and is never handed to ordinary BitTorrent.
-        val direct = prepareResolvedTransport(
-            token = token,
-            transport = directLiveTransport(swarmKey)
+        // Public live content IDs are sometimes directly usable as peer-wire swarm keys, but a dead
+        // direct swarm must not serialize a 60-second wait in front of transport metadata. Resolve
+        // metadata concurrently and use whichever path becomes actionable first.
+        return raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = DIRECT_STARTUP_SOFT_TIMEOUT_MILLIS,
+            directAttempt = {
+                val startedAt = System.currentTimeMillis()
+                prepareResolvedTransport(
+                    token = token,
+                    transport = directLiveTransport(swarmKey)
+                ).also { result ->
+                    Log.i(
+                        LOG_TAG,
+                        "event=content_direct_result elapsed_ms=${System.currentTimeMillis() - startedAt} " +
+                            "success=${result is P2pResult.Success}"
+                    )
+                }
+            },
+            metadataResolve = {
+                val startedAt = System.currentTimeMillis()
+                resolveContentTransport(swarmKey.toHex()).also { result ->
+                    Log.i(
+                        LOG_TAG,
+                        "event=content_metadata_result elapsed_ms=${System.currentTimeMillis() - startedAt} " +
+                            "success=${result is P2pResult.Success}"
+                    )
+                }
+            },
+            metadataAttempt = { transport ->
+                val startedAt = System.currentTimeMillis()
+                prepareResolvedTransport(token, transport).also { result ->
+                    Log.i(
+                        LOG_TAG,
+                        "event=content_metadata_startup_result elapsed_ms=${System.currentTimeMillis() - startedAt} " +
+                            "total_ms=${System.currentTimeMillis() - totalStartedAt} " +
+                            "success=${result is P2pResult.Success}"
+                    )
+                }
+            },
+            isCurrent = { generation.get() == token },
+            superseded = ::superseded,
+            combinedFailureMessage = { direct, metadata ->
+                "The direct Ace Live swarm failed and transport metadata was unavailable: " +
+                    "direct=${direct.message}; metadata=${metadata.message}"
+            }
         )
-        if (direct is P2pResult.Success) return direct
-        val directFailure = direct as P2pResult.Error
-        if (generation.get() != token) return superseded()
-
-        return when (val metadata = resolveContentTransport(swarmKey.toHex())) {
-            is P2pResult.Success -> prepareResolvedTransport(token, metadata.data)
-            is P2pResult.Error -> P2pResult.Error(
-                message = "The direct Ace Live swarm failed and transport metadata was unavailable: " +
-                    directFailure.message,
-                cause = directFailure.cause ?: metadata.cause
-            )
-        }
     }
 
     suspend fun prepareInfoHash(infoHash: String): P2pResult<AceLivePreparedStream> {
@@ -97,19 +126,18 @@ class AceLiveEmbeddedEngine(
 
     private suspend fun resolveContentTransport(
         contentId: String
-    ): P2pResult<AceResolvedLiveTransport> = supervisorScope {
-        val attempts = listOf(
-            async { catalogResolver.resolve(contentId) },
-            async { metadataPeerResolver.resolve(contentId) }
-        ).awaitAll()
-        attempts.filterIsInstance<P2pResult.Success<AceResolvedLiveTransport>>()
-            .firstOrNull()
-            ?: P2pResult.Error(
-                message = "Ace transport metadata was unavailable from both catalog and metadata swarm",
-                cause = attempts.filterIsInstance<P2pResult.Error>()
-                    .mapNotNull(P2pResult.Error::cause)
-                    .lastOrNull()
-            )
+    ): P2pResult<AceResolvedLiveTransport> {
+        val resolvers: List<suspend () -> P2pResult<AceResolvedLiveTransport>> = listOf(
+            { catalogResolver.resolve(contentId) },
+            { metadataPeerResolver.resolve(contentId) }
+        )
+        return firstSuccessfulP2p(
+            items = resolvers,
+            maxConcurrency = resolvers.size,
+            failureMessage = "Ace transport metadata was unavailable from both catalog and metadata swarm"
+        ) { resolver ->
+            resolver()
+        }
     }
 
     private suspend fun prepareResolvedTransport(
@@ -144,6 +172,16 @@ class AceLiveEmbeddedEngine(
                     name = transport.name.ifBlank { "Ace Live" }
                 )
             )
+        } catch (cancelled: CancellationException) {
+            // Startup races and fast channel switching cancel speculative runtimes intentionally.
+            // Cleanup must complete even though the caller's coroutine is already cancelled.
+            withContext(NonCancellable) {
+                operationMutex.withLock {
+                    if (activeRuntime === runtime) activeRuntime = null
+                }
+                runtime.close()
+            }
+            throw cancelled
         } catch (error: Throwable) {
             operationMutex.withLock {
                 if (activeRuntime === runtime) activeRuntime = null
@@ -362,11 +400,12 @@ class AceLiveEmbeddedEngine(
                 when (event) {
                     is AceLiveTcpPoolEvent.TransportConnected -> Log.i(
                         LOG_TAG,
-                        "event=peer_connected peer=${event.peerId} reconnect=${event.reconnectAttempt}"
+                        "event=peer_connected peer=${event.peerId} reconnect=${event.reconnectAttempt} " +
+                            "elapsed_ms=${startupElapsedMillis()}"
                     )
                     is AceLiveTcpPoolEvent.HandshakeAccepted -> Log.i(
                         LOG_TAG,
-                        "event=peer_ready peer=${event.peerId}"
+                        "event=peer_ready peer=${event.peerId} elapsed_ms=${startupElapsedMillis()}"
                     )
                     is AceLiveTcpPoolEvent.HandshakeRejected -> Log.w(
                         LOG_TAG,
@@ -397,7 +436,8 @@ class AceLiveEmbeddedEngine(
                 Log.i(
                     LOG_TAG,
                     "event=window_update peer=${event.peerId} min=${window.minPiece} " +
-                        "max=${window.maxPiece} position=${window.position}"
+                        "max=${window.maxPiece} position=${window.position} " +
+                        "elapsed_ms=${startupElapsedMillis()}"
                 )
             }
             val hasNewUnknownMessageId = event.result.unknownMessageIds
@@ -430,7 +470,7 @@ class AceLiveEmbeddedEngine(
                 "event=media_progress peer=${event.peerId} pieces=${pieces.size} " +
                     "piece_first=${pieces.first().piece} piece_last=${pieces.last().piece} " +
                     "total_bytes=$totalBytes retained_bytes=${mediaBuffer.retainedBytes()} " +
-                    "advertised_head=${latestHead.get()}"
+                    "advertised_head=${latestHead.get()} elapsed_ms=${startupElapsedMillis(now)}"
             )
         }
 
@@ -440,6 +480,9 @@ class AceLiveEmbeddedEngine(
             if (previous != 0L && now - previous < PROGRESS_LOG_INTERVAL_MILLIS) return false
             return lastLogAt.compareAndSet(previous, now)
         }
+
+        private fun startupElapsedMillis(nowMillis: Long = System.currentTimeMillis()): Long =
+            (nowMillis - startupStartedAtMillis.get()).coerceAtLeast(0L)
 
         private fun emitPieces(pieces: List<AceLiveReassembledPiece>) {
             pieces.forEach { piece ->
@@ -460,7 +503,8 @@ class AceLiveEmbeddedEngine(
                                         LOG_TAG,
                                         "event=startup_buffer_ready buffered_bytes=${mediaBuffer.retainedBytes()} " +
                                             "target_bytes=${decision.targetBytes} " +
-                                            "rate_bps=${decision.observedBytesPerSecond} forced=${decision.forced}"
+                                            "rate_bps=${decision.observedBytesPerSecond} forced=${decision.forced} " +
+                                            "elapsed_ms=${startupElapsedMillis(now)}"
                                     )
                                     startup.complete(Unit)
                                 }
@@ -486,6 +530,7 @@ class AceLiveEmbeddedEngine(
         const val DEFAULT_ACE_TRACKER = AceLiveNetworkDefaults.publicTracker
         const val DEFAULT_DIRECT_PIECE_BYTES = 512 * 1024
         const val DEFAULT_DIRECT_CHUNK_BYTES = 16 * 1024
+        const val DIRECT_STARTUP_SOFT_TIMEOUT_MILLIS = 8_000L
         const val TARGET_ACTIVE_PEERS = 6
         const val MAX_ACTIVE_PEERS = 10
         const val STALE_PROBE_PEERS = 2

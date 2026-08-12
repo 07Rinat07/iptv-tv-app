@@ -3,8 +3,12 @@ package com.iptv.tv.core.p2p
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 /** Network endpoint discovered by a separate tracker/DHT adapter. */
@@ -89,9 +93,9 @@ fun interface AceLiveTcpTransportFactory {
 /**
  * Android/JVM raw-socket implementation. Tracker/DHT discovery and peer selection stay outside.
  *
- * Write deadlines are enforced by [AceLiveTcpConnectionPool]. On timeout the pool closes this
- * socket, which also interrupts a blocking OutputStream write without requiring vendor-specific
- * socket options.
+ * Cancellation closes the owned socket immediately. This is important for first-success startup:
+ * a losing metadata peer must not keep a channel switch blocked until its read timeout expires.
+ * Write deadlines are still enforced by [AceLiveTcpConnectionPool].
  */
 class JvmAceLiveTcpTransportFactory(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
@@ -102,13 +106,29 @@ class JvmAceLiveTcpTransportFactory(
     ): AceLiveTcpTransport = withContext(ioDispatcher) {
         val socket = Socket()
         try {
-            socket.tcpNoDelay = true
-            socket.keepAlive = true
-            socket.soTimeout = policy.readTimeoutMillis
-            socket.connect(
-                InetSocketAddress(endpoint.host, endpoint.port),
-                policy.connectTimeoutMillis
-            )
+            suspendCancellableCoroutine<Unit> { continuation ->
+                continuation.invokeOnCancellation {
+                    runCatching { socket.close() }
+                }
+                try {
+                    socket.tcpNoDelay = true
+                    socket.keepAlive = true
+                    socket.soTimeout = policy.readTimeoutMillis
+                    socket.connect(
+                        InetSocketAddress(endpoint.host, endpoint.port),
+                        policy.connectTimeoutMillis
+                    )
+                    if (continuation.isActive) {
+                        continuation.resume(Unit)
+                    } else {
+                        runCatching { socket.close() }
+                    }
+                } catch (error: Throwable) {
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(error)
+                    }
+                }
+            }
             SocketAceLiveTcpTransport(socket, ioDispatcher)
         } catch (error: Throwable) {
             runCatching { socket.close() }
@@ -123,24 +143,42 @@ private class SocketAceLiveTcpTransport(
 ) : AceLiveTcpTransport {
     override suspend fun read(buffer: ByteArray): Int = withContext(ioDispatcher) {
         require(buffer.isNotEmpty()) { "read buffer must not be empty" }
-        try {
-            socket.getInputStream().read(buffer)
-        } catch (_: SocketTimeoutException) {
-            0
+        suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation {
+                runCatching { socket.close() }
+            }
+            try {
+                val count = socket.getInputStream().read(buffer)
+                if (continuation.isActive) continuation.resume(count)
+            } catch (_: SocketTimeoutException) {
+                if (continuation.isActive) continuation.resume(0)
+            } catch (error: Throwable) {
+                if (continuation.isActive) continuation.resumeWithException(error)
+            }
         }
     }
 
     override suspend fun write(bytes: ByteArray) {
         if (bytes.isEmpty()) return
         withContext(ioDispatcher) {
-            val output = socket.getOutputStream()
-            output.write(bytes)
-            output.flush()
+            suspendCancellableCoroutine<Unit> { continuation ->
+                continuation.invokeOnCancellation {
+                    runCatching { socket.close() }
+                }
+                try {
+                    val output = socket.getOutputStream()
+                    output.write(bytes)
+                    output.flush()
+                    if (continuation.isActive) continuation.resume(Unit)
+                } catch (error: Throwable) {
+                    if (continuation.isActive) continuation.resumeWithException(error)
+                }
+            }
         }
     }
 
     override suspend fun close() {
-        withContext(ioDispatcher) {
+        withContext(NonCancellable + ioDispatcher) {
             runCatching { socket.close() }
         }
     }
