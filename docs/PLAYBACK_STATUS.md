@@ -17,9 +17,9 @@
 
 Пользовательские журналы от 12 августа фиксируют `OutOfMemoryError` в `OkHttp TaskRunner` на устройстве/окружении с heap около 256 MiB. В одном воспроизведении непосредственно перед crash обычный IPTV-канал был успешно запущен, а heap достиг примерно 252/256 MiB. В другом прогоне после серии прямых IPTV channel switches приложение снова завершилось из-за OOM/fragmentation.
 
-Отдельный лог показывает повторную ошибку одного XMLTV источника (`XmlPullParserException: unterminated entity ref`) на последовательных каналах. Текущий EPG loader не имеет negative-cache для malformed source, поэтому один и тот же XMLTV может повторно скачиваться/парситься при каждом переключении.
+До PR #100 один и тот же malformed XMLTV (`XmlPullParserException: unterminated entity ref`) мог повторно скачиваться и разбираться при последовательном переключении каналов, потому что failed EPG не имел negative-cache.
 
-В текущем `PlaylistRepositoryImpl` XMLTV загружается через `ResponseBody.bytes()`, после чего весь `ByteArray` парсится и параллельно строятся крупные maps/lists программ. После parsing создаются дополнительные нормализованные collections. Это создаёт высокий временный peak heap и особенно опасно на 256-MiB Android heap.
+До PR #100 production XMLTV path загружал полный ответ через `ResponseBody.bytes()`, одновременно удерживал крупный `ByteArray` и строил EPG maps/lists, а затем создавал дополнительные нормализованные collections. В текущем head PR #100 этот path заменён на bounded streaming parse из `ResponseBody.byteStream()`, добавлены retained-data/cache limits, serialized heavy load, negative-cache/backoff и low-memory guard. Полноценная приёмка всё ещё требует зелёного exact-head CI и ручного rapid-zap smoke на 256-MiB/аналогичном устройстве.
 
 Подробный разбор и точный scope исправления находятся в [`testing/playback-log-analysis-2026-08-12.md`](testing/playback-log-analysis-2026-08-12.md).
 
@@ -38,18 +38,18 @@
 
 ## Текущий этап: memory safety → playback hardening
 
-Сначала выполняется EPG OOM hotfix:
+Кодовая часть EPG OOM hotfix в PR #100 реализована; остаются CI и runtime acceptance:
 
-1. убрать `ResponseBody.bytes()` из production XMLTV path и разбирать XMLTV непосредственно из `byteStream()`;
-2. ограничить максимальный объём читаемого XMLTV и retained EPG data;
-3. не строить вторую полную копию program/display-name collections после parsing;
-4. сериализовать тяжёлые EPG load/parse операции, чтобы rapid-zap не создавал несколько параллельных XMLTV загрузок;
-5. добавить bounded negative-cache/backoff для malformed/HTTP/parser failures;
-6. проверять heap headroom до тяжёлой EPG network/parse операции и при низкой памяти возвращать controlled `EPG unavailable/deferred`;
-7. ограничить число тяжёлых EPG entries в RAM cache;
-8. при смене EPG URL инвалидировать positive/negative cache;
-9. прогнать Android CI на exact PR head;
-10. вручную переключить 20–30 обычных IPTV-каналов на 256-MiB/аналогичном устройстве и убедиться, что malformed/oversized EPG максимум отключает телепрограмму, но не playback process.
+1. ✅ production XMLTV path больше не использует `ResponseBody.bytes()` и разбирает XMLTV непосредственно из bounded `byteStream()`;
+2. ✅ ограничен максимальный объём читаемого XMLTV и retained EPG data;
+3. ✅ исключена вторая полная копия program/display-name collections после parsing;
+4. ✅ тяжёлые EPG load/parse операции сериализованы, чтобы rapid-zap не создавал несколько параллельных XMLTV загрузок;
+5. ✅ добавлен bounded negative-cache/backoff для malformed/HTTP/parser failures;
+6. ✅ перед тяжёлой EPG network/parse операцией и во время parsing проверяется heap headroom; low-memory путь возвращает controlled `EPG unavailable/deferred`;
+7. ✅ positive EPG RAM cache ограничен и инвалидируется при смене EPG URL;
+8. ✅ per-channel EPG load отложен и отменяется при новом channel request, чтобы промежуточные rapid-zap каналы не запускали тяжёлую guide работу;
+9. ⏳ получить полностью зелёный Android CI на exact PR head;
+10. ⏳ вручную переключить 20–30 обычных IPTV-каналов на 256-MiB/аналогичном устройстве и убедиться, что malformed/oversized EPG максимум отключает телепрограмму, но не playback process.
 
 После успешного memory hotfix продолжается обычный playback/P2P hardening:
 
