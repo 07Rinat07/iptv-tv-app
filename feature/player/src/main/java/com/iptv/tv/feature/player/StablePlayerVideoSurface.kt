@@ -168,7 +168,9 @@ private fun StableMedia3VideoSurface(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val playerResult = remember(session.sessionId, session.streamUrl, session.requestHeaders) {
+    // Keep the expensive Media3/MediaCodec stack alive while zapping between ordinary IPTV
+    // channels. Rebuild only when the HTTP transport or buffering policy actually changes.
+    val playerResult = remember(session.requestHeaders, session.bufferConfig) {
         runCatching {
             val requestHeaders = session.requestHeaders
                 .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
@@ -264,6 +266,18 @@ private fun StableMedia3VideoSurface(
     var videoFailureReported by remember(session.sessionId) { mutableStateOf(false) }
     var diagnosticMessage by remember(session.sessionId) { mutableStateOf<String?>(null) }
 
+    DisposableEffect(player) {
+        onDispose {
+            runCatching {
+                player.playWhenReady = false
+                player.stop()
+                player.clearMediaItems()
+                player.clearVideoSurface()
+                player.release()
+            }
+        }
+    }
+
     DisposableEffect(session.sessionId, player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -317,6 +331,9 @@ private fun StableMedia3VideoSurface(
 
         player.addListener(listener)
         runCatching {
+            player.playWhenReady = false
+            player.stop()
+            player.clearMediaItems()
             val mediaItem = MediaItem.Builder()
                 .setUri(session.streamUrl)
                 .also { builder -> stableInferMimeType(session.streamUrl)?.let(builder::setMimeType) }
@@ -328,13 +345,6 @@ private fun StableMedia3VideoSurface(
 
         onDispose {
             player.removeListener(listener)
-            runCatching {
-                player.playWhenReady = false
-                player.stop()
-                player.clearMediaItems()
-                player.clearVideoSurface()
-                player.release()
-            }
         }
     }
 
