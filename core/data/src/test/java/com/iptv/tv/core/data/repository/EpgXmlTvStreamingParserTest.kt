@@ -2,10 +2,10 @@ package com.iptv.tv.core.data.repository
 
 import java.io.ByteArrayInputStream
 import java.io.IOException
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 class EpgXmlTvStreamingParserTest {
     @Test
@@ -31,7 +31,7 @@ class EpgXmlTvStreamingParserTest {
     fun rejectsMalformedXmlTvAsIOException() {
         val malformed = "<tv><channel id=\"demo\"><display-name>A & B</display-name></channel></tv>"
 
-        val error = assertFailsWith<IOException> {
+        val error = assertThrows(IOException::class.java) {
             EpgXmlTvStreamingParser.parse(ByteArrayInputStream(malformed.toByteArray()))
         }
 
@@ -42,7 +42,7 @@ class EpgXmlTvStreamingParserTest {
     fun rejectsInputBeyondHardByteLimit() {
         val xml = "<tv>" + " ".repeat(2_000) + "</tv>"
 
-        val error = assertFailsWith<IOException> {
+        val error = assertThrows(IOException::class.java) {
             EpgXmlTvStreamingParser.parse(
                 ByteArrayInputStream(xml.toByteArray()),
                 EpgXmlTvLimits(maxBytes = 512)
@@ -76,7 +76,7 @@ class EpgXmlTvStreamingParserTest {
         }
         val xml = "<tv>$programmes</tv>"
 
-        val error = assertFailsWith<IOException> {
+        val error = assertThrows(IOException::class.java) {
             EpgXmlTvStreamingParser.parse(
                 ByteArrayInputStream(xml.toByteArray()),
                 EpgXmlTvLimits(maxProgramsTotal = 3)
