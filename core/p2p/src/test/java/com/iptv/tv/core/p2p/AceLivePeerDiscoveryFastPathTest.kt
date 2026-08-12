@@ -42,6 +42,31 @@ class AceLivePeerDiscoveryFastPathTest {
     }
 
     @Test
+    fun `startup threshold accepts one tracker peer without waiting for dht`() = runBlocking {
+        val swarm = swarm(26)
+        var dhtCalled = false
+        val trackerPeer = AceLiveTcpPeerEndpoint("1.1.1.1", 8601)
+        val orchestrator = AceLivePeerDiscoveryOrchestrator(
+            dhtDiscover = {
+                dhtCalled = true
+                AceLiveDhtDiscoveryResult(emptyList(), 0, 0, 0)
+            },
+            trackerDiscover = {
+                AceLiveUdpTrackerDiscoveryResult(listOf(trackerPeer), 1, 0, 0)
+            },
+            policy = AceLivePeerDiscoveryOrchestrationPolicy(trackerFastPathMinPeers = 1),
+            dhtHeadroomAvailable = { true }
+        )
+
+        val result = orchestrator.discover(request(swarm))
+
+        assertFalse(dhtCalled)
+        assertEquals(listOf(trackerPeer), result.tcpEndpoints())
+        assertEquals(AceLivePeerDiscoverySourceStatus.NOT_REQUESTED, result.dht.status)
+        assertEquals(AceLivePeerDiscoverySourceStatus.SUCCEEDED, result.tracker.status)
+    }
+
+    @Test
     fun `weak tracker batch falls back to dht`() = runBlocking {
         val swarm = swarm(22)
         var dhtCalled = false
