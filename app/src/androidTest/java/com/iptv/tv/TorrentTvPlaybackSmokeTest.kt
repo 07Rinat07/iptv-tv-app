@@ -32,10 +32,12 @@ import org.junit.runner.RunWith
  * The emulator has no Ace Stream Engine installed or running. When the public playlists are
  * reachable, the test refreshes the descriptor text from them. If a playlist host rejects the CI
  * runner (for example HTTP 403), known infohash/content-id descriptors are constructed locally so
- * an unrelated playlist outage cannot hide the real P2P playback signal. Every sample still goes
- * through the production EngineRepository, real peer discovery, the embedded loopback stream and
- * Media3. The infohash stream is then started again after a full stop to cover switching and
- * restart cleanup.
+ * an unrelated playlist outage cannot hide the real P2P playback signal. The content-id check uses
+ * a small bounded set of current playlist candidates so one externally dead swarm cannot make the
+ * whole smoke flaky; at least one candidate must still pass the full real playback path. Every
+ * sample still goes through the production EngineRepository, real peer discovery, the embedded
+ * loopback stream and Media3. The infohash stream is then started again after a full stop to cover
+ * switching and restart cleanup.
  */
 @RunWith(AndroidJUnit4::class)
 class TorrentTvPlaybackSmokeTest {
@@ -84,8 +86,12 @@ class TorrentTvPlaybackSmokeTest {
         }
         val samples = if (customContentIdText.isNotEmpty()) {
             listOf(
-                "custom Ace content id" to
-                    "$ACE_CONTENT_ID_DESCRIPTOR_PREFIX${customContentIdText.lowercase()}"
+                SmokeSample(
+                    label = "custom Ace content id",
+                    sources = listOf(
+                        "$ACE_CONTENT_ID_DESCRIPTOR_PREFIX${customContentIdText.lowercase()}"
+                    )
+                )
             )
         } else {
             defaultTorrentTvSamples(requestedSample)
@@ -93,19 +99,48 @@ class TorrentTvPlaybackSmokeTest {
         assertTrue("No Torrent TV smoke sample matched '$requestedSample'", samples.isNotEmpty())
 
         val failures = mutableListOf<String>()
-        samples.forEach { (label, source) ->
-            val failure = runCatching {
-                verifyPlayback(label, source, stabilityMillis)
-            }.exceptionOrNull()
-            if (failure != null) {
-                val message = "$label failed: ${failure::class.java.simpleName}: ${failure.message}"
-                failures += message
-                println("TORRENT_TV_SMOKE failure $message")
-                Log.e(TAG, message, failure)
+        samples.forEach { sample ->
+            val attemptFailures = mutableListOf<String>()
+            var passed = false
+
+            for ((index, source) in sample.sources.withIndex()) {
+                val attemptLabel = if (sample.sources.size == 1) {
+                    sample.label
+                } else {
+                    "${sample.label} candidate ${index + 1}/${sample.sources.size}"
+                }
+                val failure = runCatching {
+                    verifyPlayback(attemptLabel, source, stabilityMillis)
+                }.exceptionOrNull()
+                val stopped = engineRepository.stopTorrentStream()
+
+                if (failure == null && stopped is AppResult.Success) {
+                    passed = true
+                    break
+                }
+
+                val message = buildString {
+                    append(attemptLabel)
+                    if (failure != null) {
+                        append(" failed: ")
+                        append(failure::class.java.simpleName)
+                        append(": ")
+                        append(failure.message)
+                    }
+                    if (stopped !is AppResult.Success) {
+                        if (failure != null) append("; ")
+                        append("stop failed: ")
+                        append(stopped)
+                    }
+                }
+                attemptFailures += message
+                println("TORRENT_TV_SMOKE candidate_failure $message")
+                Log.w(TAG, message, failure)
             }
-            val stopped = engineRepository.stopTorrentStream()
-            if (stopped !is AppResult.Success) {
-                failures += "$label stop failed: $stopped"
+
+            if (!passed) {
+                failures += "${sample.label} exhausted ${sample.sources.size} candidate(s): " +
+                    attemptFailures.joinToString(" | ")
             }
         }
 
@@ -115,7 +150,12 @@ class TorrentTvPlaybackSmokeTest {
         )
     }
 
-    private suspend fun defaultTorrentTvSamples(requestedSample: String?): List<Pair<String, String>> {
+    private data class SmokeSample(
+        val label: String,
+        val sources: List<String>
+    )
+
+    private suspend fun defaultTorrentTvSamples(requestedSample: String?): List<SmokeSample> {
         val providerLines = downloadPlaylistOrEmpty(PROVIDER_PLAYLIST_URL)
             .lineSequence()
             .map(String::trim)
@@ -130,16 +170,29 @@ class TorrentTvPlaybackSmokeTest {
         val infoHashSource = providerLines.firstOrNull {
             it.contains("infohash=$ANIMAL_PLANET_INFO_HASH", ignoreCase = true)
         } ?: "$ACE_INFOHASH_DESCRIPTOR_PREFIX$ANIMAL_PLANET_INFO_HASH"
-        val contentIdSource = dimonovichLines.firstOrNull {
-            it.startsWith(ACE_CONTENT_ID_DESCRIPTOR_PREFIX, ignoreCase = true)
-        } ?: "$ACE_CONTENT_ID_DESCRIPTOR_PREFIX$DIMONOVICH_CONTENT_ID_FALLBACK"
+        val playlistContentIdSources = dimonovichLines
+            .filter { it.startsWith(ACE_CONTENT_ID_DESCRIPTOR_PREFIX, ignoreCase = true) }
+            .distinct()
+        val prioritizedContentIdSources = DIMONOVICH_CONTENT_ID_FALLBACKS.mapNotNull { contentId ->
+            playlistContentIdSources.firstOrNull {
+                it.contains("id=$contentId", ignoreCase = true)
+            }
+        }
+        val contentIdSources = (prioritizedContentIdSources + playlistContentIdSources)
+            .distinct()
+            .take(MAX_CONTENT_ID_CANDIDATES)
+            .ifEmpty {
+                DIMONOVICH_CONTENT_ID_FALLBACKS
+                    .take(MAX_CONTENT_ID_CANDIDATES)
+                    .map { contentId -> "$ACE_CONTENT_ID_DESCRIPTOR_PREFIX$contentId" }
+            }
 
         return listOf(
-            "provider Animal Planet HD infohash" to infoHashSource,
-            "Dimonovich current Ace content id" to contentIdSource,
-            "provider Animal Planet HD restart" to infoHashSource
-        ).filter { (label, _) ->
-            requestedSample == null || label.contains(requestedSample, ignoreCase = true)
+            SmokeSample("provider Animal Planet HD infohash", listOf(infoHashSource)),
+            SmokeSample("Dimonovich current Ace content id", contentIdSources),
+            SmokeSample("provider Animal Planet HD restart", listOf(infoHashSource))
+        ).filter { sample ->
+            requestedSample == null || sample.label.contains(requestedSample, ignoreCase = true)
         }
     }
 
@@ -312,8 +365,13 @@ class TorrentTvPlaybackSmokeTest {
         const val ACE_INFOHASH_DESCRIPTOR_PREFIX = "http://127.0.0.1:6878/ace/getstream?infohash="
         const val ACE_CONTENT_ID_DESCRIPTOR_PREFIX = "http://127.0.0.1:6878/ace/getstream?id="
         const val ANIMAL_PLANET_INFO_HASH = "568159b1059c7bbe3eaf40f123541fef86ef83cb"
-        const val DIMONOVICH_CONTENT_ID_FALLBACK = "50bc2f512793f1e745fb5bd5b5a6afca199c2d19"
+        val DIMONOVICH_CONTENT_ID_FALLBACKS = listOf(
+            "50bc2f512793f1e745fb5bd5b5a6afca199c2d19",
+            "9644f162efbefc1b38601eeaeeed25591fd2832e",
+            "caa3dad746d80a887e8a259f1c7c2eead749094b"
+        )
         val CONTENT_ID_PATTERN = Regex("^[0-9a-fA-F]{40}$")
+        const val MAX_CONTENT_ID_CANDIDATES = 3
         const val MAX_PROBE_BYTES = 128 * 1024
         const val PLAYER_READY_TIMEOUT_MS = 45_000L
         const val PLAYBACK_STABILITY_MS = 45_000L
