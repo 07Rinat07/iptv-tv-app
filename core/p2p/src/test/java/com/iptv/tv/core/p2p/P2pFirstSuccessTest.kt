@@ -103,4 +103,34 @@ class P2pFirstSuccessTest {
         assertEquals("direct", (result as P2pResult.Success).data)
         assertTrue(metadataCancelled.get())
     }
+
+    @Test
+    fun `metadata failure does not hard cancel direct at advisory deadline`() = runBlocking {
+        val directCompleted = AtomicBoolean(false)
+
+        val result = raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = 20,
+            directAttempt = {
+                delay(80)
+                directCompleted.set(true)
+                P2pResult.Success("direct-after-advisory-deadline")
+            },
+            metadataResolve = {
+                delay(10)
+                P2pResult.Error("metadata unavailable")
+            },
+            metadataAttempt = { descriptor: String ->
+                P2pResult.Success("metadata:$descriptor")
+            },
+            isCurrent = { true },
+            superseded = { P2pResult.Error("superseded") },
+            combinedFailureMessage = { direct, metadata ->
+                "${direct.message}; ${metadata.message}"
+            }
+        )
+
+        assertTrue(result is P2pResult.Success)
+        assertEquals("direct-after-advisory-deadline", (result as P2pResult.Success).data)
+        assertTrue(directCompleted.get())
+    }
 }
