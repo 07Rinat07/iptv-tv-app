@@ -139,7 +139,10 @@ class AceLivePeerDiscoveryOrchestratorTest {
             trackerDiscover = {
                 AceLiveUdpTrackerDiscoveryResult(listOf(shared, overflow), 1, 0, 0)
             },
-            policy = AceLivePeerDiscoveryOrchestrationPolicy(maxTotalPeers = 2)
+            policy = AceLivePeerDiscoveryOrchestrationPolicy(
+                maxTotalPeers = 2,
+                preferTrackerFastPath = false
+            )
         )
 
         val result = orchestrator.discover(
