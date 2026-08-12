@@ -20,7 +20,7 @@ class P2pFirstSuccessTest {
             failureMessage = "all attempts failed"
         ) { item ->
             val current = active.incrementAndGet()
-            maxObserved.accumulateAndGet(current, ::maxOf)
+            maxObserved.updateAndGet { previous -> maxOf(previous, current) }
             try {
                 delay(20)
                 if (item == 7) {
