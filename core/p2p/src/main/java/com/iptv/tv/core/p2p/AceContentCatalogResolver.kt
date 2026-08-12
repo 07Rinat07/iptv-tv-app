@@ -6,12 +6,17 @@ import java.security.SecureRandom
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okio.ByteString.Companion.decodeBase64
 
 /** Resolves a 40-hex Ace content ID through the signed public transport catalog. */
@@ -38,38 +43,39 @@ class AceContentCatalogResolver(
             ?.takeIf { entry -> clockMillis() - entry.resolvedAtMillis < CACHE_TTL_MILLIS }
             ?.let { entry -> return P2pResult.Success(entry.transport) }
 
-        var lastError: Throwable? = null
-        for (host in CATALOG_HOSTS) {
-            kotlinx.coroutines.currentCoroutineContext().ensureActive()
-            val transportBytes = try {
-                fetch(host, normalized)
+        val resolved = firstSuccessfulP2p(
+            items = CATALOG_HOSTS,
+            maxConcurrency = MAX_CONCURRENT_CATALOG_HOSTS,
+            failureMessage = "Ace transport catalog did not return valid live metadata"
+        ) { host ->
+            currentCoroutineContext().ensureActive()
+            try {
+                when (val decoded = AceTransportDescriptorDecoder.decodeLive(fetch(host, normalized))) {
+                    is P2pResult.Success -> decoded
+                    is P2pResult.Error -> P2pResult.Error(
+                        message = "Ace catalog $host returned invalid live metadata: ${decoded.message}",
+                        cause = decoded.cause
+                    )
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                lastError = error
-                continue
-            }
-            when (val decoded = AceTransportDescriptorDecoder.decodeLive(transportBytes)) {
-                is P2pResult.Success -> {
-                    if (cache.size >= MAX_CACHE_ENTRIES) {
-                        cache.entries.minByOrNull { it.value.resolvedAtMillis }?.let { oldest ->
-                            cache.remove(oldest.key, oldest.value)
-                        }
-                    }
-                    cache[normalized] = CacheEntry(decoded.data, clockMillis())
-                    return decoded
-                }
-
-                is P2pResult.Error -> {
-                    lastError = decoded.cause ?: IllegalArgumentException(decoded.message)
-                }
+                P2pResult.Error(
+                    message = "Ace catalog $host failed: ${error.message ?: error.javaClass.simpleName}",
+                    cause = error
+                )
             }
         }
 
-        return P2pResult.Error(
-            message = "Ace transport catalog did not return valid live metadata",
-            cause = lastError
-        )
+        if (resolved is P2pResult.Success) {
+            if (cache.size >= MAX_CACHE_ENTRIES) {
+                cache.entries.minByOrNull { it.value.resolvedAtMillis }?.let { oldest ->
+                    cache.remove(oldest.key, oldest.value)
+                }
+            }
+            cache[normalized] = CacheEntry(resolved.data, clockMillis())
+        }
+        return resolved
     }
 
     internal fun signature(contentId: String, requestRandom: Long): String {
@@ -84,7 +90,7 @@ class AceContentCatalogResolver(
         return digest.toHex()
     }
 
-    private suspend fun fetch(host: String, contentId: String): ByteArray = withContext(Dispatchers.IO) {
+    private suspend fun fetch(host: String, contentId: String): ByteArray {
         val requestRandom = nextRequestRandom()
         val requestSignature = signature(contentId, requestRandom)
         val url = "http://$host:$CATALOG_PORT/gettorrent" +
@@ -95,19 +101,38 @@ class AceContentCatalogResolver(
             .header("Accept", "application/xml,text/xml,*/*")
             .header("User-Agent", "myscanerIPTV/1")
             .build()
+        val call = httpClient.newCall(request)
 
-        httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Ace catalog HTTP ${response.code}")
-            val body = response.body ?: throw IOException("Ace catalog response is empty")
-            val declaredLength = body.contentLength()
-            if (declaredLength > MAX_RESPONSE_BYTES) {
-                throw IOException("Ace catalog response exceeds the size limit")
-            }
-            val bytes = body.source().readByteArray(MAX_RESPONSE_BYTES.toLong() + 1L)
-            if (bytes.size > MAX_RESPONSE_BYTES) {
-                throw IOException("Ace catalog response exceeds the size limit")
-            }
-            parseResponse(bytes.toString(Charsets.UTF_8))
+        return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, error: IOException) {
+                    if (continuation.isActive) continuation.resumeWithException(error)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    try {
+                        val transport = response.use { current ->
+                            if (!current.isSuccessful) {
+                                throw IOException("Ace catalog HTTP ${current.code}")
+                            }
+                            val body = current.body ?: throw IOException("Ace catalog response is empty")
+                            val declaredLength = body.contentLength()
+                            if (declaredLength > MAX_RESPONSE_BYTES) {
+                                throw IOException("Ace catalog response exceeds the size limit")
+                            }
+                            val bytes = body.source().readByteArray(MAX_RESPONSE_BYTES.toLong() + 1L)
+                            if (bytes.size > MAX_RESPONSE_BYTES) {
+                                throw IOException("Ace catalog response exceeds the size limit")
+                            }
+                            parseResponse(bytes.toString(Charsets.UTF_8))
+                        }
+                        if (continuation.isActive) continuation.resume(transport)
+                    } catch (error: Throwable) {
+                        if (continuation.isActive) continuation.resumeWithException(error)
+                    }
+                }
+            })
         }
     }
 
@@ -164,6 +189,7 @@ class AceContentCatalogResolver(
         private const val CLIENT_PLATFORM = "linux"
         private const val CLIENT_VERSION_CODE = "3021100"
         private const val HOST_TIMEOUT_SECONDS = 4L
+        private const val MAX_CONCURRENT_CATALOG_HOSTS = 2
         private const val MAX_RESPONSE_BYTES = 1024 * 1024
         private const val MAX_TRANSPORT_BYTES = 1024 * 1024
         private const val MAX_BASE64_CHARS = 1_400_000
