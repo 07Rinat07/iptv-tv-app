@@ -8,7 +8,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Runs P2P attempts with a bounded worker pool and returns as soon as one attempt succeeds.
@@ -68,9 +67,10 @@ internal suspend fun <I, O> firstSuccessfulP2p(
  * - direct playback wins immediately if it produces media first;
  * - resolved metadata wins immediately if it becomes available first, after the speculative direct
  *   runtime is cancelled and fully cleaned up;
- * - a failed metadata provider does not abort a still-promising direct attempt;
- * - the direct path has a short soft deadline so a dead swarm cannot impose the full runtime startup
- *   timeout on every channel switch.
+ * - a failed metadata provider never aborts a still-promising direct attempt;
+ * - [directSoftTimeoutMillis] remains an advisory policy threshold. It must not be implemented as a
+ *   coroutine timeout around [directAttempt], because doing so destroys a viable direct swarm when
+ *   metadata is unavailable. The direct runtime owns its real bounded startup timeout.
  */
 internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
     directSoftTimeoutMillis: Long,
@@ -85,11 +85,12 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
 
     val events = Channel<StartupRaceEvent<T, M>>(capacity = 2)
     val directJob = launch {
-        val result = withTimeoutOrNull(directSoftTimeoutMillis) {
+        // Do not wrap this in withTimeout/withTimeoutOrNull. The runtime already has a bounded startup
+        // timeout and may legitimately need longer than the advisory threshold when metadata lookup
+        // fails. Metadata still races concurrently and cancels this job immediately when it wins.
+        val result = runP2pAttempt("Direct Ace Live startup failed") {
             directAttempt()
-        } ?: P2pResult.Error(
-            "Direct Ace Live startup exceeded the ${directSoftTimeoutMillis} ms soft deadline"
-        )
+        }
         events.send(StartupRaceEvent.Direct(result))
     }
     val metadataJob = launch {
