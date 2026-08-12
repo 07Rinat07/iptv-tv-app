@@ -76,6 +76,7 @@ private const val MULTIVIEW_FOUR_UP_MIN_HEAP_BYTES = 512L * 1024L * 1024L
 private const val DUPLICATE_INTERNAL_PLAY_WINDOW_MS = 1_500L
 private const val CHANNEL_LIST_EPG_WINDOW_MS = 3 * 60 * 60 * 1000L
 private const val CHANNEL_LIST_EPG_REFRESH_MS = 10 * 60 * 1000L
+private const val EPG_CHANNEL_SELECTION_DEBOUNCE_MS = 200L
 
 
 internal fun isDefaultLocalAceEndpoint(endpoint: String): Boolean {
@@ -1673,6 +1674,7 @@ class PlayerViewModel @Inject constructor(
 
         epgJob?.cancel()
         epgJob = viewModelScope.launch {
+            delay(EPG_CHANNEL_SELECTION_DEBOUNCE_MS)
             _uiState.update { it.copy(channelEpgInfo = null, epgStatus = "EPG: загрузка...") }
             when (val result = playlistRepository.getChannelEpgNowNext(channelId)) {
                 is AppResult.Success -> {
