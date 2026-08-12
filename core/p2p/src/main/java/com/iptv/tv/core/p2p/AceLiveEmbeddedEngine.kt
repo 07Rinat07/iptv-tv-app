@@ -247,6 +247,7 @@ class AceLiveEmbeddedEngine(
         private val peerIds = AtomicLong(1L)
         private val emittedBytes = AtomicLong(0L)
         private val startupStartedAtMillis = AtomicLong(0L)
+        private val initialPeerDiscovery = AtomicBoolean(true)
         private val lastMediaAppendAt = AtomicLong(0L)
         private val lastProgressLogAt = AtomicLong(0L)
         private val lastWindowLogAt = AtomicLong(0L)
@@ -348,7 +349,12 @@ class AceLiveEmbeddedEngine(
                 peerId = localPeerId,
                 announcePort = announceLease.port
             )
-            return AceLivePeerDiscoveryOrchestrator().discover(
+            val discoveryPolicy = if (initialPeerDiscovery.compareAndSet(true, false)) {
+                AceLivePeerDiscoveryOrchestrationPolicy(trackerFastPathMinPeers = 1)
+            } else {
+                AceLivePeerDiscoveryOrchestrationPolicy()
+            }
+            return AceLivePeerDiscoveryOrchestrator(policy = discoveryPolicy).discover(
                 AceLivePeerDiscoveryOrchestrationRequest(
                     dhtRequest = dhtRequest,
                     trackerRequest = trackerRequest
