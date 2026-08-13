@@ -33,6 +33,11 @@ val READY_PLAYLIST_PRESETS: List<ReadyPlaylistPreset> = listOf(
         url = "https://raw.githubusercontent.com/Dimonovich/TV/Dimonovich/FREE/TV"
     ),
     ReadyPlaylistPreset(
+        name = "Ace Stream TV — Торрент ТВ",
+        url = "https://iptv.org.ua/iptv/provayder.m3u",
+        note = "Плейлист iptv.org.ua с отдельным разделом Ace Stream TV"
+    ),
+    ReadyPlaylistPreset(
         name = "Сборник ТВ",
         url = "https://raw.githubusercontent.com/Voxlist/voxlist/refs/heads/main/voxlist.m3u"
     ),

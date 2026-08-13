@@ -396,6 +396,7 @@ class PublicRepositoryScannerDataSourceTest {
 
         assertTrue(result.isNotEmpty())
         assertTrue(result.any { it.downloadUrl.endsWith(".m3u", ignoreCase = true) || it.downloadUrl.endsWith(".m3u8", ignoreCase = true) })
+        assertTrue(result.any { it.downloadUrl == "https://iptv.org.ua/iptv/provayder.m3u" })
     }
 
     private fun failingWebClient(): OkHttpClient {
