@@ -8,6 +8,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import kotlin.concurrent.thread
+import kotlin.system.measureTimeMillis
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -150,6 +151,60 @@ class AceLiveDhtDiscoveryTest {
             assertEquals(1, result.failedQueries)
         } finally {
             silent.close()
+        }
+    }
+
+    @Test
+    fun `silent DHT branch does not block a responsive branch`() = runBlocking {
+        val sockets = listOf(
+            DatagramSocket(InetSocketAddress("127.0.0.1", 0)),
+            DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        ).sortedBy { socket -> "127.0.0.1:${socket.localPort}" }
+        val silent = sockets[0]
+        val responsive = sockets[1]
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val peer = compactEndpoint(127, 0, 0, 1, 8621)
+        val responsiveThread = dhtServerThread(responsive) { _ ->
+            response(transactionId, ByteArray(20) { 0x22 }, values = listOf(peer))
+        }
+
+        try {
+            val discovery = AceLiveDhtDiscovery(
+                policy = AceLiveDhtPolicy(
+                    requestTimeoutMillis = 5_000,
+                    discoveryBudgetMillis = 5_500,
+                    searchBranching = 2,
+                    returnAfterPeers = 1,
+                    allowNonGlobalNodeAddresses = true,
+                    allowNonGlobalPeerAddresses = true
+                ),
+                randomInt = { 0x1234 },
+                addressResolver = { listOf(ipv4("127.0.0.1")) }
+            )
+            val request = AceLiveDhtDiscoveryRequest(
+                swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 0x55 }),
+                bootstrapNodes = listOf(
+                    AceLiveDhtBootstrapNode("silent.test", silent.localPort),
+                    AceLiveDhtBootstrapNode("responsive.test", responsive.localPort)
+                ),
+                localNodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 0x44 })
+            )
+
+            lateinit var result: AceLiveDhtDiscoveryResult
+            val elapsedMillis = measureTimeMillis {
+                result = discovery.discover(request)
+            }
+
+            assertEquals(listOf(AceLiveTcpPeerEndpoint("127.0.0.1", 8621)), result.peers)
+            assertEquals(2, result.queriesSent)
+            assertTrue(
+                "first DHT peer should return before the 5s silent branch, took ${elapsedMillis}ms",
+                elapsedMillis < 3_000
+            )
+        } finally {
+            silent.close()
+            responsive.close()
+            responsiveThread.join(2_000)
         }
     }
 

@@ -51,14 +51,19 @@ class HybridEngineRepositoryImpl @Inject constructor(
     okHttpClient: OkHttpClient
 ) : EngineRepository {
     private val appContext = context.applicationContext
+    private val streamEpoch = AtomicLong(0L)
+    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val embeddedEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         LibtorrentEmbeddedEngine(appContext, okHttpClient)
     }
     private val aceLiveEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        AceLiveEmbeddedEngine(okHttpClient)
+        AceLiveEmbeddedEngine(
+            okHttpClient = okHttpClient,
+            diagnosticsObserver = { status, message ->
+                cleanupScope.launch { log(status, message) }
+            }
+        )
     }
-    private val streamEpoch = AtomicLong(0L)
-    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val embeddedEngineUsed = AtomicBoolean(false)
     private val aceLiveEngineUsed = AtomicBoolean(false)
 

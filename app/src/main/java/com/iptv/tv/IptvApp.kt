@@ -1,7 +1,11 @@
 package com.iptv.tv
 
+import android.app.Activity
 import android.app.Application
+import android.app.Application.ActivityLifecycleCallbacks
 import android.os.Build
+import android.os.Bundle
+import android.os.Process
 import android.os.SystemClock
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
@@ -28,6 +32,9 @@ import javax.inject.Inject
 
 @HiltAndroidApp
 class IptvApp : Application(), Configuration.Provider {
+    private val processStartedAtElapsedMs = SystemClock.elapsedRealtime()
+    private var startedActivityCount = 0
+
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
 
@@ -59,6 +66,8 @@ class IptvApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        val previousForegroundProcess = readPreviousForegroundProcess()
+        markProcessForeground(foreground = false)
         val defaultUncaughtExceptionHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             recordApplicationError(
@@ -69,6 +78,41 @@ class IptvApp : Application(), Configuration.Provider {
             )
             defaultUncaughtExceptionHandler?.uncaughtException(thread, throwable)
         }
+        recordApplicationEvent(
+            status = "app_process_start",
+            message = buildRuntimeContext(prefix = "Application process started")
+        )
+        if (previousForegroundProcess != null) {
+            recordApplicationEvent(
+                status = "app_previous_process_ended_in_foreground",
+                message = buildRuntimeContext(
+                    prefix = "Previous process ended while UI was foreground: " +
+                        "previousPid=${previousForegroundProcess.pid}, " +
+                        "markedAt=${previousForegroundProcess.markedAtMillis}"
+                )
+            )
+        }
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+
+            override fun onActivityStarted(activity: Activity) {
+                startedActivityCount += 1
+                if (startedActivityCount == 1) markProcessForeground(foreground = true)
+            }
+
+            override fun onActivityResumed(activity: Activity) = Unit
+
+            override fun onActivityPaused(activity: Activity) = Unit
+
+            override fun onActivityStopped(activity: Activity) {
+                startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
+                if (startedActivityCount == 0) markProcessForeground(foreground = false)
+            }
+
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        })
         applicationScope.launch(Dispatchers.IO) {
             delay(BACKGROUND_WORK_START_DELAY_MS)
             val workManager = WorkManager.getInstance(this@IptvApp)
@@ -102,8 +146,13 @@ class IptvApp : Application(), Configuration.Provider {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_RUNNING_LOW_LEVEL) {
-            recordApplicationEvent(
+        when {
+            level == TRIM_MEMORY_UI_HIDDEN_LEVEL -> recordApplicationEvent(
+                status = "app_ui_hidden",
+                message = buildRuntimeContext(prefix = "Application UI became hidden: level=$level")
+            )
+            level in TRIM_MEMORY_RUNNING_LOW_LEVEL..TRIM_MEMORY_RUNNING_CRITICAL_LEVEL ||
+                level >= TRIM_MEMORY_BACKGROUND_LEVEL -> recordApplicationEvent(
                 status = "app_trim_memory",
                 message = buildRuntimeContext(prefix = "System requested memory trim: level=$level")
             )
@@ -145,6 +194,35 @@ class IptvApp : Application(), Configuration.Provider {
         }
     }
 
+    /**
+     * Android 9 does not expose historical process-exit reasons. Persisting the foreground state
+     * lets the next process distinguish an ordinary background eviction from a process that
+     * disappeared while its UI was visible. This is intentionally diagnostic rather than a claim
+     * that every such exit was a Java crash: native aborts, system kills, and force-stop also bypass
+     * the default uncaught-exception handler.
+     */
+    private fun readPreviousForegroundProcess(): ForegroundProcessMarker? {
+        val preferences = getSharedPreferences(PROCESS_MARKER_PREFERENCES, MODE_PRIVATE)
+        val previousPid = preferences.getInt(PROCESS_MARKER_PID, -1)
+        val wasForeground = preferences.getBoolean(PROCESS_MARKER_FOREGROUND, false)
+        if (!wasForeground || previousPid <= 0 || previousPid == Process.myPid()) return null
+        return ForegroundProcessMarker(
+            pid = previousPid,
+            markedAtMillis = preferences.getLong(PROCESS_MARKER_TIME, 0L)
+        )
+    }
+
+    private fun markProcessForeground(foreground: Boolean) {
+        // commit() is deliberate: an asynchronous marker can be lost in exactly the abrupt-exit
+        // scenario this diagnostic is meant to capture. The payload is only three primitive values.
+        getSharedPreferences(PROCESS_MARKER_PREFERENCES, MODE_PRIVATE)
+            .edit()
+            .putInt(PROCESS_MARKER_PID, Process.myPid())
+            .putBoolean(PROCESS_MARKER_FOREGROUND, foreground)
+            .putLong(PROCESS_MARKER_TIME, System.currentTimeMillis())
+            .commit()
+    }
+
     private fun buildApplicationErrorMessage(threadName: String, throwable: Throwable): String {
         return buildString {
             append(buildRuntimeContext(prefix = "thread=$threadName"))
@@ -163,7 +241,12 @@ class IptvApp : Application(), Configuration.Provider {
             val info = packageManager.getPackageInfo(packageName, 0)
             "${info.versionName}/${info.longVersionCodeCompat()}"
         }.getOrDefault("unknown")
-        return "$prefix | app=$version | sdk=${Build.VERSION.SDK_INT} | device=${Build.MANUFACTURER}/${Build.MODEL} | uptime=${SystemClock.elapsedRealtime() / 1_000}s | mem=${usedMb}MB/${maxMb}MB"
+        val processUptimeSeconds =
+            (SystemClock.elapsedRealtime() - processStartedAtElapsedMs).coerceAtLeast(0L) / 1_000L
+        return "$prefix | app=$version | sdk=${Build.VERSION.SDK_INT} | " +
+            "device=${Build.MANUFACTURER}/${Build.MODEL} | pid=${Process.myPid()} | " +
+            "processUptime=${processUptimeSeconds}s | deviceUptime=${SystemClock.elapsedRealtime() / 1_000}s | " +
+            "mem=${usedMb}MB/${maxMb}MB"
     }
 
     private fun Throwable.toCauseChain(maxDepth: Int = 6): String {
@@ -218,5 +301,17 @@ class IptvApp : Application(), Configuration.Provider {
         const val MAX_CAUSE_SEGMENT = 240
         const val MB = 1024 * 1024
         const val TRIM_MEMORY_RUNNING_LOW_LEVEL = 10
+        const val TRIM_MEMORY_RUNNING_CRITICAL_LEVEL = 15
+        const val TRIM_MEMORY_UI_HIDDEN_LEVEL = 20
+        const val TRIM_MEMORY_BACKGROUND_LEVEL = 40
+        const val PROCESS_MARKER_PREFERENCES = "process_exit_diagnostics"
+        const val PROCESS_MARKER_PID = "pid"
+        const val PROCESS_MARKER_FOREGROUND = "foreground"
+        const val PROCESS_MARKER_TIME = "marked_at"
     }
+
+    private data class ForegroundProcessMarker(
+        val pid: Int,
+        val markedAtMillis: Long
+    )
 }

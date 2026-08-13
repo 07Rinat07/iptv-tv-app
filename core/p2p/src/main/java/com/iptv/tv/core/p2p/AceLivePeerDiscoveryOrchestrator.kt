@@ -84,6 +84,68 @@ data class AceLivePeerDiscoveryOrchestrationResult(
     fun tcpEndpoints(): List<AceLiveTcpPeerEndpoint> = peers.map(AceLiveDiscoveredPeer::endpoint)
 }
 
+/** Startup-only DHT work required after the deliberately permissive initial discovery. */
+internal enum class AceLiveStartupDhtRefillPlan {
+    NONE,
+    PROBE_BATCHES_THEN_EXPAND
+}
+
+/**
+ * Classifies the DHT-only work required after a deliberately small startup result.
+ *
+ * A one-to-three-peer tracker result satisfies the startup threshold of one, so the first TCP
+ * attempt can begin without waiting for DHT. It is still weaker than the normal refill threshold of
+ * four. A weak startup result therefore schedules short DHT probe batches before the full
+ * background expansion. The batches return as soon as four candidates are available and give the
+ * TCP pool several independent endpoints without recreating the old 15-second startup gate.
+ */
+internal fun aceLiveStartupNeedsImmediateDhtOnlyRefill(
+    result: AceLivePeerDiscoveryOrchestrationResult,
+    normalTrackerFastPathMinPeers: Int =
+        AceLivePeerDiscoveryOrchestrationPolicy().trackerFastPathMinPeers
+): Boolean {
+    return aceLiveStartupDhtRefillPlan(result, normalTrackerFastPathMinPeers) !=
+        AceLiveStartupDhtRefillPlan.NONE
+}
+
+internal fun aceLiveStartupDhtRefillPlan(
+    result: AceLivePeerDiscoveryOrchestrationResult,
+    normalTrackerFastPathMinPeers: Int =
+        AceLivePeerDiscoveryOrchestrationPolicy().trackerFastPathMinPeers
+): AceLiveStartupDhtRefillPlan {
+    require(normalTrackerFastPathMinPeers > 0) {
+        "normalTrackerFastPathMinPeers must be positive"
+    }
+    val weakTrackerFastPath =
+        result.dht.status == AceLivePeerDiscoverySourceStatus.NOT_REQUESTED &&
+        result.tracker.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
+        result.tracker.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
+    val weakDhtFastPath =
+        result.dht.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
+        result.dht.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
+    return when {
+        // A single tracker or DHT endpoint is only a candidate, not proof that it publishes this
+        // swarm. Probe several endpoints in small batches before the full DHT traversal.
+        weakTrackerFastPath || weakDhtFastPath ->
+            AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND
+        else -> AceLiveStartupDhtRefillPlan.NONE
+    }
+}
+
+internal fun aceLiveStartupDhtProbeShouldContinue(
+    completedRounds: Int,
+    maxRounds: Int = ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS
+): Boolean {
+    require(completedRounds >= 0) { "completedRounds must be non-negative" }
+    require(maxRounds > 0) { "maxRounds must be positive" }
+    return completedRounds in 1 until maxRounds
+}
+
+internal const val ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS = 1
+internal const val ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS = 4
+internal const val ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS = 7_000L
+internal const val ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS = 2
+
 internal const val ACE_LIVE_DHT_MIN_HEAP_HEADROOM_BYTES: Long = 32L * 1024L * 1024L
 
 // Direct content-id startup and metadata resolution may legitimately race. They share the same
@@ -128,14 +190,16 @@ internal fun aceLiveDhtHasHeapHeadroom(
  *
  * Multiple orchestrator instances may be active while content-id startup races metadata resolution.
  * Their DHT fallbacks are process-wide serialized and re-check heap headroom after acquiring the
- * gate, preventing two expensive DHT walks from racing each other on low-memory TV devices.
+ * gate, preventing two expensive DHT walks from racing each other on low-memory TV devices. Default
+ * production DHT discovery also reuses a just-completed result for the same swarm for a few seconds,
+ * so the direct and metadata paths do not immediately repeat the identical serialized network walk.
  *
  * When the tracker fast path is disabled, DHT and tracker discovery retain the original concurrent
  * supervisor behavior. Coroutine cancellation is never converted into a source failure.
  */
 class AceLivePeerDiscoveryOrchestrator(
     private val dhtDiscover: suspend (AceLiveDhtDiscoveryRequest) -> AceLiveDhtDiscoveryResult =
-        { request -> AceLiveDhtDiscovery().discover(request) },
+        { request -> AceLiveDhtDiscovery(reuseRecentResults = true).discover(request) },
     private val trackerDiscover: suspend (AceLiveUdpTrackerDiscoveryRequest) -> AceLiveUdpTrackerDiscoveryResult =
         { request -> AceLiveUdpTrackerDiscovery().discover(request) },
     private val policy: AceLivePeerDiscoveryOrchestrationPolicy =

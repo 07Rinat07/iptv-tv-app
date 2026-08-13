@@ -13,10 +13,14 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
@@ -48,9 +52,9 @@ internal data class AceDhtDiscoveryOutcome(
 )
 
 /**
- * Shared bounded BEP-5 iterative walker used by both verified Ace Live swarm keys and Ace Content ID
- * lookup targets. The target bytes are supplied explicitly by the caller, so this layer never
- * reclassifies a Content ID as a BitTorrent infohash or as an Ace Live swarm key.
+ * Shared bounded, concurrent BEP-5 iterative walker used by both verified Ace Live swarm keys and
+ * Ace Content ID lookup targets. The target bytes are supplied explicitly by the caller, so this
+ * layer never reclassifies a Content ID as a BitTorrent infohash or as an Ace Live swarm key.
  */
 internal class AceDhtIterativeDiscovery(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -65,6 +69,7 @@ internal class AceDhtIterativeDiscovery(
             val queuedEndpoints = HashMap<String, AceLiveDhtNodeId?>()
             val queriedEndpoints = HashSet<String>()
             val peers = LinkedHashMap<String, AceLiveTcpPeerEndpoint>()
+            val completionPeerCount = policy.returnAfterPeers ?: policy.maxTotalPeers
             var rejected = 0
             var failed = 0
             var queries = 0
@@ -99,59 +104,99 @@ internal class AceDhtIterativeDiscovery(
                 }
             }
 
-            while (frontier.isNotEmpty() && queries < policy.maxQueries && peers.size < policy.maxTotalPeers) {
-                currentCoroutineContext().ensureActive()
-                if (remainingBudgetMillis(deadlineNanos) <= 0) break
-                val candidate = frontier.remove()
-                val candidateKey = endpointKey(candidate.endpoint)
-                if (!queriedEndpoints.add(candidateKey)) continue
+            coroutineScope {
+                val inFlight = LinkedHashSet<Deferred<QueryCompletion>>()
+                try {
+                    while (
+                        peers.size < completionPeerCount &&
+                        (inFlight.isNotEmpty() || (frontier.isNotEmpty() && queries < policy.maxQueries))
+                    ) {
+                        currentCoroutineContext().ensureActive()
+                        if (remainingBudgetMillis(deadlineNanos) <= 0) break
 
-                queries += 1
-                val response = try {
-                    queryGetPeers(
-                        endpoint = candidate.endpoint,
-                        request = request,
-                        deadlineNanos = deadlineNanos
-                    )
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: DiscoveryBudgetExhaustedException) {
-                    break
-                } catch (_: Exception) {
-                    failed += 1
-                    continue
-                }
+                        while (
+                            inFlight.size < policy.searchBranching &&
+                            queries < policy.maxQueries &&
+                            frontier.isNotEmpty()
+                        ) {
+                            val candidate = frontier.remove()
+                            val candidateKey = endpointKey(candidate.endpoint)
+                            if (!queriedEndpoints.add(candidateKey)) continue
 
-                if (candidate.nodeId != null && candidate.nodeId != response.remoteNodeId) {
-                    failed += 1
-                    continue
-                }
+                            queries += 1
+                            inFlight += async {
+                                try {
+                                    QueryCompletion.Success(
+                                        candidate = candidate,
+                                        response = queryGetPeers(
+                                            endpoint = candidate.endpoint,
+                                            request = request,
+                                            deadlineNanos = deadlineNanos
+                                        )
+                                    )
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (_: DiscoveryBudgetExhaustedException) {
+                                    QueryCompletion.BudgetExhausted
+                                } catch (_: Exception) {
+                                    QueryCompletion.Failed
+                                }
+                            }
+                        }
 
-                for (peer in response.peers) {
-                    if (!isAllowedPeerEndpoint(peer)) {
-                        rejected += 1
-                        continue
+                        if (inFlight.isEmpty()) break
+                        val (completed, completion) = select<Pair<Deferred<QueryCompletion>, QueryCompletion>> {
+                            inFlight.forEach { pending ->
+                                pending.onAwait { outcome -> pending to outcome }
+                            }
+                        }
+                        inFlight.remove(completed)
+
+                        when (completion) {
+                            QueryCompletion.BudgetExhausted -> break
+                            QueryCompletion.Failed -> {
+                                failed += 1
+                                continue
+                            }
+                            is QueryCompletion.Success -> {
+                                val candidate = completion.candidate
+                                val response = completion.response
+                                if (candidate.nodeId != null && candidate.nodeId != response.remoteNodeId) {
+                                    failed += 1
+                                    continue
+                                }
+
+                                for (peer in response.peers) {
+                                    if (!isAllowedPeerEndpoint(peer)) {
+                                        rejected += 1
+                                        continue
+                                    }
+                                    peers.putIfAbsent(endpointKey(peer), peer)
+                                    if (peers.size >= completionPeerCount) break
+                                }
+                                if (peers.size >= completionPeerCount) break
+
+                                for (contact in response.nodes) {
+                                    if (!isAllowedNodeEndpoint(contact.endpoint)) {
+                                        rejected += 1
+                                        continue
+                                    }
+                                    val key = endpointKey(contact.endpoint)
+                                    if (key in queriedEndpoints) continue
+                                    val previousNodeId = queuedEndpoints[key]
+                                    if (!queuedEndpoints.containsKey(key)) {
+                                        queuedEndpoints[key] = contact.nodeId
+                                        frontier.add(QueryCandidate(contact.endpoint, contact.nodeId))
+                                    } else if (previousNodeId == null) {
+                                        queuedEndpoints[key] = contact.nodeId
+                                        frontier.add(QueryCandidate(contact.endpoint, contact.nodeId))
+                                    }
+                                }
+                            }
+                        }
                     }
-                    peers.putIfAbsent(endpointKey(peer), peer)
-                    if (peers.size >= policy.maxTotalPeers) break
-                }
-                if (peers.size >= policy.maxTotalPeers) break
-
-                for (contact in response.nodes) {
-                    if (!isAllowedNodeEndpoint(contact.endpoint)) {
-                        rejected += 1
-                        continue
-                    }
-                    val key = endpointKey(contact.endpoint)
-                    if (key in queriedEndpoints) continue
-                    val previousNodeId = queuedEndpoints[key]
-                    if (!queuedEndpoints.containsKey(key)) {
-                        queuedEndpoints[key] = contact.nodeId
-                        frontier.add(QueryCandidate(contact.endpoint, contact.nodeId))
-                    } else if (previousNodeId == null) {
-                        queuedEndpoints[key] = contact.nodeId
-                        frontier.add(QueryCandidate(contact.endpoint, contact.nodeId))
-                    }
+                } finally {
+                    inFlight.forEach { pending -> pending.cancel() }
                 }
             }
 
@@ -310,6 +355,16 @@ internal class AceDhtIterativeDiscovery(
         val endpoint: AceLiveTcpPeerEndpoint,
         val nodeId: AceLiveDhtNodeId?
     )
+
+    private sealed interface QueryCompletion {
+        data class Success(
+            val candidate: QueryCandidate,
+            val response: AceLiveDhtGetPeersResponse
+        ) : QueryCompletion
+
+        data object Failed : QueryCompletion
+        data object BudgetExhausted : QueryCompletion
+    }
 
     private data class Ipv4Cidr(val network: Long, val prefixBits: Int)
 

@@ -302,16 +302,8 @@ private fun AppRoot(
                         }
                         composable(Routes.READY_PLAYLISTS) {
                             ReadyPlaylistsScreen(
-                                onImportPlaylist = { url, name ->
-                                    ImportPrefillBus.push(
-                                        ImportPrefill(
-                                            url = url,
-                                            playlistName = name,
-                                            autoImport = true,
-                                            catalogOrigin = CatalogOriginKind.READY_CATALOG
-                                        )
-                                    )
-                                    navController.navigate(Routes.IMPORTER)
+                                onOpenPlaylist = { playlistId ->
+                                    navController.navigate(Routes.playerRoute(playlistId))
                                 }
                             )
                         }

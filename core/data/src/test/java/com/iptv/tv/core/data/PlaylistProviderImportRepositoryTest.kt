@@ -227,6 +227,26 @@ class PlaylistProviderImportRepositoryTest {
     }
 
     @Test
+    fun importReadyPlaylistTextPersistsDedicatedSourceAndCatalogOrigin() = runTest {
+        val sourceKey = "embedded://ready/ace-stream-tv-torrent-v1"
+        val result = repository.importReadyPlaylistText(
+            text = """
+                #EXTM3U
+                #EXTINF:-1 group-title="Ace Stream",Animal Planet HD
+                http://127.0.0.1:6878/ace/getstream?id=0123456789abcdef0123456789abcdef01234567
+            """.trimIndent(),
+            name = "Ace Stream TV",
+            sourceKey = sourceKey
+        )
+
+        assertImportSuccess(result)
+        assertEquals(PlaylistSourceType.TEXT.name, insertedPlaylist.captured.sourceType)
+        assertEquals(sourceKey, insertedPlaylist.captured.source)
+        assertEquals(CatalogOriginKind.READY_CATALOG.name, insertedPlaylist.captured.catalogOrigin)
+        assertEquals(1, insertedChannels.captured.size)
+    }
+
+    @Test
     fun importFromUrl_persistsReadyCatalogOrigin() = runTest {
         server.enqueue(
             MockResponse().setBody(

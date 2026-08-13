@@ -24,9 +24,39 @@
 ## Текущий результат
 
 - PASS: один активный Torrent TV канал на чистом эмуляторе API 34 без Ace Stream — 90 секунд, Media3 `READY`, без rebuffer; повторный запуск — 30 секунд.
-- FAIL/не завершено: скорость и надёжность переключений, устойчивое пополнение live-буфера на разных swarm, набор недоступных каналов и реальные ARM TV Box.
+- PASS: exact-head CI #462 — real public-swarm smoke, lint, все unit tests, debug/instrumentation compile и signed ARM APK.
+- PARTIAL ARM: два Ace Live источника подготовились за 16,5–18,4 секунды; пять источников вернули bounded 60-second timeout, один — 30-second no-connected-peer error после discovery.
+- PASS EPG guard: XMLTV с `Content-Length=83 760 807` контролируемо отклоняется на лимите 64 MiB; в структурированном журнале ручного прогона нет OOM.
+- BLOCKED: пользователь сообщил о нескольких выходах приложения, но старый Diagnostics export не включал persistent `app.log` со stack trace. Нужен повтор на сборке с объединённым экспортом.
+- FAIL/не завершено: точная причина выходов процесса, устойчивое пополнение live-буфера на разных swarm и полная реальная ARM TV Box матрица.
 
 Это частичный smoke-test, а не итоговая приёмка приложения.
+
+## Фокусная проверка PR #101
+
+### Подготовка
+
+1. Скачать ARM APK из artifact `tv-box-apks` exact-head Actions run PR #101 и выбрать вариант ABI устройства (`arm64-v8a` или `armeabi-v7a`).
+2. Проверить автономный маршрут: `adb shell pm list packages | grep -i acestream` не должен показывать установленный внешний Ace Engine на тестовом устройстве.
+3. Установить APK командой `adb install -r <apk>` и очистить старые логи: `adb logcat -c`.
+4. Не использовать один изменчивый публичный `content_id` как единственный критерий. Отдельно зафиксировать рабочий provider source и заведомо недоступный/нестабильный source.
+
+### Сценарии
+
+1. Открыть рабочий Torrent TV provider source три раза с полной остановкой между попытками.
+2. Выполнить 20 переключений: IPTV ↔ Torrent TV и Torrent TV ↔ Torrent TV; на каждом шаге записать время до первого видео/звука либо до controlled error.
+3. Открыть недоступный/нестабильный source. Если initial tracker fast path потребовал DHT expansion, в журнале должен появиться `event=startup_dht_expansion`; отсутствие любого TCP connection должно завершиться ограниченной ошибкой примерно через 30 секунд после expansion, а не бесконечным ожиданием. Общий startup всё равно ограничен 60 секундами.
+4. Оставить один рабочий Torrent TV канал минимум на 30 минут и убедиться, что `event=media_progress` продолжается, нет постоянного rebuffer и входящий buffer не замирает после старта.
+5. После серии экспортировать журнал. Начиная со следующей сборки PR #101 экспорт Diagnostics содержит и последние 120 structured rows, и bounded tail постоянных `app.log`/`app.log.1`; перезапуск приложения больше не удаляет uncaught stack trace.
+
+### Маркеры журнала и критерии
+
+- `event=peer_connected` — хотя бы один реальный transport connection;
+- `event=startup_dht_expansion` — обязательное расширение слабого initial tracker fast path;
+- `event=startup_buffer_ready` — локальный media buffer достиг startup threshold;
+- `event=runtime_failed` — controlled P2P failure с причиной, без crash/ANR;
+- после переключения нет `media_progress` от старой сессии;
+- рабочий источник повторяемо стартует, недоступный источник возвращает bounded error, а UI остаётся отзывчивым.
 
 ## Длительные тесты
 

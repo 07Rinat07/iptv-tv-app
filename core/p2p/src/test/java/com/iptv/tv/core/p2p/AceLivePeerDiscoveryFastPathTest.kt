@@ -39,6 +39,96 @@ class AceLivePeerDiscoveryFastPathTest {
         assertEquals(trackerPeers, result.tcpEndpoints())
         assertEquals(AceLivePeerDiscoverySourceStatus.NOT_REQUESTED, result.dht.status)
         assertEquals(AceLivePeerDiscoverySourceStatus.SUCCEEDED, result.tracker.status)
+        assertFalse(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+    }
+
+    @Test
+    fun `startup threshold accepts one tracker peer without waiting for dht`() = runBlocking {
+        val swarm = swarm(26)
+        var dhtCalled = false
+        val trackerPeer = AceLiveTcpPeerEndpoint("1.1.1.1", 8601)
+        val orchestrator = AceLivePeerDiscoveryOrchestrator(
+            dhtDiscover = {
+                dhtCalled = true
+                AceLiveDhtDiscoveryResult(emptyList(), 0, 0, 0)
+            },
+            trackerDiscover = {
+                AceLiveUdpTrackerDiscoveryResult(listOf(trackerPeer), 1, 0, 0)
+            },
+            policy = AceLivePeerDiscoveryOrchestrationPolicy(trackerFastPathMinPeers = 1),
+            dhtHeadroomAvailable = { true }
+        )
+
+        val result = orchestrator.discover(request(swarm))
+
+        assertFalse(dhtCalled)
+        assertEquals(listOf(trackerPeer), result.tcpEndpoints())
+        assertEquals(AceLivePeerDiscoverySourceStatus.NOT_REQUESTED, result.dht.status)
+        assertEquals(AceLivePeerDiscoverySourceStatus.SUCCEEDED, result.tracker.status)
+        assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+        assertEquals(
+            AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND,
+            aceLiveStartupDhtRefillPlan(result)
+        )
+    }
+
+    @Test
+    fun `one startup dht peer also schedules a full dht-only expansion`() {
+        val dhtPeer = AceLiveTcpPeerEndpoint("8.8.8.8", 8602)
+        val result = AceLivePeerDiscoveryOrchestrationResult(
+            peers = listOf(
+                AceLiveDiscoveredPeer(
+                    endpoint = dhtPeer,
+                    sources = setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)
+                )
+            ),
+            dht = AceLivePeerDiscoverySourceSummary(
+                status = AceLivePeerDiscoverySourceStatus.SUCCEEDED,
+                returnedPeerCount = 1
+            ),
+            tracker = AceLivePeerDiscoverySourceSummary(
+                status = AceLivePeerDiscoverySourceStatus.SUCCEEDED,
+                returnedPeerCount = 0
+            )
+        )
+
+        assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+        assertEquals(
+            AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND,
+            aceLiveStartupDhtRefillPlan(result)
+        )
+    }
+
+    @Test
+    fun `normal dht batch does not schedule duplicate startup expansion`() {
+        val result = AceLivePeerDiscoveryOrchestrationResult(
+            peers = (1..4).map { index ->
+                AceLiveDiscoveredPeer(
+                    endpoint = AceLiveTcpPeerEndpoint("8.8.8.$index", 8600 + index),
+                    sources = setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)
+                )
+            },
+            dht = AceLivePeerDiscoverySourceSummary(
+                status = AceLivePeerDiscoverySourceStatus.SUCCEEDED,
+                returnedPeerCount = 4
+            ),
+            tracker = AceLivePeerDiscoverySourceSummary(
+                status = AceLivePeerDiscoverySourceStatus.SUCCEEDED,
+                returnedPeerCount = 0
+            )
+        )
+
+        assertFalse(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+        assertEquals(AceLiveStartupDhtRefillPlan.NONE, aceLiveStartupDhtRefillPlan(result))
+    }
+
+    @Test
+    fun `startup dht probe runs exactly two bounded rounds`() {
+        assertFalse(aceLiveStartupDhtProbeShouldContinue(completedRounds = 0))
+        assertTrue(aceLiveStartupDhtProbeShouldContinue(completedRounds = 1))
+        assertFalse(aceLiveStartupDhtProbeShouldContinue(completedRounds = 2))
+        assertEquals(4, ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS)
+        assertEquals(7_000L, ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS)
     }
 
     @Test
@@ -62,6 +152,7 @@ class AceLivePeerDiscoveryFastPathTest {
 
         assertTrue(dhtCalled)
         assertEquals(listOf(dhtPeer, trackerPeer), result.tcpEndpoints())
+        assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
     }
 
     @Test

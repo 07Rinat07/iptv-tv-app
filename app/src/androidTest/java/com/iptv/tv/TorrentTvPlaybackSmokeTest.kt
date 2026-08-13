@@ -35,7 +35,8 @@ import org.junit.runner.RunWith
  * locally so an unrelated playlist outage cannot hide the real P2P playback signal. Every sample
  * still goes through the production EngineRepository, real peer discovery, the embedded loopback
  * stream and Media3. The infohash stream is then started again after a full stop to cover switching
- * and restart cleanup.
+ * and restart cleanup. Content-id availability is inherently volatile, so the default smoke tries
+ * a bounded set of current playlist candidates and requires at least one of them to play.
  */
 @RunWith(AndroidJUnit4::class)
 class TorrentTvPlaybackSmokeTest {
@@ -84,8 +85,11 @@ class TorrentTvPlaybackSmokeTest {
         }
         val samples = if (customContentIdText.isNotEmpty()) {
             listOf(
-                "custom Ace content id" to
-                    "$ACE_CONTENT_ID_DESCRIPTOR_PREFIX${customContentIdText.lowercase()}"
+                SmokeSample(
+                    label = "custom Ace content id",
+                    source = "$ACE_CONTENT_ID_DESCRIPTOR_PREFIX${customContentIdText.lowercase()}",
+                    requirement = SampleRequirement.REQUIRED
+                )
             )
         } else {
             defaultTorrentTvSamples(requestedSample)
@@ -93,19 +97,49 @@ class TorrentTvPlaybackSmokeTest {
         assertTrue("No Torrent TV smoke sample matched '$requestedSample'", samples.isNotEmpty())
 
         val failures = mutableListOf<String>()
-        samples.forEach { (label, source) ->
+        val contentIdCandidateFailures = mutableListOf<String>()
+        var contentIdCandidateSucceeded = false
+        samples.forEach { sample ->
+            if (
+                sample.requirement == SampleRequirement.CONTENT_ID_QUORUM &&
+                contentIdCandidateSucceeded
+            ) {
+                return@forEach
+            }
+            val (label, source) = sample
             val failure = runCatching {
                 verifyPlayback(label, source, stabilityMillis)
             }.exceptionOrNull()
             if (failure != null) {
                 val message = "$label failed: ${failure::class.java.simpleName}: ${failure.message}"
-                failures += message
-                println("TORRENT_TV_SMOKE failure $message")
-                Log.e(TAG, message, failure)
+                if (sample.requirement == SampleRequirement.CONTENT_ID_QUORUM) {
+                    contentIdCandidateFailures += message
+                    println("TORRENT_TV_SMOKE candidate_unavailable $message")
+                    Log.w(TAG, message, failure)
+                } else {
+                    failures += message
+                    println("TORRENT_TV_SMOKE failure $message")
+                    Log.e(TAG, message, failure)
+                }
+            } else if (sample.requirement == SampleRequirement.CONTENT_ID_QUORUM) {
+                contentIdCandidateSucceeded = true
             }
             val stopped = engineRepository.stopTorrentStream()
             if (stopped !is AppResult.Success) {
                 failures += "$label stop failed: $stopped"
+            }
+        }
+
+        if (
+            samples.any { it.requirement == SampleRequirement.CONTENT_ID_QUORUM } &&
+            !contentIdCandidateSucceeded
+        ) {
+            failures += buildString {
+                append("No current Ace content-id candidate reached Media3 READY")
+                if (contentIdCandidateFailures.isNotEmpty()) {
+                    append(":\n")
+                    append(contentIdCandidateFailures.joinToString("\n"))
+                }
             }
         }
 
@@ -115,7 +149,7 @@ class TorrentTvPlaybackSmokeTest {
         )
     }
 
-    private suspend fun defaultTorrentTvSamples(requestedSample: String?): List<Pair<String, String>> {
+    private suspend fun defaultTorrentTvSamples(requestedSample: String?): List<SmokeSample> {
         val providerLines = downloadPlaylistOrEmpty(PROVIDER_PLAYLIST_URL)
             .lineSequence()
             .map(String::trim)
@@ -130,17 +164,75 @@ class TorrentTvPlaybackSmokeTest {
         val infoHashSource = providerLines.firstOrNull {
             it.contains("infohash=$ANIMAL_PLANET_INFO_HASH", ignoreCase = true)
         } ?: "$ACE_INFOHASH_DESCRIPTOR_PREFIX$ANIMAL_PLANET_INFO_HASH"
-        val contentIdSource = dimonovichLines.firstOrNull {
-            it.contains("id=$VIJU_PLANET_CONTENT_ID", ignoreCase = true)
-        } ?: "$ACE_CONTENT_ID_DESCRIPTOR_PREFIX$VIJU_PLANET_CONTENT_ID"
+        val contentIdSamples = selectContentIdCandidates(dimonovichLines)
 
-        return listOf(
-            "provider Animal Planet HD infohash" to infoHashSource,
-            "Dimonovich Viju+ Planet Ace content id" to contentIdSource,
-            "provider Animal Planet HD restart" to infoHashSource
-        ).filter { (label, _) ->
-            requestedSample == null || label.contains(requestedSample, ignoreCase = true)
+        return buildList {
+            add(
+                SmokeSample(
+                    label = "provider Animal Planet HD infohash",
+                    source = infoHashSource,
+                    requirement = SampleRequirement.REQUIRED
+                )
+            )
+            addAll(contentIdSamples)
+            add(
+                SmokeSample(
+                    label = "provider Animal Planet HD restart",
+                    source = infoHashSource,
+                    requirement = SampleRequirement.REQUIRED
+                )
+            )
+        }.filter { sample ->
+            requestedSample == null || sample.label.contains(requestedSample, ignoreCase = true)
         }
+    }
+
+    private fun selectContentIdCandidates(lines: List<String>): List<SmokeSample> {
+        var pendingLabel = "Ace content id"
+        val playlistCandidates = buildList {
+            lines.forEach { line ->
+                if (line.startsWith("#EXTINF", ignoreCase = true)) {
+                    pendingLabel = line.substringAfterLast(',').trim().ifEmpty { "Ace content id" }
+                    return@forEach
+                }
+                val contentId = CONTENT_ID_URL_PATTERN.find(line)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.lowercase()
+                    ?: return@forEach
+                add(
+                    SmokeSample(
+                        label = "Dimonovich $pendingLabel Ace content id",
+                        source = "$ACE_CONTENT_ID_DESCRIPTOR_PREFIX$contentId",
+                        requirement = SampleRequirement.CONTENT_ID_QUORUM
+                    )
+                )
+            }
+        }.distinctBy(SmokeSample::source)
+
+        val knownSource = "$ACE_CONTENT_ID_DESCRIPTOR_PREFIX$VIJU_PLANET_CONTENT_ID"
+        val knownSample = playlistCandidates.firstOrNull { it.source == knownSource }
+            ?: SmokeSample(
+                label = "Dimonovich Viju+ Planet Ace content id",
+                source = knownSource,
+                requirement = SampleRequirement.CONTENT_ID_QUORUM
+            )
+        if (playlistCandidates.size <= 1) return listOf(knownSample)
+
+        val knownIndex = playlistCandidates.indexOfFirst { it.source == knownSource }
+            .takeIf { it >= 0 }
+            ?: 0
+        val fallbackOffsets = listOf(
+            1,
+            maxOf(1, playlistCandidates.size / 3),
+            maxOf(1, playlistCandidates.size * 2 / 3)
+        )
+        return buildList {
+            add(knownSample)
+            fallbackOffsets.forEach { offset ->
+                add(playlistCandidates[(knownIndex + offset) % playlistCandidates.size])
+            }
+        }.distinctBy(SmokeSample::source).take(MAX_CONTENT_ID_CANDIDATES)
     }
 
     private suspend fun downloadPlaylistOrEmpty(url: String): String = withContext(Dispatchers.IO) {
@@ -305,6 +397,17 @@ class TorrentTvPlaybackSmokeTest {
     }
 
     private companion object {
+        data class SmokeSample(
+            val label: String,
+            val source: String,
+            val requirement: SampleRequirement
+        )
+
+        enum class SampleRequirement {
+            REQUIRED,
+            CONTENT_ID_QUORUM
+        }
+
         const val TAG = "TorrentTvSmoke"
         const val PROVIDER_PLAYLIST_URL = "https://iptv.org.ua/iptv/provayder.m3u"
         const val DIMONOVICH_PLAYLIST_URL =
@@ -314,6 +417,11 @@ class TorrentTvPlaybackSmokeTest {
         const val ANIMAL_PLANET_INFO_HASH = "568159b1059c7bbe3eaf40f123541fef86ef83cb"
         const val VIJU_PLANET_CONTENT_ID = "0d59f0292f9e5569f4dff50ac4c3c89913b32a7a"
         val CONTENT_ID_PATTERN = Regex("^[0-9a-fA-F]{40}$")
+        val CONTENT_ID_URL_PATTERN = Regex(
+            "(?:[?&](?:id|content_id)=)([0-9a-fA-F]{40})(?:[&#]|$)",
+            RegexOption.IGNORE_CASE
+        )
+        const val MAX_CONTENT_ID_CANDIDATES = 4
         const val MAX_PROBE_BYTES = 128 * 1024
         const val PLAYER_READY_TIMEOUT_MS = 45_000L
         const val PLAYBACK_STABILITY_MS = 45_000L

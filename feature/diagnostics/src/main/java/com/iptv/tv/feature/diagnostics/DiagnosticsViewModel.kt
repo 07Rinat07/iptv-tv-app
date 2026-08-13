@@ -20,6 +20,7 @@ import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.ScannerSearchMode
 import com.iptv.tv.core.model.ScannerSearchRequest
 import com.iptv.tv.core.model.SyncLog
+import com.iptv.tv.core.utils.FileLogger
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
@@ -516,16 +517,17 @@ class DiagnosticsViewModel @Inject constructor(
     }
 
     fun exportLogsToFile() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val logs = _uiState.value.logs
-            if (logs.isEmpty()) {
+            val persistentLog = FileLogger.readRecent(appContext)
+            if (logs.isEmpty() && persistentLog.isBlank()) {
                 _uiState.update { it.copy(lastError = "Нет логов для экспорта") }
                 return@launch
             }
 
             runCatching {
                 val fileName = "diagnostics-logs-${System.currentTimeMillis()}.txt"
-                val content = buildLogsText(logs)
+                val content = buildLogsText(logs, persistentLog)
                 saveTextToPublicDownloads(fileName = fileName, content = content)
             }.onSuccess { path ->
                 _uiState.update {
@@ -581,16 +583,17 @@ class DiagnosticsViewModel @Inject constructor(
     }
 
     fun exportLogsToUri(uriString: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val logs = _uiState.value.logs
-            if (logs.isEmpty()) {
+            val persistentLog = FileLogger.readRecent(appContext)
+            if (logs.isEmpty() && persistentLog.isBlank()) {
                 _uiState.update { it.copy(lastError = "Нет логов для экспорта") }
                 return@launch
             }
 
             runCatching {
                 val uri = android.net.Uri.parse(uriString)
-                val content = buildLogsText(logs)
+                val content = buildLogsText(logs, persistentLog)
                 appContext.contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { writer ->
                     writer.write(content)
                 } ?: error("Не удалось открыть файл для записи")
@@ -704,8 +707,9 @@ class DiagnosticsViewModel @Inject constructor(
         return "mem=${usedMb}MB/${maxMb}MB, uptime=${uptimeSec}s"
     }
 
-    private fun buildLogsText(logs: List<SyncLog>): String {
+    private fun buildLogsText(logs: List<SyncLog>, persistentLog: String): String {
         return buildString {
+            append("=== Structured diagnostics (latest 120 rows) ===\n")
             logs.forEach { log ->
                 append(log.createdAt)
                 append(" | ")
@@ -715,6 +719,11 @@ class DiagnosticsViewModel @Inject constructor(
                 append(" | ")
                 append(log.message)
                 append('\n')
+            }
+            if (persistentLog.isNotBlank()) {
+                append("\n=== Persistent application log ===\n")
+                append(persistentLog)
+                if (lastOrNull() != '\n') append('\n')
             }
         }
     }

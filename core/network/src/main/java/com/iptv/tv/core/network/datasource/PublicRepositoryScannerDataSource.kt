@@ -1718,6 +1718,17 @@ class PublicRepositoryScannerDataSource @Inject constructor(
                 tags = setOf("iptv", "tv", "ru", "russian", "россия", "рус", "каналы")
             ),
             KnownPlaylistSeed(
+                name = "Ace Stream TV — Торрент ТВ",
+                url = "https://iptv.org.ua/iptv/provayder.m3u",
+                provider = PROVIDER_WEB,
+                repository = "iptv.org.ua",
+                path = "iptv/provayder.m3u",
+                tags = setOf(
+                    "iptv", "tv", "ace", "acestream", "torrent", "торрент", "торрент тв",
+                    "ru", "russian", "россия", "рус", "каналы"
+                )
+            ),
+            KnownPlaylistSeed(
                 name = "Voxlist",
                 url = "https://raw.githubusercontent.com/Voxlist/voxlist/refs/heads/main/voxlist.m3u",
                 provider = PROVIDER_GITHUB,
