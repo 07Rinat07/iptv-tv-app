@@ -196,15 +196,17 @@ jobs:
 
       - name: Print Torrent TV emulator diagnostics
         if: always() && steps.torrent-tv-smoke.outputs.run == 'true'
+        timeout-minutes: 2
         shell: bash
         run: |
           set +e
           mkdir -p build-artifacts/torrent-tv-smoke
 
-          # Capture device logs after the smoke step regardless of its result.
-          adb logcat -d -v threadtime \
+          # A failed/half-started emulator can leave adb indefinitely waiting.
+          # Keep diagnostics best-effort and bounded so deterministic checks still run.
+          timeout 20s adb logcat -d -v threadtime \
             > build-artifacts/torrent-tv-smoke/adb-logcat.txt 2>&1 || true
-          adb shell dumpsys activity top \
+          timeout 20s adb shell dumpsys activity top \
             > build-artifacts/torrent-tv-smoke/activity-top.txt 2>&1 || true
 
           # Preserve the Android instrumentation reports/results in a stable
@@ -245,7 +247,7 @@ jobs:
 
           # The smoke is allowed to fail without ending the job, so release
           # emulator resources before deterministic JVM/build checks continue.
-          adb emu kill >/dev/null 2>&1 || true
+          timeout 15s adb emu kill >/dev/null 2>&1 || true
 
       - name: Lint debug
         run: ./gradlew --no-daemon --stacktrace lintDebug
