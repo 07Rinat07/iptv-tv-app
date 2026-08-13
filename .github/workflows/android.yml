@@ -134,7 +134,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$ANDROID_AVD_HOME"
+          mkdir -p "$ANDROID_AVD_HOME" build-artifacts/torrent-tv-smoke
           echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME"
 
           echo "no" | avdmanager create avd \
@@ -185,16 +185,56 @@ jobs:
           fi
           echo "No external Ace Stream package is installed. Running app-owned P2P smoke."
 
+          # Keep the full instrumentation stdout/stderr even when Gradle/test fails.
+          # pipefail preserves the original Gradle exit status through tee.
+          adb logcat -c || true
           ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest \
-            -Pandroid.testInstrumentationRunnerArguments.class=com.iptv.tv.TorrentTvPlaybackSmokeTest
+            -Pandroid.testInstrumentationRunnerArguments.class=com.iptv.tv.TorrentTvPlaybackSmokeTest \
+            2>&1 | tee build-artifacts/torrent-tv-smoke/instrumentation-output.log
 
       - name: Print Torrent TV emulator diagnostics
         if: always() && steps.torrent-tv-smoke.outputs.run == 'true'
         shell: bash
         run: |
-          echo "::group::Torrent TV smoke markers"
-          grep -R "TORRENT_TV_SMOKE\|TorrentTvSmoke" -n app/build 2>/dev/null || true
+          set +e
+          mkdir -p build-artifacts/torrent-tv-smoke
+
+          # Capture device logs after the smoke step regardless of its result.
+          adb logcat -d -v threadtime \
+            > build-artifacts/torrent-tv-smoke/adb-logcat.txt 2>&1 || true
+          adb shell dumpsys activity top \
+            > build-artifacts/torrent-tv-smoke/activity-top.txt 2>&1 || true
+
+          # Preserve the Android instrumentation reports/results in a stable
+          # diagnostics directory in addition to the existing report globs.
+          find app/build -type f \
+            \( -path '*/outputs/androidTest-results/*' -o -path '*/reports/androidTests/*' \) \
+            -print0 2>/dev/null \
+            | xargs -0 -r cp --parents -t build-artifacts/torrent-tv-smoke/ || true
+          find app/build -type f \
+            \( -path '*/outputs/androidTest-results/*' -o -path '*/reports/androidTests/*' \) \
+            -print 2>/dev/null \
+            > build-artifacts/torrent-tv-smoke/android-test-files.txt || true
+
+          echo "::group::Instrumentation output tail"
+          if [ -f build-artifacts/torrent-tv-smoke/instrumentation-output.log ]; then
+            tail -n 300 build-artifacts/torrent-tv-smoke/instrumentation-output.log
+          else
+            echo "Instrumentation output file was not produced."
+          fi
           echo "::endgroup::"
+
+          echo "::group::Torrent TV smoke markers"
+          grep -R "TORRENT_TV_SMOKE\|TorrentTvSmoke" -n \
+            build-artifacts/torrent-tv-smoke app/build 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::ADB logcat smoke markers"
+          grep -E "TORRENT_TV_SMOKE|TorrentTvSmoke|FATAL EXCEPTION|AndroidRuntime|AssertionError" \
+            build-artifacts/torrent-tv-smoke/adb-logcat.txt 2>/dev/null \
+            | tail -n 300 || true
+          echo "::endgroup::"
+
           if [ -f emulator.log ]; then
             echo "::group::Emulator tail"
             tail -n 160 emulator.log
@@ -333,6 +373,7 @@ jobs:
           path: |
             assemble-release.log
             emulator.log
+            build-artifacts/torrent-tv-smoke/**
             **/build/reports/tests/**
             **/build/test-results/**
             **/build/reports/androidTests/**
