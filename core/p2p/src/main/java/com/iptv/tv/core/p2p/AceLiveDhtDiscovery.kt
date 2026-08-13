@@ -68,10 +68,12 @@ data class AceLiveDhtDiscoveryResult(
  * The public request remains explicitly swarm-key based. The bounded iterative network walk is
  * shared internally with Content ID discovery without converting either identity into the other.
  *
- * Production callers may opt into a very short process-wide result reuse window. The global DHT
+ * Production callers may opt into a short process-wide result reuse window. The global DHT
  * execution gate still owns serialization and heap safety; reuse only prevents the direct live path
- * and the concurrent metadata path from immediately repeating the same completed DHT walk for the
- * same swarm/bootstrap set. Tests and custom callers remain uncached unless they opt in explicitly.
+ * and the concurrent metadata/refill paths from immediately repeating the same completed DHT walk
+ * for the same swarm/bootstrap set. The reuse window intentionally covers one bounded metadata-peer
+ * probing phase, after which normal discovery may refresh the swarm again. Tests and custom callers
+ * remain uncached unless they opt in explicitly.
  */
 class AceLiveDhtDiscovery(
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -132,7 +134,7 @@ class AceLiveDhtDiscovery(
     }
 
     private companion object {
-        const val RECENT_RESULT_TTL_MILLIS = 5_000L
+        const val RECENT_RESULT_TTL_MILLIS = 20_000L
         const val MAX_RECENT_RESULTS = 16
         val recentResultLock = Any()
         val recentResults = LinkedHashMap<String, CachedDhtResult>()
