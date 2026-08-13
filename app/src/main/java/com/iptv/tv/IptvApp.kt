@@ -2,6 +2,7 @@ package com.iptv.tv
 
 import android.app.Application
 import android.os.Build
+import android.os.Process
 import android.os.SystemClock
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
@@ -28,6 +29,8 @@ import javax.inject.Inject
 
 @HiltAndroidApp
 class IptvApp : Application(), Configuration.Provider {
+    private val processStartedAtElapsedMs = SystemClock.elapsedRealtime()
+
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
 
@@ -69,6 +72,10 @@ class IptvApp : Application(), Configuration.Provider {
             )
             defaultUncaughtExceptionHandler?.uncaughtException(thread, throwable)
         }
+        recordApplicationEvent(
+            status = "app_process_start",
+            message = buildRuntimeContext(prefix = "Application process started")
+        )
         applicationScope.launch(Dispatchers.IO) {
             delay(BACKGROUND_WORK_START_DELAY_MS)
             val workManager = WorkManager.getInstance(this@IptvApp)
@@ -102,8 +109,13 @@ class IptvApp : Application(), Configuration.Provider {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_RUNNING_LOW_LEVEL) {
-            recordApplicationEvent(
+        when {
+            level == TRIM_MEMORY_UI_HIDDEN_LEVEL -> recordApplicationEvent(
+                status = "app_ui_hidden",
+                message = buildRuntimeContext(prefix = "Application UI became hidden: level=$level")
+            )
+            level in TRIM_MEMORY_RUNNING_LOW_LEVEL..TRIM_MEMORY_RUNNING_CRITICAL_LEVEL ||
+                level >= TRIM_MEMORY_BACKGROUND_LEVEL -> recordApplicationEvent(
                 status = "app_trim_memory",
                 message = buildRuntimeContext(prefix = "System requested memory trim: level=$level")
             )
@@ -163,7 +175,12 @@ class IptvApp : Application(), Configuration.Provider {
             val info = packageManager.getPackageInfo(packageName, 0)
             "${info.versionName}/${info.longVersionCodeCompat()}"
         }.getOrDefault("unknown")
-        return "$prefix | app=$version | sdk=${Build.VERSION.SDK_INT} | device=${Build.MANUFACTURER}/${Build.MODEL} | uptime=${SystemClock.elapsedRealtime() / 1_000}s | mem=${usedMb}MB/${maxMb}MB"
+        val processUptimeSeconds =
+            (SystemClock.elapsedRealtime() - processStartedAtElapsedMs).coerceAtLeast(0L) / 1_000L
+        return "$prefix | app=$version | sdk=${Build.VERSION.SDK_INT} | " +
+            "device=${Build.MANUFACTURER}/${Build.MODEL} | pid=${Process.myPid()} | " +
+            "processUptime=${processUptimeSeconds}s | deviceUptime=${SystemClock.elapsedRealtime() / 1_000}s | " +
+            "mem=${usedMb}MB/${maxMb}MB"
     }
 
     private fun Throwable.toCauseChain(maxDepth: Int = 6): String {
@@ -218,5 +235,8 @@ class IptvApp : Application(), Configuration.Provider {
         const val MAX_CAUSE_SEGMENT = 240
         const val MB = 1024 * 1024
         const val TRIM_MEMORY_RUNNING_LOW_LEVEL = 10
+        const val TRIM_MEMORY_RUNNING_CRITICAL_LEVEL = 15
+        const val TRIM_MEMORY_UI_HIDDEN_LEVEL = 20
+        const val TRIM_MEMORY_BACKGROUND_LEVEL = 40
     }
 }

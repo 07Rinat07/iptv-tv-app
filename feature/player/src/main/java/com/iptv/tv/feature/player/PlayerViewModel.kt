@@ -78,7 +78,6 @@ private const val CHANNEL_LIST_EPG_WINDOW_MS = 3 * 60 * 60 * 1000L
 private const val CHANNEL_LIST_EPG_REFRESH_MS = 10 * 60 * 1000L
 private const val EPG_CHANNEL_SELECTION_DEBOUNCE_MS = 200L
 
-
 internal fun isDefaultLocalAceEndpoint(endpoint: String): Boolean {
     val normalized = endpoint
         .trim()
@@ -901,14 +900,14 @@ class PlayerViewModel @Inject constructor(
     fun exportLogs(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val src = com.iptv.tv.core.utils.FileLogger.logFile(context)
-                if (!src.exists()) {
+                val recentLogs = com.iptv.tv.core.utils.FileLogger.readRecent(context)
+                if (recentLogs.isBlank()) {
                     _uiState.update { it.copy(lastInfo = "Лог файл не найден", lastError = null) }
                     return@launch
                 }
                 val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                 val dst = File(context.cacheDir, "logs_$ts.log")
-                src.copyTo(dst, overwrite = true)
+                dst.writeText(recentLogs)
 
                 val authority = "${context.packageName}.fileprovider"
                 val uri = FileProvider.getUriForFile(context, authority, dst)
@@ -1693,7 +1692,7 @@ class PlayerViewModel @Inject constructor(
                 }
                 is AppResult.Error -> {
                     val message = result.message
-                    val signature = buildEpgErrorSignature(
+                    val signature = epgErrorSignature(
                         playlistId = playlistId,
                         channelId = channelId,
                         message = message
@@ -1774,47 +1773,6 @@ class PlayerViewModel @Inject constructor(
                 epgStatus = fallback
             )
         }
-    }
-
-    private fun buildEpgErrorSignature(
-        playlistId: Long?,
-        channelId: Long,
-        message: String
-    ): String {
-        val normalizedPlaylistId = playlistId ?: -1L
-        val lowered = message.lowercase()
-        if (message.startsWith("EPG source URL is not configured", ignoreCase = true)) {
-            return "missing_epg_source|$normalizedPlaylistId"
-        }
-        val networkKind = when {
-            lowered.contains("sockettimeoutexception") || lowered.contains("timed out") ->
-                "timeout"
-            lowered.contains("unknownhostexception") || lowered.contains("unable to resolve host") ->
-                "dns"
-            lowered.contains("connectexception") || lowered.contains("connection refused") ->
-                "connect"
-            else -> null
-        }
-        if (networkKind != null) {
-            val hostOrIp = extractHostOrIp(message)
-            return "epg_net|$networkKind|$normalizedPlaylistId|${hostOrIp ?: "-"}"
-        }
-        val httpCode = Regex("""\bHTTP\s+(\d{3})\b""").find(message)?.groupValues?.getOrNull(1)
-        if (!httpCode.isNullOrBlank()) {
-            return "epg_http|$httpCode|$normalizedPlaylistId"
-        }
-        val compact = message
-            .replace(Regex("""\bport\s+\d+\b""", RegexOption.IGNORE_CASE), "port")
-            .replace(Regex("""\d{1,5}"""), "#")
-            .trim()
-            .take(160)
-        return "epg_other|$normalizedPlaylistId|$channelId|$compact"
-    }
-
-    private fun extractHostOrIp(message: String): String? {
-        val ip = Regex("""\b\d{1,3}(?:\.\d{1,3}){3}\b""").find(message)?.value
-        if (!ip.isNullOrBlank()) return ip
-        return Regex("""\b[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b""").find(message)?.value
     }
 
     private fun buildInternalPlaybackFailureMessage(
@@ -1985,9 +1943,8 @@ class PlayerViewModel @Inject constructor(
         return when (val resolveResult = engineRepository.resolveTorrentStream(descriptorToResolve)) {
             is AppResult.Success -> resolveResult
             is AppResult.Error -> AppResult.Error(
-                "P2P-поток не подготовлен: ${resolveResult.message}. " +
-                    "Magnet/.torrent обслуживает встроенный BitTorrent, " +
-                    "а Ace-ссылки — встроенный Ace Live. Подробности сохранены в диагностике."
+                message = conciseP2pResolveError(resolveResult.message),
+                cause = resolveResult.cause
             )
             AppResult.Loading -> AppResult.Loading
         }

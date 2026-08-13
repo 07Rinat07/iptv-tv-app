@@ -4,6 +4,7 @@ import android.content.Context
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
+import java.io.RandomAccessFile
 import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -27,6 +28,39 @@ object FileLogger {
     fun logFile(context: Context): File {
         val dir = logDir(context)
         return File(dir, LOG_FILE)
+    }
+
+    /**
+     * Returns a bounded tail of both the rotated and current process logs. Diagnostics export uses
+     * this instead of copying only app.log so an uncaught exception remains available after a
+     * rotation and after the application process is started again.
+     */
+    fun readRecent(context: Context, maxBytes: Int = 256_000): String {
+        return readRecentFromDirectory(logDir(context), maxBytes)
+    }
+
+    internal fun readRecentFromDirectory(directory: File, maxBytes: Int): String {
+        if (maxBytes <= 0) return ""
+        return try {
+            lock.withLock {
+                val files = listOf(File(directory, "$LOG_FILE.1"), File(directory, LOG_FILE))
+                    .filter { it.isFile && it.length() > 0L }
+                if (files.isEmpty()) return@withLock ""
+
+                val perFileLimit = (maxBytes / files.size).coerceAtLeast(1)
+                buildString {
+                    files.forEach { file ->
+                        append("--- ")
+                        append(file.name)
+                        append(" (tail) ---\n")
+                        append(readTail(file, perFileLimit))
+                        if (isNotEmpty() && this[lastIndex] != '\n') append('\n')
+                    }
+                }
+            }
+        } catch (ignored: Exception) {
+            ""
+        }
     }
 
     fun write(context: Context, level: String, tag: String, message: String, throwable: Throwable? = null) {
@@ -64,6 +98,17 @@ object FileLogger {
                 file.renameTo(old)
             }
         } catch (ignored: Exception) {}
+    }
+
+    private fun readTail(file: File, maxBytes: Int): String {
+        return RandomAccessFile(file, "r").use { input ->
+            val length = input.length()
+            val byteCount = minOf(length, maxBytes.toLong()).toInt()
+            input.seek(length - byteCount)
+            val bytes = ByteArray(byteCount)
+            input.readFully(bytes)
+            bytes.toString(Charsets.UTF_8)
+        }
     }
 
     private fun Throwable.toSanitizedStackTrace(): String {

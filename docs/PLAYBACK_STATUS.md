@@ -24,7 +24,7 @@
 
 Подробный разбор и точный scope исправления находятся в [`testing/playback-log-analysis-2026-08-12.md`](testing/playback-log-analysis-2026-08-12.md).
 
-## Текущий блокер: exact-head CI и ARM-проверка PR #101
+## PR #101: exact-head CI пройден, ARM-проверка выявила следующий диагностический пробел
 
 PR #101 сокращает Ace Live startup без возврата к небезопасному бесконечному retry:
 
@@ -34,7 +34,18 @@ PR #101 сокращает Ace Live startup без возврата к небе�
 - только положительный same-swarm DHT result переиспользуется 20 секунд; пустой bounded walk не кэшируется;
 - внешний public-swarm smoke больше не должен пропускать lint/unit/assemble и упаковку ARM APK, но его failure остаётся финальным красным gate.
 
-Actions run #461 остановился на real Torrent TV smoke: один изменчивый публичный `content_id` не нашёл подключаемого peer, тогда как provider swarm Animal Planet в том же тесте успешно стартовал и повторно запустился. Это не даёт права игнорировать smoke, но и не доказывает детерминированную ошибку кода. Следующий exact-head run обязан дать полный набор unit/lint/build результатов и сохранить диагностику внешнего fixture отдельно.
+Exact-head Actions run #462 для commit `fbf465ff` полностью прошёл: real Torrent TV smoke без внешнего Ace Engine, lint, все unit tests, debug/instrumentation compile и две signed ARM release-сборки зелёные.
+
+Первый ручной ARM-прогон 13 августа дал более полезную смешанную картину:
+
+- 50 playback requests во время навигации и rapid-zap;
+- два Ace Live источника реально подготовились примерно за 16,5 и 18,4 секунды;
+- пять недоступных источников исчерпали 60-секундный absolute startup budget;
+- один источник завершился через 30 секунд после старта peer probing (примерно 45 секунд от play request с учётом discovery);
+- oversized XMLTV размером 83 760 807 байт каждый раз возвращал controlled 64-MiB safety-limit error; в экспортированном окне нет `OutOfMemoryError`;
+- пользователь сообщил о нескольких выходах из приложения, но экспорт экрана Diagnostics включал только последние 120 строк БД и не включал постоянный `app.log`, куда uncaught handler пишет stack trace.
+
+Текущий диагностический инкремент объединяет structured diagnostics с bounded tail `app.log`/`app.log.1`, отмечает каждый старт процесса, не трактует `TRIM_MEMORY_UI_HIDDEN=20` как low-memory pressure и дедуплицирует одинаковую ошибку одного EPG source между каналами. Подробный разбор: [`testing/playback-log-analysis-2026-08-13.md`](testing/playback-log-analysis-2026-08-13.md).
 
 ## Известные проблемы после фикса текущего crash
 
@@ -66,13 +77,14 @@ Actions run #461 остановился на real Torrent TV smoke: один и�
 
 Текущий playback/P2P hardening:
 
-1. получить полный exact-head CI PR #101 и ARM APK artifacts;
-2. проверить рабочий provider source, повторное открытие, 20 переключений и недоступный source без внешнего Ace Engine;
-3. измерить фактическое время discovery, `peer_connected`, `startup_buffer_ready` и Media3 READY;
-4. обеспечить непрерывную подкачку Ace Live с достаточным запасом данных и bounded recovery;
-5. разделить в диагностике unavailable source, dead swarm, insufficient buffer, stall, decoder/demux error и user cancellation;
-6. выполнить MPEG-TS/decoder hardening отдельным PR после startup acceptance;
-7. после короткой матрицы выполнить слабую сеть, двухчасовой и восьмичасовой soak-тесты.
+1. ✅ получить полный exact-head CI PR #101 и ARM APK artifacts;
+2. ⏳ повторить ARM rapid-zap с объединённым persistent/structured export и точно классифицировать каждый выход процесса;
+3. проверить рабочий provider source три раза, 20 переключений и недоступный source без внешнего Ace Engine;
+4. измерить фактическое время discovery, `peer_connected`, `startup_buffer_ready` и Media3 READY;
+5. обеспечить непрерывную подкачку Ace Live с достаточным запасом данных и bounded recovery;
+6. разделить в диагностике unavailable source, dead swarm, insufficient buffer, stall, decoder/demux error и user cancellation;
+7. выполнить MPEG-TS/decoder hardening отдельным PR после startup acceptance;
+8. после короткой матрицы выполнить слабую сеть, двухчасовой и восьмичасовой soak-тесты.
 
 ## Критерий завершения
 
