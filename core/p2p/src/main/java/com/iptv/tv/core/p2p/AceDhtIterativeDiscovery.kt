@@ -69,6 +69,7 @@ internal class AceDhtIterativeDiscovery(
             val queuedEndpoints = HashMap<String, AceLiveDhtNodeId?>()
             val queriedEndpoints = HashSet<String>()
             val peers = LinkedHashMap<String, AceLiveTcpPeerEndpoint>()
+            val completionPeerCount = policy.returnAfterPeers ?: policy.maxTotalPeers
             var rejected = 0
             var failed = 0
             var queries = 0
@@ -107,7 +108,7 @@ internal class AceDhtIterativeDiscovery(
                 val inFlight = LinkedHashSet<Deferred<QueryCompletion>>()
                 try {
                     while (
-                        peers.size < policy.maxTotalPeers &&
+                        peers.size < completionPeerCount &&
                         (inFlight.isNotEmpty() || (frontier.isNotEmpty() && queries < policy.maxQueries))
                     ) {
                         currentCoroutineContext().ensureActive()
@@ -171,9 +172,9 @@ internal class AceDhtIterativeDiscovery(
                                         continue
                                     }
                                     peers.putIfAbsent(endpointKey(peer), peer)
-                                    if (peers.size >= policy.maxTotalPeers) break
+                                    if (peers.size >= completionPeerCount) break
                                 }
-                                if (peers.size >= policy.maxTotalPeers) break
+                                if (peers.size >= completionPeerCount) break
 
                                 for (contact in response.nodes) {
                                     if (!isAllowedNodeEndpoint(contact.endpoint)) {

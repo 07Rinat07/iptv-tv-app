@@ -174,7 +174,7 @@ class AceLiveDhtDiscoveryTest {
                     requestTimeoutMillis = 5_000,
                     discoveryBudgetMillis = 5_500,
                     searchBranching = 2,
-                    maxTotalPeers = 1,
+                    returnAfterPeers = 1,
                     allowNonGlobalNodeAddresses = true,
                     allowNonGlobalPeerAddresses = true
                 ),
@@ -198,7 +198,7 @@ class AceLiveDhtDiscoveryTest {
             assertEquals(listOf(AceLiveTcpPeerEndpoint("127.0.0.1", 8621)), result.peers)
             assertEquals(2, result.queriesSent)
             assertTrue(
-                "responsive DHT branch should win before the 5s silent timeout, took ${elapsedMillis}ms",
+                "first DHT peer should return before the 5s silent branch, took ${elapsedMillis}ms",
                 elapsedMillis < 3_000
             )
         } finally {

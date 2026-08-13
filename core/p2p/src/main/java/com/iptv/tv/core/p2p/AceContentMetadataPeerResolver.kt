@@ -265,7 +265,18 @@ private suspend fun discoverDefaultMetadataPeers(
     peerId: ByteArray,
     announcePort: Int
 ): List<AceLiveTcpPeerEndpoint> = withContext(Dispatchers.IO) {
-    val result = AceLivePeerDiscoveryOrchestrator().discover(
+    // Content metadata races direct live startup for the same public content id. Returning the first
+    // DHT candidate lets metadata probing begin without owning the process-wide DHT gate for the
+    // complete 15-second walk; the direct runtime performs its own non-blocking full expansion.
+    val startupDhtDiscovery = AceLiveDhtDiscovery(
+        policy = AceLiveDhtPolicy(
+            returnAfterPeers = ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS
+        ),
+        reuseRecentResults = true
+    )
+    val result = AceLivePeerDiscoveryOrchestrator(
+        dhtDiscover = startupDhtDiscovery::discover
+    ).discover(
         AceLivePeerDiscoveryOrchestrationRequest(
             dhtRequest = AceLiveDhtDiscoveryRequest(
                 swarmKey = swarmKey,

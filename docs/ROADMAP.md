@@ -8,14 +8,14 @@
 
 Автономный Torrent TV маршрут уже работает без внешнего Ace Engine. PR #98 добавил first-success/fast-switch стратегию Ace Live, PR #99 убрал полное пересоздание Media3/MediaCodec при обычном IPTV zapping, а PR #100 перенёс XMLTV на bounded streaming parse и закрыл известный EPG OOM в коде. Все три PR находятся в `main`; memory fix ещё требует ручного rapid-zap подтверждения на 256-MiB/аналогичном устройстве.
 
-Текущий рабочий инкремент — PR #101: bounded Ace Live startup discovery и подготовка сборки для аппаратной проверки. Первый tracker peer запускается немедленно, обязательный DHT-only refill расширяет слабый fast path, а 30-секундный no-connected-peer budget переустанавливается после этого расширения. DHT walker обходит до четырёх ветвей параллельно и не кэширует пустой результат.
+Текущий рабочий инкремент — PR #101: bounded Ace Live startup discovery и подготовка сборки для аппаратной проверки. Первый tracker peer запускается немедленно, обязательный DHT-only refill расширяет слабый fast path в фоне, а 30-секундный no-connected-peer budget переустанавливается после этого расширения. Повторная аппаратная проверка показала остаточное ожидание initial DHT при быстром последующем player handoff. Поэтому initial direct/metadata DHT теперь должен вернуть первый валидный peer сразу и продолжить полное расширение в фоне. Пустой DHT result по-прежнему не кэшируется.
 
 Actions run #461 показал отдельную CI-проблему: нестабильный публичный Torrent TV fixture остановил job до lint/unit/assemble, хотя другой provider swarm в том же smoke успешно стартовал повторно. Workflow должен сохранить внешний smoke как обязательный финальный gate, но всегда доводить детерминированные проверки и упаковку APK до конца.
 
 Поэтому текущий порядок hardening такой:
 
-1. получить полный exact-head CI PR #101: lint/unit/debug/release/ARM artifacts должны завершаться независимо от результата внешнего public-swarm smoke;
-2. проверить сборку PR #101 на ARM TV Box без внешнего Ace Engine: рабочий provider source, повторный запуск, 20 переключений и заведомо недоступный/нестабильный source;
+1. ✅ получить полный exact-head CI PR #101: CI #464 прошёл real public-swarm smoke, lint/unit/debug/release и выпустил ARM artifacts;
+2. ⏳ проверить следующий initial-DHT fast path на ARM TV Box без внешнего Ace Engine: рабочий provider source, повторный запуск, 20 переключений и заведомо недоступный/нестабильный source;
 3. параллельно повторить rapid-zap обычного IPTV на 256-MiB/аналогичном устройстве и подтвердить, что уже слитый PR #100 устранил EPG crash;
 4. по аппаратным логам измерить startup phases, retained buffer, download/consume rate, rebuffer и stall reason;
 5. затем перейти к непрерывному buffer refill и MPEG-TS/decoder discontinuity/PAT-PMT/random-access hardening;

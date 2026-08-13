@@ -62,7 +62,8 @@ class AceLiveEmbeddedEngine(
     private val catalogResolver: AceContentCatalogResolver = AceContentCatalogResolver(okHttpClient),
     private val metadataPeerResolver: AceContentMetadataPeerResolver = AceContentMetadataPeerResolver(),
     private val bufferSettings: AceLiveBufferSettings = AceLiveBufferSettings(),
-    private val eventObserver: (AceLiveTcpPoolEvent) -> Unit = {}
+    private val eventObserver: (AceLiveTcpPoolEvent) -> Unit = {},
+    private val diagnosticsObserver: (status: String, message: String) -> Unit = { _, _ -> }
 ) {
     private val operationMutex = Mutex()
     private val generation = AtomicLong(0L)
@@ -164,7 +165,12 @@ class AceLiveEmbeddedEngine(
             if (generation.get() != token) return@withLock null
             closeActiveLocked()
             runCatching {
-                Runtime(transport, bufferSettings, eventObserver).also { created -> activeRuntime = created }
+                Runtime(
+                    transport = transport,
+                    bufferSettings = bufferSettings,
+                    eventObserver = eventObserver,
+                    diagnosticsObserver = diagnosticsObserver
+                ).also { created -> activeRuntime = created }
             }
         } ?: return superseded()
         val runtime = runtimeCreation.getOrElse { error ->
@@ -248,7 +254,8 @@ class AceLiveEmbeddedEngine(
     private class Runtime(
         private val transport: AceResolvedLiveTransport,
         bufferSettings: AceLiveBufferSettings,
-        private val eventObserver: (AceLiveTcpPoolEvent) -> Unit
+        private val eventObserver: (AceLiveTcpPoolEvent) -> Unit,
+        private val diagnosticsObserver: (status: String, message: String) -> Unit
     ) : Closeable {
         private val startupBufferPolicy = AceLiveStartupBufferPolicy(bufferSettings)
         val startup = CompletableDeferred<Unit>()
@@ -332,8 +339,8 @@ class AceLiveEmbeddedEngine(
                     runAceLiveSessionWithBackgroundPeerRefill(
                         backgroundRefill = {
                             if (immediateStartupDhtOnlyRefill.get()) {
-                                // A single tracker peer is enough to start live playback immediately.
-                                // Expand that weak candidate set through DHT in this background job:
+                                // One initial tracker or DHT peer is enough to start live playback.
+                                // Expand that deliberately small candidate set in this background job:
                                 // waiting for the full bounded DHT walk here used to hold driveSession()
                                 // behind a repeatable ~15-second startup gate even when the tracker peer
                                 // was already connected and ready to publish media.
@@ -375,6 +382,7 @@ class AceLiveEmbeddedEngine(
         }
 
         private suspend fun discoverPeers(): AceLivePeerDiscoveryOrchestrationResult {
+            val discoveryStartedAtMillis = System.currentTimeMillis()
             val dhtRequest = AceLiveDhtDiscoveryRequest(
                 swarmKey = transport.swarmKey,
                 bootstrapNodes = DEFAULT_DHT_BOOTSTRAP_NODES
@@ -394,7 +402,24 @@ class AceLiveEmbeddedEngine(
             } else {
                 AceLivePeerDiscoveryOrchestrationPolicy()
             }
-            val result = AceLivePeerDiscoveryOrchestrator(policy = discoveryPolicy).discover(
+            val dhtDiscovery = when {
+                isInitialDiscovery -> AceLiveDhtDiscovery(
+                    policy = AceLiveDhtPolicy(
+                        returnAfterPeers = ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS
+                    ),
+                    reuseRecentResults = true
+                )
+                useImmediateDhtOnlyRefill -> AceLiveDhtDiscovery(
+                    // The initial result was intentionally short. A full startup expansion must not
+                    // reuse it from the positive-result cache.
+                    reuseRecentResults = false
+                )
+                else -> AceLiveDhtDiscovery(reuseRecentResults = true)
+            }
+            val result = AceLivePeerDiscoveryOrchestrator(
+                dhtDiscover = dhtDiscovery::discover,
+                policy = discoveryPolicy
+            ).discover(
                 AceLivePeerDiscoveryOrchestrationRequest(
                     dhtRequest = dhtRequest,
                     trackerRequest = trackerRequest.takeUnless { useImmediateDhtOnlyRefill }
@@ -404,6 +429,18 @@ class AceLiveEmbeddedEngine(
                 immediateStartupDhtOnlyRefill.set(
                     aceLiveStartupNeedsImmediateDhtOnlyRefill(result)
                 )
+            }
+            if (isInitialDiscovery || useImmediateDhtOnlyRefill) {
+                runCatching {
+                    diagnosticsObserver(
+                        "embedded_ace_live_peer_discovery",
+                        "phase=${if (isInitialDiscovery) "initial" else "startup_dht_expansion"}, " +
+                            "elapsedMs=${System.currentTimeMillis() - discoveryStartedAtMillis}, " +
+                            "peers=${result.peers.size}, " +
+                            "tracker=${result.tracker.status}/${result.tracker.returnedPeerCount}, " +
+                            "dht=${result.dht.status}/${result.dht.returnedPeerCount}"
+                    )
+                }
             }
             return result
         }

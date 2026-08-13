@@ -21,7 +21,9 @@ data class AceLiveDhtBootstrapNode(
  *
  * [searchBranching] bounds concurrent KRPC requests. A small value still prevents one dead DHT
  * node from serializing the whole lookup, while the query, packet, peer, and absolute-time caps
- * keep the fan-out suitable for memory-constrained TV devices.
+ * keep the fan-out suitable for memory-constrained TV devices. [returnAfterPeers] optionally turns
+ * the walker into a startup fast path: it still obeys [maxTotalPeers], but cancels remaining branches
+ * after the requested number of valid peers has been collected.
  */
 data class AceLiveDhtPolicy(
     val requestTimeoutMillis: Int = 2_000,
@@ -34,6 +36,7 @@ data class AceLiveDhtPolicy(
     val maxNodesPerResponse: Int = 64,
     val maxPeersPerResponse: Int = 64,
     val maxTotalPeers: Int = 256,
+    val returnAfterPeers: Int? = null,
     val allowNonGlobalNodeAddresses: Boolean = false,
     val allowNonGlobalPeerAddresses: Boolean = false
 ) {
@@ -48,6 +51,7 @@ data class AceLiveDhtPolicy(
         require(maxNodesPerResponse in 1..AceLiveDhtCodec.DEFAULT_MAX_NODES)
         require(maxPeersPerResponse in 1..AceLiveDhtCodec.DEFAULT_MAX_PEERS)
         require(maxTotalPeers in 1..2_048)
+        require(returnAfterPeers == null || returnAfterPeers in 1..maxTotalPeers)
     }
 }
 

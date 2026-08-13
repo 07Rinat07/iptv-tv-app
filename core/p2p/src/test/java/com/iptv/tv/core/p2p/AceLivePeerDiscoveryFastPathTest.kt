@@ -69,6 +69,51 @@ class AceLivePeerDiscoveryFastPathTest {
     }
 
     @Test
+    fun `one startup dht peer also schedules a full dht-only expansion`() {
+        val dhtPeer = AceLiveTcpPeerEndpoint("8.8.8.8", 8602)
+        val result = AceLivePeerDiscoveryOrchestrationResult(
+            peers = listOf(
+                AceLiveDiscoveredPeer(
+                    endpoint = dhtPeer,
+                    sources = setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)
+                )
+            ),
+            dht = AceLivePeerDiscoverySourceSummary(
+                status = AceLivePeerDiscoverySourceStatus.SUCCEEDED,
+                returnedPeerCount = 1
+            ),
+            tracker = AceLivePeerDiscoverySourceSummary(
+                status = AceLivePeerDiscoverySourceStatus.SUCCEEDED,
+                returnedPeerCount = 0
+            )
+        )
+
+        assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+    }
+
+    @Test
+    fun `normal dht batch does not schedule duplicate startup expansion`() {
+        val result = AceLivePeerDiscoveryOrchestrationResult(
+            peers = (1..4).map { index ->
+                AceLiveDiscoveredPeer(
+                    endpoint = AceLiveTcpPeerEndpoint("8.8.8.$index", 8600 + index),
+                    sources = setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)
+                )
+            },
+            dht = AceLivePeerDiscoverySourceSummary(
+                status = AceLivePeerDiscoverySourceStatus.SUCCEEDED,
+                returnedPeerCount = 4
+            ),
+            tracker = AceLivePeerDiscoverySourceSummary(
+                status = AceLivePeerDiscoverySourceStatus.SUCCEEDED,
+                returnedPeerCount = 0
+            )
+        )
+
+        assertFalse(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+    }
+
+    @Test
     fun `weak tracker batch falls back to dht`() = runBlocking {
         val swarm = swarm(22)
         var dhtCalled = false
@@ -89,7 +134,7 @@ class AceLivePeerDiscoveryFastPathTest {
 
         assertTrue(dhtCalled)
         assertEquals(listOf(dhtPeer, trackerPeer), result.tcpEndpoints())
-        assertFalse(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+        assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
     }
 
     @Test

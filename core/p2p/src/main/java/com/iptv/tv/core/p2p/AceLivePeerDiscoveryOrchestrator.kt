@@ -85,12 +85,14 @@ data class AceLivePeerDiscoveryOrchestrationResult(
 }
 
 /**
- * Detects the startup fast-path result that still needs an immediate DHT-only refill.
+ * Detects a deliberately small startup result that still needs a full DHT-only refill.
  *
  * A one-to-three-peer tracker result satisfies the startup threshold of one, so the first TCP
  * attempt can begin without waiting for DHT. It is still weaker than the normal refill threshold of
- * four. Re-running the tracker before that DHT fallback can consume its full 20-second budget while
- * the no-connected-peer guard is active, so the next refill must go directly to DHT once.
+ * four. Initial DHT discovery follows the same rule: it may return the first usable peer immediately
+ * instead of holding startup behind the complete 15-second iterative walk. Re-running the tracker or
+ * reusing that deliberately short DHT result would defeat the expansion, so the next refill must go
+ * directly through a fresh full DHT walk once.
  */
 internal fun aceLiveStartupNeedsImmediateDhtOnlyRefill(
     result: AceLivePeerDiscoveryOrchestrationResult,
@@ -100,10 +102,17 @@ internal fun aceLiveStartupNeedsImmediateDhtOnlyRefill(
     require(normalTrackerFastPathMinPeers > 0) {
         "normalTrackerFastPathMinPeers must be positive"
     }
-    return result.dht.status == AceLivePeerDiscoverySourceStatus.NOT_REQUESTED &&
+    val weakTrackerFastPath =
+        result.dht.status == AceLivePeerDiscoverySourceStatus.NOT_REQUESTED &&
         result.tracker.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
         result.tracker.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
+    val weakDhtFastPath =
+        result.dht.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
+        result.dht.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
+    return weakTrackerFastPath || weakDhtFastPath
 }
+
+internal const val ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS = 1
 
 internal const val ACE_LIVE_DHT_MIN_HEAP_HEADROOM_BYTES: Long = 32L * 1024L * 1024L
 
