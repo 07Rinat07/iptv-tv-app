@@ -315,6 +315,21 @@ class AceLiveEmbeddedEngine(
                     if (initialRefill.startedPeers == 0) {
                         error("Ace Live peer discovery returned no reachable candidates")
                     }
+                    if (immediateStartupDhtOnlyRefill.get()) {
+                        val expandedRefill = refillLoop.runOneCycle()
+                        if (!connectedAtLeastOnce.get()) {
+                            // The single-tracker fast path deliberately starts probing before DHT.
+                            // Rearm the dead-swarm budget only after that mandatory DHT-only
+                            // expansion has completed, so DHT discovery cannot consume the time
+                            // reserved for its newly started peers to establish a TCP connection.
+                            firstPeerStartAtMillis.set(System.currentTimeMillis())
+                        }
+                        Log.i(
+                            LOG_TAG,
+                            "event=startup_dht_expansion " +
+                                "started_peers=${expandedRefill.startedPeers}"
+                        )
+                    }
                     val refillJob = launch { refillLoop.run() }
                     try {
                         driveSession()
