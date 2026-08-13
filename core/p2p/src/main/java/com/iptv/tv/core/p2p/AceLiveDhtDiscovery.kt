@@ -16,10 +16,17 @@ data class AceLiveDhtBootstrapNode(
     }
 }
 
-/** Local resource and network-safety bounds for BEP-5 discovery. */
+/**
+ * Local resource and network-safety bounds for BEP-5 discovery.
+ *
+ * [searchBranching] bounds concurrent KRPC requests. A small value still prevents one dead DHT
+ * node from serializing the whole lookup, while the query, packet, peer, and absolute-time caps
+ * keep the fan-out suitable for memory-constrained TV devices.
+ */
 data class AceLiveDhtPolicy(
     val requestTimeoutMillis: Int = 2_000,
     val discoveryBudgetMillis: Long = 15_000,
+    val searchBranching: Int = 4,
     val maxPacketBytes: Int = AceLiveDhtCodec.DEFAULT_MAX_PACKET_BYTES,
     val maxBootstrapNodes: Int = 8,
     val maxResolvedAddressesPerBootstrap: Int = 4,
@@ -33,6 +40,7 @@ data class AceLiveDhtPolicy(
     init {
         require(requestTimeoutMillis in 100..30_000)
         require(discoveryBudgetMillis in requestTimeoutMillis.toLong()..120_000L)
+        require(searchBranching in 1..64)
         require(maxPacketBytes in 512..65_507)
         require(maxBootstrapNodes in 1..64)
         require(maxResolvedAddressesPerBootstrap in 1..16)
@@ -68,12 +76,13 @@ data class AceLiveDhtDiscoveryResult(
  * The public request remains explicitly swarm-key based. The bounded iterative network walk is
  * shared internally with Content ID discovery without converting either identity into the other.
  *
- * Production callers may opt into a short process-wide result reuse window. The global DHT
+ * Production callers may opt into a short process-wide positive-result reuse window. The global DHT
  * execution gate still owns serialization and heap safety; reuse only prevents the direct live path
- * and the concurrent metadata/refill paths from immediately repeating the same completed DHT walk
- * for the same swarm/bootstrap set. The reuse window intentionally covers one bounded metadata-peer
- * probing phase, after which normal discovery may refresh the swarm again. Tests and custom callers
- * remain uncached unless they opt in explicitly.
+ * and the concurrent metadata/refill paths from immediately repeating the same successful DHT walk
+ * for the same swarm/bootstrap set. Empty results are never reused: a bounded BEP-5 lookup that found
+ * no peers is not proof that the distributed swarm is empty, and suppressing an immediate fresh walk
+ * can strand startup on one weak routing-table path. Tests and custom callers remain uncached unless
+ * they opt in explicitly.
  */
 class AceLiveDhtDiscovery(
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -116,7 +125,7 @@ class AceLiveDhtDiscovery(
             failedQueries = outcome.failedQueries,
             rejectedEndpoints = outcome.rejectedEndpoints
         )
-        if (reuseRecentResults) {
+        if (reuseRecentResults && result.peers.isNotEmpty()) {
             rememberDhtResult(cacheKey, result, clockMillis())
         }
         return result

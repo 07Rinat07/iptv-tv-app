@@ -61,6 +61,55 @@ class AceLiveDhtRecentResultReuseTest {
         }
     }
 
+    @Test
+    fun `production reuse never caches an empty DHT walk`() = runBlocking {
+        val bootstrap = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        val peer = compactEndpoint(127, 0, 0, 1, 8621)
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val serverThread = thread(start = true, isDaemon = true) {
+            try {
+                repeat(2) { queryIndex ->
+                    val buffer = ByteArray(8 * 1024)
+                    val packet = DatagramPacket(buffer, buffer.size)
+                    bootstrap.receive(packet)
+                    val response = response(
+                        transactionId = transactionId,
+                        remoteId = ByteArray(20) { 0x22 },
+                        peer = peer.takeIf { queryIndex == 1 }
+                    )
+                    bootstrap.send(DatagramPacket(response, response.size, packet.socketAddress))
+                }
+            } catch (_: Exception) {
+                // Socket closure is normal test cleanup.
+            }
+        }
+
+        try {
+            val policy = AceLiveDhtPolicy(
+                requestTimeoutMillis = 500,
+                discoveryBudgetMillis = 1_000,
+                allowNonGlobalNodeAddresses = true,
+                allowNonGlobalPeerAddresses = true
+            )
+            val first = discovery(policy, nowMillis = 2_000L)
+            val second = discovery(policy, nowMillis = 2_001L)
+            val request = AceLiveDhtDiscoveryRequest(
+                swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 0x67 }),
+                bootstrapNodes = listOf(AceLiveDhtBootstrapNode("bootstrap.empty-reuse.test", bootstrap.localPort)),
+                localNodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 0x44 })
+            )
+
+            assertEquals(emptyList<AceLiveTcpPeerEndpoint>(), first.discover(request).peers)
+            assertEquals(
+                listOf(AceLiveTcpPeerEndpoint("127.0.0.1", 8621)),
+                second.discover(request).peers
+            )
+        } finally {
+            bootstrap.close()
+            serverThread.join(2_000)
+        }
+    }
+
     private fun discovery(policy: AceLiveDhtPolicy, nowMillis: Long) = AceLiveDhtDiscovery(
         policy = policy,
         randomInt = { 0x1234 },
@@ -72,13 +121,16 @@ class AceLiveDhtRecentResultReuseTest {
     private fun response(
         transactionId: ByteArray,
         remoteId: ByteArray,
-        peer: ByteArray
+        peer: ByteArray?
     ): ByteArray = ByteArrayOutputStream().apply {
         writeAscii("d1:rd2:id20:")
         write(remoteId)
-        writeAscii("6:valuesl${peer.size}:")
-        write(peer)
-        writeAscii("ee1:t${transactionId.size}:")
+        if (peer != null) {
+            writeAscii("6:valuesl${peer.size}:")
+            write(peer)
+            writeAscii("e")
+        }
+        writeAscii("e1:t${transactionId.size}:")
         write(transactionId)
         writeAscii("1:y1:re")
     }.toByteArray()

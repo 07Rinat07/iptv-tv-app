@@ -129,7 +129,9 @@ jobs:
             "system-images;android-${ANDROID_API_LEVEL};google_apis;x86_64"
 
       - name: Run real Torrent TV playback smoke without Ace Engine
+        id: torrent-tv-playback-smoke
         if: steps.torrent-tv-smoke.outputs.run == 'true'
+        continue-on-error: true
         timeout-minutes: 15
         shell: bash
         run: |
@@ -240,6 +242,10 @@ jobs:
             tail -n 160 emulator.log
             echo "::endgroup::"
           fi
+
+          # The smoke is allowed to fail without ending the job, so release
+          # emulator resources before deterministic JVM/build checks continue.
+          adb emu kill >/dev/null 2>&1 || true
 
       - name: Lint debug
         run: ./gradlew --no-daemon --stacktrace lintDebug
@@ -381,3 +387,14 @@ jobs:
             **/build/reports/lint-results*.html
             **/build/reports/lint-results*.xml
             **/build/outputs/mapping/**
+
+      - name: Enforce real Torrent TV playback smoke result
+        if: >-
+          always() &&
+          steps.torrent-tv-smoke.outputs.run == 'true' &&
+          steps.torrent-tv-playback-smoke.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "The real Torrent TV smoke failed. Deterministic checks and APK packaging were allowed to finish."
+          echo "Inspect the torrent-tv-smoke diagnostics artifact before rerunning or changing application code."
+          exit 1

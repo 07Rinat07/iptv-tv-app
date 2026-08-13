@@ -201,11 +201,23 @@ The app has separate embedded paths for ordinary BitTorrent and Ace Live. A 40-c
 7. Keep LibVLC fallback limited to decoder/container/demux failures; a dead network source is not retried through another decoder.
 8. Cover the peer-wire variants, stall handling, retry/session lifecycle and fallback policy with unit and instrumentation tests.
 
+## Current startup-discovery hardening (PR #101)
+
+1. Let only the initial discovery return after one tracker peer, then immediately run a DHT-only refill when the fast path yielded fewer than four candidates.
+2. Rearm the 30-second no-connected-peer budget after that mandatory DHT expansion so discovery cannot consume the connection interval reserved for newly started peers.
+3. Keep the 60-second absolute startup timeout for sessions that already demonstrated a real TCP connection or other progress.
+4. Walk independent BEP-5 branches with at most four concurrent KRPC requests under the existing 2-second request, 15-second lookup and 64-query bounds.
+5. Cancel outstanding UDP requests as soon as enough peers are found, the absolute lookup budget expires or the playback request is superseded.
+6. Reuse only positive same-swarm DHT results for the short production window. Never cache an empty bounded walk as evidence that the global swarm has no peers.
+7. Keep the process-wide DHT mutex, heap-headroom guard, endpoint filtering and Content ID/live-swarm identity separation unchanged.
+8. Run deterministic lint/unit/assemble checks and produce ARM APK artifacts even when the public-swarm smoke fails; preserve the smoke failure as the final CI result and retain its diagnostics.
+9. Require exact-head CI plus manual ARM-device acceptance before merge. A public content ID that changes availability is a separate fixture result, not by itself proof of an application regression.
+
 ## Next autonomous increments
 
 1. Instrument retained buffer bytes, producer/consumer rates, startup phases, peer usefulness, rebuffer count and final stall reason.
 2. Tune request depth, startup threshold and read-ahead from device measurements so the sliding buffer keeps filling while the player consumes it.
-3. Reduce channel-switch latency with prompt cancellation plus separate discovery, handshake and startup deadlines; verify that the old loopback stream is closed.
+3. Measure the remaining channel-switch latency after PR #101 and keep prompt cancellation plus separate discovery, connection and absolute startup deadlines; verify that the old loopback stream is closed.
 4. Improve bounded recovery for temporarily stale peer windows without hiding a dead swarm behind an endless retry loop.
 5. Feed verified decoded live metadata into `AceLiveDescriptor` when a lawful/public decoder or provider is available.
 6. Add LSD only if LAN peer discovery provides practical value; keep it independent from public tracker/DHT policy.

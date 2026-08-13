@@ -4,20 +4,22 @@
 
 Получить реально устанавливаемое Android TV / TV Box приложение, которое без внешних обязательных зависимостей воспроизводит обычные IPTV-потоки и BitTorrent-источники, умеет автоматически переключаться Media3 → LibVLC, показывает EPG при наличии/обнаружении источника и удобно управляется пультом, мышью и тачпадом.
 
-## Текущий срез — 12 августа 2026
+## Текущий срез — 13 августа 2026
 
-Автономный Torrent TV маршрут уже работает без внешнего Ace Engine. PR #98 добавил first-success/fast-switch стратегию Ace Live и после исправления regression/CI smoke был слит в `main`. PR #99 ранее убрал полное пересоздание Media3/MediaCodec на каждом переключении обычного IPTV и также находится в `main`.
+Автономный Torrent TV маршрут уже работает без внешнего Ace Engine. PR #98 добавил first-success/fast-switch стратегию Ace Live, PR #99 убрал полное пересоздание Media3/MediaCodec при обычном IPTV zapping, а PR #100 перенёс XMLTV на bounded streaming parse и закрыл известный EPG OOM в коде. Все три PR находятся в `main`; memory fix ещё требует ручного rapid-zap подтверждения на 256-MiB/аналогичном устройстве.
 
-Новые пользовательские журналы от 12 августа выявили более приоритетный общий блокер: **EPG OOM может закрывать приложение даже при воспроизведении обычных прямых IPTV URL**. На 256-MiB heap процесс доходил до 224–252 MiB, после чего `OkHttp TaskRunner` получал `OutOfMemoryError`. Отдельный журнал показывает повторную загрузку одного и того же повреждённого XMLTV (`unterminated entity ref`) при последовательном переключении каналов.
+Текущий рабочий инкремент — PR #101: bounded Ace Live startup discovery и подготовка сборки для аппаратной проверки. Первый tracker peer запускается немедленно, обязательный DHT-only refill расширяет слабый fast path, а 30-секундный no-connected-peer budget переустанавливается после этого расширения. DHT walker обходит до четырёх ветвей параллельно и не кэширует пустой результат.
+
+Actions run #461 показал отдельную CI-проблему: нестабильный публичный Torrent TV fixture остановил job до lint/unit/assemble, хотя другой provider swarm в том же smoke успешно стартовал повторно. Workflow должен сохранить внешний smoke как обязательный финальный gate, но всегда доводить детерминированные проверки и упаковку APK до конца.
 
 Поэтому текущий порядок hardening такой:
 
-1. **EPG OOM hardening** — убрать `ResponseBody.bytes()` из XMLTV path, перейти на streaming parse, ограничить размер/retained data/cache, сериализовать тяжёлые EPG loads, добавить negative-cache malformed source и low-memory headroom guard;
-2. повторить rapid-zap тест обычного IPTV на 256-MiB/аналогичном устройстве и убедиться, что EPG failure больше не может завершить процесс;
-3. после memory fix измерить оставшуюся задержку переключения обычного IPTV;
-4. отдельно продолжить Ace Live startup/stall hardening, включая источники, которые всё ещё могут исчерпывать полный startup budget;
-5. затем перейти к MPEG-TS/decoder discontinuity/PAT-PMT/random-access hardening;
-6. только после этого продолжить длительную аппаратную приёмку и release gate.
+1. получить полный exact-head CI PR #101: lint/unit/debug/release/ARM artifacts должны завершаться независимо от результата внешнего public-swarm smoke;
+2. проверить сборку PR #101 на ARM TV Box без внешнего Ace Engine: рабочий provider source, повторный запуск, 20 переключений и заведомо недоступный/нестабильный source;
+3. параллельно повторить rapid-zap обычного IPTV на 256-MiB/аналогичном устройстве и подтвердить, что уже слитый PR #100 устранил EPG crash;
+4. по аппаратным логам измерить startup phases, retained buffer, download/consume rate, rebuffer и stall reason;
+5. затем перейти к непрерывному buffer refill и MPEG-TS/decoder discontinuity/PAT-PMT/random-access hardening;
+6. после короткой матрицы выполнить слабую сеть, двухчасовой и восьмичасовой release gate.
 
 Актуальные доказательства и критерии находятся в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md). Подробный разбор новых OOM-журналов и точный scope текущего PR сохранены в [`testing/playback-log-analysis-2026-08-12.md`](testing/playback-log-analysis-2026-08-12.md). Исторический P2P-разбор 11 августа остаётся в [`testing/playback-log-analysis-2026-08-11.md`](testing/playback-log-analysis-2026-08-11.md).
 
@@ -36,6 +38,7 @@
 - улучшенное обнаружение актуального Ace Stream приложения/службы;
 - PR #98: direct Ace Live startup и metadata resolution выполняются конкурентно с first-success semantics; отмена проигравших путей и regression coverage прошли real Torrent TV smoke без внешнего Ace Engine;
 - PR #99: Media3/MediaCodec stack переиспользуется при zapping обычных IPTV-каналов вместо полного `release()/rebuild` на каждый session change;
+- PR #100: XMLTV читается bounded streaming parser, тяжёлые EPG loads сериализованы, а malformed/low-memory failures имеют ограниченный negative-cache/fail-safe;
 - TV-интерфейс, пульт, мышь, тачпад и полноэкранный режим;
 - группы, подгруппы, восстановление фокуса и постраничная прокрутка в основных разделах;
 - Editor использует общий `TvScrollableLazyColumn`: TV-кнопки начала/Page Up/Page Down, PageUp/PageDown и ChannelUp/ChannelDown, mouse wheel/touchpad и scrollbar без изменения операций редактирования;
@@ -51,8 +54,8 @@
 Этот порядок имеет приоритет над исторической нумерацией технических блоков ниже. Подтверждённый crash/ANR/memory regression всегда получает приоритет над функциональным roadmap.
 
 0. **Issue #40 — regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
-1. **Playback safety hotfix — EPG OOM.** Текущий рабочий инкремент: streaming XMLTV, bounded memory/cache, negative-cache malformed source, single-flight/serialized EPG load и low-memory fail-safe. Критерий: повреждённый/огромный EPG может привести только к отсутствию программы, но не к закрытию playback процесса.
-2. **Master #44 — playback/P2P hardening.** После EPG memory fix сократить и ограничить остаточное время переключения, обеспечить измеримую непрерывную подкачку, улучшить peer/stall recovery и пройти аппаратную приёмку без внешнего Ace Engine.
+1. **Playback safety acceptance — EPG OOM.** Код PR #100 слит: streaming XMLTV, bounded memory/cache, negative-cache, serialized load и low-memory fail-safe. Осталось ручное подтверждение, что повреждённый/огромный EPG отключает только программу, а не playback process.
+2. **Master #44 — playback/P2P hardening.** Завершить PR #101, проверить bounded startup на ARM, затем обеспечить измеримую непрерывную подкачку, улучшить peer/stall recovery и пройти приёмку без внешнего Ace Engine.
 3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** После стабилизации критического playback path продолжить identity, navigation skeleton, dedup/source variants и единое избранное.
 4. **Issue #47 — EPG / Now-Next / real archive.** Полноценный ingestion/cache/matching/catch-up redesign строить поверх стабильной channel identity из #45; текущий OOM hotfix не должен превращаться в полный #47 redesign.
 5. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
@@ -89,7 +92,7 @@
 7. ✅ `P2pEngineRouter` оставляет embedded backend основным; Torrent TV `content_id` и live infohash не падают автоматически во внешний Ace Engine.
 8. ✅ Отдельная модель Ace Live не смешивает `content_id`, live infohash и BitTorrent BTIH.
 9. ✅ PR #98 сократил serial startup wait: direct swarm и metadata resolution теперь гоняются first-success, проигравшие операции отменяются; regression тест и real Torrent TV smoke прошли перед merge.
-10. ⏳ После EPG OOM hotfix завершить startup/stall/playback hardening и приёмку на эмуляторе, затем на ARM TV Box.
+10. ⏳ PR #101: завершить bounded startup discovery, exact-head CI и приёмку на ARM TV Box.
 
 ### Детализация Ace transport / torrent-TV
 
@@ -107,16 +110,16 @@
 - `YouROK/TorrServer` — полезный эталон поведения для streaming read-ahead, reader lifecycle, cache windows и приоритетов pieces. Проект GPL-3.0, поэтому прямое копирование его реализации в текущую кодовую базу без отдельного лицензионного решения не допускается.
 - `proninyaroslav/libretorrent` — полезный эталон libtorrent4j для sequential download, first/last piece priority, alerts и metadata lifecycle. Проект GPL-3.0; использовать для сравнения поведения и API, а не для прямого копирования кода.
 - `tsynik/torrent` — fork torrent engine, обнаруженный как upstream в Flux; лицензия MPL-2.0. Можно исследовать алгоритмы и поведение, но прямое включение исходных файлов потребует соблюдения MPL на уровне затронутых файлов.
-- `AceStreamCoreLive` и AceServe APK — использовать как доказательство существования отдельного Ace Live subsystem и как карту компонентов/терминов. Закрытые/AOT/native реализации не переносить в исходный код приложения.
+- `AceStreamCoreLive` 3.1.67, официальный Ace Stream Engine 3.1.73 и AceServe APK — использовать как доказательство существования отдельного Ace Live subsystem и как поведенческую карту компонентов/терминов. Статическое сравнение DHT подтвердило практику параллельных запросов с коротким request timeout; текущая clean-room реализация выбирает более консервативное ветвление 4 для TV memory/IO bounds. Закрытые/AOT/native реализации не переносить в исходный код приложения.
 
 ### Следующие P2P-инкременты
 
 1. Добавить метрики retained buffer, download/consume rate, first-media-byte, startup, rebuffer, peer count и stall reason.
 2. Разделить `playbackRequestId` и active `playbackSessionId`; все callbacks обязаны соблюдать `latest request wins`.
 3. Обеспечить непрерывное пополнение live-буфера: adaptive low/target/high-water, feedback-driven request pipeline и ограниченное восстановление после потери peers.
-4. После memory hotfix измерить остаточную задержку переключения и не возвращать serial 60-second wait, уже устранённый PR #98.
+4. После PR #101 измерить остаточную задержку переключения и не возвращать serial 60-second wait, уже устранённый PR #98.
 5. Разделить unavailable source, dead/stale swarm, insufficient buffer, transport timeout и decoder/demux error в UI и экспортируемой диагностике.
-6. Завершить EPG OOM hotfix: negative-cache одинаковой ошибки XMLTV, streaming parse, bounded cache/data и low-memory guard; не считать штатную EPG-отмену playback error.
+6. Подтвердить PR #100 на 256-MiB/аналогичном устройстве; не считать штатную EPG-отмену playback error.
 7. Расширить `.acelive` routing/diagnostics без ошибочного преобразования в обычный magnet.
 8. Сохранять ordinary BitTorrent regression baseline: magnet/infohash/local/HTTP torrent, read-ahead, seek и local HTTP Range.
 9. Провести матрицу из обычных IPTV и Torrent TV каналов: 20 переключений, повторное открытие, слабая сеть, потеря peers, двухчасовой и восьмичасовой просмотр.
