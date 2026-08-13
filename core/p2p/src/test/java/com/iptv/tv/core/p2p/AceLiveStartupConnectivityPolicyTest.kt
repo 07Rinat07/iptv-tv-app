@@ -11,7 +11,7 @@ class AceLiveStartupConnectivityPolicyTest {
             aceLiveStartupHasNoConnectedPeerTooLong(
                 startupComplete = false,
                 anyTransportConnected = false,
-                elapsedMillis = 29_999,
+                elapsedSinceFirstPeerStartMillis = 29_999,
                 timeoutMillis = 30_000
             )
         )
@@ -19,7 +19,19 @@ class AceLiveStartupConnectivityPolicyTest {
             aceLiveStartupHasNoConnectedPeerTooLong(
                 startupComplete = false,
                 anyTransportConnected = false,
-                elapsedMillis = 30_000,
+                elapsedSinceFirstPeerStartMillis = 30_000,
+                timeoutMillis = 30_000
+            )
+        )
+    }
+
+    @Test
+    fun `discovery time cannot consume no connection budget before first peer starts`() {
+        assertFalse(
+            aceLiveStartupHasNoConnectedPeerTooLong(
+                startupComplete = false,
+                anyTransportConnected = false,
+                elapsedSinceFirstPeerStartMillis = null,
                 timeoutMillis = 30_000
             )
         )
@@ -31,7 +43,7 @@ class AceLiveStartupConnectivityPolicyTest {
             aceLiveStartupHasNoConnectedPeerTooLong(
                 startupComplete = false,
                 anyTransportConnected = true,
-                elapsedMillis = 60_000,
+                elapsedSinceFirstPeerStartMillis = 60_000,
                 timeoutMillis = 30_000
             )
         )
@@ -43,7 +55,7 @@ class AceLiveStartupConnectivityPolicyTest {
             aceLiveStartupHasNoConnectedPeerTooLong(
                 startupComplete = true,
                 anyTransportConnected = false,
-                elapsedMillis = 60_000,
+                elapsedSinceFirstPeerStartMillis = 60_000,
                 timeoutMillis = 30_000
             )
         )

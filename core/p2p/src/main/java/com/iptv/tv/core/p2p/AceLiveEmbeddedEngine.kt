@@ -248,7 +248,9 @@ class AceLiveEmbeddedEngine(
         private val peerIds = AtomicLong(1L)
         private val emittedBytes = AtomicLong(0L)
         private val startupStartedAtMillis = AtomicLong(0L)
+        private val firstPeerStartAtMillis = AtomicLong(0L)
         private val initialPeerDiscovery = AtomicBoolean(true)
+        private val immediateStartupDhtOnlyRefill = AtomicBoolean(false)
         private val lastMediaAppendAt = AtomicLong(0L)
         private val lastProgressLogAt = AtomicLong(0L)
         private val lastWindowLogAt = AtomicLong(0L)
@@ -299,6 +301,7 @@ class AceLiveEmbeddedEngine(
                     swarmKey = transport.swarmKey.toByteArray(),
                     localPeerId = localPeerId
                 )
+                firstPeerStartAtMillis.compareAndSet(0L, System.currentTimeMillis())
             }
         )
         private var runner: Job? = null
@@ -350,17 +353,26 @@ class AceLiveEmbeddedEngine(
                 peerId = localPeerId,
                 announcePort = announceLease.port
             )
-            val discoveryPolicy = if (initialPeerDiscovery.compareAndSet(true, false)) {
+            val isInitialDiscovery = initialPeerDiscovery.compareAndSet(true, false)
+            val useImmediateDhtOnlyRefill = !isInitialDiscovery &&
+                immediateStartupDhtOnlyRefill.compareAndSet(true, false)
+            val discoveryPolicy = if (isInitialDiscovery) {
                 AceLivePeerDiscoveryOrchestrationPolicy(trackerFastPathMinPeers = 1)
             } else {
                 AceLivePeerDiscoveryOrchestrationPolicy()
             }
-            return AceLivePeerDiscoveryOrchestrator(policy = discoveryPolicy).discover(
+            val result = AceLivePeerDiscoveryOrchestrator(policy = discoveryPolicy).discover(
                 AceLivePeerDiscoveryOrchestrationRequest(
                     dhtRequest = dhtRequest,
-                    trackerRequest = trackerRequest
+                    trackerRequest = trackerRequest.takeUnless { useImmediateDhtOnlyRefill }
                 )
             )
+            if (isInitialDiscovery) {
+                immediateStartupDhtOnlyRefill.set(
+                    aceLiveStartupNeedsImmediateDhtOnlyRefill(result)
+                )
+            }
+            return result
         }
 
         private suspend fun driveSession() {
@@ -370,7 +382,8 @@ class AceLiveEmbeddedEngine(
                     aceLiveStartupHasNoConnectedPeerTooLong(
                         startupComplete = startup.isCompleted,
                         anyTransportConnected = connectedAtLeastOnce.get(),
-                        elapsedMillis = startupElapsedMillis(now),
+                        elapsedSinceFirstPeerStartMillis =
+                            elapsedSinceFirstPeerStartMillis(now),
                         timeoutMillis = NO_CONNECTED_PEER_TIMEOUT_MILLIS
                     )
                 ) {
@@ -506,6 +519,12 @@ class AceLiveEmbeddedEngine(
 
         private fun startupElapsedMillis(nowMillis: Long = System.currentTimeMillis()): Long =
             (nowMillis - startupStartedAtMillis.get()).coerceAtLeast(0L)
+
+        private fun elapsedSinceFirstPeerStartMillis(nowMillis: Long): Long? {
+            val startedAt = firstPeerStartAtMillis.get()
+            if (startedAt <= 0L) return null
+            return (nowMillis - startedAt).coerceAtLeast(0L)
+        }
 
         private fun emitPieces(pieces: List<AceLiveReassembledPiece>) {
             pieces.forEach { piece ->

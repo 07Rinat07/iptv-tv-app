@@ -84,6 +84,27 @@ data class AceLivePeerDiscoveryOrchestrationResult(
     fun tcpEndpoints(): List<AceLiveTcpPeerEndpoint> = peers.map(AceLiveDiscoveredPeer::endpoint)
 }
 
+/**
+ * Detects the startup fast-path result that still needs an immediate DHT-only refill.
+ *
+ * A one-to-three-peer tracker result satisfies the startup threshold of one, so the first TCP
+ * attempt can begin without waiting for DHT. It is still weaker than the normal refill threshold of
+ * four. Re-running the tracker before that DHT fallback can consume its full 20-second budget while
+ * the no-connected-peer guard is active, so the next refill must go directly to DHT once.
+ */
+internal fun aceLiveStartupNeedsImmediateDhtOnlyRefill(
+    result: AceLivePeerDiscoveryOrchestrationResult,
+    normalTrackerFastPathMinPeers: Int =
+        AceLivePeerDiscoveryOrchestrationPolicy().trackerFastPathMinPeers
+): Boolean {
+    require(normalTrackerFastPathMinPeers > 0) {
+        "normalTrackerFastPathMinPeers must be positive"
+    }
+    return result.dht.status == AceLivePeerDiscoverySourceStatus.NOT_REQUESTED &&
+        result.tracker.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
+        result.tracker.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
+}
+
 internal const val ACE_LIVE_DHT_MIN_HEAP_HEADROOM_BYTES: Long = 32L * 1024L * 1024L
 
 // Direct content-id startup and metadata resolution may legitimately race. They share the same

@@ -39,6 +39,7 @@ class AceLivePeerDiscoveryFastPathTest {
         assertEquals(trackerPeers, result.tcpEndpoints())
         assertEquals(AceLivePeerDiscoverySourceStatus.NOT_REQUESTED, result.dht.status)
         assertEquals(AceLivePeerDiscoverySourceStatus.SUCCEEDED, result.tracker.status)
+        assertFalse(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
     }
 
     @Test
@@ -64,6 +65,7 @@ class AceLivePeerDiscoveryFastPathTest {
         assertEquals(listOf(trackerPeer), result.tcpEndpoints())
         assertEquals(AceLivePeerDiscoverySourceStatus.NOT_REQUESTED, result.dht.status)
         assertEquals(AceLivePeerDiscoverySourceStatus.SUCCEEDED, result.tracker.status)
+        assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
     }
 
     @Test
@@ -87,6 +89,7 @@ class AceLivePeerDiscoveryFastPathTest {
 
         assertTrue(dhtCalled)
         assertEquals(listOf(dhtPeer, trackerPeer), result.tcpEndpoints())
+        assertFalse(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
     }
 
     @Test
