@@ -67,12 +67,19 @@ data class AceLiveDhtDiscoveryResult(
  *
  * The public request remains explicitly swarm-key based. The bounded iterative network walk is
  * shared internally with Content ID discovery without converting either identity into the other.
+ *
+ * Production callers may opt into a very short process-wide result reuse window. The global DHT
+ * execution gate still owns serialization and heap safety; reuse only prevents the direct live path
+ * and the concurrent metadata path from immediately repeating the same completed DHT walk for the
+ * same swarm/bootstrap set. Tests and custom callers remain uncached unless they opt in explicitly.
  */
 class AceLiveDhtDiscovery(
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     policy: AceLiveDhtPolicy = AceLiveDhtPolicy(),
     randomInt: () -> Int = AceDhtIterativeDiscovery.DEFAULT_RANDOM_INT,
-    addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER
+    addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER,
+    private val reuseRecentResults: Boolean = false,
+    private val clockMillis: () -> Long = System::currentTimeMillis
 ) {
     private val delegate = AceDhtIterativeDiscovery(
         ioDispatcher = ioDispatcher,
@@ -82,6 +89,11 @@ class AceLiveDhtDiscovery(
     )
 
     suspend fun discover(request: AceLiveDhtDiscoveryRequest): AceLiveDhtDiscoveryResult {
+        val cacheKey = request.cacheKey()
+        if (reuseRecentResults) {
+            recentDhtResult(cacheKey, clockMillis())?.let { cached -> return cached }
+        }
+
         val outcome = delegate.discover(
             AceDhtLookupRequest(
                 targetBytes = request.swarmKey.toByteArray(),
@@ -96,11 +108,74 @@ class AceLiveDhtDiscovery(
                 }
             )
         )
-        return AceLiveDhtDiscoveryResult(
+        val result = AceLiveDhtDiscoveryResult(
             peers = outcome.peers,
             queriesSent = outcome.queriesSent,
             failedQueries = outcome.failedQueries,
             rejectedEndpoints = outcome.rejectedEndpoints
         )
+        if (reuseRecentResults) {
+            rememberDhtResult(cacheKey, result, clockMillis())
+        }
+        return result
     }
+
+    private fun AceLiveDhtDiscoveryRequest.cacheKey(): String = buildString {
+        append(swarmKey.toHex())
+        append('|')
+        bootstrapNodes.forEachIndexed { index, node ->
+            if (index > 0) append(',')
+            append(node.host.lowercase())
+            append(':')
+            append(node.port)
+        }
+    }
+
+    private companion object {
+        const val RECENT_RESULT_TTL_MILLIS = 5_000L
+        const val MAX_RECENT_RESULTS = 16
+        val recentResultLock = Any()
+        val recentResults = LinkedHashMap<String, CachedDhtResult>()
+
+        fun recentDhtResult(key: String, nowMillis: Long): AceLiveDhtDiscoveryResult? =
+            synchronized(recentResultLock) {
+                pruneRecentResults(nowMillis)
+                recentResults[key]?.result
+            }
+
+        fun rememberDhtResult(
+            key: String,
+            result: AceLiveDhtDiscoveryResult,
+            nowMillis: Long
+        ) = synchronized(recentResultLock) {
+            pruneRecentResults(nowMillis)
+            recentResults.remove(key)
+            while (recentResults.size >= MAX_RECENT_RESULTS) {
+                val eldestKey = recentResults.keys.firstOrNull() ?: break
+                recentResults.remove(eldestKey)
+            }
+            recentResults[key] = CachedDhtResult(
+                storedAtMillis = nowMillis,
+                result = result.copy(peers = result.peers.toList())
+            )
+        }
+
+        fun pruneRecentResults(nowMillis: Long) {
+            val iterator = recentResults.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                val age = if (nowMillis >= entry.value.storedAtMillis) {
+                    nowMillis - entry.value.storedAtMillis
+                } else {
+                    Long.MAX_VALUE
+                }
+                if (age > RECENT_RESULT_TTL_MILLIS) iterator.remove()
+            }
+        }
+    }
+
+    private data class CachedDhtResult(
+        val storedAtMillis: Long,
+        val result: AceLiveDhtDiscoveryResult
+    )
 }
