@@ -243,6 +243,7 @@ class AceLiveEmbeddedEngine(
         val server = LoopbackHttpLiveServer(mediaBuffer)
 
         private val closed = AtomicBoolean(false)
+        private val connectedAtLeastOnce = AtomicBoolean(false)
         private val latestHead = AtomicLong(-1L)
         private val peerIds = AtomicLong(1L)
         private val emittedBytes = AtomicLong(0L)
@@ -365,6 +366,19 @@ class AceLiveEmbeddedEngine(
         private suspend fun driveSession() {
             while (currentCoroutineContext().isActive) {
                 val now = System.currentTimeMillis()
+                if (
+                    aceLiveStartupHasNoConnectedPeerTooLong(
+                        startupComplete = startup.isCompleted,
+                        anyTransportConnected = connectedAtLeastOnce.get(),
+                        elapsedMillis = startupElapsedMillis(now),
+                        timeoutMillis = NO_CONNECTED_PEER_TIMEOUT_MILLIS
+                    )
+                ) {
+                    error(
+                        "Ace Live did not connect to any peer within " +
+                            "$NO_CONNECTED_PEER_TIMEOUT_MILLIS ms"
+                    )
+                }
                 val stallTimeoutMillis = startupBufferPolicy.mediaStallTimeoutMillis()
                 if (
                     aceLiveMediaIsStalled(
@@ -404,11 +418,14 @@ class AceLiveEmbeddedEngine(
             if (closed.get()) return
             if (event !is AceLiveTcpPoolEvent.Ingress) {
                 when (event) {
-                    is AceLiveTcpPoolEvent.TransportConnected -> Log.i(
-                        LOG_TAG,
-                        "event=peer_connected peer=${event.peerId} reconnect=${event.reconnectAttempt} " +
-                            "elapsed_ms=${startupElapsedMillis()}"
-                    )
+                    is AceLiveTcpPoolEvent.TransportConnected -> {
+                        connectedAtLeastOnce.set(true)
+                        Log.i(
+                            LOG_TAG,
+                            "event=peer_connected peer=${event.peerId} reconnect=${event.reconnectAttempt} " +
+                                "elapsed_ms=${startupElapsedMillis()}"
+                        )
+                    }
                     is AceLiveTcpPoolEvent.HandshakeAccepted -> Log.i(
                         LOG_TAG,
                         "event=peer_ready peer=${event.peerId} elapsed_ms=${startupElapsedMillis()}"
@@ -537,6 +554,7 @@ class AceLiveEmbeddedEngine(
         const val DEFAULT_DIRECT_PIECE_BYTES = 512 * 1024
         const val DEFAULT_DIRECT_CHUNK_BYTES = 16 * 1024
         const val DIRECT_STARTUP_SOFT_TIMEOUT_MILLIS = 8_000L
+        const val NO_CONNECTED_PEER_TIMEOUT_MILLIS = 30_000L
         const val TARGET_ACTIVE_PEERS = 6
         const val MAX_ACTIVE_PEERS = 10
         const val STALE_PROBE_PEERS = 2
