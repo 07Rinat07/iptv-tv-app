@@ -67,7 +67,7 @@ class AceLivePeerDiscoveryFastPathTest {
         assertEquals(AceLivePeerDiscoverySourceStatus.SUCCEEDED, result.tracker.status)
         assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
         assertEquals(
-            AceLiveStartupDhtRefillPlan.FIRST_DHT_PEER_THEN_EXPAND,
+            AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND,
             aceLiveStartupDhtRefillPlan(result)
         )
     }
@@ -94,7 +94,7 @@ class AceLivePeerDiscoveryFastPathTest {
 
         assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
         assertEquals(
-            AceLiveStartupDhtRefillPlan.FULL_DHT_EXPANSION,
+            AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND,
             aceLiveStartupDhtRefillPlan(result)
         )
     }
@@ -123,11 +123,12 @@ class AceLivePeerDiscoveryFastPathTest {
     }
 
     @Test
-    fun `first startup dht peer is expanded but empty or useful batches are not duplicated`() {
-        assertFalse(aceLiveStartupFirstDhtResultNeedsFullExpansion(returnedPeerCount = 0))
-        assertTrue(aceLiveStartupFirstDhtResultNeedsFullExpansion(returnedPeerCount = 1))
-        assertTrue(aceLiveStartupFirstDhtResultNeedsFullExpansion(returnedPeerCount = 3))
-        assertFalse(aceLiveStartupFirstDhtResultNeedsFullExpansion(returnedPeerCount = 4))
+    fun `startup dht probe runs exactly two bounded rounds`() {
+        assertFalse(aceLiveStartupDhtProbeShouldContinue(completedRounds = 0))
+        assertTrue(aceLiveStartupDhtProbeShouldContinue(completedRounds = 1))
+        assertFalse(aceLiveStartupDhtProbeShouldContinue(completedRounds = 2))
+        assertEquals(4, ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS)
+        assertEquals(7_000L, ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS)
     }
 
     @Test

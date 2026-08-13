@@ -272,9 +272,10 @@ class AceLiveEmbeddedEngine(
         private val startupStartedAtMillis = AtomicLong(0L)
         private val firstPeerStartAtMillis = AtomicLong(0L)
         private val initialPeerDiscovery = AtomicBoolean(true)
-        private val startupDhtFirstPeerRefillPending = AtomicBoolean(false)
+        private val startupDhtProbeRefillPending = AtomicBoolean(false)
         private val startupDhtFullExpansionPending = AtomicBoolean(false)
-        private val lastStartupFirstDhtPeerCount = AtomicInteger(0)
+        private val startupDhtProbeRounds = AtomicInteger(0)
+        private val lastStartupDhtProbePeerCount = AtomicInteger(0)
         private val lastMediaAppendAt = AtomicLong(0L)
         private val lastProgressLogAt = AtomicLong(0L)
         private val lastWindowLogAt = AtomicLong(0L)
@@ -341,46 +342,43 @@ class AceLiveEmbeddedEngine(
                     }
                     runAceLiveSessionWithBackgroundPeerRefill(
                         backgroundRefill = {
-                            if (startupDhtFirstPeerRefillPending.get()) {
-                                // A tracker result is only an endpoint candidate, not proof that the
-                                // peer can publish this live swarm. The first DHT peer must enter the
-                                // pool as soon as it is found; otherwise a useful peer discovered near
-                                // the beginning of the walk remains hidden until the full 15-second
-                                // traversal completes.
-                                val firstDhtRefill = refillLoop.runOneCycle()
-                                val returnedDhtPeers = lastStartupFirstDhtPeerCount.get()
-                                startupDhtFullExpansionPending.set(
-                                    aceLiveStartupFirstDhtResultNeedsFullExpansion(
-                                        returnedPeerCount = returnedDhtPeers
-                                    )
+                            while (
+                                startupDhtProbeRefillPending.get() &&
+                                !startup.isCompleted
+                            ) {
+                                // One DHT endpoint frequently accepts no useful live session. A
+                                // bounded four-candidate batch gives the TCP pool several chances in
+                                // a few seconds, while two independent rounds reduce dependence on a
+                                // single routing-table path. Neither walk blocks scheduling or media
+                                // ingestion from candidates already in the pool.
+                                val probeRefill = refillLoop.runOneCycle()
+                                val completedRounds = startupDhtProbeRounds.get()
+                                val returnedDhtPeers = lastStartupDhtProbePeerCount.get()
+                                startupDhtProbeRefillPending.set(
+                                    aceLiveStartupDhtProbeShouldContinue(completedRounds)
                                 )
-                                if (
-                                    returnedDhtPeers == 0 &&
-                                    !connectedAtLeastOnce.get()
-                                ) {
-                                    // The bounded first-peer walk already exhausted its budget. Keep
-                                    // the existing no-connected-peer timing while the regular loop is
-                                    // free to make an independent uncached retry.
-                                    firstPeerStartAtMillis.set(System.currentTimeMillis())
-                                }
                                 Log.i(
                                     LOG_TAG,
-                                    "event=startup_dht_first_peer " +
+                                    "event=startup_dht_probe " +
+                                        "round=$completedRounds " +
                                         "returned_peers=$returnedDhtPeers " +
-                                        "started_peers=${firstDhtRefill.startedPeers}"
+                                        "started_peers=${probeRefill.startedPeers}"
                                 )
+                                // Discovery can be skipped if enough candidates became active while
+                                // this coroutine was scheduled. Do not spin on an unconsumed flag.
+                                if (!probeRefill.discoveryAttempted) break
+                            }
+                            if (
+                                startupDhtProbeRounds.get() > 0 &&
+                                !startup.isCompleted
+                            ) {
+                                startupDhtFullExpansionPending.set(true)
                             }
                             if (startupDhtFullExpansionPending.get()) {
                                 // Once the first DHT candidate is being probed concurrently by the
                                 // session, collect the wider candidate set for resiliency and stale-
                                 // peer recovery. This second pass remains off the critical path.
                                 val expandedRefill = refillLoop.runOneCycle()
-                                if (!connectedAtLeastOnce.get()) {
-                                    // The no-connected-peer budget still belongs to the expanded peer
-                                    // set. Rearm it after DHT completes without blocking scheduling and
-                                    // media ingestion from the original tracker fast-path peer.
-                                    firstPeerStartAtMillis.set(System.currentTimeMillis())
-                                }
                                 Log.i(
                                     LOG_TAG,
                                     "event=startup_dht_expansion " +
@@ -425,10 +423,10 @@ class AceLiveEmbeddedEngine(
                 announcePort = announceLease.port
             )
             val isInitialDiscovery = initialPeerDiscovery.compareAndSet(true, false)
-            val useStartupDhtFirstPeerRefill = !isInitialDiscovery &&
-                startupDhtFirstPeerRefillPending.compareAndSet(true, false)
+            val useStartupDhtProbeRefill = !isInitialDiscovery &&
+                startupDhtProbeRefillPending.compareAndSet(true, false)
             val useStartupDhtFullExpansion = !isInitialDiscovery &&
-                !useStartupDhtFirstPeerRefill &&
+                !useStartupDhtProbeRefill &&
                 startupDhtFullExpansionPending.compareAndSet(true, false)
             val discoveryPolicy = if (isInitialDiscovery) {
                 AceLivePeerDiscoveryOrchestrationPolicy(trackerFastPathMinPeers = 1)
@@ -442,13 +440,14 @@ class AceLiveEmbeddedEngine(
                     ),
                     reuseRecentResults = true
                 )
-                useStartupDhtFirstPeerRefill -> AceLiveDhtDiscovery(
+                useStartupDhtProbeRefill -> AceLiveDhtDiscovery(
                     policy = AceLiveDhtPolicy(
-                        returnAfterPeers = ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS
+                        discoveryBudgetMillis = ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS,
+                        returnAfterPeers = ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS
                     ),
-                    // The concurrent metadata resolver may already have found the first peer for
-                    // this swarm. Reusing that positive result releases the DHT gate immediately.
-                    reuseRecentResults = true
+                    // A cached one-peer fast-path result must not satisfy a four-peer probe batch.
+                    // An uncached round also explores a fresh randomized routing-table path.
+                    reuseRecentResults = false
                 )
                 useStartupDhtFullExpansion -> AceLiveDhtDiscovery(
                     // The initial result was intentionally short. A full startup expansion must not
@@ -464,32 +463,34 @@ class AceLiveEmbeddedEngine(
                 AceLivePeerDiscoveryOrchestrationRequest(
                     dhtRequest = dhtRequest,
                     trackerRequest = trackerRequest.takeUnless {
-                        useStartupDhtFirstPeerRefill || useStartupDhtFullExpansion
+                        useStartupDhtProbeRefill || useStartupDhtFullExpansion
                     }
                 )
             )
             if (isInitialDiscovery) {
                 when (aceLiveStartupDhtRefillPlan(result)) {
                     AceLiveStartupDhtRefillPlan.NONE -> Unit
-                    AceLiveStartupDhtRefillPlan.FIRST_DHT_PEER_THEN_EXPAND ->
-                        startupDhtFirstPeerRefillPending.set(true)
-                    AceLiveStartupDhtRefillPlan.FULL_DHT_EXPANSION ->
-                        startupDhtFullExpansionPending.set(true)
+                    AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND ->
+                        startupDhtProbeRefillPending.set(true)
                 }
             }
-            if (useStartupDhtFirstPeerRefill) {
-                lastStartupFirstDhtPeerCount.set(result.dht.returnedPeerCount)
+            val probeRound = if (useStartupDhtProbeRefill) {
+                lastStartupDhtProbePeerCount.set(result.dht.returnedPeerCount)
+                startupDhtProbeRounds.incrementAndGet()
+            } else {
+                0
             }
-            if (isInitialDiscovery || useStartupDhtFirstPeerRefill || useStartupDhtFullExpansion) {
+            if (isInitialDiscovery || useStartupDhtProbeRefill || useStartupDhtFullExpansion) {
                 val phase = when {
                     isInitialDiscovery -> "initial"
-                    useStartupDhtFirstPeerRefill -> "startup_dht_first_peer"
+                    useStartupDhtProbeRefill -> "startup_dht_probe"
                     else -> "startup_dht_expansion"
                 }
                 runCatching {
                     diagnosticsObserver(
                         "embedded_ace_live_peer_discovery",
                         "phase=$phase, " +
+                            (if (probeRound > 0) "round=$probeRound, " else "") +
                             "elapsedMs=${System.currentTimeMillis() - discoveryStartedAtMillis}, " +
                             "peers=${result.peers.size}, " +
                             "tracker=${result.tracker.status}/${result.tracker.returnedPeerCount}, " +

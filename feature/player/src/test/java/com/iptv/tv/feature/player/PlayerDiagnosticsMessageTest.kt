@@ -16,6 +16,15 @@ class PlayerDiagnosticsMessageTest {
             epgErrorSignature(playlistId = 1L, channelId = 10L, message = message),
             epgErrorSignature(playlistId = 1L, channelId = 99L, message = message)
         )
+        assertEquals(15L * 60_000L, epgSourceRetryBackoffMillis(message))
+    }
+
+    @Test
+    fun `ordinary EPG errors remain immediately retryable`() {
+        assertEquals(
+            0L,
+            epgSourceRetryBackoffMillis("Unable to load EPG: temporary HTTP 503")
+        )
     }
 
     @Test

@@ -39,6 +39,19 @@ internal fun epgErrorSignature(
     return "epg_other|$normalizedPlaylistId|$compact"
 }
 
+/** Playlist-wide failures that should not be downloaded again on every channel selection. */
+internal fun epgSourceRetryBackoffMillis(message: String): Long {
+    val lowered = message.lowercase()
+    return if (
+        lowered.contains("epg input exceeds") &&
+        lowered.contains("safety limit")
+    ) {
+        15L * 60_000L
+    } else {
+        0L
+    }
+}
+
 private fun extractDiagnosticHostOrIp(message: String): String? {
     val ip = Regex("""\b\d{1,3}(?:\.\d{1,3}){3}\b""").find(message)?.value
     if (!ip.isNullOrBlank()) return ip

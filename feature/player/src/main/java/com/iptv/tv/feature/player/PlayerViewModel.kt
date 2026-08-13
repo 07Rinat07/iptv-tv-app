@@ -261,6 +261,8 @@ class PlayerViewModel @Inject constructor(
     private var lastEpgRequestedChannelId: Long? = null
     private val epgErrorLoggedAtMs = mutableMapOf<String, Long>()
     private val epgUiErrorShownAtMs = mutableMapOf<String, Long>()
+    private val epgSourceBlockedUntilMs = mutableMapOf<Long, Long>()
+    private val epgSourceBlockedMessage = mutableMapOf<Long, String>()
     private val missingEpgByPlaylistLoggedAtMs = mutableMapOf<Long, Long>()
     private var internalStartElapsedMs: Long = 0L
     private val vlcLauncher = ExternalVlcLauncher()
@@ -1674,6 +1676,20 @@ class PlayerViewModel @Inject constructor(
         epgJob?.cancel()
         epgJob = viewModelScope.launch {
             delay(EPG_CHANNEL_SELECTION_DEBOUNCE_MS)
+            val blockedUntil = playlistId?.let { epgSourceBlockedUntilMs[it] } ?: 0L
+            if (blockedUntil > System.currentTimeMillis()) {
+                val cachedMessage = playlistId
+                    ?.let { epgSourceBlockedMessage[it] }
+                    .orEmpty()
+                    .ifBlank { "источник временно отключён после ошибки" }
+                _uiState.update {
+                    it.copy(
+                        channelEpgInfo = null,
+                        epgStatus = "EPG: $cachedMessage (повтор позже)"
+                    )
+                }
+                return@launch
+            }
             _uiState.update { it.copy(channelEpgInfo = null, epgStatus = "EPG: загрузка...") }
             when (val result = playlistRepository.getChannelEpgNowNext(channelId)) {
                 is AppResult.Success -> {
@@ -1692,6 +1708,12 @@ class PlayerViewModel @Inject constructor(
                 }
                 is AppResult.Error -> {
                     val message = result.message
+                    val sourceBackoffMillis = epgSourceRetryBackoffMillis(message)
+                    if (playlistId != null && sourceBackoffMillis > 0L) {
+                        epgSourceBlockedUntilMs[playlistId] =
+                            System.currentTimeMillis() + sourceBackoffMillis
+                        epgSourceBlockedMessage[playlistId] = message
+                    }
                     val signature = epgErrorSignature(
                         playlistId = playlistId,
                         channelId = channelId,

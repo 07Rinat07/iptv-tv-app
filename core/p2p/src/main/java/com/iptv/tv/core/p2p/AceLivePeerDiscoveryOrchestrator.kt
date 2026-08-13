@@ -87,8 +87,7 @@ data class AceLivePeerDiscoveryOrchestrationResult(
 /** Startup-only DHT work required after the deliberately permissive initial discovery. */
 internal enum class AceLiveStartupDhtRefillPlan {
     NONE,
-    FIRST_DHT_PEER_THEN_EXPAND,
-    FULL_DHT_EXPANSION
+    PROBE_BATCHES_THEN_EXPAND
 }
 
 /**
@@ -96,9 +95,9 @@ internal enum class AceLiveStartupDhtRefillPlan {
  *
  * A one-to-three-peer tracker result satisfies the startup threshold of one, so the first TCP
  * attempt can begin without waiting for DHT. It is still weaker than the normal refill threshold of
- * four. A tracker-only result first needs one DHT peer delivered to the pool and then a full
- * expansion. If initial discovery already returned a DHT peer, only the full expansion remains.
- * Re-running the tracker or waiting to deliver every DHT candidate would recreate the startup gate.
+ * four. A weak startup result therefore schedules short DHT probe batches before the full
+ * background expansion. The batches return as soon as four candidates are available and give the
+ * TCP pool several independent endpoints without recreating the old 15-second startup gate.
  */
 internal fun aceLiveStartupNeedsImmediateDhtOnlyRefill(
     result: AceLivePeerDiscoveryOrchestrationResult,
@@ -125,30 +124,27 @@ internal fun aceLiveStartupDhtRefillPlan(
         result.dht.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
         result.dht.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
     return when {
-        // The runtime log can show a tracker response in a few hundred milliseconds while that
-        // endpoint never establishes a useful session. Feed the first DHT peer to the pool before
-        // waiting for a complete expansion walk.
-        weakTrackerFastPath -> AceLiveStartupDhtRefillPlan.FIRST_DHT_PEER_THEN_EXPAND
-        // Initial discovery already returned a DHT peer, so repeating the first-peer pass would add
-        // no value. Continue directly with the uncached full expansion in the background.
-        weakDhtFastPath -> AceLiveStartupDhtRefillPlan.FULL_DHT_EXPANSION
+        // A single tracker or DHT endpoint is only a candidate, not proof that it publishes this
+        // swarm. Probe several endpoints in small batches before the full DHT traversal.
+        weakTrackerFastPath || weakDhtFastPath ->
+            AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND
         else -> AceLiveStartupDhtRefillPlan.NONE
     }
 }
 
-internal fun aceLiveStartupFirstDhtResultNeedsFullExpansion(
-    returnedPeerCount: Int,
-    normalTrackerFastPathMinPeers: Int =
-        AceLivePeerDiscoveryOrchestrationPolicy().trackerFastPathMinPeers
+internal fun aceLiveStartupDhtProbeShouldContinue(
+    completedRounds: Int,
+    maxRounds: Int = ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS
 ): Boolean {
-    require(returnedPeerCount >= 0) { "returnedPeerCount must be non-negative" }
-    require(normalTrackerFastPathMinPeers > 0) {
-        "normalTrackerFastPathMinPeers must be positive"
-    }
-    return returnedPeerCount in 1 until normalTrackerFastPathMinPeers
+    require(completedRounds >= 0) { "completedRounds must be non-negative" }
+    require(maxRounds > 0) { "maxRounds must be positive" }
+    return completedRounds in 1 until maxRounds
 }
 
 internal const val ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS = 1
+internal const val ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS = 4
+internal const val ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS = 7_000L
+internal const val ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS = 2
 
 internal const val ACE_LIVE_DHT_MIN_HEAP_HEADROOM_BYTES: Long = 32L * 1024L * 1024L
 
