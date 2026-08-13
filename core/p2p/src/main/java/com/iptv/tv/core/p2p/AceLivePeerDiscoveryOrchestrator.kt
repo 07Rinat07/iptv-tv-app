@@ -84,21 +84,36 @@ data class AceLivePeerDiscoveryOrchestrationResult(
     fun tcpEndpoints(): List<AceLiveTcpPeerEndpoint> = peers.map(AceLiveDiscoveredPeer::endpoint)
 }
 
+/** Startup-only DHT work required after the deliberately permissive initial discovery. */
+internal enum class AceLiveStartupDhtRefillPlan {
+    NONE,
+    FIRST_DHT_PEER_THEN_EXPAND,
+    FULL_DHT_EXPANSION
+}
+
 /**
- * Detects a deliberately small startup result that still needs a full DHT-only refill.
+ * Classifies the DHT-only work required after a deliberately small startup result.
  *
  * A one-to-three-peer tracker result satisfies the startup threshold of one, so the first TCP
  * attempt can begin without waiting for DHT. It is still weaker than the normal refill threshold of
- * four. Initial DHT discovery follows the same rule: it may return the first usable peer immediately
- * instead of holding startup behind the complete 15-second iterative walk. Re-running the tracker or
- * reusing that deliberately short DHT result would defeat the expansion, so the next refill must go
- * directly through a fresh full DHT walk once.
+ * four. A tracker-only result first needs one DHT peer delivered to the pool and then a full
+ * expansion. If initial discovery already returned a DHT peer, only the full expansion remains.
+ * Re-running the tracker or waiting to deliver every DHT candidate would recreate the startup gate.
  */
 internal fun aceLiveStartupNeedsImmediateDhtOnlyRefill(
     result: AceLivePeerDiscoveryOrchestrationResult,
     normalTrackerFastPathMinPeers: Int =
         AceLivePeerDiscoveryOrchestrationPolicy().trackerFastPathMinPeers
 ): Boolean {
+    return aceLiveStartupDhtRefillPlan(result, normalTrackerFastPathMinPeers) !=
+        AceLiveStartupDhtRefillPlan.NONE
+}
+
+internal fun aceLiveStartupDhtRefillPlan(
+    result: AceLivePeerDiscoveryOrchestrationResult,
+    normalTrackerFastPathMinPeers: Int =
+        AceLivePeerDiscoveryOrchestrationPolicy().trackerFastPathMinPeers
+): AceLiveStartupDhtRefillPlan {
     require(normalTrackerFastPathMinPeers > 0) {
         "normalTrackerFastPathMinPeers must be positive"
     }
@@ -109,7 +124,28 @@ internal fun aceLiveStartupNeedsImmediateDhtOnlyRefill(
     val weakDhtFastPath =
         result.dht.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
         result.dht.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
-    return weakTrackerFastPath || weakDhtFastPath
+    return when {
+        // The runtime log can show a tracker response in a few hundred milliseconds while that
+        // endpoint never establishes a useful session. Feed the first DHT peer to the pool before
+        // waiting for a complete expansion walk.
+        weakTrackerFastPath -> AceLiveStartupDhtRefillPlan.FIRST_DHT_PEER_THEN_EXPAND
+        // Initial discovery already returned a DHT peer, so repeating the first-peer pass would add
+        // no value. Continue directly with the uncached full expansion in the background.
+        weakDhtFastPath -> AceLiveStartupDhtRefillPlan.FULL_DHT_EXPANSION
+        else -> AceLiveStartupDhtRefillPlan.NONE
+    }
+}
+
+internal fun aceLiveStartupFirstDhtResultNeedsFullExpansion(
+    returnedPeerCount: Int,
+    normalTrackerFastPathMinPeers: Int =
+        AceLivePeerDiscoveryOrchestrationPolicy().trackerFastPathMinPeers
+): Boolean {
+    require(returnedPeerCount >= 0) { "returnedPeerCount must be non-negative" }
+    require(normalTrackerFastPathMinPeers > 0) {
+        "normalTrackerFastPathMinPeers must be positive"
+    }
+    return returnedPeerCount in 1 until normalTrackerFastPathMinPeers
 }
 
 internal const val ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS = 1

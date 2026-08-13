@@ -66,6 +66,10 @@ class AceLivePeerDiscoveryFastPathTest {
         assertEquals(AceLivePeerDiscoverySourceStatus.NOT_REQUESTED, result.dht.status)
         assertEquals(AceLivePeerDiscoverySourceStatus.SUCCEEDED, result.tracker.status)
         assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+        assertEquals(
+            AceLiveStartupDhtRefillPlan.FIRST_DHT_PEER_THEN_EXPAND,
+            aceLiveStartupDhtRefillPlan(result)
+        )
     }
 
     @Test
@@ -89,6 +93,10 @@ class AceLivePeerDiscoveryFastPathTest {
         )
 
         assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+        assertEquals(
+            AceLiveStartupDhtRefillPlan.FULL_DHT_EXPANSION,
+            aceLiveStartupDhtRefillPlan(result)
+        )
     }
 
     @Test
@@ -111,6 +119,15 @@ class AceLivePeerDiscoveryFastPathTest {
         )
 
         assertFalse(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+        assertEquals(AceLiveStartupDhtRefillPlan.NONE, aceLiveStartupDhtRefillPlan(result))
+    }
+
+    @Test
+    fun `first startup dht peer is expanded but empty or useful batches are not duplicated`() {
+        assertFalse(aceLiveStartupFirstDhtResultNeedsFullExpansion(returnedPeerCount = 0))
+        assertTrue(aceLiveStartupFirstDhtResultNeedsFullExpansion(returnedPeerCount = 1))
+        assertTrue(aceLiveStartupFirstDhtResultNeedsFullExpansion(returnedPeerCount = 3))
+        assertFalse(aceLiveStartupFirstDhtResultNeedsFullExpansion(returnedPeerCount = 4))
     }
 
     @Test
