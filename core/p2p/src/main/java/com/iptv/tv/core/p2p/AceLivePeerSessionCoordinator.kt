@@ -79,6 +79,7 @@ class AceLivePeerSessionCoordinator(
     private val activePeers: AceLiveActivePeerCoordinator
     private val reassembler: AceLivePieceReassembler
     private var initializedFromLiveWindow: Boolean = false
+    private var emittedAnyPiece: Boolean = false
 
     init {
         require(requestedMaxAheadPieces > 0) { "requestedMaxAheadPieces must be positive" }
@@ -193,8 +194,11 @@ class AceLivePeerSessionCoordinator(
     fun nextNeededPiece(): Long? = reassembler.nextNeededPiece()
 
     /**
-     * Selects the initial cursor from the first verified peer window. Subsequent peers reuse the
-     * existing contiguous cursor, so reconnects cannot replay an older live segment.
+     * Selects the initial cursor from the first verified peer window. During startup, a later
+     * verified window may move that cursor forward only when the old cursor has definitely fallen
+     * below the advertised live floor and no payload is buffered or has been emitted yet. This
+     * prevents a stale first peer window from pinning startup to already-evicted pieces while keeping
+     * established output and ordinary reconnects monotonic.
      */
     fun initializeFromLiveWindow(
         window: AceLivePeerAdvertisedWindow,
@@ -202,15 +206,26 @@ class AceLivePeerSessionCoordinator(
         nowMillis: Long
     ): Long {
         require(prefetchPieces >= 0) { "prefetchPieces must be non-negative" }
+        val head = (window.position ?: window.maxPiece).coerceIn(window.minPiece, window.maxPiece)
+        val start = head.saturatingSubtract(prefetchPieces).coerceAtLeast(window.minPiece)
+
         if (initializedFromLiveWindow) {
-            return reassembler.nextNeededPiece()
+            val current = reassembler.nextNeededPiece()
                 ?: error("Ace Live session is exhausted at the u32 piece boundary")
+            val canRebaseStartup = current < window.minPiece &&
+                !emittedAnyPiece &&
+                reassembler.bufferedPieceCount() == 0
+            if (!canRebaseStartup) return current
+
+            val emitted = reassembler.skipTo(start)
+            check(emitted.isEmpty()) { "Ace Live startup rebase unexpectedly emitted buffered pieces" }
+            activePeers.onCursorAdvanced(start, nowMillis)
+            return start
         }
+
         check(activePeers.trackedPieceCount() == 0) {
             "Ace Live initial cursor cannot change after scheduling starts"
         }
-        val head = (window.position ?: window.maxPiece).coerceIn(window.minPiece, window.maxPiece)
-        val start = head.saturatingSubtract(prefetchPieces).coerceAtLeast(window.minPiece)
         reassembler.initializeAt(start)
         activePeers.onCursorAdvanced(start, nowMillis)
         initializedFromLiveWindow = true
@@ -288,6 +303,7 @@ class AceLivePeerSessionCoordinator(
             "Reassembly changed after successful preflight: ${reassembly.disposition}"
         }
         if (reassembly.emittedPieces.isNotEmpty()) {
+            emittedAnyPiece = true
             synchronizeContiguousCursor(nowMillis)
         }
 
