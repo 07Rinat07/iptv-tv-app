@@ -25,8 +25,22 @@ class HomeStartupPolicyTest {
         assertNull(
             findImportedReadyPlaylist(
                 playlists = listOf(playlist(id = 1L, source = "https://example.org/one.m3u")),
-                sourceUrl = "https://example.org/missing.m3u"
+                sourceKey = "https://example.org/missing.m3u"
             )
+        )
+    }
+
+    @Test
+    fun embeddedReadyPlaylistUsesDedicatedSourceKey() {
+        val externalUrl = "https://iptv.org.ua/iptv/provayder.m3u"
+        val playlists = listOf(
+            playlist(id = 1L, source = externalUrl),
+            playlist(id = 2L, source = ACE_STREAM_TORRENT_SOURCE_KEY)
+        )
+
+        assertEquals(
+            2L,
+            findImportedReadyPlaylist(playlists, ACE_STREAM_TORRENT_SOURCE_KEY)?.id
         )
     }
 

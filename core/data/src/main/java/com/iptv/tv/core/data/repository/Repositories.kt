@@ -486,6 +486,21 @@ class PlaylistRepositoryImpl @Inject constructor(
         )
     }
 
+    override suspend fun importReadyPlaylistText(
+        text: String,
+        name: String,
+        sourceKey: String
+    ): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
+        if (sourceKey.isBlank()) return@withContext AppResult.Error("Ready playlist source key is empty")
+        importParsedPlaylist(
+            playlistName = name,
+            rawPlaylist = text,
+            sourceType = PlaylistSourceType.TEXT,
+            source = sourceKey,
+            catalogOrigin = CatalogOriginKind.READY_CATALOG
+        )
+    }
+
     override suspend fun importFromFile(pathOrUri: String, name: String): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
         if (pathOrUri.isBlank()) return@withContext AppResult.Error("File path/uri is empty")
         val raw = runCatching { readPlaylistContent(pathOrUri) }.getOrElse {

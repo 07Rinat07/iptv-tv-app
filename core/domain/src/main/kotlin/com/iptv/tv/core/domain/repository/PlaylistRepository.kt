@@ -48,6 +48,11 @@ interface PlaylistRepository {
         name: String
     ): AppResult<PlaylistImportReport>
     suspend fun importFromText(text: String, name: String): AppResult<PlaylistImportReport>
+    suspend fun importReadyPlaylistText(
+        text: String,
+        name: String,
+        sourceKey: String
+    ): AppResult<PlaylistImportReport> = importFromText(text, name)
     suspend fun importFromFile(pathOrUri: String, name: String): AppResult<PlaylistImportReport>
     suspend fun validatePlaylist(playlistId: Long): AppResult<PlaylistValidationReport>
     suspend fun refreshPlaylist(playlistId: Long): AppResult<Unit>
