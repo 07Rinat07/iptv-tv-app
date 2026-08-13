@@ -13,6 +13,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -40,6 +41,19 @@ internal fun aceLiveMediaIsStalled(
     return startupComplete &&
         lastMediaAtMillis > 0L &&
         nowMillis - lastMediaAtMillis >= timeoutMillis
+}
+
+/** Keeps live scheduling active while a slow peer-discovery refill continues in the background. */
+internal suspend fun runAceLiveSessionWithBackgroundPeerRefill(
+    backgroundRefill: suspend () -> Unit,
+    driveSession: suspend () -> Unit
+) = coroutineScope {
+    val refillJob = launch { backgroundRefill() }
+    try {
+        driveSession()
+    } finally {
+        refillJob.cancel()
+    }
 }
 
 /** End-to-end autonomous playback for public Ace Live content IDs. */
@@ -315,27 +329,31 @@ class AceLiveEmbeddedEngine(
                     if (initialRefill.startedPeers == 0) {
                         error("Ace Live peer discovery returned no reachable candidates")
                     }
-                    if (immediateStartupDhtOnlyRefill.get()) {
-                        val expandedRefill = refillLoop.runOneCycle()
-                        if (!connectedAtLeastOnce.get()) {
-                            // The single-tracker fast path deliberately starts probing before DHT.
-                            // Rearm the dead-swarm budget only after that mandatory DHT-only
-                            // expansion has completed, so DHT discovery cannot consume the time
-                            // reserved for its newly started peers to establish a TCP connection.
-                            firstPeerStartAtMillis.set(System.currentTimeMillis())
-                        }
-                        Log.i(
-                            LOG_TAG,
-                            "event=startup_dht_expansion " +
-                                "started_peers=${expandedRefill.startedPeers}"
-                        )
-                    }
-                    val refillJob = launch { refillLoop.run() }
-                    try {
-                        driveSession()
-                    } finally {
-                        refillJob.cancel()
-                    }
+                    runAceLiveSessionWithBackgroundPeerRefill(
+                        backgroundRefill = {
+                            if (immediateStartupDhtOnlyRefill.get()) {
+                                // A single tracker peer is enough to start live playback immediately.
+                                // Expand that weak candidate set through DHT in this background job:
+                                // waiting for the full bounded DHT walk here used to hold driveSession()
+                                // behind a repeatable ~15-second startup gate even when the tracker peer
+                                // was already connected and ready to publish media.
+                                val expandedRefill = refillLoop.runOneCycle()
+                                if (!connectedAtLeastOnce.get()) {
+                                    // The no-connected-peer budget still belongs to the expanded peer
+                                    // set. Rearm it after DHT completes without blocking scheduling and
+                                    // media ingestion from the original tracker fast-path peer.
+                                    firstPeerStartAtMillis.set(System.currentTimeMillis())
+                                }
+                                Log.i(
+                                    LOG_TAG,
+                                    "event=startup_dht_expansion " +
+                                        "started_peers=${expandedRefill.startedPeers}"
+                                )
+                            }
+                            refillLoop.run()
+                        },
+                        driveSession = ::driveSession
+                    )
                 } catch (error: Throwable) {
                     if (!closed.get()) {
                         Log.e(LOG_TAG, "event=runtime_failed reason=${error.javaClass.simpleName}", error)
