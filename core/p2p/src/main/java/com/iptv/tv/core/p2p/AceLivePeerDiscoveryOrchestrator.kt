@@ -128,14 +128,16 @@ internal fun aceLiveDhtHasHeapHeadroom(
  *
  * Multiple orchestrator instances may be active while content-id startup races metadata resolution.
  * Their DHT fallbacks are process-wide serialized and re-check heap headroom after acquiring the
- * gate, preventing two expensive DHT walks from racing each other on low-memory TV devices.
+ * gate, preventing two expensive DHT walks from racing each other on low-memory TV devices. Default
+ * production DHT discovery also reuses a just-completed result for the same swarm for a few seconds,
+ * so the direct and metadata paths do not immediately repeat the identical serialized network walk.
  *
  * When the tracker fast path is disabled, DHT and tracker discovery retain the original concurrent
  * supervisor behavior. Coroutine cancellation is never converted into a source failure.
  */
 class AceLivePeerDiscoveryOrchestrator(
     private val dhtDiscover: suspend (AceLiveDhtDiscoveryRequest) -> AceLiveDhtDiscoveryResult =
-        { request -> AceLiveDhtDiscovery().discover(request) },
+        { request -> AceLiveDhtDiscovery(reuseRecentResults = true).discover(request) },
     private val trackerDiscover: suspend (AceLiveUdpTrackerDiscoveryRequest) -> AceLiveUdpTrackerDiscoveryResult =
         { request -> AceLiveUdpTrackerDiscovery().discover(request) },
     private val policy: AceLivePeerDiscoveryOrchestrationPolicy =
