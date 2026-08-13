@@ -6,19 +6,19 @@
 
 ## Текущий срез — 13 августа 2026
 
-Автономный Torrent TV маршрут уже работает без внешнего Ace Engine. PR #98 добавил first-success/fast-switch стратегию Ace Live, PR #99 убрал полное пересоздание Media3/MediaCodec при обычном IPTV zapping, а PR #100 перенёс XMLTV на bounded streaming parse и закрыл известный EPG OOM в коде. Все три PR находятся в `main`; memory fix ещё требует ручного rapid-zap подтверждения на 256-MiB/аналогичном устройстве.
+Автономный Torrent TV маршрут работает без обязательного внешнего Ace Engine. PR #98 добавил first-success/fast-switch стратегию Ace Live, PR #99 убрал полное пересоздание Media3/MediaCodec при обычном IPTV zapping, а PR #100 перенёс XMLTV на bounded streaming parse и закрыл известный EPG OOM в коде.
 
-Текущий рабочий инкремент — PR #101: bounded Ace Live startup discovery и подготовка сборки для аппаратной проверки. Первый tracker peer запускается немедленно, обязательный DHT-only refill расширяет слабый fast path в фоне, а 30-секундный no-connected-peer budget переустанавливается после этого расширения. Повторная аппаратная проверка показала остаточное ожидание initial DHT при быстром последующем player handoff. Поэтому initial direct/metadata DHT теперь должен вернуть первый валидный peer сразу и продолжить полное расширение в фоне. Пустой DHT result по-прежнему не кэшируется.
+PR #101 завершает текущий bounded-startup инкремент и после зелёного exact-head CI сливается в `main`. В него вошли короткие DHT probe batches с немедленным возвратом первого валидного peer, фоновое расширение discovery, согласованный 30-секундный no-connected-peer guard, постоянная crash/lifecycle диагностика, 15-минутный backoff для oversized EPG и готовый каталог `📡 Ace Stream TV-Торрент ТВ` из 279 уникальных каналов.
 
-Actions run #461 показал отдельную CI-проблему: нестабильный публичный Torrent TV fixture остановил job до lint/unit/assemble, хотя другой provider swarm в том же smoke успешно стартовал повторно. Workflow должен сохранить внешний smoke как обязательный финальный gate, но всегда доводить детерминированные проверки и упаковку APK до конца.
+Ручные ARM-прогоны подтвердили, что встроенный Ace Live путь способен запускать реальные источники без внешнего Ace Engine и стал немного быстрее. При этом переключение всё ещё занимает примерно в 3–5 раз больше желаемого времени, отдельные источники доходят до bounded timeout, а сообщения о закрытии процесса требуют точной классификации по persistent log и ADB logcat. Поэтому это не stable release, а завершённая база для следующего узкого fast-zap/crash-hardening этапа.
 
-Поэтому текущий порядок hardening такой:
+Следующий порядок работ:
 
-1. ✅ получить полный exact-head CI PR #101: CI #464 прошёл real public-swarm smoke, lint/unit/debug/release и выпустил ARM artifacts;
-2. ⏳ проверить следующий initial-DHT fast path на ARM TV Box без внешнего Ace Engine: рабочий provider source, повторный запуск, 20 переключений и заведомо недоступный/нестабильный source;
-3. параллельно повторить rapid-zap обычного IPTV на 256-MiB/аналогичном устройстве и подтвердить, что уже слитый PR #100 устранил EPG crash;
-4. по аппаратным логам измерить startup phases, retained buffer, download/consume rate, rebuffer и stall reason;
-5. затем перейти к непрерывному buffer refill и MPEG-TS/decoder discontinuity/PAT-PMT/random-access hardening;
+1. ✅ слить PR #101 после полного exact-head CI и удалить его временную ветку;
+2. измерить на одном наборе каналов `play_request → peer_connected → first_media_byte → player_ready`, отдельно для обычного IPTV и Ace Live;
+3. отменять устаревшие discovery/metadata/player requests сразу при новом выборе канала и coalesce промежуточные rapid-zap запросы;
+4. сократить ожидание достижимых Ace Live источников без ослабления абсолютных bounds; недоступный источник должен завершаться понятной ошибкой, а не удерживать UI;
+5. классифицировать каждый выход процесса как Java crash, native crash, ANR или system kill и устранить подтверждённую причину;
 6. после короткой матрицы выполнить слабую сеть, двухчасовой и восьмичасовой release gate.
 
 Актуальные доказательства и критерии находятся в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md). Подробный разбор новых OOM-журналов и точный scope текущего PR сохранены в [`testing/playback-log-analysis-2026-08-12.md`](testing/playback-log-analysis-2026-08-12.md). Исторический P2P-разбор 11 августа остаётся в [`testing/playback-log-analysis-2026-08-11.md`](testing/playback-log-analysis-2026-08-11.md).
@@ -39,6 +39,7 @@ Actions run #461 показал отдельную CI-проблему: нест
 - PR #98: direct Ace Live startup и metadata resolution выполняются конкурентно с first-success semantics; отмена проигравших путей и regression coverage прошли real Torrent TV smoke без внешнего Ace Engine;
 - PR #99: Media3/MediaCodec stack переиспользуется при zapping обычных IPTV-каналов вместо полного `release()/rebuild` на каждый session change;
 - PR #100: XMLTV читается bounded streaming parser, тяжёлые EPG loads сериализованы, а malformed/low-memory failures имеют ограниченный negative-cache/fail-safe;
+- PR #101: bounded Ace Live discovery согласован с no-connected-peer guard, первый DHT peer возвращается без ожидания полного обхода, диагностика переживает перезапуск процесса, oversized EPG получает длительный backoff, а готовый Torrent TV каталог содержит 279 уникальных Ace Stream каналов;
 - TV-интерфейс, пульт, мышь, тачпад и полноэкранный режим;
 - группы, подгруппы, восстановление фокуса и постраничная прокрутка в основных разделах;
 - Editor использует общий `TvScrollableLazyColumn`: TV-кнопки начала/Page Up/Page Down, PageUp/PageDown и ChannelUp/ChannelDown, mouse wheel/touchpad и scrollbar без изменения операций редактирования;
@@ -55,7 +56,7 @@ Actions run #461 показал отдельную CI-проблему: нест
 
 0. **Issue #40 — regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
 1. **Playback safety acceptance — EPG OOM.** Код PR #100 слит: streaming XMLTV, bounded memory/cache, negative-cache, serialized load и low-memory fail-safe. Осталось ручное подтверждение, что повреждённый/огромный EPG отключает только программу, а не playback process.
-2. **Master #44 — playback/P2P hardening.** Завершить PR #101, проверить bounded startup на ARM, затем обеспечить измеримую непрерывную подкачку, улучшить peer/stall recovery и пройти приёмку без внешнего Ace Engine.
+2. **Master #44 — playback/P2P hardening.** PR #101 слит как bounded-startup baseline. Следующий узкий инкремент — измерить и сократить fast-zap latency, исключить stale requests, классифицировать закрытия процесса, затем улучшить непрерывную подкачку и peer/stall recovery.
 3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** После стабилизации критического playback path продолжить identity, navigation skeleton, dedup/source variants и единое избранное.
 4. **Issue #47 — EPG / Now-Next / real archive.** Полноценный ingestion/cache/matching/catch-up redesign строить поверх стабильной channel identity из #45; текущий OOM hotfix не должен превращаться в полный #47 redesign.
 5. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
@@ -92,7 +93,7 @@ Actions run #461 показал отдельную CI-проблему: нест
 7. ✅ `P2pEngineRouter` оставляет embedded backend основным; Torrent TV `content_id` и live infohash не падают автоматически во внешний Ace Engine.
 8. ✅ Отдельная модель Ace Live не смешивает `content_id`, live infohash и BitTorrent BTIH.
 9. ✅ PR #98 сократил serial startup wait: direct swarm и metadata resolution теперь гоняются first-success, проигравшие операции отменяются; regression тест и real Torrent TV smoke прошли перед merge.
-10. ⏳ PR #101: завершить bounded startup discovery, exact-head CI и приёмку на ARM TV Box.
+10. ✅ PR #101: bounded startup discovery, exact-head CI, ARM-логи, persistent diagnostics и готовый каталог из 279 Ace Stream каналов завершены; дальнейшее ускорение переключения вынесено в следующий инкремент.
 
 ### Детализация Ace transport / torrent-TV
 
