@@ -88,7 +88,9 @@ class AceLiveStartupCursorRebaseTest {
         AceLivePeerAdvertisedWindow(
             minPiece = min,
             maxPiece = max,
-            position = position
+            position = position,
+            distanceFromSource = null,
+            minPieceExplicit = true
         )
 
     private fun liveChunk(
