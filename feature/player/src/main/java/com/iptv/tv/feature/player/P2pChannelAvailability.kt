@@ -1,5 +1,7 @@
 package com.iptv.tv.feature.player
 
+import androidx.compose.runtime.mutableStateMapOf
+
 /**
  * User-facing availability snapshot for a Torrent TV / Ace Stream channel.
  *
@@ -20,6 +22,29 @@ enum class P2pChannelAvailabilityState {
     PLAYING,
     NO_PEERS,
     ERROR
+}
+
+/**
+ * Process-local UI cache of the last observed result for channels the user actually tried.
+ *
+ * We intentionally do not probe the whole catalog: doing so would create hundreds of concurrent
+ * tracker/DHT operations for a 279-channel Torrent TV list. Untouched channels stay UNCHECKED.
+ */
+internal object P2pChannelAvailabilityUiCache {
+    val statuses = mutableStateMapOf<Long, P2pChannelAvailability>()
+
+    fun mark(
+        channelId: Long,
+        state: P2pChannelAvailabilityState,
+        peers: Int = statuses[channelId]?.peers ?: 0,
+        speedKbps: Int = statuses[channelId]?.speedKbps ?: 0
+    ) {
+        statuses[channelId] = P2pChannelAvailability(
+            state = state,
+            peers = peers.coerceAtLeast(0),
+            speedKbps = speedKbps.coerceAtLeast(0)
+        )
+    }
 }
 
 internal fun p2pChannelAvailabilityLabel(status: P2pChannelAvailability?): String {
