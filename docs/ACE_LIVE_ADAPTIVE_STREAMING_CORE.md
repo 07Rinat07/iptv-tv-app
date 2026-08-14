@@ -59,9 +59,13 @@ P2P-specific Media3 LoadControl
 
 PR #108 завершил базовый V2 accounting и уже находится в `main`: отдельный `AceLivePeerProductionTracker` не считает найденный endpoint producing peer, хранит `connected/handshaked`, отмечает fresh media production только после contiguous reassembled media contribution и строит aggregate EWMA delivery snapshot. `AceLiveTcpConnectionPool` подключает этот tracker к реальным connect/handshake/disconnect/ingress событиям и предоставляет immutable `peerProductionSnapshot()` для scheduler/diagnostics слоя.
 
-Текущий V2b-инкремент добавляет две недостающие requestability-стадии. `windowUseful` вычисляется не по факту наличия metadata, а относительно authoritative `nextNeededPiece()`: peer полезен только если текущий cursor находится внутри его advertised live-window. `unchoked` берётся из фактического peer-wire state. Requestability пересчитывается при metadata/window update, нормальном продвижении contiguous cursor и recovery jump. Fresh media считается `producing` только пока peer одновременно `windowUseful + unchoked`; stale-window или choke исключают его из producing snapshot немедленно, не ожидая общего stall timeout.
+PR #109 завершил V2b requestability и уже находится в `main`. `windowUseful` вычисляется не по факту наличия metadata, а относительно authoritative `nextNeededPiece()`: peer полезен только если текущий cursor находится внутри его advertised live-window. `unchoked` берётся из фактического peer-wire state. Requestability пересчитывается при metadata/window update, нормальном продвижении contiguous cursor и recovery jump. Fresh media считается `producing` только пока peer одновременно `windowUseful + unchoked`; stale-window или choke исключают его из producing snapshot немедленно, не ожидая общего stall timeout. Exact-head Android CI #497 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
 
-Следующий подэтап после exact-head проверки V2b: усилить семантику media contribution до подтверждённого post-authenticated/post-output уровня и вывести structured snapshot в persistent diagnostics/UI status. После этого quality snapshot можно безопасно использовать как вход `LiveBufferController` и adaptive scheduler, не меняя startup/stall bounds.
+Текущий V2c-инкремент выводит тот же immutable quality snapshot в уже существующий persistent diagnostics path. `AceLivePeerDiagnosticsReporter` публикует structured event `embedded_ace_live_peer_quality` с полями `discovered / connected / handshaked / windowUseful / unchoked / producing / aggregate_bps / aggregate_mbps / freshest_media_age_ms`. Material stage changes публикуются сразу, а стабильное состояние обновляется не чаще одного раза в 5 секунд, поэтому 200-мс scheduler tick не превращается в поток DB-записей.
+
+Persistent path не создаётся заново: `AceLiveEmbeddedEngine.diagnosticsObserver` уже подключён в `HybridEngineRepositoryImpl` к `SyncLogDao`, а `DiagnosticsRepository` читает тот же журнал для экрана/экспорта диагностики. V2c только добавляет новый структурированный источник в существующую цепочку. Scheduler request depth, startup/no-peer/stall bounds и wire protocol этим инкрементом не меняются.
+
+Следующий подэтап после exact-head проверки V2c: усилить семантику media contribution до подтверждённого post-authenticated/post-output уровня. После этого quality snapshot можно безопасно использовать как вход `LiveBufferController` и adaptive scheduler, не меняя startup/stall bounds.
 
 ## Buffer model
 
@@ -174,11 +178,12 @@ Media-format логика не переносится внутрь peer schedule
 - [x] per-peer media freshness/rate primitive;
 - [x] aggregate producing-peer snapshot primitive;
 - [x] wire tracker to TCP lifecycle + contiguous reassembled media events (PR #108);
-- [x] include `windowUseful/unchoked` requestability state in quality snapshot (V2b branch);
-- [x] recalculate `windowUseful` against authoritative cursor after metadata, contiguous output and recovery advance (V2b branch);
-- [ ] exact-head CI + real Torrent TV smoke for V2b;
-- [ ] mark production from confirmed post-authenticated/post-output media bytes;
-- [ ] persistent structured diagnostics/UI source for real peer status.
+- [x] include `windowUseful/unchoked` requestability state in quality snapshot (PR #109);
+- [x] recalculate `windowUseful` against authoritative cursor after metadata, contiguous output and recovery advance (PR #109);
+- [x] exact-head CI + real Torrent TV smoke for V2b (Android CI #497 / PR #109);
+- [x] persistent structured peer-quality diagnostics source implemented in V2c branch;
+- [ ] exact-head CI + real Torrent TV smoke for V2c;
+- [ ] mark production from confirmed post-authenticated/post-output media bytes.
 
 ### V3 — buffer-pressure scheduler
 
