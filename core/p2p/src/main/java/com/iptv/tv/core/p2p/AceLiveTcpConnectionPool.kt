@@ -79,7 +79,7 @@ data class AceLiveTcpDispatchResult(
  * - serialize all access to the shared [AceLivePeerSessionCoordinator];
  * - route only already-scheduled request frames to the connection that currently owns them;
  * - maintain a runtime-quality snapshot that distinguishes connected/handshaked peers from peers
- *   that recently contributed contiguous reassembled live media.
+ *   whose advertised window is useful, which are unchoked, and which recently produced media.
  *
  * Non-responsibilities:
  * - tracker/DHT discovery and peer scoring;
@@ -242,8 +242,12 @@ class AceLiveTcpConnectionPool(
     suspend fun applyRecoveryAdvance(
         advance: AceLiveCursorAdvance,
         nowMillis: Long = clockMillis()
-    ): AceLiveRecoveryApplicationResult = sessionMutex.withLock {
-        session.applyRecoveryAdvance(advance, nowMillis)
+    ): AceLiveRecoveryApplicationResult {
+        val result = sessionMutex.withLock {
+            session.applyRecoveryAdvance(advance, nowMillis)
+        }
+        refreshAllPeerRequestability()
+        return result
     }
 
     suspend fun nextNeededPiece(): Long? = sessionMutex.withLock {
@@ -530,9 +534,7 @@ class AceLiveTcpConnectionPool(
         val result = sessionMutex.withLock {
             runtime.connection.consumePeerBytes(bytes, nowMillis = clockMillis())
         }
-        if (
-            result.metadataUpdates.isNotEmpty()
-        ) {
+        if (result.metadataUpdates.isNotEmpty()) {
             val window = result.metadataUpdates.last()
             val now = clockMillis()
             sessionMutex.withLock {
@@ -543,6 +545,13 @@ class AceLiveTcpConnectionPool(
                 )
             }
         }
+
+        if (result.metadataUpdates.isNotEmpty() || result.emittedPieces.isNotEmpty()) {
+            refreshAllPeerRequestability()
+        } else {
+            refreshPeerRequestability(runtime)
+        }
+
         if (
             result.decodedFrames > 0 ||
             result.metadataUpdates.isNotEmpty() ||
@@ -554,6 +563,45 @@ class AceLiveTcpConnectionPool(
             emit(AceLiveTcpPoolEvent.Ingress(runtime.peerId, result))
         }
         return !result.disconnectRecommended
+    }
+
+    private suspend fun refreshAllPeerRequestability() {
+        val runtimes = poolMutex.withLock { peers.values.toList() }
+        val states = sessionMutex.withLock {
+            val cursor = session.nextNeededPiece()
+            runtimes.map { runtime -> runtime.peerId to requestabilityFor(runtime, cursor) }
+        }
+        states.forEach { (peerId, requestability) ->
+            productionTracker.onPeerRequestability(
+                peerId = peerId,
+                windowUseful = requestability.windowUseful,
+                unchoked = requestability.unchoked
+            )
+        }
+    }
+
+    private suspend fun refreshPeerRequestability(runtime: PeerRuntime) {
+        val requestability = sessionMutex.withLock {
+            requestabilityFor(runtime, session.nextNeededPiece())
+        }
+        productionTracker.onPeerRequestability(
+            peerId = runtime.peerId,
+            windowUseful = requestability.windowUseful,
+            unchoked = requestability.unchoked
+        )
+    }
+
+    private fun requestabilityFor(
+        runtime: PeerRuntime,
+        cursor: Long?
+    ): PeerRequestability {
+        val window = runtime.connection.advertisedWindow()
+        return PeerRequestability(
+            windowUseful = cursor != null &&
+                window != null &&
+                cursor in window.minPiece..window.maxPiece,
+            unchoked = runtime.connection.isPeerUnchoked()
+        )
     }
 
     private fun emit(event: AceLiveTcpPoolEvent) {
@@ -602,6 +650,11 @@ class AceLiveTcpConnectionPool(
         @Volatile
         var writeJob: Deferred<Boolean>? = null
     }
+
+    private data class PeerRequestability(
+        val windowUseful: Boolean,
+        val unchoked: Boolean
+    )
 
     private sealed interface HandshakeStageResult {
         data object Accepted : HandshakeStageResult
