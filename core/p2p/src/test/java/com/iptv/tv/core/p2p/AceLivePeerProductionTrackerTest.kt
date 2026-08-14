@@ -128,6 +128,39 @@ class AceLivePeerProductionTrackerTest {
     }
 
     @Test
+    fun `late output from buffered piece does not resurrect disconnected peer`() {
+        val tracker = AceLivePeerProductionTracker(producingFreshnessMillis = 5_000L)
+        tracker.onTransportConnected(peerId = 9L, nowMillis = 0L)
+        tracker.onHandshakeAccepted(peerId = 9L)
+        tracker.onPeerRequestability(peerId = 9L, windowUseful = true, unchoked = true)
+        tracker.onDisconnected(peerId = 9L)
+
+        tracker.onMediaProduced(peerId = 9L, mediaBytes = 188_000L, nowMillis = 2_000L)
+        val snapshot = tracker.snapshot(nowMillis = 2_100L)
+
+        assertEquals(0, snapshot.connectedPeers)
+        assertEquals(0, snapshot.handshakedPeers)
+        assertEquals(0, snapshot.windowUsefulPeers)
+        assertEquals(0, snapshot.unchokedPeers)
+        assertEquals(0, snapshot.producingPeers)
+        assertEquals(0L, snapshot.aggregateBytesPerSecond)
+        assertNull(snapshot.freshestMediaAgeMillis)
+    }
+
+    @Test
+    fun `output evidence without lifecycle does not create a peer`() {
+        val tracker = AceLivePeerProductionTracker(producingFreshnessMillis = 5_000L)
+
+        tracker.onMediaProduced(peerId = 99L, mediaBytes = 188_000L, nowMillis = 1_000L)
+        val snapshot = tracker.snapshot(nowMillis = 1_100L)
+
+        assertEquals(0, snapshot.connectedPeers)
+        assertEquals(0, snapshot.handshakedPeers)
+        assertEquals(0, snapshot.producingPeers)
+        assertNull(snapshot.freshestMediaAgeMillis)
+    }
+
+    @Test
     fun `aggregate rate includes only fresh requestable producing peers`() {
         val tracker = AceLivePeerProductionTracker(
             producingFreshnessMillis = 2_500L,
