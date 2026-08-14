@@ -44,12 +44,12 @@ internal data class AceLiveBufferPressureSettings(
         require(durationHysteresisMillis >= 0L) {
             "durationHysteresisMillis must be non-negative"
         }
-        require(durationHysteresisMillis * 2L <
-            targetBoundaryDurationMillis - criticalBoundaryDurationMillis) {
+        require(durationHysteresisMillis <=
+            (targetBoundaryDurationMillis - criticalBoundaryDurationMillis) / 2L) {
             "duration hysteresis overlaps critical/target boundaries"
         }
-        require(durationHysteresisMillis * 2L <
-            highBoundaryDurationMillis - targetBoundaryDurationMillis) {
+        require(durationHysteresisMillis <=
+            (highBoundaryDurationMillis - targetBoundaryDurationMillis) / 2L) {
             "duration hysteresis overlaps target/high boundaries"
         }
 
