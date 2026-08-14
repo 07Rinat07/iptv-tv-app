@@ -303,6 +303,7 @@ class AceLiveEmbeddedEngine(
             policy = AceLiveTcpConnectionPolicy(maxConcurrentPeers = MAX_ACTIVE_PEERS),
             onEvent = ::onPoolEvent
         )
+        private val peerDiagnosticsReporter = AceLivePeerDiagnosticsReporter(diagnosticsObserver)
         private val refillCoordinator = AceLivePeerRefillCoordinator(
             AceLivePeerRefillPolicy(
                 targetActivePeers = TARGET_ACTIVE_PEERS,
@@ -504,6 +505,10 @@ class AceLiveEmbeddedEngine(
         private suspend fun driveSession() {
             while (currentCoroutineContext().isActive) {
                 val now = System.currentTimeMillis()
+                peerDiagnosticsReporter.maybeReport(
+                    snapshot = pool.peerProductionSnapshot(now),
+                    nowMillis = now
+                )
                 if (
                     aceLiveStartupHasNoConnectedPeerTooLong(
                         startupComplete = startup.isCompleted,
