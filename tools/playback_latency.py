@@ -141,9 +141,16 @@ def _parse_timestamp_ms(raw: str) -> int:
 
 def parse_structured_events(text: str) -> list[LogEvent]:
     events: list[LogEvent] = []
-    in_structured_section = False
+    lines = text.splitlines()
+    has_structured_header = any(
+        raw_line.strip("\ufeff").startswith(STRUCTURED_HEADER)
+        for raw_line in lines
+    )
+    # Older Diagnostics exports contain only structured rows and therefore have no section header.
+    # Newer exports prepend a named structured section and may append a persistent app-log section.
+    in_structured_section = not has_structured_header
 
-    for source_index, raw_line in enumerate(text.splitlines()):
+    for source_index, raw_line in enumerate(lines):
         line = raw_line.strip("\ufeff")
         if line.startswith(STRUCTURED_HEADER):
             in_structured_section = True
