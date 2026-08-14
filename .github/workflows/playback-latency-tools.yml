@@ -1,0 +1,37 @@
+name: Playback latency tooling
+
+on:
+  pull_request:
+    paths:
+      - "tools/**"
+      - "docs/testing/playback-latency-baseline.md"
+      - ".github/workflows/playback-latency-tools.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/**"
+      - "docs/testing/playback-latency-baseline.md"
+      - ".github/workflows/playback-latency-tools.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  playback-latency-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Unit tests
+        run: python -m unittest discover -s tools/tests -p "test_*.py" -v
+
+      - name: CLI help smoke
+        run: python tools/analyze_playback_latency.py --help
