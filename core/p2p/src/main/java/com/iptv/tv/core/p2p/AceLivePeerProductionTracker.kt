@@ -3,14 +3,16 @@ package com.iptv.tv.core.p2p
 /**
  * Runtime-quality view of Ace Live peers.
  *
- * Discovery counts are intentionally kept separate from connected/handshaked/producing peers.
- * A peer is "producing" only after bytes from that peer have contributed to accepted contiguous
- * media output recently enough to still be useful for live playback.
+ * Discovery counts are intentionally kept separate from connected/handshaked/requestable/producing
+ * peers. A peer is "producing" only while its advertised live window is useful to the authoritative
+ * cursor, it is currently unchoked, and its recent bytes contributed to accepted contiguous media.
  */
 data class AceLivePeerProductionSnapshot(
     val discoveredCandidates: Int,
     val connectedPeers: Int,
     val handshakedPeers: Int,
+    val windowUsefulPeers: Int,
+    val unchokedPeers: Int,
     val producingPeers: Int,
     val aggregateBytesPerSecond: Long,
     val freshestMediaAgeMillis: Long?
@@ -39,6 +41,8 @@ internal class AceLivePeerProductionTracker(
         val peer = peers.getOrPut(peerId, ::PeerState)
         peer.connected = true
         peer.handshaked = false
+        peer.windowUseful = false
+        peer.unchoked = false
         peer.connectedAtMillis = nowMillis.coerceAtLeast(0L)
     }
 
@@ -49,13 +53,19 @@ internal class AceLivePeerProductionTracker(
     }
 
     fun onHandshakeRejected(peerId: Long): Unit = synchronized(lock) {
-        peers[peerId]?.handshaked = false
+        peers[peerId]?.apply {
+            handshaked = false
+            windowUseful = false
+            unchoked = false
+        }
     }
 
     fun onConnectFailed(peerId: Long): Unit = synchronized(lock) {
         peers.getOrPut(peerId, ::PeerState).apply {
             connected = false
             handshaked = false
+            windowUseful = false
+            unchoked = false
         }
     }
 
@@ -63,7 +73,26 @@ internal class AceLivePeerProductionTracker(
         peers[peerId]?.apply {
             connected = false
             handshaked = false
+            windowUseful = false
+            unchoked = false
         }
+    }
+
+    /**
+     * Updates the two requestability stages derived from verified peer state.
+     *
+     * [windowUseful] means the peer's currently advertised live window contains the authoritative
+     * next-needed piece. [unchoked] means the peer currently allows requests. Neither flag is inferred
+     * from discovery or past media delivery.
+     */
+    fun onPeerRequestability(
+        peerId: Long,
+        windowUseful: Boolean,
+        unchoked: Boolean
+    ): Unit = synchronized(lock) {
+        val peer = peers.getOrPut(peerId, ::PeerState)
+        peer.windowUseful = peer.connected && peer.handshaked && windowUseful
+        peer.unchoked = peer.connected && peer.handshaked && unchoked
     }
 
     fun onMediaProduced(peerId: Long, mediaBytes: Long, nowMillis: Long): Unit = synchronized(lock) {
@@ -93,15 +122,21 @@ internal class AceLivePeerProductionTracker(
 
     fun snapshot(nowMillis: Long): AceLivePeerProductionSnapshot = synchronized(lock) {
         val now = nowMillis.coerceAtLeast(0L)
-        val producing = peers.values.filter { peer ->
-            peer.connected &&
-                peer.handshaked &&
+        val connected = peers.values.filter { it.connected }
+        val handshaked = connected.filter { it.handshaked }
+        val windowUseful = handshaked.filter { it.windowUseful }
+        val unchoked = handshaked.filter { it.unchoked }
+        val producing = handshaked.filter { peer ->
+            peer.windowUseful &&
+                peer.unchoked &&
                 peer.lastMediaAtMillis?.let { now - it <= producingFreshnessMillis } == true
         }
         AceLivePeerProductionSnapshot(
             discoveredCandidates = discoveredCandidates,
-            connectedPeers = peers.values.count { it.connected },
-            handshakedPeers = peers.values.count { it.connected && it.handshaked },
+            connectedPeers = connected.size,
+            handshakedPeers = handshaked.size,
+            windowUsefulPeers = windowUseful.size,
+            unchokedPeers = unchoked.size,
             producingPeers = producing.size,
             aggregateBytesPerSecond = producing.fold(0L) { total, peer ->
                 saturatingAdd(total, peer.ewmaBytesPerSecond.coerceAtLeast(0L))
@@ -138,6 +173,8 @@ internal class AceLivePeerProductionTracker(
     private class PeerState {
         var connected: Boolean = false
         var handshaked: Boolean = false
+        var windowUseful: Boolean = false
+        var unchoked: Boolean = false
         var connectedAtMillis: Long = 0L
         var lastMediaAtMillis: Long? = null
         var totalMediaBytes: Long = 0L
