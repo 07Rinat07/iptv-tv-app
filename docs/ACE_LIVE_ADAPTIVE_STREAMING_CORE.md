@@ -63,11 +63,11 @@ PR #109 завершил V2b requestability и уже находится в `mai
 
 PR #110 завершил V2c persistent diagnostics и уже находится в `main`. `AceLivePeerDiagnosticsReporter` публикует structured event `embedded_ace_live_peer_quality` с полями `discovered / connected / handshaked / windowUseful / unchoked / producing / aggregate_bps / aggregate_mbps / freshest_media_age_ms`. Material stage changes публикуются сразу, а стабильное состояние обновляется не чаще одного раза в 5 секунд, поэтому 200-мс scheduler tick не превращается в поток DB-записей. Existing path `AceLiveEmbeddedEngine.diagnosticsObserver → HybridEngineRepositoryImpl → SyncLogDao → DiagnosticsRepository` используется без второго логгера. Exact-head Android CI #500 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
 
-Текущий V2d-инкремент усиливает саму семантику `producing`. Peer provenance сохраняется из verified piece ownership через bounded reassembly до `AceLiveReassembledPiece.sourcePeerId`. Сетевой ingress и даже contiguous reassembly больше не могут самостоятельно отметить peer как producing. Production подтверждается только после `AceLiveMediaAuthenticator.verifyAndStrip()`, `AceLiveMpegTsResynchronizer.consume()` и успешного `AceLiveMediaBuffer.append()`.
+PR #111 завершил V2d post-output semantics и уже находится в `main`. Peer provenance сохраняется из verified piece ownership через bounded reassembly до `AceLiveReassembledPiece.sourcePeerId`. Сетевой ingress и contiguous reassembly больше не могут самостоятельно отметить peer как producing. Production подтверждается только после `AceLiveMediaAuthenticator.verifyAndStrip()`, `AceLiveMpegTsResynchronizer.consume()` и успешного `AceLiveMediaBuffer.append()`.
 
-До первого устойчивого MPEG-TS sync resynchronizer может удерживать небольшой pending tail предыдущего piece. Поэтому V2d не приписывает текущему peer весь первый resync output: credited contribution ограничен `min(acceptedOutputBytes, authenticatedCurrentPieceBytes)`. Закрытый live buffer возвращает `0` accepted bytes и не создаёт production evidence. Scheduler request depth, recovery policy, startup/no-peer/stall bounds и wire protocol этим инкрементом не меняются.
+До первого устойчивого MPEG-TS sync resynchronizer может удерживать небольшой pending tail предыдущего piece, поэтому credited contribution ограничен `min(acceptedOutputBytes, authenticatedCurrentPieceBytes)`. Закрытый live buffer возвращает `0` accepted bytes и не создаёт production evidence. Late output buffered piece не воскресает как connected/handshaked peer. Exact-head Android CI #502 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно; scheduler request depth, recovery policy, startup/no-peer/stall bounds и wire protocol не менялись.
 
-После exact-head проверки V2d quality snapshot можно использовать как более строгий вход `LiveBufferController` и adaptive scheduler, не меняя startup/stall bounds.
+V2 quality snapshot теперь имеет достаточно строгую semantics, чтобы использоваться как вход следующего feedback layer. Текущий V3a вводит отдельный `AceLiveBufferController`, но пока намеренно не меняет scheduler policy.
 
 ## Buffer model
 
@@ -81,16 +81,18 @@ PR #110 завершил V2c persistent diagnostics и уже находится
 - AUTO forced-start считается от first-media и требует более сильный reserve;
 - MANUAL threshold не обходится AUTO forced-start.
 
-### Следующий LiveBufferController
+### V3a — LiveBufferController primitive
 
-Должен оперировать одновременно `bytes` и `seconds` и иметь hysteresis:
+`AceLiveBufferController` классифицирует явный playable headroom в четыре стабильные зоны:
 
-- `critical` — playback скоро исчерпает запас;
-- `low` — усилить scheduling/refill;
-- `target` — нормальный рабочий запас;
-- `high` — не расширять pipeline без необходимости.
+- `CRITICAL` — запас ниже critical boundary;
+- `LOW` — запас выше critical, но ниже target;
+- `TARGET` — рабочий запас между target и high;
+- `HIGH` — запас выше high boundary.
 
-Порог в секундах рассчитывается из измеренного media delivery/consumption, а не из непроверенного raw descriptor bitrate.
+Если известен положительный consumer rate, authoritative signal — `playableDurationMillis`; без надёжной consumer-rate оценки используется bounded byte fallback. Все три границы имеют симметричный hysteresis, поэтому небольшие колебания около threshold не переключают scheduler-facing state на каждом sample. Смена signal `BYTES ↔ DURATION` выполняет немедленную reclassification, поскольку это разные модели измерения, а не соседние samples одной шкалы.
+
+Критически важно: `AceLiveMediaBuffer.retainedBytes()` — размер retained sliding storage window, а не непрочитанный запас конкретного Media3 reader. Поэтому V3a не связывает controller с `retainedBytes()` и принимает явный `playableBytes`. Следующий wiring-инкремент должен измерять reader/consumer cursor и consumer bytes/s, после чего pressure snapshot можно безопасно подать в scheduler/refill feedback.
 
 ## Adaptive scheduling
 
@@ -121,7 +123,7 @@ P2P runtime и Media3 сейчас имеют независимые buffer loop
 - `loopback_first_read`;
 - producer bytes/s;
 - consumer bytes/s;
-- retained bytes/seconds;
+- playable bytes/seconds относительно consumer cursor;
 - Media3 `BUFFERING`;
 - Media3 `READY`;
 - `first_video_frame`;
@@ -185,12 +187,14 @@ Media-format логика не переносится внутрь peer schedule
 - [x] exact-head CI + real Torrent TV smoke for V2b (Android CI #497 / PR #109);
 - [x] persistent structured peer-quality diagnostics source (PR #110);
 - [x] exact-head CI + real Torrent TV smoke for V2c (Android CI #500 / PR #110);
-- [x] implement post-authenticated/post-output production accounting with peer provenance (V2d branch);
-- [ ] exact-head CI + real Torrent TV smoke for V2d.
+- [x] post-authenticated/post-output production accounting with peer provenance (PR #111);
+- [x] exact-head CI + real Torrent TV smoke for V2d (Android CI #502 / PR #111).
 
 ### V3 — buffer-pressure scheduler
 
-- [ ] critical/low/target/high watermarks;
+- [x] pure `critical/low/target/high` pressure primitive with bytes/duration and hysteresis (V3a branch);
+- [ ] exact-head CI + real Torrent TV smoke for V3a;
+- [ ] consumer-cursor/playable-headroom telemetry wiring;
 - [ ] adaptive request depth/in-flight;
 - [ ] peer replacement based on producing quality;
 - [ ] startup discovery shutdown after stable-ready;
@@ -198,7 +202,7 @@ Media-format логика не переносится внутрь peer schedule
 
 ### V4 — player/TS boundary
 
-- [ ] loopback producer/consumer telemetry;
+- [ ] loopback producer/consumer telemetry beyond V3 pressure input;
 - [ ] P2P-specific Media3 LoadControl;
 - [ ] BUFFERING/READY/first-frame telemetry;
 - [ ] TS discontinuity/PAT/PMT/random-access recovery.
@@ -218,6 +222,7 @@ Media-format логика не переносится внутрь peer schedule
 - увеличивать 30/60-second bounds, чтобы скрыть плохой startup;
 - считать найденный tracker/DHT endpoint доказательством playable peer;
 - запускать player с крошечным byte buffer без оценки реальной media rate;
+- трактовать retained sliding-window bytes как непрочитанный consumer headroom;
 - перекладывать upstream stall на LibVLC;
 - использовать внешний Ace Engine как fallback успешности собственного runtime;
 - создавать массовый background probe всего Torrent TV каталога;
