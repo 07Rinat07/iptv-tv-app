@@ -40,6 +40,22 @@ class PlaybackLatencyAnalyzerTest(unittest.TestCase):
         self.assertEqual(2000, analysis.summary.p90_ready_ms)
         self.assertEqual(2000, analysis.summary.max_ready_ms)
 
+    def test_parses_legacy_headerless_structured_export(self) -> None:
+        text = """1710000003000 | player_ready | playlist=1 | Internal ready, startupMs=500, sessionId=1
+1710000002500 | player_start | playlist=1 | Internal playback start: channelId=10
+1710000002000 | player_resolve_ok | playlist=1 | channelId=10, streamKind=IPTV поток (прямой URL)
+1710000001000 | player_play_request | playlist=1 | channelId=10, playlistId=1, requestedPlayer=INTERNAL, forceAce=false
+"""
+
+        events = parse_structured_events(text)
+        analysis = analyze_text(text)
+
+        self.assertEqual(4, len(events))
+        self.assertEqual(1, analysis.summary.total_requests)
+        self.assertEqual(1, analysis.summary.ready_requests)
+        self.assertEqual(2000, analysis.requests[0].player_ready_ms)
+        self.assertEqual("IPTV поток (прямой URL)", analysis.requests[0].stream_kind)
+
     def test_marks_previous_pending_request_superseded_on_rapid_zap(self) -> None:
         text = """=== Structured diagnostics (latest 120 rows) ===
 1710000002200 | player_start | playlist=1 | Internal playback start: channelId=2
