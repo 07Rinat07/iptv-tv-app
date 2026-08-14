@@ -57,6 +57,8 @@ P2P-specific Media3 LoadControl
 
 Для каждого producing peer нужны как минимум freshness, delivered bytes/rate, timeout/error history и usefulness текущему cursor.
 
+V2 начинается с отдельного `AceLivePeerProductionTracker`: он намеренно не считает найденный endpoint producing peer, хранит lifecycle `connected/handshaked`, отмечает producing только после media contribution, истекает stale producing-state по freshness window и строит aggregate rate snapshot. Следующий V2-инкремент должен подключить этот primitive к реальным runtime events после media validation/output и вывести snapshot в persistent diagnostics/UI status.
+
 ## Buffer model
 
 ### Уже в adaptive prebuffer v1
@@ -160,14 +162,16 @@ Media-format логика не переносится внутрь peer schedule
 - [x] stronger AUTO minimum reserve;
 - [x] forced-start anchored to first-media;
 - [x] regression tests for long discovery + fast media;
-- [ ] exact-head CI + real Torrent TV smoke.
+- [x] exact-head CI + real Torrent TV smoke без внешнего Ace Engine (PR #107).
 
 ### V2 — producing peer accounting
 
-- [ ] peer lifecycle counters;
-- [ ] per-peer media freshness/rate;
-- [ ] aggregate producing-peer snapshot;
-- [ ] structured diagnostics/UI source for real peer status.
+- [x] lifecycle/production accounting primitive;
+- [x] per-peer media freshness/rate primitive;
+- [x] aggregate producing-peer snapshot primitive;
+- [ ] wire tracker to validated runtime media output;
+- [ ] persistent structured diagnostics/UI source for real peer status;
+- [ ] include window usefulness/unchoked state in quality snapshot.
 
 ### V3 — buffer-pressure scheduler
 
