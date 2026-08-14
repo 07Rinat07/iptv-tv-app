@@ -38,12 +38,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -283,6 +286,54 @@ class PlayerViewModelMultiviewTest {
         assertTrue(restarted.streamUrl != firstSession.streamUrl)
         assertEquals(1, viewModel.uiState.value.retryAttempt)
         assertTrue(viewModel.uiState.value.lastInfo?.startsWith("P2P-сессия переподключена") == true)
+    }
+
+
+    @Test
+    fun lateP2pRetryFromA_cannotReplaceC_afterRapidABCZap() = runTest(dispatcher) {
+        val contentId = "50bc2f512793f1e745fb5bd5b5a6afca199c2d19"
+        val engineRepository = FakeEngineRepository()
+        val viewModel = createViewModel(
+            channels = listOf(
+                testChannel(
+                    id = 10L,
+                    name = "Torrent A",
+                    streamUrl = "http://127.0.0.1:6878/ace/getstream?id=$contentId"
+                ),
+                testChannel(id = 11L, name = "HTTP B", streamUrl = "https://example.com/b.m3u8"),
+                testChannel(id = 12L, name = "HTTP C", streamUrl = "https://example.com/c.m3u8")
+            ),
+            engineRepository = engineRepository
+        )
+        advanceUntilIdle()
+
+        viewModel.playChannelInternal(10L)
+        advanceUntilIdle()
+        val sessionA = requireNotNull(viewModel.uiState.value.internalSession)
+        assertEquals(1, engineRepository.resolveCount)
+
+        // Let the retry coroutine publish its delayed retry state, but do not advance through the
+        // 800 ms backoff yet. B and C must invalidate and cancel this pending work.
+        viewModel.onInternalPlaybackError(
+            message = "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED: Source error",
+            sessionId = sessionA.sessionId
+        )
+        runCurrent()
+
+        viewModel.playChannelInternal(11L)
+        runCurrent()
+        viewModel.playChannelInternal(12L)
+        runCurrent()
+
+        advanceTimeBy(5_000L)
+        advanceUntilIdle()
+
+        val current = requireNotNull(viewModel.uiState.value.internalSession)
+        assertEquals(12L, current.channelId)
+        assertNotEquals(sessionA.sessionId, current.sessionId)
+        assertNotEquals(sessionA.requestId, current.requestId)
+        assertEquals(1, engineRepository.resolveCount)
+        assertEquals(0, viewModel.uiState.value.retryAttempt)
     }
 
     private fun createViewModel(
