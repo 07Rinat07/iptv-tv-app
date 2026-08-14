@@ -9,9 +9,9 @@ import javax.inject.Singleton
 
 /**
  * Keeps the first P2P selection responsive while coalescing a burst of subsequent rapid-zap
- * selections. The Player cancels the previous playback coroutine on every new channel request;
- * therefore a request waiting in [delay] is cancelled before it can enter the expensive P2P
- * resolver when an even newer selection arrives.
+ * selections. The Player cancels both the previous primary resolution and any pending retry job on
+ * every new channel request; therefore a request waiting in [delay] is cancelled before it can enter
+ * the expensive P2P resolver when an even newer selection arrives.
  *
  * Direct HTTP IPTV never reaches [EngineRepository.resolveTorrentStream], so this policy adds no
  * latency to ordinary IPTV playback.
