@@ -10,28 +10,30 @@
 
 Автономный Torrent TV маршрут работает без внешнего Ace Engine. Базовая цепочка уже включает public tracker/DHT discovery, TCP peer pool, Ace Live handshake/window/chunk scheduling, bounded recovery, MPEG-TS resync, sliding loopback output и Media3/LibVLC playback.
 
-После PR #101 последовательно завершены дополнительные hardening-инкременты:
+После PR #101 последовательно завершены дополнительные hardening/adaptive-инкременты:
 
 - PR #102 — playback latency analyzer и точная разбивка `play_request → resolve → READY`;
 - PR #103 — cancellable rapid-zap coalescing P2P запросов;
 - PR #104 — прямой Ace startup продолжает peer progress внутри существующего soft-window без ослабления абсолютных bounds;
 - PR #105 — глобально уникальные playback session IDs, request ownership, отменяемый retry и защита от `A → B → C → late retry A`;
-- PR #106 — полный Torrent TV каталог всегда видим; динамическая P2P-доступность показывается как информационный last-known status и больше не скрывает каналы.
+- PR #106 — полный Torrent TV каталог всегда видим; динамическая P2P-доступность показывается как информационный last-known status и больше не скрывает каналы;
+- PR #107 — adaptive prebuffer v1: throughput clock начинается с first-media, используется EWMA media delivery, усилен startup reserve без увеличения failure bounds;
+- PR #108 — media-producing peer accounting: discovered endpoints отделены от connected/handshaked/producing peers, добавлены freshness и aggregate EWMA media rate; exact-head Android CI #495 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
 
-Свежий полевой прогон на ARM/TV Box изменил приоритет работ. Одни и те же публичные Torrent TV источники способны быстро находить tracker/DHT peers, но наш runtime не всегда превращает найденные endpoints в устойчивый media-producing pool. В логе встречаются `peers=4..7` одновременно с итоговым no-peer/60-second timeout, а несколько успешно resolved потоков затем проводят около 66 секунд между `player_start` и `player_ready`. Это указывает не на один общий codec-дефект, а на незавершённую связку peer usefulness → throughput → prebuffer → loopback consumption → player buffering.
+Полевой прогон на ARM/TV Box изменил приоритет работ. Одни и те же публичные Torrent TV источники способны быстро находить tracker/DHT peers, но найденные endpoints не всегда превращаются в устойчивый media-producing pool. В логе встречались `peers=4..7` одновременно с итоговым no-peer/60-second timeout, а несколько успешно resolved потоков затем проводили около 66 секунд между `player_start` и `player_ready`. Это указало не на один общий codec-дефект, а на незавершённую связку peer usefulness → throughput → prebuffer → loopback consumption → player buffering.
 
-Отдельно найден дефект startup prebuffer: старая AUTO-оценка делила retained media bytes на возраст всего runtime, включая discovery/handshake. После долгого поиска здоровый media stream выглядел искусственно медленным, target мог падать к 512 KiB, а forced-start также разрешал 512 KiB. Текущий инкремент начинает **Ace Live adaptive streaming core v1**: throughput считается только после первого media-byte, используется EWMA реальной media delivery, минимальный AUTO floor повышается, а forced-start больше не срабатывает по времени discovery и требует существенно большего media reserve.
+V1 уже исправил конкретный дефект startup prebuffer: discovery/handshake latency больше не входит в media-throughput estimate. Базовый V2 из PR #108 также уже в `main` и перестал трактовать raw discovery count как качество swarm. Текущий инкремент **V2b peer quality** добавляет недостающие requestability-стадии: `windowUseful` вычисляется относительно authoritative `nextNeededPiece()`, `unchoked` берётся из фактического peer-wire state, а fresh media считается producing только пока peer остаётся `windowUseful + unchoked`. Requestability пересчитывается при live-window/cursor update и recovery advance; startup/stall bounds не увеличиваются.
 
 Следующий порядок P2P-работ:
 
-1. **Adaptive prebuffer v1** — исправить media-throughput clock, EWMA и безопасный startup reserve без увеличения 30/60-second failure bounds.
-2. **Media-producing peer accounting** — различать `discovered / connected / handshaked / unchoked / producing`, измерять aggregate media rate и freshness каждого полезного peer.
-3. **Adaptive live scheduler** — low/target/high watermarks, buffer-pressure feedback, adaptive request depth/in-flight и быстрый replacement деградировавших peers.
+1. ✅ **Adaptive prebuffer v1 (PR #107)** — first-media throughput clock, EWMA и безопасный startup reserve без увеличения 30/60-second failure bounds.
+2. 🚧 **Media-producing peer accounting** — базовый `discovered / connected / handshaked / producing + freshness/rate` слит в PR #108; текущий V2b добавляет `windowUseful / unchoked`, затем persistent peer-quality diagnostics и post-output semantics.
+3. **Adaptive live scheduler** — `LiveBufferController`, low/target/high watermarks, buffer-pressure feedback, adaptive request depth/in-flight и быстрый replacement деградировавших peers.
 4. **Loopback/player boundary** — измерять first HTTP read, producer/consumer rate и Media3 `BUFFERING/READY/first-frame`; выделить отдельный P2P LoadControl вместо generic IPTV assumptions.
 5. **Discontinuity/TS hardening** — PAT/PMT/random-access/IDR gating и корректное decoder recovery после подтверждённого live-window jump.
 6. **Acceptance** — фиксированная матрица Torrent TV, 20 rapid switches, weak network, peer loss, 2h/8h ARM soak без внешнего Ace Engine.
 
-Актуальные доказательства и критерии находятся в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md), детали runtime — в [`P2P_RUNTIME_NOTES.md`](P2P_RUNTIME_NOTES.md), а пошаговый clean-room план Ace Live — в [`ACE_LIVE_IMPLEMENTATION_PLAN.md`](ACE_LIVE_IMPLEMENTATION_PLAN.md).
+Актуальные доказательства и критерии находятся в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md), детали runtime — в [`P2P_RUNTIME_NOTES.md`](P2P_RUNTIME_NOTES.md), целевая adaptive-архитектура — в [`ACE_LIVE_ADAPTIVE_STREAMING_CORE.md`](ACE_LIVE_ADAPTIVE_STREAMING_CORE.md), а пошаговый clean-room план Ace Live — в [`ACE_LIVE_IMPLEMENTATION_PLAN.md`](ACE_LIVE_IMPLEMENTATION_PLAN.md).
 
 ## Завершено
 
@@ -54,6 +56,8 @@
 - PR #104: direct Ace progress сохраняется внутри существующего 8-second soft-window при конкурентном metadata resolve;
 - PR #105: playback ownership/stale-session hardening исключает reuse sessionId, zombie retry и поздний takeover старого канала;
 - PR #106: Torrent TV каталог не фильтруется по временной доступности; UI показывает last-known P2P status без массового peer probing;
+- PR #107: adaptive prebuffer v1 использует first-media throughput clock, EWMA и усиленный startup reserve; exact-head CI и real Torrent TV smoke прошли без внешнего Ace Engine;
+- PR #108: `AceLivePeerProductionTracker` отделяет discovery от реальной media production, учитывает connected/handshaked lifecycle, freshness и aggregate delivery rate; exact-head CI #495 полностью зелёный;
 - TV-интерфейс, пульт, мышь, тачпад и полноэкранный режим;
 - группы, подгруппы, восстановление фокуса и постраничная прокрутка в основных разделах;
 - Editor использует общий `TvScrollableLazyColumn`: TV-кнопки начала/Page Up/Page Down, PageUp/PageDown и ChannelUp/ChannelDown, mouse wheel/touchpad и scrollbar без изменения операций редактирования;
@@ -70,7 +74,7 @@
 
 0. **Issue #40 — regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
 1. **Playback safety acceptance — EPG OOM.** Код PR #100 слит: streaming XMLTV, bounded memory/cache, negative-cache, serialized load и low-memory fail-safe. Ручные логи после фикса не показывают возврата прежнего OOM в просмотренном окне; hardware regression продолжает входить в release gate.
-2. **Master #44 — автономный P2P/Ace Live engine.** Это текущий главный приоритет. Ownership/rapid-zap базовые гонки закрыты PR #103/#105; теперь работа идёт по adaptive streaming core: throughput/prebuffer → producing peers → scheduler feedback → player/TS boundary → weak-network/soak acceptance.
+2. **Master #44 — автономный P2P/Ace Live engine.** Это текущий главный приоритет. Ownership/rapid-zap базовые гонки закрыты PR #103/#105; adaptive streaming core уже прошёл V1 (PR #107) и базовый producing accounting (PR #108). Текущий порядок внутри #44: `windowUseful/unchoked + persistent peer diagnostics → LiveBufferController/scheduler feedback → player/TS boundary → weak-network/soak acceptance`.
 3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** Продолжать после стабилизации критического playback path; PR #106 уже обеспечивает полный Torrent TV выбор без временного availability-filter.
 4. **Issue #47 — EPG / Now-Next / real archive.** Полноценный ingestion/cache/matching/catch-up redesign строить поверх стабильной channel identity из #45.
 5. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
@@ -110,7 +114,9 @@
 10. ✅ PR #101: bounded startup discovery, exact-head CI, ARM-логи, persistent diagnostics и готовый каталог из 279 Ace Stream каналов завершены.
 11. ✅ PR #103/#105: rapid-zap и playback ownership защищены от промежуточных/zombie requests.
 12. ✅ PR #106: availability больше не удаляет Torrent TV канал из пользовательского выбора.
-13. 🚧 Adaptive streaming core v1: реальный media throughput, безопасный time-based prebuffer, producing-peer accounting и buffer-pressure scheduling.
+13. ✅ PR #107: adaptive prebuffer v1 — first-media throughput clock, EWMA и более безопасный startup reserve.
+14. ✅ PR #108: базовый media-producing peer accounting — connected/handshaked/producing, freshness и aggregate delivery snapshot.
+15. 🚧 V2b peer quality — `windowUseful/unchoked`, authoritative cursor usefulness и подготовка structured persistent diagnostics перед scheduler feedback.
 
 ### Детализация Ace transport / torrent-TV
 
@@ -130,17 +136,19 @@
 
 ### Следующие P2P-инкременты
 
-1. 🚧 **Adaptive prebuffer v1:** throughput clock начинается с первого media-byte; EWMA строится по реальному приросту media; discovery latency не занижает target; AUTO больше не стартует с прежнего 512-KiB floor.
-2. Добавить `MediaProducingPeerTracker`: `discovered/connected/handshaked/unchoked/producing`, bytes/time/freshness и aggregate media delivery rate.
-3. Добавить `LiveBufferController`: buffer seconds + critical/low/target/high watermarks и hysteresis.
-4. Сделать request depth/in-flight адаптивным к buffer pressure и фактической производительности peers вместо постоянного `2 pieces/peer`.
-5. При устойчивом `buffer-ready` завершать startup-specific DHT expansion и переходить в lightweight refill; discovery не должен конкурировать с уже работающим media path.
-6. Добавить player-boundary telemetry: first localhost HTTP open/read, producer/consumer rate, Media3 BUFFERING/READY/first-frame и rebuffer count.
-7. Выделить P2P-specific Media3 LoadControl для уже стабилизированного localhost live stream; не использовать generic IPTV buffering как единственный feedback layer.
-8. Разделить unavailable source, dead/stale swarm, insufficient throughput/buffer, transport timeout и decoder/demux error в экспортируемой диагностике.
-9. Wire output discontinuity в TS keyframe/PAT/PMT recovery без переноса media-format логики внутрь peer protocol scheduler.
-10. Сохранять ordinary BitTorrent regression baseline: magnet/infohash/local/HTTP torrent, read-ahead, seek и local HTTP Range.
-11. Провести матрицу из обычных IPTV и Torrent TV каналов: cold/warm start, 20 переключений, повторное открытие, слабая сеть, потеря peers, двухчасовой и восьмичасовой просмотр.
+1. ✅ **Adaptive prebuffer v1 / PR #107:** throughput clock начинается с первого media-byte; EWMA строится по реальному приросту media; discovery latency не занижает target; AUTO больше не стартует с прежнего 512-KiB floor.
+2. ✅ **Producing peer accounting / PR #108:** `discovered/connected/handshaked/producing`, media bytes/rate/freshness и aggregate media delivery snapshot.
+3. 🚧 **Peer quality V2b:** добавить `windowUseful/unchoked`; `windowUseful` считать относительно authoritative `nextNeededPiece()`, refresh выполнять при metadata/cursor/recovery changes, а producing требовать только от fresh requestable peers.
+4. Вывести peer-quality snapshot в persistent diagnostics/UI: `discovered/connected/handshaked/windowUseful/unchoked/producing`, aggregate Mbps и freshest media age; уточнить media contribution до post-authenticated/post-output boundary.
+5. Добавить `LiveBufferController`: buffer seconds + critical/low/target/high watermarks и hysteresis.
+6. Сделать request depth/in-flight адаптивным к buffer pressure и фактической производительности peers вместо постоянного `2 pieces/peer`.
+7. При устойчивом `buffer-ready` завершать startup-specific DHT expansion и переходить в lightweight refill; discovery не должен конкурировать с уже работающим media path.
+8. Добавить player-boundary telemetry: first localhost HTTP open/read, producer/consumer rate, Media3 BUFFERING/READY/first-frame и rebuffer count.
+9. Выделить P2P-specific Media3 LoadControl для уже стабилизированного localhost live stream; не использовать generic IPTV buffering как единственный feedback layer.
+10. Разделить unavailable source, dead/stale swarm, insufficient throughput/buffer, transport timeout и decoder/demux error в экспортируемой диагностике.
+11. Wire output discontinuity в TS keyframe/PAT/PMT recovery без переноса media-format логики внутрь peer protocol scheduler.
+12. Сохранять ordinary BitTorrent regression baseline: magnet/infohash/local/HTTP torrent, read-ahead, seek и local HTTP Range.
+13. Провести матрицу из обычных IPTV и Torrent TV каналов: cold/warm start, 20 переключений, повторное открытие, слабая сеть, потеря peers, двухчасовой и восьмичасовой просмотр.
 
 ## Этап 3: EPG, Now/Next и реальный архив (#47)
 
