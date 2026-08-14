@@ -188,8 +188,11 @@ private fun AceLiveBufferSettings.normalized(): AceLiveBufferSettings {
         .coerceIn(boundedAutoMin, maxStartup)
     val boundedManual = manualStartupBufferBytes
         .coerceIn(MIN_STARTUP_BUFFER_BYTES, maxStartup)
+    // Forced-start is an escape hatch below the adaptive target, so it must not be normalized up
+    // to autoMinStartupBufferBytes. It remains independently bounded by the global safety floor and
+    // by the output-buffer capacity.
     val boundedForcedMin = forcedStartMinBufferBytes
-        .coerceIn(boundedAutoMin, maxStartup)
+        .coerceIn(MIN_STARTUP_BUFFER_BYTES, maxStartup)
 
     return copy(
         manualStartupBufferBytes = boundedManual,
