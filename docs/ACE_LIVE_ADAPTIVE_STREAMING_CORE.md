@@ -57,9 +57,11 @@ P2P-specific Media3 LoadControl
 
 Для каждого producing peer нужны как минимум freshness, delivered bytes/rate, timeout/error history и usefulness текущему cursor.
 
-V2 начинается с отдельного `AceLivePeerProductionTracker`. Он намеренно не считает найденный endpoint producing peer, хранит lifecycle `connected/handshaked`, отмечает producing только после contiguous media contribution, истекает stale producing-state по freshness window и строит aggregate rate snapshot. `AceLiveTcpConnectionPool` уже подключает tracker к реальным connect/handshake/disconnect/ingress событиям и предоставляет immutable `peerProductionSnapshot()` для следующего scheduler/diagnostics слоя.
+PR #108 завершил базовый V2 accounting и уже находится в `main`: отдельный `AceLivePeerProductionTracker` не считает найденный endpoint producing peer, хранит `connected/handshaked`, отмечает fresh media production только после contiguous reassembled media contribution и строит aggregate EWMA delivery snapshot. `AceLiveTcpConnectionPool` подключает этот tracker к реальным connect/handshake/disconnect/ingress событиям и предоставляет immutable `peerProductionSnapshot()` для scheduler/diagnostics слоя.
 
-Следующий подэтап должен усилить семантику producing до post-authenticated/post-output bytes, добавить `windowUseful/unchoked` и вывести snapshot в persistent diagnostics/UI status.
+Текущий V2b-инкремент добавляет две недостающие requestability-стадии. `windowUseful` вычисляется не по факту наличия metadata, а относительно authoritative `nextNeededPiece()`: peer полезен только если текущий cursor находится внутри его advertised live-window. `unchoked` берётся из фактического peer-wire state. Requestability пересчитывается при metadata/window update, нормальном продвижении contiguous cursor и recovery jump. Fresh media считается `producing` только пока peer одновременно `windowUseful + unchoked`; stale-window или choke исключают его из producing snapshot немедленно, не ожидая общего stall timeout.
+
+Следующий подэтап после exact-head проверки V2b: усилить семантику media contribution до подтверждённого post-authenticated/post-output уровня и вывести structured snapshot в persistent diagnostics/UI status. После этого quality snapshot можно безопасно использовать как вход `LiveBufferController` и adaptive scheduler, не меняя startup/stall bounds.
 
 ## Buffer model
 
@@ -171,10 +173,12 @@ Media-format логика не переносится внутрь peer schedule
 - [x] lifecycle/production accounting primitive;
 - [x] per-peer media freshness/rate primitive;
 - [x] aggregate producing-peer snapshot primitive;
-- [x] wire tracker to TCP lifecycle + contiguous reassembled media events;
-- [ ] mark producing from post-authenticated/post-output media bytes;
-- [ ] persistent structured diagnostics/UI source for real peer status;
-- [ ] include window usefulness/unchoked state in quality snapshot.
+- [x] wire tracker to TCP lifecycle + contiguous reassembled media events (PR #108);
+- [x] include `windowUseful/unchoked` requestability state in quality snapshot (V2b branch);
+- [x] recalculate `windowUseful` against authoritative cursor after metadata, contiguous output and recovery advance (V2b branch);
+- [ ] exact-head CI + real Torrent TV smoke for V2b;
+- [ ] mark production from confirmed post-authenticated/post-output media bytes;
+- [ ] persistent structured diagnostics/UI source for real peer status.
 
 ### V3 — buffer-pressure scheduler
 
