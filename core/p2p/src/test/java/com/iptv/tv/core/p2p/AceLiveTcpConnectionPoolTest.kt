@@ -57,6 +57,13 @@ class AceLiveTcpConnectionPoolTest {
                     .any { it.result.metadataUpdates.isNotEmpty() }
         }
 
+        val quality = pool.peerProductionSnapshot(nowMillis = 0L)
+        assertEquals(1, quality.connectedPeers)
+        assertEquals(1, quality.handshakedPeers)
+        assertEquals(1, quality.windowUsefulPeers)
+        assertEquals(1, quality.unchokedPeers)
+        assertEquals(0, quality.producingPeers)
+
         val dispatch = pool.scheduleAndDispatch(head = 12, nowMillis = 1)
 
         assertEquals(3, dispatch.scheduledFrames)
