@@ -2,26 +2,36 @@
 
 ## Цель стабильной версии
 
-Получить реально устанавливаемое Android TV / TV Box приложение, которое без внешних обязательных зависимостей воспроизводит обычные IPTV-потоки и BitTorrent-источники, умеет автоматически переключаться Media3 → LibVLC, показывает EPG при наличии/обнаружении источника и удобно управляется пультом, мышью и тачпадом.
+Получить реально устанавливаемое Android TV / TV Box приложение, которое без внешних обязательных P2P-зависимостей воспроизводит обычные IPTV-потоки, BitTorrent и Torrent TV/Ace Live. Главный технический приоритет проекта — собственный автономный live-P2P runtime: он должен быстро находить полезные пиры, удерживать непрерывный запас media, переживать деградацию отдельных peers и давать плееру стабильный локальный поток. Media3 остаётся основным декодером, LibVLC — изолированным fallback только для подтверждённых container/demux/codec проблем.
 
-## Текущий срез — 13 августа 2026
+Целевой ориентир P2P — не просто функциональная совместимость, а измеримое качество: быстрый zap здорового swarm, минимальный rebuffer, bounded recovery, отсутствие stale-session гонок и длительная стабильность на реальном TV Box. Внешний Ace Stream Engine не является runtime-стратегией, fallback или требованием проекта; сторонние приложения/движки используются только как поведенческий benchmark при A/B-проверке тех же каналов и устройств.
 
-Автономный Torrent TV маршрут работает без обязательного внешнего Ace Engine. PR #98 добавил first-success/fast-switch стратегию Ace Live, PR #99 убрал полное пересоздание Media3/MediaCodec при обычном IPTV zapping, а PR #100 перенёс XMLTV на bounded streaming parse и закрыл известный EPG OOM в коде.
+## Текущий срез — 14 августа 2026
 
-PR #101 завершает текущий bounded-startup инкремент и после зелёного exact-head CI сливается в `main`. В него вошли короткие DHT probe batches с немедленным возвратом первого валидного peer, фоновое расширение discovery, согласованный 30-секундный no-connected-peer guard, постоянная crash/lifecycle диагностика, 15-минутный backoff для oversized EPG и готовый каталог `📡 Ace Stream TV-Торрент ТВ` из 279 уникальных каналов.
+Автономный Torrent TV маршрут работает без внешнего Ace Engine. Базовая цепочка уже включает public tracker/DHT discovery, TCP peer pool, Ace Live handshake/window/chunk scheduling, bounded recovery, MPEG-TS resync, sliding loopback output и Media3/LibVLC playback.
 
-Ручные ARM-прогоны подтвердили, что встроенный Ace Live путь способен запускать реальные источники без внешнего Ace Engine и стал немного быстрее. При этом переключение всё ещё занимает примерно в 3–5 раз больше желаемого времени, отдельные источники доходят до bounded timeout, а сообщения о закрытии процесса требуют точной классификации по persistent log и ADB logcat. Поэтому это не stable release, а завершённая база для следующего узкого fast-zap/crash-hardening этапа.
+После PR #101 последовательно завершены дополнительные hardening-инкременты:
 
-Следующий порядок работ:
+- PR #102 — playback latency analyzer и точная разбивка `play_request → resolve → READY`;
+- PR #103 — cancellable rapid-zap coalescing P2P запросов;
+- PR #104 — прямой Ace startup продолжает peer progress внутри существующего soft-window без ослабления абсолютных bounds;
+- PR #105 — глобально уникальные playback session IDs, request ownership, отменяемый retry и защита от `A → B → C → late retry A`;
+- PR #106 — полный Torrent TV каталог всегда видим; динамическая P2P-доступность показывается как информационный last-known status и больше не скрывает каналы.
 
-1. ✅ слить PR #101 после полного exact-head CI и удалить его временную ветку;
-2. измерить на одном наборе каналов `play_request → peer_connected → first_media_byte → player_ready`, отдельно для обычного IPTV и Ace Live;
-3. отменять устаревшие discovery/metadata/player requests сразу при новом выборе канала и coalesce промежуточные rapid-zap запросы;
-4. сократить ожидание достижимых Ace Live источников без ослабления абсолютных bounds; недоступный источник должен завершаться понятной ошибкой, а не удерживать UI;
-5. классифицировать каждый выход процесса как Java crash, native crash, ANR или system kill и устранить подтверждённую причину;
-6. после короткой матрицы выполнить слабую сеть, двухчасовой и восьмичасовой release gate.
+Свежий полевой прогон на ARM/TV Box изменил приоритет работ. Одни и те же публичные Torrent TV источники способны быстро находить tracker/DHT peers, но наш runtime не всегда превращает найденные endpoints в устойчивый media-producing pool. В логе встречаются `peers=4..7` одновременно с итоговым no-peer/60-second timeout, а несколько успешно resolved потоков затем проводят около 66 секунд между `player_start` и `player_ready`. Это указывает не на один общий codec-дефект, а на незавершённую связку peer usefulness → throughput → prebuffer → loopback consumption → player buffering.
 
-Актуальные доказательства и критерии находятся в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md). Подробный разбор новых OOM-журналов и точный scope текущего PR сохранены в [`testing/playback-log-analysis-2026-08-12.md`](testing/playback-log-analysis-2026-08-12.md). Исторический P2P-разбор 11 августа остаётся в [`testing/playback-log-analysis-2026-08-11.md`](testing/playback-log-analysis-2026-08-11.md).
+Отдельно найден дефект startup prebuffer: старая AUTO-оценка делила retained media bytes на возраст всего runtime, включая discovery/handshake. После долгого поиска здоровый media stream выглядел искусственно медленным, target мог падать к 512 KiB, а forced-start также разрешал 512 KiB. Текущий инкремент начинает **Ace Live adaptive streaming core v1**: throughput считается только после первого media-byte, используется EWMA реальной media delivery, минимальный AUTO floor повышается, а forced-start больше не срабатывает по времени discovery и требует существенно большего media reserve.
+
+Следующий порядок P2P-работ:
+
+1. **Adaptive prebuffer v1** — исправить media-throughput clock, EWMA и безопасный startup reserve без увеличения 30/60-second failure bounds.
+2. **Media-producing peer accounting** — различать `discovered / connected / handshaked / unchoked / producing`, измерять aggregate media rate и freshness каждого полезного peer.
+3. **Adaptive live scheduler** — low/target/high watermarks, buffer-pressure feedback, adaptive request depth/in-flight и быстрый replacement деградировавших peers.
+4. **Loopback/player boundary** — измерять first HTTP read, producer/consumer rate и Media3 `BUFFERING/READY/first-frame`; выделить отдельный P2P LoadControl вместо generic IPTV assumptions.
+5. **Discontinuity/TS hardening** — PAT/PMT/random-access/IDR gating и корректное decoder recovery после подтверждённого live-window jump.
+6. **Acceptance** — фиксированная матрица Torrent TV, 20 rapid switches, weak network, peer loss, 2h/8h ARM soak без внешнего Ace Engine.
+
+Актуальные доказательства и критерии находятся в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md), детали runtime — в [`P2P_RUNTIME_NOTES.md`](P2P_RUNTIME_NOTES.md), а пошаговый clean-room план Ace Live — в [`ACE_LIVE_IMPLEMENTATION_PLAN.md`](ACE_LIVE_IMPLEMENTATION_PLAN.md).
 
 ## Завершено
 
@@ -29,24 +39,28 @@ PR #101 завершает текущий bounded-startup инкремент и 
 - импорт URL, файла, текста и провайдеров;
 - редактор, избранное, история и базовый EPG;
 - стартовый экран просмотра с готовыми списками;
-- Media3 и LibVLC fallback с автоматическим переключением;
-- legacy Ace Stream Android Service/AIDL compatibility integration;
+- Media3 и LibVLC fallback с автоматическим переключением для decoder/container/demux проблем;
+- legacy Ace Stream Android Service/AIDL compatibility integration как изолированный compatibility-код, не как Torrent TV fallback;
 - встроенный libtorrent backend для `magnet:`, infohash и `.torrent`;
 - встроенный Ace Live runtime для Torrent TV `content_id`/live infohash без автоматического внешнего fallback;
 - прямой peer discovery/handshake, live-window, chunk reassembly и локальная MPEG-TS выдача;
 - пересоздание P2P-сессии при retry, ограниченный stall watchdog и корректная остановка при переключении;
-- улучшенное обнаружение актуального Ace Stream приложения/службы;
 - PR #98: direct Ace Live startup и metadata resolution выполняются конкурентно с first-success semantics; отмена проигравших путей и regression coverage прошли real Torrent TV smoke без внешнего Ace Engine;
 - PR #99: Media3/MediaCodec stack переиспользуется при zapping обычных IPTV-каналов вместо полного `release()/rebuild` на каждый session change;
-- PR #100: XMLTV читается bounded streaming parser, тяжёлые EPG loads сериализованы, а malformed/low-memory failures имеют ограниченный negative-cache/fail-safe;
+- PR #100: XMLTV читается bounded streaming parser, тяжёлые EPG loads сериализованы, malformed/low-memory failures имеют ограниченный negative-cache/fail-safe;
 - PR #101: bounded Ace Live discovery согласован с no-connected-peer guard, первый DHT peer возвращается без ожидания полного обхода, диагностика переживает перезапуск процесса, oversized EPG получает длительный backoff, а готовый Torrent TV каталог содержит 279 уникальных Ace Stream каналов;
+- PR #102: добавлен analyzer фактической playback latency и получен baseline rapid-zap/resolve/READY;
+- PR #103: P2P rapid-zap coalescing отменяет промежуточные запросы, не затрагивая direct HTTP;
+- PR #104: direct Ace progress сохраняется внутри существующего 8-second soft-window при конкурентном metadata resolve;
+- PR #105: playback ownership/stale-session hardening исключает reuse sessionId, zombie retry и поздний takeover старого канала;
+- PR #106: Torrent TV каталог не фильтруется по временной доступности; UI показывает last-known P2P status без массового peer probing;
 - TV-интерфейс, пульт, мышь, тачпад и полноэкранный режим;
 - группы, подгруппы, восстановление фокуса и постраничная прокрутка в основных разделах;
 - Editor использует общий `TvScrollableLazyColumn`: TV-кнопки начала/Page Up/Page Down, PageUp/PageDown и ChannelUp/ChannelDown, mouse wheel/touchpad и scrollbar без изменения операций редактирования;
 - меню «Разделы» при открытии фокусирует первый доступный маршрут, удерживает TV-focus видимым и возвращает фокус на кнопку «Разделы» после закрытия/перехода; диалог выхода по умолчанию фокусирует безопасную «Отмена»;
 - общий `tvBringIntoViewOnFocus()` поддерживает focus-follow без изменения стандартного вида кнопок; `tvFocusOutline()` использует тот же механизм; standalone actions подключены на About и History, верхние вкладки Diagnostics, основная action-группа Favorites и action-группы Downloads также удерживаются в видимой области; Settings selection/section controls, основные source action-группы Importer, action controls Network Test и standalone action-группа Playlists также используют focus-follow; аппаратная приёмка на BlueStacks/TV Box остаётся обязательной;
 - D-pad smoke-тест меню «Разделы» проверяет реальное перемещение focus Scanner → Importer и активацию DPAD_CENTER; Android CI компилирует `:app:assembleDebugAndroidTest`, чтобы instrumentation-тесты не оставались непроверенным исходным кодом;
-- адаптивный буфер для слабых устройств;
+- адаптивный Media3 буфер для слабых устройств;
 - автоматические lint, unit, debug и release сборки;
 - очистка документации, workflow и бинарных артефактов.
 
@@ -55,13 +69,13 @@ PR #101 завершает текущий bounded-startup инкремент и 
 Этот порядок имеет приоритет над исторической нумерацией технических блоков ниже. Подтверждённый crash/ANR/memory regression всегда получает приоритет над функциональным roadmap.
 
 0. **Issue #40 — regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
-1. **Playback safety acceptance — EPG OOM.** Код PR #100 слит: streaming XMLTV, bounded memory/cache, negative-cache, serialized load и low-memory fail-safe. Осталось ручное подтверждение, что повреждённый/огромный EPG отключает только программу, а не playback process.
-2. **Master #44 — playback/P2P hardening.** PR #101 слит как bounded-startup baseline. Следующий узкий инкремент — измерить и сократить fast-zap latency, исключить stale requests, классифицировать закрытия процесса, затем улучшить непрерывную подкачку и peer/stall recovery.
-3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** После стабилизации критического playback path продолжить identity, navigation skeleton, dedup/source variants и единое избранное.
-4. **Issue #47 — EPG / Now-Next / real archive.** Полноценный ingestion/cache/matching/catch-up redesign строить поверх стабильной channel identity из #45; текущий OOM hotfix не должен превращаться в полный #47 redesign.
+1. **Playback safety acceptance — EPG OOM.** Код PR #100 слит: streaming XMLTV, bounded memory/cache, negative-cache, serialized load и low-memory fail-safe. Ручные логи после фикса не показывают возврата прежнего OOM в просмотренном окне; hardware regression продолжает входить в release gate.
+2. **Master #44 — автономный P2P/Ace Live engine.** Это текущий главный приоритет. Ownership/rapid-zap базовые гонки закрыты PR #103/#105; теперь работа идёт по adaptive streaming core: throughput/prebuffer → producing peers → scheduler feedback → player/TS boundary → weak-network/soak acceptance.
+3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** Продолжать после стабилизации критического playback path; PR #106 уже обеспечивает полный Torrent TV выбор без временного availability-filter.
+4. **Issue #47 — EPG / Now-Next / real archive.** Полноценный ingestion/cache/matching/catch-up redesign строить поверх стабильной channel identity из #45.
 5. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
 6. **Issue #43 — contextual Help + built-in Help + docs baseline.** Завершать после стабилизации основных экранов, чтобы не переписывать подсказки после Catalog/EPG/Player изменений.
-7. **Master #44 release gate.** Hardware/playback hardening, P2P acceptance, D-pad-only/mouse-only sessions, weak network, 2h/8h soak, signed release и финальная синхронизация docs. Только после этого закрывать #44 и объявлять stable.
+7. **Master #44 release gate.** Hardware/playback hardening, автономная P2P acceptance, D-pad-only/mouse-only sessions, weak network, 2h/8h soak, signed release и финальная синхронизация docs. Только после этого закрывать #44 и объявлять stable.
 
 ## Этап 1: canonical catalog hierarchy и provenance (#45)
 
@@ -82,7 +96,7 @@ PR #101 завершает текущий bounded-startup инкремент и 
 
 ## Этап 2: встроенный P2P engine и Ace transport
 
-Внешний Ace Stream больше не считается достаточным решением. В APK находятся собственные ordinary BitTorrent и Ace Live backends; текущий приоритет — стабильная подкачка, быстрое переключение и аппаратная приёмка автономного playback path после устранения общего EPG memory crash.
+Внешний Ace Stream Engine не является целевым backend, обязательной зависимостью или fallback для Torrent TV. В APK развиваются собственные ordinary BitTorrent и Ace Live backends. Текущий главный приоритет — довести автономный Ace Live streaming path до более быстрого и устойчивого поведения на реальном TV Box за счёт peer selection, scheduling, adaptive buffering и восстановления, а не за счёт увеличения таймаутов.
 
 1. ✅ Добавлен модуль `core:p2p` на базе libtorrent/libtorrent4j.
 2. ✅ Поддержаны `magnet:`, infohash, локальный `.torrent` и HTTP(S) URL на `.torrent`.
@@ -93,37 +107,40 @@ PR #101 завершает текущий bounded-startup инкремент и 
 7. ✅ `P2pEngineRouter` оставляет embedded backend основным; Torrent TV `content_id` и live infohash не падают автоматически во внешний Ace Engine.
 8. ✅ Отдельная модель Ace Live не смешивает `content_id`, live infohash и BitTorrent BTIH.
 9. ✅ PR #98 сократил serial startup wait: direct swarm и metadata resolution теперь гоняются first-success, проигравшие операции отменяются; regression тест и real Torrent TV smoke прошли перед merge.
-10. ✅ PR #101: bounded startup discovery, exact-head CI, ARM-логи, persistent diagnostics и готовый каталог из 279 Ace Stream каналов завершены; дальнейшее ускорение переключения вынесено в следующий инкремент.
+10. ✅ PR #101: bounded startup discovery, exact-head CI, ARM-логи, persistent diagnostics и готовый каталог из 279 Ace Stream каналов завершены.
+11. ✅ PR #103/#105: rapid-zap и playback ownership защищены от промежуточных/zombie requests.
+12. ✅ PR #106: availability больше не удаляет Torrent TV канал из пользовательского выбора.
+13. 🚧 Adaptive streaming core v1: реальный media throughput, безопасный time-based prebuffer, producing-peer accounting и buffer-pressure scheduling.
 
 ### Детализация Ace transport / torrent-TV
 
-1. Не считать `content_id` эквивалентом BitTorrent infohash. Явный `acestream:?infohash=...` может идти во встроенный BitTorrent backend, а чистый `acestream://content_id` сначала должен быть разрешён через transport metadata.
-2. Использовать публичный контракт официального `acestream/acestream-android-sdk`: `get_media_files` в полном режиме с `expand_wrapper=1` и `dump_transport_file=1`; хранить раздельно `infohash`, `transport_file_data`, `transport_file_cache_key`, `files[]` и `wrapper_data`.
+1. Не считать `content_id` эквивалентом BitTorrent infohash. Явный `acestream:?infohash=...` и ordinary BTIH маршрутизируются только по подтверждённому transport contract; чистый `acestream://content_id` остаётся Ace transport identity.
+2. Хранить раздельно `content_id`, live swarm identity, `transport_file_data`, transport metadata и ordinary BitTorrent identity; не угадывать преобразования между ними.
 3. Различать `type=vod|live` и `transport_type=bt|hls|wrapper`. Только подтверждённый non-live BitTorrent transport разрешается передавать стандартному libtorrent.
 4. Поддерживать явную модель `.acelive`/Ace Live descriptor и отдельную диагностику маршрута; не скрывать сбои `content_id` запуском внешнего Ace Engine.
-5. Встроенный Ace Live backend покрывает transport descriptor, live window, bounded piece/chunk scheduling, DHT/tracker peer discovery, восстановление пула и локальный MPEG-TS output. Следующий шаг — измеримая подкачка, быстрое переключение и длительная аппаратная проверка.
-6. Выполнить аппаратную приёмку на нескольких `acestream://content_id`, прямых Ace `infohash`, обычных magnet/.torrent и `.acelive` источниках.
+5. Встроенный Ace Live backend покрывает transport descriptor, live window, bounded piece/chunk scheduling, DHT/tracker peer discovery, восстановление пула и локальный MPEG-TS output. Текущий шаг — измеримая непрерывная media delivery и feedback-driven scheduling.
+6. Выполнить аппаратную приёмку на нескольких `acestream://content_id`, прямых Ace live identities, обычных magnet/.torrent и поддерживаемых `.acelive` источниках.
 
 ### Исследовательские ориентиры и лицензионные границы
 
-- `acestream/acestream-android-sdk` — основной открытый эталон transport descriptor/API. Лицензия MIT; публичные модели и API можно адаптировать с соблюдением notice.
-- `Flux-1.38.apk` — статический анализ подтвердил архитектуру встроенного torrent streaming через локальный HTTP и Go-слой на базе `anacrolix/torrent`/`tsynik/torrent`. APK используется только для поиска публичных upstream-реализаций и архитектурных ориентиров; декомпилированный/бинарный код не переносится.
-- `YouROK/TorrServer` — полезный эталон поведения для streaming read-ahead, reader lifecycle, cache windows и приоритетов pieces. Проект GPL-3.0, поэтому прямое копирование его реализации в текущую кодовую базу без отдельного лицензионного решения не допускается.
-- `proninyaroslav/libretorrent` — полезный эталон libtorrent4j для sequential download, first/last piece priority, alerts и metadata lifecycle. Проект GPL-3.0; использовать для сравнения поведения и API, а не для прямого копирования кода.
-- `tsynik/torrent` — fork torrent engine, обнаруженный как upstream в Flux; лицензия MPL-2.0. Можно исследовать алгоритмы и поведение, но прямое включение исходных файлов потребует соблюдения MPL на уровне затронутых файлов.
-- `AceStreamCoreLive` 3.1.67, официальный Ace Stream Engine 3.1.73 и AceServe APK — использовать как доказательство существования отдельного Ace Live subsystem и как поведенческую карту компонентов/терминов. Статическое сравнение DHT подтвердило практику параллельных запросов с коротким request timeout; текущая clean-room реализация выбирает более консервативное ветвление 4 для TV memory/IO bounds. Закрытые/AOT/native реализации не переносить в исходный код приложения.
+- открытые спецификации BitTorrent/BEP и публичные API/модели используются как первичные контракты там, где применимо;
+- `Flux`, TorrServe/TorrServer, LibreTorrent и другие продукты используются как архитектурные/поведенческие ориентиры streaming lifecycle, reader ownership, caching и peer scheduling; чужой код не переносится без совместимой лицензии;
+- официальный Ace Stream Engine и приложения, использующие его, служат только A/B benchmark: время запуска, устойчивость, recovery и поведение на тех же каналах/устройстве. Закрытые/AOT/native реализации не копируются и не становятся зависимостью проекта;
+- развитие собственного Ace Live runtime остаётся clean-room и опирается на самостоятельно проверяемые wire/runtime контракты и наши тестовые наблюдения.
 
 ### Следующие P2P-инкременты
 
-1. Добавить метрики retained buffer, download/consume rate, first-media-byte, startup, rebuffer, peer count и stall reason.
-2. Разделить `playbackRequestId` и active `playbackSessionId`; все callbacks обязаны соблюдать `latest request wins`.
-3. Обеспечить непрерывное пополнение live-буфера: adaptive low/target/high-water, feedback-driven request pipeline и ограниченное восстановление после потери peers.
-4. После PR #101 измерить остаточную задержку переключения и не возвращать serial 60-second wait, уже устранённый PR #98.
-5. Разделить unavailable source, dead/stale swarm, insufficient buffer, transport timeout и decoder/demux error в UI и экспортируемой диагностике.
-6. Подтвердить PR #100 на 256-MiB/аналогичном устройстве; не считать штатную EPG-отмену playback error.
-7. Расширить `.acelive` routing/diagnostics без ошибочного преобразования в обычный magnet.
-8. Сохранять ordinary BitTorrent regression baseline: magnet/infohash/local/HTTP torrent, read-ahead, seek и local HTTP Range.
-9. Провести матрицу из обычных IPTV и Torrent TV каналов: 20 переключений, повторное открытие, слабая сеть, потеря peers, двухчасовой и восьмичасовой просмотр.
+1. 🚧 **Adaptive prebuffer v1:** throughput clock начинается с первого media-byte; EWMA строится по реальному приросту media; discovery latency не занижает target; AUTO больше не стартует с прежнего 512-KiB floor.
+2. Добавить `MediaProducingPeerTracker`: `discovered/connected/handshaked/unchoked/producing`, bytes/time/freshness и aggregate media delivery rate.
+3. Добавить `LiveBufferController`: buffer seconds + critical/low/target/high watermarks и hysteresis.
+4. Сделать request depth/in-flight адаптивным к buffer pressure и фактической производительности peers вместо постоянного `2 pieces/peer`.
+5. При устойчивом `buffer-ready` завершать startup-specific DHT expansion и переходить в lightweight refill; discovery не должен конкурировать с уже работающим media path.
+6. Добавить player-boundary telemetry: first localhost HTTP open/read, producer/consumer rate, Media3 BUFFERING/READY/first-frame и rebuffer count.
+7. Выделить P2P-specific Media3 LoadControl для уже стабилизированного localhost live stream; не использовать generic IPTV buffering как единственный feedback layer.
+8. Разделить unavailable source, dead/stale swarm, insufficient throughput/buffer, transport timeout и decoder/demux error в экспортируемой диагностике.
+9. Wire output discontinuity в TS keyframe/PAT/PMT recovery без переноса media-format логики внутрь peer protocol scheduler.
+10. Сохранять ordinary BitTorrent regression baseline: magnet/infohash/local/HTTP torrent, read-ahead, seek и local HTTP Range.
+11. Провести матрицу из обычных IPTV и Torrent TV каналов: cold/warm start, 20 переключений, повторное открытие, слабая сеть, потеря peers, двухчасовой и восьмичасовой просмотр.
 
 ## Этап 3: EPG, Now/Next и реальный архив (#47)
 
@@ -171,15 +188,16 @@ PR #101 завершает текущий bounded-startup инкремент и 
 1. Проверить D-pad, оптическую мышь и тачпад на BlueStacks 5, слабом и среднем TV Box.
 2. Проверить готовые списки и Media3 → LibVLC fallback на реальных потоках.
 3. Проверить rapid-zap обычного IPTV на 256-MiB/аналогичном heap: malformed/large EPG не должен вызывать OOM/crash.
-4. Проверить magnet/torrent и реальные торрент-ТВ источники через встроенный P2P engine.
-5. Проверить, что Torrent TV live-буфер продолжает пополняться после старта, а rebuffer и stall измеряются.
+4. Проверить magnet/torrent и реальные Torrent TV источники через **только встроенный** P2P engine; отсутствие внешнего Ace Engine является нормальной тестовой конфигурацией.
+5. Проверить, что Torrent TV live-буфер продолжает пополняться после старта, а producer/consumer rate, buffer seconds, rebuffer и stall измеряются.
 6. Выполнить серию из 20 переключений без зависшей старой P2P-сессии; долгое ожидание должно завершаться ограниченной ошибкой.
-7. Проверить EPG на нескольких независимых XMLTV/провайдерских источниках, включая malformed и oversized fixture.
-8. Выполнить минимум двухчасовой тест непрерывного просмотра.
-9. Выполнить восьмичасовой soak-тест перед стабильным релизом.
-10. Проверить слабую сеть: 2–5 Мбит/с, задержка 120–250 мс, потеря 1–3%.
-11. Подготовить production keystore, собрать подписанный APK и проверить подпись.
-12. Заполнить отчёт приёмки и создать GitHub Release.
+7. Проверить деградацию одного/нескольких producing peers: playback либо восстанавливается в bounded budget, либо выдаёт точную причину без бесконечного retry.
+8. Проверить EPG на нескольких независимых XMLTV/провайдерских источниках, включая malformed и oversized fixture.
+9. Выполнить минимум двухчасовой тест непрерывного просмотра.
+10. Выполнить восьмичасовой soak-тест перед стабильным релизом.
+11. Проверить слабую сеть: 2–5 Мбит/с, задержка 120–250 мс, потеря 1–3%.
+12. Подготовить production keystore, собрать подписанный APK и проверить подпись.
+13. Заполнить отчёт приёмки и создать GitHub Release.
 
 ## После релиза
 
