@@ -468,6 +468,7 @@ class AceLiveEmbeddedEngine(
                     }
                 )
             )
+            pool.recordDiscoveredCandidateCount(result.peers.size)
             if (isInitialDiscovery) {
                 when (aceLiveStartupDhtRefillPlan(result)) {
                     AceLiveStartupDhtRefillPlan.NONE -> Unit
