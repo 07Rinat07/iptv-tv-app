@@ -1,6 +1,6 @@
 # Rinat IPTV
 
-**Rinat IPTV** — Android TV / TV Box приложение для просмотра IPTV с интерфейсом, рассчитанным на телевизор, пульт и мышь. Проект активно развивается: обычное IPTV, BitTorrent и автономный Ace Live уже имеют рабочие встроенные маршруты, но стабильность воспроизведения на всём наборе источников ещё проходит доводку.
+**Rinat IPTV** — Android TV / TV Box приложение для просмотра IPTV с интерфейсом, рассчитанным на телевизор, пульт и мышь. Проект активно развивается: обычное IPTV, BitTorrent и автономный Ace Live имеют собственные встроенные маршруты. Главный технический приоритет — довести собственный Torrent TV/Ace Live runtime до быстрого и устойчивого воспроизведения без внешнего Ace Stream Engine.
 
 <p align="center">
   <img src="docs/images/rinat-iptv-player-preview.svg" alt="Rinat IPTV — презентационный вид плеера" width="900">
@@ -15,13 +15,14 @@
 - **Сканер публичных источников** для поиска новых плейлистов с последующим просмотром и импортом найденных результатов.
 - **Редактор каналов и плейлистов**: работа со списками, группами и подгруппами без необходимости редактировать M3U вручную.
 - **Избранное, история и EPG**: быстрый доступ к сохранённым каналам, истории просмотра и программе передач, когда она доступна у источника.
-- **Media3 / ExoPlayer как основной плеер** с изолированным **LibVLC fallback**, если поток корректнее воспроизводится через VLC.
+- **Media3 / ExoPlayer как основной плеер** с изолированным **LibVLC fallback** для подтверждённых container/demux/codec несовместимостей.
 - **Встроенный BitTorrent/P2P backend** для `magnet:`, infohash, локальных `.torrent` и HTTP(S)-ссылок на `.torrent`; поток для плеера отдаётся через локальный HTTP Range.
-- **Встроенный Ace Live backend** для подписанного live peer-протокола и локальной MPEG-TS выдачи; Torrent TV `content_id` и live infohash не переключаются автоматически на внешний Ace Engine.
+- **Собственный встроенный Ace Live backend**: tracker/DHT discovery, peer lifecycle, live-window/chunk scheduling, recovery и локальная MPEG-TS выдача. Torrent TV не требует внешнего Ace Engine.
+- **Полный Torrent TV каталог**: временная P2P-доступность показывается как статус и не скрывает канал из пользовательского выбора.
 - **Управление с телевизора**: D-pad, Enter/Center, PageUp/PageDown, ChannelUp/ChannelDown, мышь, колесо, тачпад и сенсорный экран.
 - **TV-first оформление**: в тёмном режиме используется сине-чёрная палитра с голубым акцентом и хорошо заметным focus; светлая системная тема также поддерживается.
 - **TV-friendly навигация**: возврат focus после меню и диалогов, прокрутка сфокусированного элемента в видимую область.
-- **Полноэкранный просмотр**, автоскрытие элементов управления и адаптивный буфер для менее производительных TV Box.
+- **Полноэкранный просмотр**, автоскрытие элементов управления и адаптивные playback policies для TV Box.
 - **Диагностика и техническая информация** для проверки сети, playback/P2P маршрута и причин fallback.
 - **Экспорт и обслуживание данных**: сохранение списков и очистка устаревших/ошибочных данных через предусмотренные экраны приложения.
 
@@ -36,11 +37,19 @@
 
 ## Статус P2P / Torrent TV
 
-В проекте уже есть встроенный P2P-движок на libtorrent/libtorrent4j для обычного BitTorrent transport. Он поддерживает подготовку torrent metadata, приоритетную подкачку pieces, seek/read-ahead и локальную HTTP Range выдачу в Media3/LibVLC.
+Ordinary BitTorrent обслуживается встроенным libtorrent/libtorrent4j backend: metadata, streaming priorities, read-ahead/seek и локальная HTTP Range выдача.
 
-Ace Live обрабатывается отдельным встроенным runtime: DHT/tracker discovery, подписанное рукопожатие, live-window/chunk scheduling, восстановление ограниченных разрывов и локальная MPEG-TS выдача. Ace `content_id` не считается BitTorrent infohash. Для публичного live `content_id` используется прямой Ace peer-wire swarm, затем публичный каталог и metadata swarm. Повтор после stall создаёт новую P2P-сессию, а не переиспользует остановившийся локальный URL.
+Ace Live обрабатывается отдельным собственным runtime. `content_id`, live swarm identity и ordinary BitTorrent BTIH не смешиваются. Runtime выполняет bounded tracker/DHT discovery, Ace peer handshake, live-window scheduling, chunk/piece reassembly, recovery и выдаёт MPEG-TS через `127.0.0.1` плееру.
 
-Проверочный канал успешно воспроизводился на чистом Android API 34 без установленного Ace Engine, но текущая сборка ещё не считается стабильной: переключение каналов бывает долгим и неуспешным, а встроенная подкачка не всегда удерживает достаточный live-буфер. На большинстве реально запустившихся каналов звук нормальный; редкие audio-дефекты остаются в матрице проверки. Подробный подтверждённый статус, ограничения и критерии следующего этапа описаны в [`docs/PLAYBACK_STATUS.md`](docs/PLAYBACK_STATUS.md).
+**Внешний Ace Stream Engine не является целевым backend или fallback для Torrent TV.** Разработка собственного движка — основной приоритет проекта. Сторонние решения используются только как benchmark: на одинаковом канале/устройстве сравниваются время запуска, rebuffer, recovery и длительная стабильность.
+
+Текущий этап — **Ace Live adaptive streaming core**. По полевым TV Box логам найдено, что обнаруженные DHT/tracker endpoints ещё не гарантируют media-producing peers, а старая startup-buffer оценка включала discovery latency в media rate и могла открыть поток с недостаточным запасом. В первой версии adaptive prebuffer throughput clock перенесён на first-media, добавлен EWMA и усилены startup reserve rules. Далее идут producing-peer accounting, buffer watermarks, adaptive request depth и отдельная telemetry loopback/Media3.
+
+Подробности:
+
+- [`docs/ACE_LIVE_ADAPTIVE_STREAMING_CORE.md`](docs/ACE_LIVE_ADAPTIVE_STREAMING_CORE.md) — текущая архитектурная цель;
+- [`docs/PLAYBACK_STATUS.md`](docs/PLAYBACK_STATUS.md) — подтверждённые результаты и blockers;
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — порядок разработки и acceptance.
 
 ## Требования
 
@@ -80,15 +89,15 @@ APK/AAB не хранятся в Git. GitHub Actions прикладывает с
 - unit-тесты модулей;
 - компиляцию Android instrumentation tests;
 - `assembleDebug`;
-- `assembleRelease`;
+- release/ARM APK сборки;
+- real Torrent TV playback smoke для P2P/runtime изменений без внешнего Ace Engine;
 - публикацию APK и отчётов как временных GitHub Actions artifacts.
 
 ## Документация
 
 Актуальная документация находится в [`docs/README.md`](docs/README.md).  
-Текущий статус воспроизведения — в [`docs/PLAYBACK_STATUS.md`](docs/PLAYBACK_STATUS.md).
-
-План развития и оставшиеся проверки — в [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Текущий статус воспроизведения — в [`docs/PLAYBACK_STATUS.md`](docs/PLAYBACK_STATUS.md).  
+План развития — в [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Автор
 
