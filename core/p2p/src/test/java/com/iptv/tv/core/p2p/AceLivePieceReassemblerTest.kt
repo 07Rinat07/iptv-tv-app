@@ -19,6 +19,7 @@ class AceLivePieceReassemblerTest {
         assertEquals(AceLiveReassemblyDisposition.ACCEPTED, result.disposition)
         assertEquals(1, result.emittedPieces.size)
         assertEquals(10L, result.emittedPieces.single().piece)
+        assertEquals(1L, result.emittedPieces.single().sourcePeerId)
         assertArrayEquals(byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), result.emittedPieces.single().data)
         assertArrayEquals(header, result.emittedPieces.single().pieceHeader)
         assertEquals(11L, result.nextNeededPiece)
@@ -31,15 +32,16 @@ class AceLivePieceReassemblerTest {
         val header10 = header(1000.0)
         val header11 = header(1001.0)
 
-        completePiece(reassembler, piece = 11, header = header11, base = 20).also { result ->
+        completePiece(reassembler, piece = 11, header = header11, base = 20, peerId = 2).also { result ->
             assertTrue(result.emittedPieces.isEmpty())
         }
         assertEquals(listOf(11L), reassembler.bufferedPieces())
         assertEquals(10L, reassembler.nextNeededPiece())
 
-        val result = completePiece(reassembler, piece = 10, header = header10, base = 10)
+        val result = completePiece(reassembler, piece = 10, header = header10, base = 10, peerId = 1)
 
         assertEquals(listOf(10L, 11L), result.emittedPieces.map { it.piece })
+        assertEquals(listOf(1L, 2L), result.emittedPieces.map { it.sourcePeerId })
         assertArrayEquals(expectedPieceBytes(10), result.emittedPieces[0].data)
         assertArrayEquals(expectedPieceBytes(20), result.emittedPieces[1].data)
         assertEquals(12L, result.nextNeededPiece)
@@ -138,6 +140,7 @@ class AceLivePieceReassemblerTest {
         val emitted = reassembler.skipTo(11)
 
         assertEquals(listOf(11L), emitted.map { it.piece })
+        assertEquals(1L, emitted.single().sourcePeerId)
         assertArrayEquals(expectedPieceBytes(20), emitted.single().data)
         assertEquals(12L, reassembler.nextNeededPiece())
         assertEquals(0, reassembler.bufferedPieceCount())
@@ -157,6 +160,7 @@ class AceLivePieceReassemblerTest {
         val result = completePiece(reassembler, piece = maxPiece, header = header, base = 30)
 
         assertEquals(listOf(maxPiece), result.emittedPieces.map { it.piece })
+        assertEquals(1L, result.emittedPieces.single().sourcePeerId)
         assertNull(result.nextNeededPiece)
         assertNull(reassembler.nextNeededPiece())
         assertEquals(
@@ -203,16 +207,17 @@ class AceLivePieceReassemblerTest {
         reassembler: AceLivePieceReassembler,
         piece: Long,
         header: ByteArray,
-        base: Int
+        base: Int,
+        peerId: Long = 1
     ): AceLiveReassemblyResult {
         reassembler.appendAcceptedChunk(
-            chunk(piece, 0, header, byteArrayOf(base.toByte(), (base + 1).toByte(), (base + 2).toByte(), (base + 3).toByte()))
+            chunk(piece, 0, header, byteArrayOf(base.toByte(), (base + 1).toByte(), (base + 2).toByte(), (base + 3).toByte()), peerId)
         )
         reassembler.appendAcceptedChunk(
-            chunk(piece, 1, header, byteArrayOf((base + 4).toByte(), (base + 5).toByte(), (base + 6).toByte(), (base + 7).toByte()))
+            chunk(piece, 1, header, byteArrayOf((base + 4).toByte(), (base + 5).toByte(), (base + 6).toByte(), (base + 7).toByte()), peerId)
         )
         return reassembler.appendAcceptedChunk(
-            chunk(piece, 2, header, byteArrayOf((base + 8).toByte(), (base + 9).toByte()))
+            chunk(piece, 2, header, byteArrayOf((base + 8).toByte(), (base + 9).toByte()), peerId)
         )
     }
 
@@ -226,9 +231,10 @@ class AceLivePieceReassemblerTest {
         piece: Long,
         index: Int,
         header: ByteArray,
-        data: ByteArray
+        data: ByteArray,
+        peerId: Long = 1
     ) = AceLiveIncomingChunk(
-        peerId = 1,
+        peerId = peerId,
         streamIndex = 0,
         piece = piece,
         chunkIndex = index,

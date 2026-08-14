@@ -195,6 +195,18 @@ class AceLiveTcpConnectionPool(
     }
 
     /**
+     * Records only media that crossed authentication/resync and was accepted by the live output.
+     * Network ingress alone is deliberately insufficient to mark a peer as producing.
+     */
+    fun recordMediaProduced(
+        peerId: Long,
+        mediaBytes: Long,
+        nowMillis: Long = clockMillis()
+    ) {
+        productionTracker.onMediaProduced(peerId, mediaBytes, nowMillis)
+    }
+
+    /**
      * Runs one serialized scheduling tick and writes selected request frames to matching peers.
      *
      * Routes are dispatched concurrently. Each peer has at most one in-flight socket write and a
@@ -617,12 +629,7 @@ class AceLiveTcpConnectionPool(
                 productionTracker.onConnectFailed(event.peerId)
             is AceLiveTcpPoolEvent.Disconnected ->
                 productionTracker.onDisconnected(event.peerId)
-            is AceLiveTcpPoolEvent.Ingress -> {
-                val contiguousBytes = event.result.emittedPieces.sumOf { piece -> piece.data.size.toLong() }
-                if (contiguousBytes > 0L) {
-                    productionTracker.onMediaProduced(event.peerId, contiguousBytes, now)
-                }
-            }
+            is AceLiveTcpPoolEvent.Ingress -> Unit
         }
         runCatching { onEvent(event) }
     }

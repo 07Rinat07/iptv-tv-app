@@ -664,23 +664,34 @@ class AceLiveEmbeddedEngine(
                     is P2pResult.Success -> {
                         val media = resynchronizer.consume(verified.data)
                         if (media.isNotEmpty()) {
-                            mediaBuffer.append(media)
-                            val now = System.currentTimeMillis()
-                            lastMediaAppendAt.set(now)
-                            if (!startup.isCompleted) {
-                                val decision = startupBufferPolicy.evaluate(
-                                    bufferedBytes = mediaBuffer.retainedBytes().toLong(),
-                                    elapsedMillis = (now - startupStartedAtMillis.get()).coerceAtLeast(1L)
+                            val acceptedOutputBytes = mediaBuffer.append(media)
+                            if (acceptedOutputBytes > 0) {
+                                val now = System.currentTimeMillis()
+                                val attributableBytes = minOf(
+                                    acceptedOutputBytes,
+                                    verified.data.size
                                 )
-                                if (decision.ready) {
-                                    Log.i(
-                                        LOG_TAG,
-                                        "event=startup_buffer_ready buffered_bytes=${mediaBuffer.retainedBytes()} " +
-                                            "target_bytes=${decision.targetBytes} " +
-                                            "rate_bps=${decision.observedBytesPerSecond} forced=${decision.forced} " +
-                                            "elapsed_ms=${startupElapsedMillis(now)}"
+                                pool.recordMediaProduced(
+                                    peerId = piece.sourcePeerId,
+                                    mediaBytes = attributableBytes.toLong(),
+                                    nowMillis = now
+                                )
+                                lastMediaAppendAt.set(now)
+                                if (!startup.isCompleted) {
+                                    val decision = startupBufferPolicy.evaluate(
+                                        bufferedBytes = mediaBuffer.retainedBytes().toLong(),
+                                        elapsedMillis = (now - startupStartedAtMillis.get()).coerceAtLeast(1L)
                                     )
-                                    startup.complete(Unit)
+                                    if (decision.ready) {
+                                        Log.i(
+                                            LOG_TAG,
+                                            "event=startup_buffer_ready buffered_bytes=${mediaBuffer.retainedBytes()} " +
+                                                "target_bytes=${decision.targetBytes} " +
+                                                "rate_bps=${decision.observedBytesPerSecond} forced=${decision.forced} " +
+                                                "elapsed_ms=${startupElapsedMillis(now)}"
+                                        )
+                                        startup.complete(Unit)
+                                    }
                                 }
                             }
                         }
