@@ -1,0 +1,41 @@
+name: Apply playback ownership patch
+
+on:
+  push:
+    branches:
+      - agent/playback-ownership-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v6
+        with:
+          ref: agent/playback-ownership-hardening
+          fetch-depth: 0
+
+      - name: Apply deterministic source patch
+        run: python3 tools/apply_playback_ownership_patch.py
+
+      - name: Commit patched sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "No source changes were produced"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt \
+            feature/player/src/test/java/com/iptv/tv/feature/player/PlayerViewModelMultiviewTest.kt \
+            .github/workflows/android.yml
+          git commit -m "fix(player): harden playback request ownership"
+          git push origin HEAD:agent/playback-ownership-hardening
