@@ -1,102 +1,125 @@
 # Статус воспроизведения
 
-Актуальный срез: 13 августа 2026 года.
+Актуальный срез: **14 августа 2026 года**.
+
+## Главный приоритет
+
+Собственный автономный P2P/Ace Live runtime является текущим главным техническим приоритетом проекта. Torrent TV `content_id` и live identities должны воспроизводиться без внешнего Ace Stream Engine. Внешние продукты могут использоваться только как поведенческий A/B benchmark на том же канале/устройстве, но не как fallback или условие успешной работы приложения.
+
+Цель текущего этапа — не увеличивать timeout, а улучшить цепочку:
+
+`peer discovery → useful/media-producing peers → throughput → adaptive live buffer → loopback → Media3`.
 
 ## Что подтверждено
 
-- Обычные IPTV-потоки открываются через Media3; LibVLC используется только для ошибок контейнера, demux или кодека.
-- PR #99 уже убрал полное пересоздание Media3/MediaCodec на каждом переключении обычного IPTV: при совместимых HTTP headers/buffer config Media3 stack переиспользуется между channel sessions.
+- Обычные IPTV-потоки открываются через Media3; LibVLC используется только для ошибок container/demux/codec класса.
+- PR #99 убрал полное пересоздание Media3/MediaCodec на каждом обычном IPTV zap при совместимых transport settings.
 - `magnet:`, BitTorrent infohash и `.torrent` обслуживаются встроенным libtorrent backend.
-- Torrent TV `content_id` и live infohash обслуживаются встроенным Ace Live runtime без автоматического запуска внешнего Ace Engine.
-- PR #98 уже находится в `main`: direct Ace Live swarm и metadata resolution выполняются first-success, а Android CI #425 перед merge прошёл real Torrent TV playback smoke без Ace Engine.
-- PR #100 находится в `main`: production XMLTV path использует bounded streaming parse, retained/cache limits, serialized heavy load, negative-cache/backoff и low-memory guard.
-- Новые пользовательские журналы отдельно подтверждают последовательный успешный `resolve/start/ready` обычных каналов с `streamKind=IPTV поток (прямой URL)` непосредственно перед закрытием процесса. Это доказывает, что текущий crash не является только P2P/Ace-проблемой.
+- Torrent TV `content_id` и live identities обслуживаются встроенным Ace Live runtime без автоматического запуска внешнего Ace Engine.
+- PR #98 ввёл first-success race direct Ace Live / metadata.
+- PR #101 закрепил bounded startup discovery, persistent diagnostics и каталог из 279 Torrent TV каналов.
+- PR #102 добавил latency analyzer.
+- PR #103 добавил cancellable rapid-zap coalescing.
+- PR #104 сохранил direct-Ace progress внутри существующего soft window при конкурентном metadata resolution.
+- PR #105 закрыл reuse sessionId/zombie retry/stale callback takeover и regression `A → B → C → late retry A`.
+- PR #106 убрал availability-filter из Torrent TV каталога: весь выбор остаётся видимым, статус является информационным.
+- EPG OOM hotfix PR #100 остаётся в `main`: production XMLTV path bounded/streaming, тяжёлые loads сериализованы и имеют backoff/low-memory guard.
 
-Эти результаты подтверждают работоспособность основных playback routes, но stable release пока блокируется ручным memory-safety подтверждением и последующим playback hardening.
+## Свежий ARM/TV Box лог — ключевые выводы
 
-## EPG OOM: код исправлен, аппаратная приёмка не завершена
+Экспорт от 14 августа показывает, что массовую проблему Torrent TV нельзя объяснить только плохими каналами или codec support.
 
-Пользовательские журналы от 12 августа фиксируют `OutOfMemoryError` в `OkHttp TaskRunner` на устройстве/окружении с heap около 256 MiB. В одном воспроизведении непосредственно перед crash обычный IPTV-канал был успешно запущен, а heap достиг примерно 252/256 MiB. В другом прогоне после серии прямых IPTV channel switches приложение снова завершилось из-за OOM/fragmentation.
+### Discovery не равен playable peer
 
-До PR #100 один и тот же malformed XMLTV (`XmlPullParserException: unterminated entity ref`) мог повторно скачиваться и разбираться при последовательном переключении каналов, потому что failed EPG не имел negative-cache.
+В нескольких сессиях initial tracker быстро возвращает один endpoint, после чего DHT находит дополнительные endpoints. При этом встречаются ситуации:
 
-До PR #100 production XMLTV path загружал полный ответ через `ResponseBody.bytes()`, одновременно удерживал крупный `ByteArray` и строил EPG maps/lists, а затем создавал дополнительные нормализованные collections. Слитый PR #100 заменил этот path на bounded streaming parse из `ResponseBody.byteStream()`, добавил retained-data/cache limits, serialized heavy load, negative-cache/backoff и low-memory guard. Полноценная приёмка всё ещё требует ручного rapid-zap smoke на 256-MiB/аналогичном устройстве.
+- `peers=4..5` и затем полный 60-second source timeout;
+- `peers=4..7` и затем no-peer error;
+- один канал получает 1 initial peer, позже DHT видит 7 endpoints, но runtime всё равно не формирует устойчивый media path.
 
-Подробный разбор и точный scope исправления находятся в [`testing/playback-log-analysis-2026-08-12.md`](testing/playback-log-analysis-2026-08-12.md).
+Следовательно текущий `peers=N` означает прежде всего **discovered endpoints**, а не обязательно `connected/handshaked/unchoked/media-producing peers`.
 
-## PR #101: exact-head CI пройден, ARM-проверка выявила следующий диагностический пробел
+Следующий peer-accounting слой обязан различать эти стадии и измерять media freshness/rate каждого действительно полезного peer.
 
-PR #101 сокращает Ace Live startup без возврата к небезопасному бесконечному retry:
+### P2P resolve и decoder startup — разные проблемы
 
-- initial tracker fast path запускает первый peer немедленно, а при 1–3 кандидатах выполняет обязательный DHT-only refill;
-- 30-секундный no-connected-peer budget переустанавливается после обязательного DHT expansion, если TCP connection ещё не состоялся;
-- Mainline DHT выполняет до четырёх KRPC запросов параллельно под существующими 2-second request, 15-second absolute walk и 64-query bounds;
-- только положительный same-swarm DHT result переиспользуется 20 секунд; пустой bounded walk не кэшируется;
-- внешний public-swarm smoke больше не должен пропускать lint/unit/assemble и упаковку ARM APK, но его failure остаётся финальным красным gate.
+Есть Ace Live каналы, где после `embedded_ace_live_resolved` Media3 достигает READY очень быстро: примерно 0.1–1.6 секунды. Это доказывает, что Media3/MediaCodec на устройстве в принципе способен быстро воспроизводить часть нашего локального MPEG-TS output.
 
-Exact-head Actions run #462 для commit `fbf465ff` полностью прошёл: real Torrent TV smoke без внешнего Ace Engine, lint, все unit tests, debug/instrumentation compile и две signed ARM release-сборки зелёные.
+Но другие уже resolved каналы показывают повторяемый `player_start → player_ready` около **66 секунд**. Поэтому требуется отдельная телеметрия loopback/player boundary: first HTTP open/read, Media3 BUFFERING/READY, first frame, producer/consumer rate и rebuffer duration.
 
-Первый ручной ARM-прогон 13 августа дал более полезную смешанную картину:
+Codec incompatibility остаётся возможной причиной для отдельных каналов, но не объясняет общий класс slow/stalling Torrent TV behavior.
 
-- 50 playback requests во время навигации и rapid-zap;
-- два Ace Live источника реально подготовились примерно за 16,5 и 18,4 секунды;
-- пять недоступных источников исчерпали 60-секундный absolute startup budget;
-- один источник завершился через 30 секунд после старта peer probing (примерно 45 секунд от play request с учётом discovery);
-- oversized XMLTV размером 83 760 807 байт каждый раз возвращал controlled 64-MiB safety-limit error; в экспортированном окне нет `OutOfMemoryError`;
-- пользователь сообщил о нескольких выходах из приложения, но экспорт экрана Diagnostics включал только последние 120 строк БД и не включал постоянный `app.log`, куда uncaught handler пишет stack trace.
+### Найден конкретный дефект startup prebuffer
 
-Текущий диагностический инкремент объединяет structured diagnostics с bounded tail `app.log`/`app.log.1`, отмечает каждый старт процесса, не трактует `TRIM_MEMORY_UI_HIDDEN=20` как low-memory pressure и дедуплицирует одинаковую ошибку одного EPG source между каналами. Подробный разбор: [`testing/playback-log-analysis-2026-08-13.md`](testing/playback-log-analysis-2026-08-13.md).
+До текущего adaptive-streaming инкремента AUTO policy оценивал media rate как retained bytes / возраст всего runtime. Discovery/handshake latency попадала в знаменатель.
 
-## Известные проблемы после фикса текущего crash
+Пример класса ошибки:
 
-После устранения EPG OOM остаются отдельные playback-hardening задачи:
+1. runtime ищет/проверяет peers 15–20 секунд;
+2. затем здоровый peer начинает быстро отдавать media;
+3. формула всё равно делит первые media bytes на 15–20 секунд;
+4. observed rate искусственно занижается;
+5. target стремится к минимальному byte floor;
+6. старый forced-start мог открыть stream примерно с 512 KiB.
 
-- часть Ace Live `content_id` всё ещё может исчерпывать полный startup budget, если direct swarm не стартует, а transport metadata недоступна;
-- часть P2P-потоков воспроизводится с торможениями или зависает после старта;
-- отдельные swarm закрывают соединения, имеют пустой/устаревший live-window либо перестают публиковать новые pieces;
-- MPEG-TS output пока не имеет полного PAT/PMT/random-access/IDR gating и decoder/discontinuity hardening;
-- после memory fix нужно повторно измерить rapid-zap latency обычного IPTV и при необходимости добавить узкое coalescing/debounce для промежуточных channel requests;
-- не завершены длительные тесты, слабая сеть и матрица реальных ARM TV Box.
+Для HD live этого запаса может быть недостаточно, что согласуется с полевым поведением «долго запускается → начинает показывать → тормозит/буферизуется».
 
-Поэтому текущая сборка остаётся тестовой. Критерий «любой выбранный рабочий IPTV/Torrent TV канал стабильно включается, воспроизводится со звуком, переключается и корректно останавливается» ещё не выполнен.
+## Текущий инкремент: Ace Live adaptive streaming core v1
 
-## Текущий этап: PR #101 → аппаратная приёмка
+Первая часть уже реализуется в `core:p2p`:
 
-Кодовая часть EPG OOM hotfix из PR #100 находится в `main`; остаётся runtime acceptance:
+1. throughput clock устанавливается по **первому media sample**, а не по runtime start;
+2. discovery/handshake latency больше не занижает rate;
+3. rate обновляется EWMA по реальному приросту media bytes;
+4. AUTO target теперь по умолчанию ориентирован на 4 секунды media;
+5. minimum AUTO startup reserve повышен с 512 KiB до 1 MiB;
+6. maximum AUTO startup reserve увеличен до 6 MiB внутри существующего bounded output buffer;
+7. forced-start budget считается от first-media и требует минимум 2 MiB;
+8. MANUAL threshold не обходится AUTO forced-start;
+9. абсолютный 60-second startup timeout и narrow 30-second no-connected-peer guard **не увеличиваются**.
 
-1. ✅ production XMLTV path больше не использует `ResponseBody.bytes()` и разбирает XMLTV непосредственно из bounded `byteStream()`;
-2. ✅ ограничен максимальный объём читаемого XMLTV и retained EPG data;
-3. ✅ исключена вторая полная копия program/display-name collections после parsing;
-4. ✅ тяжёлые EPG load/parse операции сериализованы, чтобы rapid-zap не создавал несколько параллельных XMLTV загрузок;
-5. ✅ добавлен bounded negative-cache/backoff для malformed/HTTP/parser failures;
-6. ✅ перед тяжёлой EPG network/parse операцией и во время parsing проверяется heap headroom; low-memory путь возвращает controlled `EPG unavailable/deferred`;
-7. ✅ positive EPG RAM cache ограничен и инвалидируется при смене EPG URL;
-8. ✅ per-channel EPG load отложен и отменяется при новом channel request, чтобы промежуточные rapid-zap каналы не запускали тяжёлую guide работу;
-9. ✅ PR #100 слит в `main`;
-10. ⏳ вручную переключить 20–30 обычных IPTV-каналов на 256-MiB/аналогичном устройстве и убедиться, что malformed/oversized EPG максимум отключает телепрограмму, но не playback process.
+Это не считается окончательным решением sustained playback. Следующие V2/V3 должны добавить media-producing peer accounting, buffer watermarks и feedback-driven request depth.
 
-Текущий playback/P2P hardening:
+## Текущие известные проблемы
 
-1. ✅ получить полный exact-head CI PR #101 и ARM APK artifacts;
-2. ⏳ повторить ARM rapid-zap с объединённым persistent/structured export и точно классифицировать каждый выход процесса;
-3. проверить рабочий provider source три раза, 20 переключений и недоступный source без внешнего Ace Engine;
-4. измерить фактическое время discovery, `peer_connected`, `startup_buffer_ready` и Media3 READY;
-5. обеспечить непрерывную подкачку Ace Live с достаточным запасом данных и bounded recovery;
-6. разделить в диагностике unavailable source, dead swarm, insufficient buffer, stall, decoder/demux error и user cancellation;
-7. выполнить MPEG-TS/decoder hardening отдельным PR после startup acceptance;
-8. после короткой матрицы выполнить слабую сеть, двухчасовой и восьмичасовой soak-тесты.
+- discovered peer ещё не означает accepted handshake/useful live-window/media delivery;
+- часть источников исчерпывает bounded startup despite нескольких найденных endpoints;
+- часть потоков после успешного resolve долго остаётся в player buffering;
+- sustained prefetch не имеет полноценной модели buffer seconds + consumer rate;
+- request depth пока в основном статический (`MAX_IN_FLIGHT_PER_PEER = 2` baseline);
+- startup DHT expansion может продолжать работу после того, как media path уже достаточно прогрессировал;
+- MPEG-TS output после recovery discontinuity ещё не имеет полного PAT/PMT/random-access/IDR hardening;
+- P2P и Media3 используют два независимых buffer feedback loop без полной cross-layer telemetry;
+- не завершены weak-network, peer-loss, 2h/8h ARM soak tests.
 
-## Критерий завершения
+## Следующие P2P задачи
+
+1. завершить exact-head CI + real Torrent TV smoke для adaptive prebuffer v1;
+2. добавить `MediaProducingPeerTracker`: discovered/connected/handshaked/windowUseful/unchoked/producing;
+3. добавить per-peer media bytes/rate/freshness и aggregate producing rate;
+4. добавить `LiveBufferController` с `critical/low/target/high` watermarks в секундах и bytes;
+5. сделать request depth/in-flight адаптивным к buffer pressure и quality peers;
+6. прекращать startup-specific discovery после устойчивого media-ready и оставлять lightweight refill;
+7. добавить loopback producer/consumer telemetry и Media3 BUFFERING/READY/first-frame/rebuffer metrics;
+8. выделить P2P-specific Media3 LoadControl после измерений;
+9. wire typed recovery discontinuity в TS/decoder recovery;
+10. повторить fixed channel matrix и 20 rapid switches на TV Box.
+
+## Критерий завершения playback/P2P hardening
 
 Playback hardening можно считать завершённым только когда:
 
 - рабочие контрольные IPTV и Torrent TV источники стартуют повторяемо без внешнего Ace Engine;
-- переключение укладывается в зафиксированный бюджет времени либо быстро возвращает понятную ошибку;
-- malformed, oversized или временно недоступный EPG не может вызвать crash/ANR и не блокирует воспроизведение канала;
-- rapid-zap обычного IPTV не создаёт неконтролируемого роста heap и не закрывает процесс;
-- live-буфер непрерывно пополняется и удерживает измеримый запас без постоянной повторной буферизации;
-- звук слышен и корректно выбирается на всех контрольных каналах;
-- переключение и остановка не оставляют старую сессию или локальный HTTP stream;
-- временная потеря peers или сети приводит к ограниченному восстановлению либо к понятной ошибке, но не к бесконечному ожиданию;
-- на поддерживаемых устройствах нет crash/ANR, неконтролируемого роста памяти и постоянной повторной буферизации;
-- заполнен отчёт приёмки, а CI и релизные проверки зелёные.
+- healthy swarm имеет стабильный измеримый startup/zap budget;
+- недоступный swarm возвращает bounded точную ошибку, а не бесконечный retry;
+- live buffer непрерывно пополняется и удерживает измеримый запас;
+- кратковременная потеря одного producing peer не обязана останавливать playback, если остаются/находятся альтернативные полезные peers;
+- peer/status diagnostics различает discovery, connection, handshake, useful window и real media production;
+- Media3 READY/first-frame и rebuffer причины измеряются отдельно от P2P resolve;
+- переключение и stop не оставляют старую P2P-сессию/loopback stream;
+- weak network приводит к bounded recovery либо точной ошибке;
+- нет crash/ANR/OOM и неконтролируемого memory growth;
+- 2h и 8h ARM soak проходят на контрольной матрице;
+- exact-head Android CI, unit/instrumentation checks и real Torrent TV smoke зелёные.
+
+Подробная архитектура этапа: [`ACE_LIVE_ADAPTIVE_STREAMING_CORE.md`](ACE_LIVE_ADAPTIVE_STREAMING_CORE.md).
