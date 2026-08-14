@@ -12,6 +12,8 @@
 - Поддержка standard/Ace live peer-wire variants, compact live status и скользящего live-window во встроенном runtime.
 - Готовый список `📡 Ace Stream TV-Торрент ТВ` с 279 уникальными каналами; временная P2P-доступность больше не скрывает канал.
 - Документирован adaptive streaming core: media-producing peer accounting, buffer watermarks, scheduler feedback и player-boundary telemetry.
+- PR #108 добавил отдельный `AceLivePeerProductionTracker`: discovered endpoints больше не считаются эквивалентом реально producing peers; учитываются connected/handshaked lifecycle, freshness и aggregate EWMA media delivery rate.
+- V2b peer-quality increment добавляет `windowUseful` и `unchoked` в runtime snapshot; usefulness вычисляется относительно authoritative live cursor, а не только по наличию peer metadata.
 
 ### Changed
 - Главный сценарий приложения начинается с просмотра ТВ, а сканер остаётся дополнительным разделом.
@@ -20,13 +22,16 @@
 - LibVLC fallback ограничен ошибками container/demux/codec; сетевые/source ошибки не запускают второй заведомо бесполезный decoder.
 - Снято искусственное ограничение разрешения Media3, из-за которого поддерживаемый 1080p мог отбрасываться на устройствах с небольшим Java heap.
 - Ace Live discovery использует bounded startup paths и prompt cancellation; timeout bounds не увеличиваются для маскировки медленного startup.
-- **Adaptive prebuffer v1:** media throughput теперь измеряется от первого media sample, а не от начала discovery; используется EWMA реального byte growth, AUTO target ориентирован на playable duration, прежний 512-KiB startup floor удалён, forced-start привязан к first-media и требует более сильный reserve.
+- **Adaptive prebuffer v1 (PR #107):** media throughput измеряется от первого media sample, а не от начала discovery; используется EWMA реального byte growth, AUTO target ориентирован на playable duration, прежний 512-KiB startup floor удалён, forced-start привязан к first-media и требует более сильный reserve.
+- **Producing-peer accounting (PR #108):** TCP connect/handshake/disconnect/media ingress события формируют отдельный immutable peer-quality snapshot; stale media production истекает по freshness window.
+- **V2b:** fresh media считается producing только если peer одновременно остаётся `windowUseful + unchoked`; requestability пересчитывается при live-window/cursor update и recovery advance без увеличения startup/stall timeout.
 - Диагностический экспорт включает persistent log и маркеры старта процесса; oversized EPG получает source-level backoff вместо повторной тяжёлой загрузки на каждом канале.
 - Документация и roadmap закрепляют собственный Ace Live engine как главный P2P-приоритет; внешний Ace Engine не является Torrent TV fallback или release requirement.
 
 ### Known issues
 - Переключение Torrent TV каналов всё ещё бывает долгим и иногда завершается bounded ошибкой.
-- Discovered tracker/DHT peers ещё не равны media-producing peers; требуется отдельное peer-quality accounting.
+- Базовый producing-peer accounting уже есть, но peer-quality snapshot ещё не сохранён в persistent diagnostics/UI и пока не управляет scheduler/in-flight.
+- Текущий media contribution считается на contiguous reassembled output; следующий V2 шаг должен закрепить post-authenticated/post-output semantics перед scheduler feedback.
 - Некоторые resolved Ace streams долго остаются в Media3 buffering; loopback producer/consumer и first-frame telemetry ещё предстоит добавить.
 - Sustained live buffer ещё не имеет полного `critical/low/target/high` feedback controller и adaptive request depth.
 - MPEG-TS discontinuity/PAT/PMT/random-access recovery ещё не завершён.
