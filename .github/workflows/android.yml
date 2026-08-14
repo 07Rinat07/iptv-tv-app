@@ -48,11 +48,12 @@ jobs:
 
           run_smoke=false
           if grep -Eq \
-            '^(app/src/androidTest/java/com/iptv/tv/(TorrentTvPlaybackSmokeTest|HiltTestRunner)\.kt|app/src/main/java/com/iptv/tv/ApplicationEngineEntryPoint\.kt|core/(p2p|engine)/)' \
+            '^(app/src/androidTest/java/com/iptv/tv/(TorrentTvPlaybackSmokeTest|HiltTestRunner)\.kt|app/src/main/java/com/iptv/tv/ApplicationEngineEntryPoint\.kt|core/(p2p|engine)/|core/data/src/main/java/com/iptv/tv/core/data/repository/(HybridEngineRepositoryImpl|CoalescingEngineRepository)\.kt)' \
             <<< "$changed_files"; then
             run_smoke=true
           elif git diff --unified=0 "$base_sha" "$head_sha" -- \
             core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt \
+            core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule.kt \
             | grep -Eq '^[+-][^+-].*(resolveTorrentStream|stopTorrentStream|prepareStream|torrent|Torrent|P2P|p2p|Ace|acestream|infohash|contentId|EngineRepository|engineRepository|DHT|dht|peer)'; then
             run_smoke=true
           fi
