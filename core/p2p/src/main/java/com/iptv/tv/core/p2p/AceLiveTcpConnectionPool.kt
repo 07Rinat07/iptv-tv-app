@@ -77,7 +77,9 @@ data class AceLiveTcpDispatchResult(
  * - perform the public Ace transport handshake before accepting peer frames;
  * - feed bounded peer reads into [AceLivePeerConnectionStateMachine];
  * - serialize all access to the shared [AceLivePeerSessionCoordinator];
- * - route only already-scheduled request frames to the connection that currently owns them.
+ * - route only already-scheduled request frames to the connection that currently owns them;
+ * - maintain a runtime-quality snapshot that distinguishes connected/handshaked peers from peers
+ *   that recently contributed contiguous reassembled live media.
  *
  * Non-responsibilities:
  * - tracker/DHT discovery and peer scoring;
@@ -98,6 +100,7 @@ class AceLiveTcpConnectionPool(
     private val dispatchMutex = Mutex()
     private val nodeIdentity = AceLiveNodeIdentity.generate()
     private val peers = LinkedHashMap<Long, PeerRuntime>()
+    private val productionTracker = AceLivePeerProductionTracker()
 
     suspend fun startPeer(
         peerId: Long,
@@ -181,6 +184,15 @@ class AceLiveTcpConnectionPool(
 
     suspend fun activePeerIds(): Set<Long> =
         poolMutex.withLock { peers.keys.toSet() }
+
+    /** Latest quality snapshot for scheduler/diagnostics without exposing mutable peer internals. */
+    fun peerProductionSnapshot(nowMillis: Long = clockMillis()): AceLivePeerProductionSnapshot =
+        productionTracker.snapshot(nowMillis)
+
+    /** Discovery remains outside this pool, but its candidate count belongs in the same snapshot. */
+    fun recordDiscoveredCandidateCount(candidateCount: Int) {
+        productionTracker.recordDiscovery(candidateCount)
+    }
 
     /**
      * Runs one serialized scheduling tick and writes selected request frames to matching peers.
@@ -545,6 +557,25 @@ class AceLiveTcpConnectionPool(
     }
 
     private fun emit(event: AceLiveTcpPoolEvent) {
+        val now = clockMillis()
+        when (event) {
+            is AceLiveTcpPoolEvent.TransportConnected ->
+                productionTracker.onTransportConnected(event.peerId, now)
+            is AceLiveTcpPoolEvent.HandshakeAccepted ->
+                productionTracker.onHandshakeAccepted(event.peerId)
+            is AceLiveTcpPoolEvent.HandshakeRejected ->
+                productionTracker.onHandshakeRejected(event.peerId)
+            is AceLiveTcpPoolEvent.ConnectFailed ->
+                productionTracker.onConnectFailed(event.peerId)
+            is AceLiveTcpPoolEvent.Disconnected ->
+                productionTracker.onDisconnected(event.peerId)
+            is AceLiveTcpPoolEvent.Ingress -> {
+                val contiguousBytes = event.result.emittedPieces.sumOf { piece -> piece.data.size.toLong() }
+                if (contiguousBytes > 0L) {
+                    productionTracker.onMediaProduced(event.peerId, contiguousBytes, now)
+                }
+            }
+        }
         runCatching { onEvent(event) }
     }
 
