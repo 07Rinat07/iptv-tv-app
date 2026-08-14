@@ -1,6 +1,6 @@
 # Playback latency baseline
 
-Этот документ описывает первый измерительный шаг fast-zap/playback-hardening после PR #101.
+Этот документ описывает измерительный и fast-zap этап playback-hardening после PR #101.
 
 ## Зачем нужен анализатор
 
@@ -69,6 +69,23 @@ python3 tools/analyze_playback_latency.py diagnostics-logs-123.txt \
 - duplicate requests, которые Player уже проигнорировал;
 - median, p90 и max для полного `play_request -> READY`.
 
+## PR #102 — измерительный baseline
+
+PR #102 добавил анализатор и regression coverage, не меняя runtime playback path. Исторический аппаратный журнал от 13 августа показал главный перекос: Ace Live resolve занимает порядка 16–18 секунд, а при быстром пролистывании пользователь способен отправлять новые channel requests через несколько сотен миллисекунд. Значит промежуточные P2P-запуски выгоднее не доводить до дорогого discovery/metadata resolve.
+
+## Rapid-zap coalescing
+
+Следующий узкий runtime-инкремент использует `CoalescingEngineRepository` только на P2P/Ace boundary:
+
+- первый P2P request после паузы запускается немедленно;
+- если следующий P2P request приходит не позднее чем через `1200 ms`, перед дорогим resolver применяется cancellable settle delay `550 ms`;
+- новый выбор канала отменяет предыдущую Player coroutine, поэтому промежуточный request, находящийся в settle delay, не входит в P2P resolver;
+- `stopTorrentStream()` и `releaseTorrentStream()` сбрасывают rapid-zap gate;
+- обычный HTTP IPTV не вызывает `resolveTorrentStream()`, поэтому coalescing не добавляет ему задержку;
+- absolute P2P discovery/metadata/startup bounds этим изменением не уменьшаются.
+
+`P2pRapidZapGate` является отдельной чистой thread-safe policy и имеет JVM regression tests для первого request, rapid-window boundary, reset, выхода из окна и clock re-anchor.
+
 ## Рекомендуемый аппаратный baseline
 
 На одном и том же устройстве выполнить отдельные серии, не смешивая их:
@@ -81,18 +98,19 @@ python3 tools/analyze_playback_latency.py diagnostics-logs-123.txt \
 
 После каждой короткой серии сразу экспортировать Diagnostics. Если процесс закрылся — после повторного запуска экспортировать журнал до новой длинной серии.
 
-## Как принимать следующий fast-zap PR
+## Как принимать fast-zap PR
 
 Оптимизацию нельзя оценивать только субъективно. Перед изменением runtime сохранить baseline CSV/JSON, затем тем же набором каналов повторить тест после PR и сравнить:
 
-- median/p90 `ready` для обычного IPTV;
+- median/p90 `ready` для обычного IPTV — не должно появиться регрессии от P2P coalescing;
 - median/p90 `resolve` и `ready` для Ace Live;
+- число промежуточных P2P resolves во время rapid-zap — должно уменьшиться;
 - долю `superseded` rapid-zap requests;
-- наличие старого `player_start`/`player_ready` после нового request;
-- время контролируемого завершения недоступного source.
+- наличие старого `player_start`/`player_ready` после нового request — stale playback не допускается;
+- время контролируемого завершения недоступного source — safety bounds остаются ограниченными.
 
-Следующий кодовый инкремент должен быть направлен на самый большой измеренный участок (`request -> peer`, `peer -> buffer`, `resolve -> start` или `start -> READY`), а не уменьшать абсолютные safety bounds вслепую.
+После coalescing следующий кодовый инкремент должен быть направлен на самый большой измеренный участок (`request -> peer`, `peer -> buffer`, `resolve -> start` или `start -> READY`), а не уменьшать абсолютные safety bounds вслепую.
 
 ## CI
 
-Файл `.github/workflows/playback-latency-tools.yml` запускает стандартные `unittest` для корреляции newest-first export, rapid-zap supersede, P2P milestones, resolve errors и CSV/JSON output. Анализатор использует только Python standard library.
+Файл `.github/workflows/playback-latency-tools.yml` запускает стандартные `unittest` для корреляции newest-first export, rapid-zap supersede, P2P milestones, resolve errors и CSV/JSON output. Анализатор использует только Python standard library. Android CI дополнительно прогоняет `core:data` unit tests, включая `P2pRapidZapGateTest`.
