@@ -26,13 +26,15 @@ The narrow 30-second no-connected-peer guard and 60-second absolute startup budg
 
 ## Ace Live peer meaning
 
-`discovered peers` are only network endpoints returned by tracker/DHT. They are not proof that the channel is playable. The runtime must progressively distinguish:
+`discovered peers` are only network endpoints returned by tracker/DHT. They are not proof that the channel is playable. Runtime quality is represented as a staged state rather than one ambiguous counter:
 
-`discovered → connected → handshaked → unchoked/window-useful → media-producing`.
+`discovered → connected → handshaked → windowUseful → unchoked → producing`.
 
-A field log may therefore legitimately contain several discovered endpoints while no peer has yet produced useful contiguous media. UI/diagnostics must not equate `peers=N` with a guaranteed working stream.
+PR #108 introduced the production accounting foundation. `AceLivePeerProductionTracker` records connected/handshaked lifecycle, fresh contiguous media contribution and aggregate EWMA delivery rate; the TCP pool feeds it from actual transport/handshake/disconnect/media-ingress events. A field log may therefore legitimately contain several discovered endpoints while zero peers are producing media.
 
-The next peer-accounting increment will retain per-peer media freshness/rate and an aggregate count of media-producing peers so scheduling decisions can prefer peers that actually sustain the authoritative live cursor.
+The V2b increment tightens requestability semantics. `windowUseful` means the peer's advertised `[minPiece..maxPiece]` contains the authoritative `nextNeededPiece()`. `unchoked` is the actual peer-wire state. Fresh media counts as `producing` only while both are true. The pool refreshes these stages when metadata changes, contiguous output advances the cursor, a choke/unchoke frame arrives, or recovery explicitly advances the cursor.
+
+This quality snapshot is still an observation layer, not scheduler policy. Before scheduler feedback it must be persisted in structured diagnostics and the media-contribution boundary must be hardened to confirmed post-authenticated/post-output bytes.
 
 ## Ace Live adaptive startup buffering
 
@@ -49,7 +51,7 @@ The output ring remains bounded at 16 MiB by default. Startup readiness is now t
 
 This fixes a concrete field-log failure mode in the old policy. Previously, if discovery consumed 15–20 seconds before media arrived, `retainedBytes / runtimeAge` made a healthy stream look artificially slow. AUTO could collapse toward the minimum threshold and expose HD playback with too little reserve.
 
-The current increment is only the first layer of adaptive streaming. It does **not** yet claim accepted sustained playback. The next controller must track buffer seconds after playback begins, producer/consumer rates and critical/low/target/high watermarks.
+Adaptive startup V1 is merged and accepted by exact-head CI/real Torrent TV smoke. It does **not** by itself claim accepted sustained playback. The next controller must track buffer seconds after playback begins, producer/consumer rates and critical/low/target/high watermarks.
 
 ## Ace Live scheduling and retry
 
@@ -57,7 +59,7 @@ The runtime currently targets a bounded active peer pool, caps concurrent peers,
 
 Player retry releases the old local stream and prepares a new P2P session. Retrying the same stopped loopback URL is not a valid recovery path. Network/source failures also do not trigger LibVLC because a decoder change cannot repair a dead upstream.
 
-The next scheduling hardening must use buffer pressure and producing-peer quality to adjust request depth/refill. A healthy, already-buffered stream should avoid discovery churn; a falling buffer should increase useful work and replace stale/non-producing peers within explicit bounds.
+The next scheduling hardening must use buffer pressure and producing-peer quality to adjust request depth/refill. A healthy, already-buffered stream should avoid discovery churn; a falling buffer should increase useful work and replace stale/non-producing peers within explicit bounds. The V2/V2b quality snapshot is intentionally prepared before this policy change so scheduler tuning is driven by measured useful peers rather than raw discovery counts.
 
 ## Loopback/player boundary
 
@@ -71,4 +73,4 @@ Next telemetry must capture at least first localhost HTTP open/read, media produ
 
 ## Acceptance rule
 
-A runtime change that affects P2P playback requires exact-head full Android CI and the real Torrent TV smoke without external Ace Engine. Hardware acceptance additionally uses a fixed TV Box matrix, rapid channel switching, weak-network/peer-loss cases and long-run soak tests.
+A runtime change that affects P2P playback requires exact-head full Android CI and the real Torrent TV smoke without external Ace Engine. PR #108 met this gate in Android CI #495 before merge. Every following V2b/V3 runtime increment must repeat the same exact-head gate; a previous green run is not transferable to a new head. Hardware acceptance additionally uses a fixed TV Box matrix, rapid channel switching, weak-network/peer-loss cases and long-run soak tests.
