@@ -75,7 +75,7 @@ PR #102 добавил анализатор и regression coverage, не мен�
 
 ## Rapid-zap coalescing
 
-Следующий узкий runtime-инкремент использует `CoalescingEngineRepository` только на P2P/Ace boundary:
+PR #103 использует `CoalescingEngineRepository` только на P2P/Ace boundary:
 
 - первый P2P request после паузы запускается немедленно;
 - если следующий P2P request приходит не позднее чем через `1200 ms`, перед дорогим resolver применяется cancellable settle delay `550 ms`;
@@ -85,6 +85,23 @@ PR #102 добавил анализатор и regression coverage, не мен�
 - absolute P2P discovery/metadata/startup bounds этим изменением не уменьшаются.
 
 `P2pRapidZapGate` является отдельной чистой thread-safe policy и имеет JVM regression tests для первого request, rapid-window boundary, reset, выхода из окна и clock re-anchor.
+
+## Ace direct soft-start window
+
+После coalescing следующий bottleneck находится внутри Ace content-id startup race. Direct swarm и transport-metadata resolution уже запускаются конкурентно, но раньше ранний успешный metadata lookup немедленно отменял direct runtime. Это уничтожало уже выполненный DHT/peer/startup-buffer прогресс даже тогда, когда direct swarm был близок к READY.
+
+Текущий инкремент делает существующий `DIRECT_STARTUP_SOFT_TIMEOUT_MILLIS = 8000` реальной политикой переключения путей:
+
+- direct startup и metadata resolution по-прежнему стартуют одновременно;
+- metadata может разрешиться сразу, но до истечения 8-секундного soft-window только сохраняется как готовая альтернатива и не пересоздаёт runtime;
+- если direct успевает получить пригодный поток внутри окна, он выигрывает без потери уже набранного swarm-прогресса;
+- если direct завершается ошибкой раньше окна, уже разрешённая metadata запускается немедленно;
+- если direct всё ещё работает после 8 секунд и metadata уже готова, direct корректно отменяется и запускается metadata transport;
+- если metadata появляется только после 8 секунд, она сразу получает право заменить всё ещё pending direct;
+- если metadata lookup завершился ошибкой, soft-window не обрывает direct: его существующий абсолютный startup timeout продолжает ограничивать работу;
+- одновременно два Ace runtime не запускаются: metadata playback начинается только после полного завершения/cleanup direct runtime.
+
+Таким образом изменяется только момент безопасного handoff между двумя уже существующими стратегиями. Абсолютные discovery, no-connected-peer и startup bounds не увеличиваются и не уменьшаются.
 
 ## Рекомендуемый аппаратный baseline
 
@@ -105,12 +122,15 @@ PR #102 добавил анализатор и regression coverage, не мен�
 - median/p90 `ready` для обычного IPTV — не должно появиться регрессии от P2P coalescing;
 - median/p90 `resolve` и `ready` для Ace Live;
 - число промежуточных P2P resolves во время rapid-zap — должно уменьшиться;
+- `content_metadata_result` может появиться раньше direct результата, но direct runtime не должен быть уничтожен до soft-window, если он продолжает прогрессировать;
+- успешный direct результат раньше 8 секунд должен выигрывать без `content_metadata_startup_result`;
+- после 8 секунд готовая metadata должна получить handoff вместо бесконечного ожидания speculative direct;
 - долю `superseded` rapid-zap requests;
 - наличие старого `player_start`/`player_ready` после нового request — stale playback не допускается;
 - время контролируемого завершения недоступного source — safety bounds остаются ограниченными.
 
-После coalescing следующий кодовый инкремент должен быть направлен на самый большой измеренный участок (`request -> peer`, `peer -> buffer`, `resolve -> start` или `start -> READY`), а не уменьшать абсолютные safety bounds вслепую.
+После этого инкремента следующий runtime-шаг выбирается только по новому аппаратному breakdown `request -> peer -> buffer -> resolve -> READY`: дальнейшее уменьшение абсолютных safety bounds вслепую не допускается.
 
 ## CI
 
-Файл `.github/workflows/playback-latency-tools.yml` запускает стандартные `unittest` для корреляции newest-first export, rapid-zap supersede, P2P milestones, resolve errors и CSV/JSON output. Анализатор использует только Python standard library. Android CI дополнительно прогоняет `core:data` unit tests, включая `P2pRapidZapGateTest`.
+Файл `.github/workflows/playback-latency-tools.yml` запускает стандартные `unittest` для корреляции newest-first export, rapid-zap supersede, P2P milestones, resolve errors и CSV/JSON output. Анализатор использует только Python standard library. Android CI прогоняет `core:data` и `core:p2p` unit tests; изменения `core:p2p` дополнительно активируют реальный Torrent TV emulator smoke без внешнего Ace Engine.
