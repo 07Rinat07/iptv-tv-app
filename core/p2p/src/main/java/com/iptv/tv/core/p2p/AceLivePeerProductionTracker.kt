@@ -7,7 +7,7 @@ package com.iptv.tv.core.p2p
  * A peer is "producing" only after bytes from that peer have contributed to accepted contiguous
  * media output recently enough to still be useful for live playback.
  */
-internal data class AceLivePeerProductionSnapshot(
+data class AceLivePeerProductionSnapshot(
     val discoveredCandidates: Int,
     val connectedPeers: Int,
     val handshakedPeers: Int,
@@ -31,42 +31,42 @@ internal class AceLivePeerProductionTracker(
         }
     }
 
-    fun recordDiscovery(candidateCount: Int) = synchronized(lock) {
+    fun recordDiscovery(candidateCount: Int): Unit = synchronized(lock) {
         discoveredCandidates = candidateCount.coerceAtLeast(0)
     }
 
-    fun onTransportConnected(peerId: Long, nowMillis: Long) = synchronized(lock) {
+    fun onTransportConnected(peerId: Long, nowMillis: Long): Unit = synchronized(lock) {
         val peer = peers.getOrPut(peerId, ::PeerState)
         peer.connected = true
         peer.handshaked = false
         peer.connectedAtMillis = nowMillis.coerceAtLeast(0L)
     }
 
-    fun onHandshakeAccepted(peerId: Long) = synchronized(lock) {
+    fun onHandshakeAccepted(peerId: Long): Unit = synchronized(lock) {
         val peer = peers.getOrPut(peerId, ::PeerState)
         peer.connected = true
         peer.handshaked = true
     }
 
-    fun onHandshakeRejected(peerId: Long) = synchronized(lock) {
+    fun onHandshakeRejected(peerId: Long): Unit = synchronized(lock) {
         peers[peerId]?.handshaked = false
     }
 
-    fun onConnectFailed(peerId: Long) = synchronized(lock) {
+    fun onConnectFailed(peerId: Long): Unit = synchronized(lock) {
         peers.getOrPut(peerId, ::PeerState).apply {
             connected = false
             handshaked = false
         }
     }
 
-    fun onDisconnected(peerId: Long) = synchronized(lock) {
+    fun onDisconnected(peerId: Long): Unit = synchronized(lock) {
         peers[peerId]?.apply {
             connected = false
             handshaked = false
         }
     }
 
-    fun onMediaProduced(peerId: Long, mediaBytes: Long, nowMillis: Long) = synchronized(lock) {
+    fun onMediaProduced(peerId: Long, mediaBytes: Long, nowMillis: Long): Unit = synchronized(lock) {
         if (mediaBytes <= 0L) return@synchronized
         val now = nowMillis.coerceAtLeast(0L)
         val peer = peers.getOrPut(peerId, ::PeerState)
