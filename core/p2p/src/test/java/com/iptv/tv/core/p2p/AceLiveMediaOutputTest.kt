@@ -16,11 +16,20 @@ class AceLiveMediaOutputTest {
     fun retainedBytesTracksTheBoundedLiveWindow() {
         val buffer = AceLiveMediaBuffer(maxBufferedBytes = 188 * 64)
 
-        buffer.append(ByteArray(188 * 40))
+        assertEquals(188 * 40, buffer.append(ByteArray(188 * 40)))
         assertEquals(188 * 40, buffer.retainedBytes())
 
-        buffer.append(ByteArray(188 * 40))
+        assertEquals(188 * 40, buffer.append(ByteArray(188 * 40)))
         assertEquals(188 * 40, buffer.retainedBytes())
+    }
+
+    @Test
+    fun closedMediaBufferRejectsOutputBytes() {
+        val buffer = AceLiveMediaBuffer(maxBufferedBytes = 188 * 64)
+        buffer.close()
+
+        assertEquals(0, buffer.append(ByteArray(188 * 8)))
+        assertEquals(0, buffer.retainedBytes())
     }
 
     @Test
