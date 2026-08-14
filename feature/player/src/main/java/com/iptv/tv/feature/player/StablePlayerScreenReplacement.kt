@@ -167,7 +167,6 @@ fun StablePlayerScreen(
     var panel by rememberSaveable { mutableStateOf(StablePlayerPanel.NONE) }
     var showChannelDrawer by rememberSaveable { mutableStateOf(false) }
     var favoritesOnly by rememberSaveable { mutableStateOf(false) }
-    var hideUnavailable by rememberSaveable { mutableStateOf(true) }
     var optimisticFavoriteIds by remember { mutableStateOf(state.favoriteChannelIds) }
     var channelBannerVersion by remember { mutableIntStateOf(0) }
     var showChannelBanner by remember { mutableStateOf(false) }
@@ -187,6 +186,55 @@ fun StablePlayerScreen(
         optimisticFavoriteIds = state.favoriteChannelIds
     }
 
+    // Torrent TV availability is informational only. Never probe or hide the full catalog.
+    // We remember the last result only for channels the user actually tried.
+    LaunchedEffect(
+        state.selectedChannelId,
+        state.isStartingPlayback,
+        state.internalSession?.sessionId,
+        state.enginePeers,
+        state.engineSpeedKbps,
+        state.resolvedStreamUrl,
+        state.lastError
+    ) {
+        val channel = state.channels.firstOrNull { it.id == state.selectedChannelId }
+            ?: return@LaunchedEffect
+        if (PlayerP2pDescriptor.detect(channel.streamUrl) == null) return@LaunchedEffect
+
+        val activeSession = state.internalSession?.takeIf { it.channelId == channel.id }
+        val previous = P2pChannelAvailabilityUiCache.statuses[channel.id]
+        val p2pFailure = state.lastError?.takeIf { message ->
+            message.contains("Torrent TV", ignoreCase = true) ||
+                message.contains("P2P", ignoreCase = true) ||
+                message.contains("подготовить поток", ignoreCase = true)
+        }
+        val availability = when {
+            activeSession != null && !state.isStartingPlayback -> P2pChannelAvailabilityState.PLAYING
+            activeSession != null -> P2pChannelAvailabilityState.READY
+            state.isStartingPlayback -> P2pChannelAvailabilityState.SEARCHING
+            p2pFailure != null -> p2pAvailabilityFromResolveError(p2pFailure)
+            state.resolvedStreamUrl != null -> P2pChannelAvailabilityState.READY
+            else -> previous?.state ?: P2pChannelAvailabilityState.UNCHECKED
+        }
+        val peers = when (availability) {
+            P2pChannelAvailabilityState.SEARCHING,
+            P2pChannelAvailabilityState.NO_PEERS,
+            P2pChannelAvailabilityState.ERROR -> 0
+            else -> state.enginePeers.coerceAtLeast(0)
+        }
+        val speed = if (availability == P2pChannelAvailabilityState.PLAYING) {
+            state.engineSpeedKbps.coerceAtLeast(0)
+        } else {
+            0
+        }
+        P2pChannelAvailabilityUiCache.mark(
+            channelId = channel.id,
+            state = availability,
+            peers = peers,
+            speedKbps = speed
+        )
+    }
+
     val filteredChannels = remember(
         state.channels,
         state.channelQuery,
@@ -194,7 +242,6 @@ fun StablePlayerScreen(
         state.selectedSubGroup,
         optimisticFavoriteIds,
         favoritesOnly,
-        hideUnavailable,
         state.parentalControlEnabled,
         state.parentalHideAdultChannels,
         state.parentalBlockedKeywords
@@ -208,7 +255,6 @@ fun StablePlayerScreen(
                     channel.group.orEmpty().lowercase(Locale.ROOT).contains(query) ||
                     channel.tvgId.orEmpty().lowercase(Locale.ROOT).contains(query)
             }
-            .filter { !hideUnavailable || it.health != ChannelHealth.UNAVAILABLE }
             .filter { !favoritesOnly || it.id in optimisticFavoriteIds }
             .filterNot { channel ->
                 state.parentalControlEnabled &&
@@ -464,7 +510,6 @@ fun StablePlayerScreen(
                 selectedGroup = state.selectedGroup,
                 subGroups = state.availableSubGroups,
                 selectedSubGroup = state.selectedSubGroup,
-                hideUnavailable = hideUnavailable,
                 favoritesOnly = favoritesOnly,
                 bufferSummary = state.adaptiveBufferSummary,
                 epgStatus = state.channelListEpgStatus,
@@ -480,7 +525,6 @@ fun StablePlayerScreen(
                 },
                 onSelectGroup = viewModel::selectGroup,
                 onSelectSubGroup = viewModel::selectSubGroup,
-                onToggleUnavailable = { hideUnavailable = !hideUnavailable },
                 onToggleFavoritesOnly = { favoritesOnly = !favoritesOnly },
                 onCycleScale = viewModel::cycleVideoScale,
                 onOpenAppSettings = onPrimaryAction
@@ -854,6 +898,11 @@ private fun StableNearbyChannelsReplacement(
                     epgByChannel[channel.id].orEmpty(),
                     System.currentTimeMillis()
                 )
+                val p2pStatus = if (PlayerP2pDescriptor.detect(channel.streamUrl) != null) {
+                    p2pChannelAvailabilityLabel(P2pChannelAvailabilityUiCache.statuses[channel.id])
+                } else {
+                    null
+                }
                 Card(
                     modifier = Modifier
                         .width(184.dp)
@@ -871,7 +920,7 @@ private fun StableNearbyChannelsReplacement(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            current?.let { "${stableTime(it.startEpochMs)} ${it.title}" }
+                            p2pStatus ?: current?.let { "${stableTime(it.startEpochMs)} ${it.title}" }
                                 ?: "EPG нет",
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 2,
@@ -967,6 +1016,11 @@ private fun StableChannelListReplacement(
                     System.currentTimeMillis()
                 )
                 val selected = channel.id == selectedChannelId
+                val p2pStatus = if (PlayerP2pDescriptor.detect(channel.streamUrl) != null) {
+                    p2pChannelAvailabilityLabel(P2pChannelAvailabilityUiCache.statuses[channel.id])
+                } else {
+                    null
+                }
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1006,7 +1060,7 @@ private fun StableChannelListReplacement(
                                 }
                             )
                             Text(
-                                current?.let {
+                                p2pStatus ?: current?.let {
                                     "${stableTime(it.startEpochMs)}–${stableTime(it.endEpochMs)} ${it.title}"
                                 } ?: "Программа не найдена",
                                 style = MaterialTheme.typography.bodySmall,
@@ -1317,7 +1371,6 @@ private fun StablePanelDialogReplacement(
     selectedGroup: String?,
     subGroups: List<String>,
     selectedSubGroup: String?,
-    hideUnavailable: Boolean,
     favoritesOnly: Boolean,
     bufferSummary: String,
     epgStatus: String,
@@ -1330,7 +1383,6 @@ private fun StablePanelDialogReplacement(
     onSelectPlaylist: (Long) -> Unit,
     onSelectGroup: (String?) -> Unit,
     onSelectSubGroup: (String?) -> Unit,
-    onToggleUnavailable: () -> Unit,
     onToggleFavoritesOnly: () -> Unit,
     onCycleScale: () -> Unit,
     onOpenAppSettings: (() -> Unit)?
@@ -1374,9 +1426,6 @@ private fun StablePanelDialogReplacement(
                             },
                             modifier = Modifier.weight(1f)
                         )
-                    }
-                    OutlinedButton(onClick = onToggleUnavailable, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (hideUnavailable) "Показывать недоступные" else "Скрывать недоступные")
                     }
                     OutlinedButton(onClick = onToggleFavoritesOnly, modifier = Modifier.fillMaxWidth()) {
                         Text(if (favoritesOnly) "Показать все каналы" else "Только избранное")
