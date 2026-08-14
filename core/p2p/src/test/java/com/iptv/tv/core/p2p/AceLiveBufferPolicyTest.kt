@@ -52,11 +52,14 @@ class AceLiveBufferPolicyTest {
         assertFalse(tooSmall.ready)
         assertEquals(1L * 1024L * 1024L, tooSmall.targetBytes)
 
+        // Before a trustworthy rate sample exists, the new one-MiB floor is the earliest AUTO may
+        // expose a stream. The old 512-KiB floor is no longer sufficient.
         val minimumUseful = policy.evaluate(
             bufferedBytes = 1L * 1024L * 1024L,
-            elapsedMillis = 5_300L
+            elapsedMillis = 5_100L
         )
         assertTrue(minimumUseful.ready)
+        assertEquals(0L, minimumUseful.observedBytesPerSecond)
     }
 
     @Test
