@@ -62,7 +62,8 @@ data class InternalPlaybackSession(
     val requestHeaders: Map<String, String>,
     val bufferConfig: BufferConfig,
     val recoveryPolicy: BufferingRecoveryPolicy,
-    val bufferPlanSummary: String
+    val bufferPlanSummary: String,
+    val requestId: Long = 0L
 )
 
 enum class MultiviewMode(val paneCount: Int) {
@@ -255,7 +256,8 @@ class PlayerViewModel @Inject constructor(
     private var channelListEpgLoadedPlaylistId: Long? = null
     private var channelListEpgLoadedAtMs: Long = 0L
     private var primaryPlaybackJob: Job? = null
-    private var primaryPlaybackRequestId: Long = 0L
+    private var primaryRetryJob: Job? = null
+    private val primaryPlaybackOwnership = PrimaryPlaybackOwnership()
     private var lastInternalPlayRequestChannelId: Long? = null
     private var lastInternalPlayRequestAtMs: Long = 0L
     private var lastEpgRequestedChannelId: Long? = null
@@ -286,17 +288,18 @@ class PlayerViewModel @Inject constructor(
 
     private fun beginPrimaryPlaybackRequest(): Long {
         primaryPlaybackJob?.cancel()
-        primaryPlaybackRequestId += 1L
-        return primaryPlaybackRequestId
+        primaryRetryJob?.cancel()
+        return primaryPlaybackOwnership.beginRequest()
     }
 
     private fun invalidatePrimaryPlaybackRequest() {
         primaryPlaybackJob?.cancel()
-        primaryPlaybackRequestId += 1L
+        primaryRetryJob?.cancel()
+        primaryPlaybackOwnership.invalidateRequest()
     }
 
     private fun isCurrentPrimaryPlaybackRequest(requestId: Long): Boolean {
-        return requestId == primaryPlaybackRequestId
+        return primaryPlaybackOwnership.isCurrentRequest(requestId)
     }
 
     private fun stopAdditionalSessionsForMode(
@@ -1018,8 +1021,19 @@ class PlayerViewModel @Inject constructor(
         }
 
         val requestId = beginPrimaryPlaybackRequest()
+        // Remove the previous decoder surface synchronously. A slow P2P resolve must never leave
+        // the old channel visible under the newly selected channel name or able to emit callbacks.
+        _uiState.update {
+            it.copy(
+                internalSession = null,
+                isStartingPlayback = true,
+                retryAttempt = 0,
+                resolvedStreamUrl = null,
+                lastError = null,
+                lastInfo = null
+            )
+        }
         primaryPlaybackJob = viewModelScope.launch {
-            _uiState.update { it.copy(isStartingPlayback = true, lastError = null) }
             safeLog(
                 status = "player_play_request",
                 message = "channelId=${channel.id}, playlistId=${channel.playlistId}, requestedPlayer=$playerType, forceAce=$forceAceResolution"
@@ -1182,6 +1196,18 @@ class PlayerViewModel @Inject constructor(
     fun onInternalPlaybackReady(sessionId: Long? = null) {
         val state = _uiState.value
         val currentSession = state.internalSession
+        if (
+            currentSession != null &&
+            currentSession.requestId != 0L &&
+            !isCurrentPrimaryPlaybackRequest(currentSession.requestId)
+        ) {
+            logAsync(
+                status = "player_ready_ignored",
+                message = "Ignored ready from invalidated request: requestId=${currentSession.requestId}, sessionId=${currentSession.sessionId}",
+                playlistId = state.selectedPlaylistId
+            )
+            return
+        }
         if (sessionId != null && currentSession?.sessionId != sessionId) {
             viewModelScope.launch {
                 diagnosticsRepository.addLog(
@@ -1255,10 +1281,19 @@ class PlayerViewModel @Inject constructor(
             )
             return
         }
+        if (session.requestId == 0L || !isCurrentPrimaryPlaybackRequest(session.requestId)) {
+            logAsync(
+                status = "player_error_ignored",
+                message = "Ignored error from invalidated playback request: requestId=${session.requestId}, sessionId=${session.sessionId}",
+                playlistId = state.selectedPlaylistId
+            )
+            return
+        }
         val sourceChannel = state.channels.firstOrNull { channel -> channel.id == session.channelId }
         val isP2pPlayback = sourceChannel?.streamUrl?.let(::detectAceDescriptor) != null
         val errorKind = classifyPlaybackError(message, isP2pPlayback)
         if (!errorKind.retryable || state.retryAttempt >= MAX_AUTO_RETRIES) {
+            primaryRetryJob?.cancel()
             viewModelScope.launch {
                 diagnosticsRepository.addLog(
                     status = "player_error",
@@ -1284,13 +1319,25 @@ class PlayerViewModel @Inject constructor(
             return
         }
 
+        val requestId = session.requestId
         val nextAttempt = state.retryAttempt + 1
-        viewModelScope.launch {
+        primaryRetryJob?.cancel()
+        primaryRetryJob = viewModelScope.launch {
             diagnosticsRepository.addLog(
                 status = "player_rebuffer",
-                message = "Retry $nextAttempt/$MAX_AUTO_RETRIES due to: kind=${errorKind.code}, msg=$message",
+                message = "Retry $nextAttempt/$MAX_AUTO_RETRIES due to: kind=${errorKind.code}, msg=$message, requestId=$requestId, sessionId=${session.sessionId}",
                 playlistId = state.selectedPlaylistId
             )
+            if (
+                !primaryPlaybackOwnership.ownsSession(
+                    expectedRequestId = requestId,
+                    expectedSessionId = session.sessionId,
+                    currentRequestId = _uiState.value.internalSession?.requestId,
+                    currentSessionId = _uiState.value.internalSession?.sessionId
+                )
+            ) {
+                return@launch
+            }
             _uiState.update {
                 it.copy(
                     retryAttempt = nextAttempt,
@@ -1300,38 +1347,86 @@ class PlayerViewModel @Inject constructor(
             }
             val delayMs = RETRY_DELAYS_MS.getOrElse(nextAttempt - 1) { 2_500L }
             delay(delayMs)
+
             val latestSession = _uiState.value.internalSession
-            if (latestSession == null || latestSession.sessionId != session.sessionId) {
+            if (
+                !primaryPlaybackOwnership.ownsSession(
+                    expectedRequestId = requestId,
+                    expectedSessionId = session.sessionId,
+                    currentRequestId = latestSession?.requestId,
+                    currentSessionId = latestSession?.sessionId
+                )
+            ) {
+                safeLog(
+                    status = "player_retry_superseded",
+                    message = "Retry suppressed after channel change: requestId=$requestId, sessionId=${session.sessionId}",
+                    playlistId = state.selectedPlaylistId
+                )
                 return@launch
             }
+
             if (sourceChannel != null && isP2pPlayback) {
                 when (val resolved = resolvePlayableChannel(sourceChannel)) {
                     is AppResult.Success -> {
                         val current = _uiState.value.internalSession
-                        if (current == null || current.sessionId != session.sessionId) return@launch
+                        if (
+                            !primaryPlaybackOwnership.ownsSession(
+                                expectedRequestId = requestId,
+                                expectedSessionId = session.sessionId,
+                                currentRequestId = current?.requestId,
+                                currentSessionId = current?.sessionId
+                            )
+                        ) {
+                            safeLog(
+                                status = "player_retry_superseded",
+                                message = "Resolved stale P2P retry discarded: requestId=$requestId, sessionId=${session.sessionId}",
+                                playlistId = sourceChannel.playlistId
+                            )
+                            return@launch
+                        }
                         startInternalPlayback(
                             channel = sourceChannel.copy(streamUrl = resolved.data),
                             infoMessage = "P2P-сессия переподключена",
+                            requestId = requestId,
                             retryAttempt = nextAttempt
                         )
                     }
 
                     is AppResult.Error -> {
                         val current = _uiState.value.internalSession
-                        if (current == null || current.sessionId != session.sessionId) return@launch
+                        if (
+                            !primaryPlaybackOwnership.ownsSession(
+                                expectedRequestId = requestId,
+                                expectedSessionId = session.sessionId,
+                                currentRequestId = current?.requestId,
+                                currentSessionId = current?.sessionId
+                            )
+                        ) return@launch
                         diagnosticsRepository.addLog(
                             status = "player_p2p_restart_error",
                             message = "P2P restart failed: ${resolved.message.take(MAX_LOG_MESSAGE)}",
                             playlistId = sourceChannel.playlistId
                         )
-                        _uiState.update {
-                            it.copy(
-                                internalSession = null,
-                                isStartingPlayback = false,
-                                retryAttempt = 0,
-                                lastError = "P2P-источник не публикует новые данные или сейчас не имеет доступных пиров",
-                                lastInfo = null
-                            )
+                        _uiState.update { currentState ->
+                            val active = currentState.internalSession
+                            if (
+                                primaryPlaybackOwnership.ownsSession(
+                                    expectedRequestId = requestId,
+                                    expectedSessionId = session.sessionId,
+                                    currentRequestId = active?.requestId,
+                                    currentSessionId = active?.sessionId
+                                )
+                            ) {
+                                currentState.copy(
+                                    internalSession = null,
+                                    isStartingPlayback = false,
+                                    retryAttempt = 0,
+                                    lastError = "P2P-источник не публикует новые данные или сейчас не имеет доступных пиров",
+                                    lastInfo = null
+                                )
+                            } else {
+                                currentState
+                            }
                         }
                     }
 
@@ -1339,12 +1434,26 @@ class PlayerViewModel @Inject constructor(
                 }
                 return@launch
             }
-            _uiState.update {
-                it.copy(
-                    internalSession = latestSession.copy(sessionId = latestSession.sessionId + 1),
-                    lastInfo = "Повторное подключение...",
-                    lastError = null
-                )
+
+            val retrySessionId = primaryPlaybackOwnership.nextSessionId()
+            _uiState.update { currentState ->
+                val active = currentState.internalSession
+                if (
+                    primaryPlaybackOwnership.ownsSession(
+                        expectedRequestId = requestId,
+                        expectedSessionId = session.sessionId,
+                        currentRequestId = active?.requestId,
+                        currentSessionId = active?.sessionId
+                    )
+                ) {
+                    currentState.copy(
+                        internalSession = active?.copy(sessionId = retrySessionId),
+                        lastInfo = "Повторное подключение...",
+                        lastError = null
+                    )
+                } else {
+                    currentState
+                }
             }
         }
     }
@@ -1975,10 +2084,10 @@ class PlayerViewModel @Inject constructor(
     private fun startInternalPlayback(
         channel: Channel,
         infoMessage: String,
-        requestId: Long? = null,
+        requestId: Long,
         retryAttempt: Int = 0
     ) {
-        if (requestId != null && !isCurrentPrimaryPlaybackRequest(requestId)) {
+        if (!isCurrentPrimaryPlaybackRequest(requestId)) {
             logAsync(
                 status = "player_start_ignored",
                 message = "Ignored stale internal start: requestId=$requestId, channelId=${channel.id}",
@@ -1997,7 +2106,7 @@ class PlayerViewModel @Inject constructor(
             )
         )
         val preparedStream = parseKodiStyleStream(channel.streamUrl)
-        val nextSessionId = (state.internalSession?.sessionId ?: 0L) + 1L
+        val nextSessionId = primaryPlaybackOwnership.nextSessionId()
         _uiState.update {
             it.copy(
                 internalSession = InternalPlaybackSession(
@@ -2008,7 +2117,8 @@ class PlayerViewModel @Inject constructor(
                     requestHeaders = preparedStream.headers,
                     bufferConfig = plan.config,
                     recoveryPolicy = plan.recoveryPolicy,
-                    bufferPlanSummary = plan.summary
+                    bufferPlanSummary = plan.summary,
+                    requestId = requestId
                 ),
                 adaptiveBufferSummary = plan.summary,
                 isStartingPlayback = true,
@@ -2093,7 +2203,7 @@ class PlayerViewModel @Inject constructor(
             ),
             isAdditionalPane = true
         )
-        val nextSessionId = (sessionForPane(state, paneIndex)?.sessionId ?: 0L) + 1L
+        val nextSessionId = primaryPlaybackOwnership.nextSessionId()
         _uiState.update {
             val nextSession = InternalPlaybackSession(
                 sessionId = nextSessionId,
