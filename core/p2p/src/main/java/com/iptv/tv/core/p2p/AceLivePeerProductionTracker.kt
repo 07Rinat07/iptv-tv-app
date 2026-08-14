@@ -5,7 +5,7 @@ package com.iptv.tv.core.p2p
  *
  * Discovery counts are intentionally kept separate from connected/handshaked/requestable/producing
  * peers. A peer is "producing" only while its advertised live window is useful to the authoritative
- * cursor, it is currently unchoked, and its recent bytes contributed to accepted contiguous media.
+ * cursor, it is currently unchoked, and its recent bytes reached accepted live output.
  */
 data class AceLivePeerProductionSnapshot(
     val discoveredCandidates: Int,
@@ -95,12 +95,15 @@ internal class AceLivePeerProductionTracker(
         peer.unchoked = peer.connected && peer.handshaked && unchoked
     }
 
+    /**
+     * Records output evidence without mutating transport/handshake lifecycle.
+     * A completed future piece can reach output after its source peer disconnected, so output must
+     * never resurrect that peer as connected or handshaked.
+     */
     fun onMediaProduced(peerId: Long, mediaBytes: Long, nowMillis: Long): Unit = synchronized(lock) {
         if (mediaBytes <= 0L) return@synchronized
+        val peer = peers[peerId] ?: return@synchronized
         val now = nowMillis.coerceAtLeast(0L)
-        val peer = peers.getOrPut(peerId, ::PeerState)
-        peer.connected = true
-        peer.handshaked = true
 
         val previousAt = peer.lastMediaAtMillis
         if (previousAt != null && now > previousAt) {
