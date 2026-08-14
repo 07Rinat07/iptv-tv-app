@@ -66,9 +66,11 @@ AceLiveTcpConnectionPool
     ↓
 handshake + live-window + choke state
     ↓
+AceLivePeerProductionTracker
+    ↓
 AceLivePeerSessionCoordinator
     ↓
-chunk requests / authenticated piece reassembly
+chunk requests / contiguous piece reassembly
     ↓
 AceLiveMpegTsResynchronizer
     ↓
@@ -80,6 +82,8 @@ Media3 / LibVLC decoder fallback
 ```
 
 Peer-wire слой поддерживает standard/observed Ace HAVE/status/window variants, bounded frame parsing и explicit ownership. Live scheduler не имеет права самостоятельно перескакивать через недостающий authoritative cursor: forward jump выполняется только через typed recovery discontinuity.
+
+`AceLivePeerProductionTracker` является observation/quality layer, а не scheduler policy. Базовый V2 из PR #108 уже отделяет discovery от connected/handshaked/fresh media production и строит aggregate delivery snapshot. V2b добавляет requestability: `windowUseful` вычисляется относительно authoritative `nextNeededPiece()`, `unchoked` отражает фактический peer-wire state, а producing требует fresh contiguous media при одновременно полезном window и unchoked peer.
 
 ### Adaptive streaming architecture
 
@@ -97,13 +101,13 @@ LiveBufferController
 loopback/player telemetry
 ```
 
-`peer count` должен иметь явные стадии:
+`peer count` имеет явные стадии:
 
-`discovered → connected → handshaked → windowUseful/unchoked → media-producing`.
+`discovered → connected → handshaked → windowUseful → unchoked → media-producing`.
 
-Найденный tracker/DHT endpoint не считается playable peer. Scheduler в конечном состоянии должен опираться на media freshness/rate, usefulness authoritative cursor, timeout history и текущий buffer pressure.
+Найденный tracker/DHT endpoint не считается playable peer. `windowUseful` также не означает «peer прислал любую metadata»: его advertised live-window должен содержать текущий authoritative cursor. При metadata/window update, contiguous cursor progress и recovery jump requestability пересчитывается для активных peers. Scheduler в конечном состоянии должен опираться на media freshness/rate, usefulness authoritative cursor, timeout history и текущий buffer pressure.
 
-`LiveBufferController` должен оперировать запасом в bytes и seconds, использовать `critical/low/target/high` watermarks и hysteresis. Throughput не выводится из возраста runtime или непроверенного raw descriptor bitrate. Adaptive startup v1 уже переносит throughput clock на первый media-byte и использует EWMA реального media growth.
+`LiveBufferController` должен оперировать запасом в bytes и seconds, использовать `critical/low/target/high` watermarks и hysteresis. Throughput не выводится из возраста runtime или непроверенного raw descriptor bitrate. Adaptive startup v1 из PR #107 уже переносит throughput clock на первый media-byte и использует EWMA реального media growth. Базовый producing accounting из PR #108 уже в `main`; V2b подготавливает quality contract до включения scheduler feedback.
 
 Текущие default startup bounds остаются конечными failure guards; их увеличение не является способом улучшения производительности.
 
@@ -122,7 +126,7 @@ P2P recovery уже способен выдать typed output discontinuity п�
 ## Порядок зависимостей
 
 1. завершить кодовую regression-baseline TV navigation (#40), а реальную BlueStacks/TV Box приёмку вести параллельно;
-2. довести автономный P2P/Ace Live runtime до устойчивого startup/sustained playback: adaptive prebuffer, producing peers, scheduler feedback, player/TS boundary и hardware acceptance (#44);
+2. довести автономный P2P/Ace Live runtime до устойчивого startup/sustained playback: V1 adaptive prebuffer завершён, V2 peer quality/diagnostics продолжается, затем scheduler feedback, player/TS boundary и hardware acceptance (#44);
 3. стабилизировать canonical catalog identity/provenance и unified Favorites (#45);
 4. построить EPG/Now-Next/real archive поверх стабильной channel identity (#47);
 5. переработать Player UX поверх готовых Catalog + P2P + EPG contracts (#46);
