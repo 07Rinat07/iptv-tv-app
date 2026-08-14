@@ -7,7 +7,8 @@ private const val MAX_ACE_LIVE_REASSEMBLY_CHUNKS_PER_PIECE = 0x1_0000
 class AceLiveReassembledPiece(
     val piece: Long,
     val pieceHeader: ByteArray,
-    val data: ByteArray
+    val data: ByteArray,
+    val sourcePeerId: Long
 )
 
 enum class AceLiveReassemblyDisposition {
@@ -36,7 +37,8 @@ data class AceLiveReassemblyResult(
  * Pure bounded reassembler for chunks that already passed [AceLiveActivePeerCoordinator].
  *
  * This class owns payload assembly and contiguous emission only. It deliberately does not own peer
- * identity, request scheduling, sockets, discovery, authentication or recovery timing.
+ * identity decisions, request scheduling, sockets, discovery, authentication or recovery timing;
+ * it only preserves the source-peer provenance already verified by the ownership layer.
  *
  * Key invariants:
  * - [nextNeededPiece] is the only emission cursor;
@@ -184,7 +186,7 @@ class AceLivePieceReassembler(
     /** Sets the first live cursor once, before any request or payload has been accepted. */
     fun initializeAt(piece: Long) {
         require(piece in 0..MAX_ACE_LIVE_REASSEMBLY_PIECE) {
-            "initial live piece must fit the u32 wire field"
+            "initial live piece must fit Ace Live u32 wire field"
         }
         check(pieces.isEmpty() && allocatedPayloadBytes == 0L) {
             "Ace Live reassembler already owns buffered data"
@@ -206,6 +208,7 @@ class AceLivePieceReassembler(
         }
 
         return PieceBuffer(
+            sourcePeerId = chunk.peerId,
             pieceHeader = chunk.pieceHeader.copyOf(),
             bytes = ByteArray(geometry.pieceLengthBytes),
             receivedChunks = BooleanArray(geometry.chunksPerPiece)
@@ -226,7 +229,8 @@ class AceLivePieceReassembler(
             emitted += AceLiveReassembledPiece(
                 piece = emittedPieceNumber,
                 pieceHeader = completed.pieceHeader.copyOf(),
-                data = completed.bytes.copyOf()
+                data = completed.bytes.copyOf(),
+                sourcePeerId = completed.sourcePeerId
             )
 
             if (nextNeeded == MAX_ACE_LIVE_REASSEMBLY_PIECE) {
@@ -261,6 +265,7 @@ class AceLivePieceReassembler(
     )
 
     private data class PieceBuffer(
+        val sourcePeerId: Long,
         val pieceHeader: ByteArray,
         val bytes: ByteArray,
         val receivedChunks: BooleanArray,
