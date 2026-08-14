@@ -259,10 +259,15 @@ class AceLiveEmbeddedEngine(
         private val diagnosticsObserver: (status: String, message: String) -> Unit
     ) : Closeable {
         private val startupBufferPolicy = AceLiveStartupBufferPolicy(bufferSettings)
+        private val consumerPressureTracker = AceLiveConsumerBufferPressureTracker()
+        private val bufferDiagnosticsReporter = AceLiveBufferDiagnosticsReporter(diagnosticsObserver)
         val startup = CompletableDeferred<Unit>()
         val startupTimeoutMillis = startupBufferPolicy.startupTimeoutMillis()
         val mediaBuffer = AceLiveMediaBuffer(maxBufferedBytes = startupBufferPolicy.outputBufferBytes())
-        val server = LoopbackHttpLiveServer(mediaBuffer)
+        val server = LoopbackHttpLiveServer(
+            mediaBuffer = mediaBuffer,
+            consumerObserver = ::onConsumerProgress
+        )
 
         private val closed = AtomicBoolean(false)
         private val connectedAtLeastOnce = AtomicBoolean(false)
@@ -555,6 +560,15 @@ class AceLiveEmbeddedEngine(
                 }
                 delay(SCHEDULER_TICK_MILLIS)
             }
+        }
+
+        private fun onConsumerProgress(consumer: AceLiveMediaConsumerSnapshot) {
+            val pressure = consumerPressureTracker.evaluate(consumer)
+            bufferDiagnosticsReporter.maybeReport(
+                consumer = consumer,
+                pressure = pressure,
+                nowMillis = System.currentTimeMillis()
+            )
         }
 
         private fun onPoolEvent(event: AceLiveTcpPoolEvent) {
