@@ -8,6 +8,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -58,7 +60,88 @@ class AceLiveMediaOutputTest {
     }
 
     @Test
-    fun mediaBufferKeepsIndependentReaderCursors() {
+    fun unconfirmedReadDoesNotConsumePlayableHeadroom() {
+        val buffer = AceLiveMediaBuffer(maxBufferedBytes = 188 * 64)
+        val data = ByteArray(188 * 16)
+        buffer.append(data)
+        val reader = buffer.openReader()
+
+        val bytes = ByteArray(512)
+        assertEquals(512, reader.read(bytes, 0, bytes.size))
+
+        val pending = reader.snapshot()
+        assertEquals(0L, pending.consumerOffset)
+        assertEquals(data.size.toLong(), pending.liveEdgeOffset)
+        assertEquals(data.size.toLong(), pending.playableBytes)
+        assertEquals(0L, pending.totalDeliveredBytes)
+        assertNull(pending.consumerBytesPerSecond)
+        assertFalse(pending.fellBehind)
+        buffer.close()
+    }
+
+    @Test
+    fun confirmedDeliveryConsumesPlayableHeadroom() {
+        val buffer = AceLiveMediaBuffer(maxBufferedBytes = 188 * 64)
+        val data = ByteArray(188 * 16)
+        buffer.append(data)
+        val reader = buffer.openReader()
+
+        val bytes = ByteArray(512)
+        assertEquals(512, reader.read(bytes, 0, bytes.size))
+        val delivered = reader.confirmDelivered(512, nowMillis = 1_000L)
+
+        assertEquals(512L, delivered.consumerOffset)
+        assertEquals(data.size.toLong(), delivered.liveEdgeOffset)
+        assertEquals(data.size.toLong() - 512L, delivered.playableBytes)
+        assertEquals(512L, delivered.totalDeliveredBytes)
+        assertNull(delivered.consumerBytesPerSecond)
+        assertFalse(delivered.fellBehind)
+        buffer.close()
+    }
+
+    @Test
+    fun consumerRateUsesConfirmedDeliveryAndAppearsAfterTimedSample() {
+        val buffer = AceLiveMediaBuffer(maxBufferedBytes = 188 * 64)
+        buffer.append(ByteArray(4_000))
+        val reader = buffer.openReader()
+        val bytes = ByteArray(1_000)
+
+        assertEquals(1_000, reader.read(bytes, 0, bytes.size))
+        assertNull(reader.confirmDelivered(1_000, nowMillis = 1_000L).consumerBytesPerSecond)
+
+        assertEquals(1_000, reader.read(bytes, 0, bytes.size))
+        val second = reader.confirmDelivered(1_000, nowMillis = 2_000L)
+
+        assertEquals(1_000L, second.consumerBytesPerSecond)
+        assertEquals(2_000L, second.totalDeliveredBytes)
+        assertEquals(2_000L, second.playableBytes)
+        buffer.close()
+    }
+
+    @Test
+    fun trimMarksConfirmedReaderAsFallenBehindAndClampsToLiveFloor() {
+        val maxBytes = 188 * 64
+        val firstSegmentBytes = 188 * 32
+        val buffer = AceLiveMediaBuffer(maxBufferedBytes = maxBytes)
+        buffer.append(ByteArray(firstSegmentBytes))
+        val reader = buffer.openReader()
+        val bytes = ByteArray(188)
+
+        assertEquals(188, reader.read(bytes, 0, bytes.size))
+        reader.confirmDelivered(188, nowMillis = 1_000L)
+        buffer.append(ByteArray(maxBytes))
+
+        val snapshot = reader.snapshot()
+        assertEquals(firstSegmentBytes.toLong(), snapshot.consumerOffset)
+        assertEquals((firstSegmentBytes + maxBytes).toLong(), snapshot.liveEdgeOffset)
+        assertEquals(maxBytes.toLong(), snapshot.playableBytes)
+        assertEquals(188L, snapshot.totalDeliveredBytes)
+        assertTrue(snapshot.fellBehind)
+        buffer.close()
+    }
+
+    @Test
+    fun mediaBufferKeepsIndependentConfirmedReaderCursors() {
         val buffer = AceLiveMediaBuffer(maxBufferedBytes = 188 * 64)
         val first = buffer.openReader()
         val second = buffer.openReader()
@@ -66,11 +149,31 @@ class AceLiveMediaOutputTest {
         buffer.append(data)
 
         val firstRead = ByteArray(256)
-        val secondRead = ByteArray(256)
+        val secondRead = ByteArray(128)
         assertEquals(256, first.read(firstRead, 0, firstRead.size))
-        assertEquals(256, second.read(secondRead, 0, secondRead.size))
-        assertArrayEquals(firstRead, secondRead)
+        assertEquals(128, second.read(secondRead, 0, secondRead.size))
+        assertArrayEquals(firstRead.copyOf(128), secondRead)
+
+        val firstSnapshot = first.confirmDelivered(256, nowMillis = 1_000L)
+        val secondSnapshot = second.confirmDelivered(128, nowMillis = 1_000L)
+
+        assertTrue(firstSnapshot.readerId != secondSnapshot.readerId)
+        assertEquals(256L, firstSnapshot.consumerOffset)
+        assertEquals(128L, secondSnapshot.consumerOffset)
+        assertEquals(data.size.toLong() - 256L, firstSnapshot.playableBytes)
+        assertEquals(data.size.toLong() - 128L, secondSnapshot.playableBytes)
         buffer.close()
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun confirmationMustMatchPendingReadExactly() {
+        val buffer = AceLiveMediaBuffer(maxBufferedBytes = 188 * 64)
+        buffer.append(ByteArray(188 * 8))
+        val reader = buffer.openReader()
+        val bytes = ByteArray(188)
+
+        reader.read(bytes, 0, bytes.size)
+        reader.confirmDelivered(187, nowMillis = 1_000L)
     }
 
     @Test
