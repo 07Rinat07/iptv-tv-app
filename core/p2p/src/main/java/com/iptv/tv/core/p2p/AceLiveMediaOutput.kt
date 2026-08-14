@@ -77,10 +77,11 @@ internal class AceLiveMediaBuffer(
         require(maxBufferedBytes >= MIN_BUFFERED_BYTES) { "Ace live media buffer is too small" }
     }
 
-    fun append(bytes: ByteArray) {
-        if (bytes.isEmpty()) return
-        synchronized(lock) {
-            if (closed) return
+    /** Returns the number of bytes actually accepted into the live output window. */
+    fun append(bytes: ByteArray): Int {
+        if (bytes.isEmpty()) return 0
+        return synchronized(lock) {
+            if (closed) return@synchronized 0
             val retained = if (bytes.size > maxBufferedBytes) {
                 bytes.copyOfRange(bytes.size - maxBufferedBytes, bytes.size)
             } else {
@@ -90,6 +91,7 @@ internal class AceLiveMediaBuffer(
             nextOffset += retained.size.toLong()
             trimLocked()
             lock.notifyAll()
+            retained.size
         }
     }
 
