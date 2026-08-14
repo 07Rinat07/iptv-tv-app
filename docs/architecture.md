@@ -8,8 +8,8 @@
 - `core/data` и `core/database` — хранение и реализация репозиториев;
 - `core/network` — сетевые источники;
 - `core/player` и `core/player-vlc` — Media3 и LibVLC;
-- `core/engine` — Ace Stream compatibility/transport integration;
-- `core/p2p` — встроенный BitTorrent/P2P backend;
+- `core/engine` — legacy/compatibility transport integration;
+- `core/p2p` — собственные embedded BitTorrent и Ace Live backends;
 - `feature/*` — независимые экраны и сценарии;
 - `sync` — фоновые обновления.
 
@@ -42,23 +42,88 @@
 
 ## P2P / Ace transport boundary
 
-`core:p2p` обрабатывает только подтверждённый BitTorrent transport: magnet, infohash и `.torrent`. Чистый `acestream://content_id` не считается BitTorrent infohash.
+### Ownership
 
-Для автономного Ace bootstrap введён отдельный `AceContentIdDhtKey`: только валидный 20-byte/40-hex Content ID может использоваться как DHT lookup target. Этот тип намеренно не является ни `AceLiveSwarmKey`, ни BitTorrent infohash. На BEP-5 wire значение помещается в стандартное поле `info_hash`, но его доменная семантика не меняется и из него не строится `magnet:?xt=urn:btih:...`.
+Torrent TV/Ace Live является собственностью embedded runtime. Внешний Ace Stream Engine не является целевым backend, автоматическим fallback или release requirement. Legacy AIDL/HTTP integration остаётся изолированным compatibility-кодом для явно совместимых сценариев, но не используется, чтобы скрыть сбой собственного Torrent TV path.
 
-`core:engine` содержит `AceContentTransportResolver`, который переводит transport metadata в безопасный non-live BitTorrent, Ace Live transport либо unsupported transport. `core:p2p` самостоятельно разрешает публичный `content_id`, выполняет DHT/tracker discovery, подписанное рукопожатие, распознаёт live-window, собирает chunks/pieces и отдаёт MPEG-TS через локальный HTTP stream. Live transport не передаётся стандартному libtorrent только на основании наличия 40-символьного идентификатора.
+`core:p2p` содержит две разные подсистемы:
 
-Peer-wire слой поддерживает стандартный HAVE, расширенный HAVE со stream index, отдельный stream HAVE и ограниченно разбираемый compact live status. Runtime держит ограниченный скользящий output buffer, начинает выдачу после стартового порога, ограничивает число peers и запросов и применяет watchdog для media stall. Retry со стороны Player пересоздаёт всю P2P-сессию, чтобы не переиспользовать остановившийся loopback URL.
+- ordinary BitTorrent — magnet, BTIH, `.torrent`, libtorrent streaming/read-ahead и local HTTP Range;
+- Ace Live — отдельные identity/transport contracts, tracker/DHT discovery, peer-wire session, live scheduling/reassembly, recovery и local MPEG-TS stream.
 
-Автоматический внешний Ace fallback для Torrent TV `content_id` и live infohash отключён: успешный тест такого канала должен доказывать работу собственного runtime. AIDL/HTTP integration остаётся изолированным compatibility-кодом для явно неподдерживаемых legacy descriptor, но не скрывает сбой автономного маршрута.
+Чистый `acestream://content_id` не считается BitTorrent infohash. `AceLiveSwarmKey`, `AceContentIdDhtKey` и ordinary BTIH имеют разные доменные роли даже если отдельные wire-протоколы используют 20-byte ключи.
 
-Текущий архитектурный блокер находится уже не в наличии маршрута, а в playback hardening: быстрое переключение, стабильная подкачка live-буфера, классификация недоступных swarm и длительная аппаратная приёмка. Актуальные результаты и критерии собраны в `PLAYBACK_STATUS.md`.
+### Ace Live runtime pipeline
+
+Текущая цепочка:
+
+```text
+content/live identity
+    ↓
+bounded tracker + Mainline DHT discovery
+    ↓
+AceLiveTcpConnectionPool
+    ↓
+handshake + live-window + choke state
+    ↓
+AceLivePeerSessionCoordinator
+    ↓
+chunk requests / authenticated piece reassembly
+    ↓
+AceLiveMpegTsResynchronizer
+    ↓
+AceLiveMediaBuffer
+    ↓
+LoopbackHttpLiveServer (127.0.0.1/live.ts)
+    ↓
+Media3 / LibVLC decoder fallback
+```
+
+Peer-wire слой поддерживает standard/observed Ace HAVE/status/window variants, bounded frame parsing и explicit ownership. Live scheduler не имеет права самостоятельно перескакивать через недостающий authoritative cursor: forward jump выполняется только через typed recovery discontinuity.
+
+### Adaptive streaming architecture
+
+Главный следующий слой строится поверх уже работающего protocol runtime:
+
+```text
+PeerPool
+  + MediaProducingPeerTracker
+  + PeerQualityScorer
+        ↓
+AdaptiveLiveScheduler
+        ↓
+LiveBufferController
+        ↓
+loopback/player telemetry
+```
+
+`peer count` должен иметь явные стадии:
+
+`discovered → connected → handshaked → windowUseful/unchoked → media-producing`.
+
+Найденный tracker/DHT endpoint не считается playable peer. Scheduler в конечном состоянии должен опираться на media freshness/rate, usefulness authoritative cursor, timeout history и текущий buffer pressure.
+
+`LiveBufferController` должен оперировать запасом в bytes и seconds, использовать `critical/low/target/high` watermarks и hysteresis. Throughput не выводится из возраста runtime или непроверенного raw descriptor bitrate. Adaptive startup v1 уже переносит throughput clock на первый media-byte и использует EWMA реального media growth.
+
+Текущие default startup bounds остаются конечными failure guards; их увеличение не является способом улучшения производительности.
+
+### Player boundary
+
+P2P buffer и Media3 LoadControl являются двумя разными feedback loops. Для localhost Ace Live нужен отдельный измеримый contract: `first_media_byte`, `buffer_ready`, `http_open/read`, producer/consumer rate, Media3 `BUFFERING/READY`, first frame и rebuffer duration. Только после этого P2P-specific LoadControl настраивается отдельно от generic IPTV.
+
+Media3 остаётся primary decoder. LibVLC используется при подтверждённой container/demux/codec несовместимости. Upstream no-peer/stall/insufficient-throughput не лечатся заменой decoder.
+
+### Discontinuity/media format
+
+P2P recovery уже способен выдать typed output discontinuity при подтверждённом live-window jump. MPEG-TS слой должен отдельно выполнить resync/PAT/PMT/random-access recovery и при необходимости инициировать decoder recovery. Media-format правила не должны попадать внутрь peer scheduler.
+
+Подробный текущий план находится в [`ACE_LIVE_ADAPTIVE_STREAMING_CORE.md`](ACE_LIVE_ADAPTIVE_STREAMING_CORE.md), runtime invariants — в [`P2P_RUNTIME_NOTES.md`](P2P_RUNTIME_NOTES.md), фактические field results — в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md).
 
 ## Порядок зависимостей
 
 1. завершить кодовую regression-baseline TV navigation (#40), а реальную BlueStacks/TV Box приёмку вести параллельно;
-2. стабилизировать canonical catalog identity/provenance и unified Favorites (#45);
-3. завершить P2P playback hardening: переключение, непрерывная подкачка, stall recovery и аппаратная приёмка (#44);
+2. довести автономный P2P/Ace Live runtime до устойчивого startup/sustained playback: adaptive prebuffer, producing peers, scheduler feedback, player/TS boundary и hardware acceptance (#44);
+3. стабилизировать canonical catalog identity/provenance и unified Favorites (#45);
 4. построить EPG/Now-Next/real archive поверх стабильной channel identity (#47);
 5. переработать Player UX поверх готовых Catalog + P2P + EPG contracts (#46);
 6. завершить contextual Help и пользовательскую документацию после стабилизации экранов (#43);
