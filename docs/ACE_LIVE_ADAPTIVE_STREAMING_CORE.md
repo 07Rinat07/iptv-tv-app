@@ -53,11 +53,13 @@ P2P-specific Media3 LoadControl
 3. `handshaked` — Ace handshake принят;
 4. `windowUseful` — peer рекламирует live-window, полезный для authoritative cursor;
 5. `unchoked` — peer разрешает запросы;
-6. `producing` — peer недавно реально дал accepted/contiguous media bytes.
+6. `producing` — peer недавно реально дал media contribution, дошедший как минимум до contiguous reassembled live output.
 
 Для каждого producing peer нужны как минимум freshness, delivered bytes/rate, timeout/error history и usefulness текущему cursor.
 
-V2 начинается с отдельного `AceLivePeerProductionTracker`: он намеренно не считает найденный endpoint producing peer, хранит lifecycle `connected/handshaked`, отмечает producing только после media contribution, истекает stale producing-state по freshness window и строит aggregate rate snapshot. Следующий V2-инкремент должен подключить этот primitive к реальным runtime events после media validation/output и вывести snapshot в persistent diagnostics/UI status.
+V2 начинается с отдельного `AceLivePeerProductionTracker`. Он намеренно не считает найденный endpoint producing peer, хранит lifecycle `connected/handshaked`, отмечает producing только после contiguous media contribution, истекает stale producing-state по freshness window и строит aggregate rate snapshot. `AceLiveTcpConnectionPool` уже подключает tracker к реальным connect/handshake/disconnect/ingress событиям и предоставляет immutable `peerProductionSnapshot()` для следующего scheduler/diagnostics слоя.
+
+Следующий подэтап должен усилить семантику producing до post-authenticated/post-output bytes, добавить `windowUseful/unchoked` и вывести snapshot в persistent diagnostics/UI status.
 
 ## Buffer model
 
@@ -169,7 +171,8 @@ Media-format логика не переносится внутрь peer schedule
 - [x] lifecycle/production accounting primitive;
 - [x] per-peer media freshness/rate primitive;
 - [x] aggregate producing-peer snapshot primitive;
-- [ ] wire tracker to validated runtime media output;
+- [x] wire tracker to TCP lifecycle + contiguous reassembled media events;
+- [ ] mark producing from post-authenticated/post-output media bytes;
 - [ ] persistent structured diagnostics/UI source for real peer status;
 - [ ] include window usefulness/unchoked state in quality snapshot.
 
