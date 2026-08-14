@@ -62,14 +62,27 @@ internal class AceLiveMediaAuthenticator(
     }
 }
 
+/** Confirmed delivery state for one loopback live-media reader. */
+internal data class AceLiveMediaConsumerSnapshot(
+    val readerId: Long,
+    val consumerOffset: Long,
+    val liveEdgeOffset: Long,
+    val playableBytes: Long,
+    val consumerBytesPerSecond: Long?,
+    val totalDeliveredBytes: Long,
+    val fellBehind: Boolean
+)
+
 /** Keeps a bounded recent live window and gives each loopback client an independent cursor. */
 internal class AceLiveMediaBuffer(
-    private val maxBufferedBytes: Int = DEFAULT_MAX_BUFFERED_BYTES
+    private val maxBufferedBytes: Int = DEFAULT_MAX_BUFFERED_BYTES,
+    private val clockMillis: () -> Long = System::currentTimeMillis
 ) : Closeable {
     private val lock = Object()
     private val segments = ArrayDeque<Segment>()
     private var firstOffset = 0L
     private var nextOffset = 0L
+    private var nextReaderId = 1L
     private var closed = false
     private var failure: IOException? = null
 
@@ -105,7 +118,14 @@ internal class AceLiveMediaBuffer(
     }
 
     fun openReader(): Reader = synchronized(lock) {
-        Reader(cursor = firstOffset)
+        val readerId = nextReaderId
+        check(readerId > 0L) { "Ace live media reader id space exhausted" }
+        nextReaderId = Math.addExact(nextReaderId, 1L)
+        Reader(
+            readerId = readerId,
+            readCursor = firstOffset,
+            deliveredCursor = firstOffset
+        )
     }
 
     fun retainedBytes(): Int = synchronized(lock) {
@@ -127,7 +147,22 @@ internal class AceLiveMediaBuffer(
         if (segments.isEmpty()) firstOffset = nextOffset
     }
 
-    inner class Reader internal constructor(private var cursor: Long) {
+    inner class Reader internal constructor(
+        val readerId: Long,
+        private var readCursor: Long,
+        private var deliveredCursor: Long
+    ) {
+        private var unconfirmedReadBytes = 0L
+        private var totalDeliveredBytes = 0L
+        private var lastRateSampleAtMillis: Long? = null
+        private var bytesSinceRateSample = 0L
+        private var ewmaBytesPerSecond = 0L
+        private var fellBehind = false
+
+        /**
+         * Copies one chunk from the live window but does not advance the confirmed consumer cursor.
+         * The caller must invoke [confirmDelivered] only after those bytes were successfully flushed.
+         */
         fun read(buffer: ByteArray, offset: Int, length: Int): Int {
             require(offset >= 0 && length >= 0 && offset + length <= buffer.size) {
                 "read bounds are invalid"
@@ -135,14 +170,24 @@ internal class AceLiveMediaBuffer(
             if (length == 0) return 0
 
             synchronized(lock) {
+                check(unconfirmedReadBytes == 0L) {
+                    "previous Ace live media read must be confirmed before reading again"
+                }
                 while (true) {
-                    if (cursor < firstOffset) cursor = firstOffset
-                    val segment = segments.firstOrNull { item -> cursor in item.startOffset until item.endOffset }
+                    if (readCursor < firstOffset) {
+                        readCursor = firstOffset
+                        deliveredCursor = firstOffset
+                        fellBehind = true
+                    }
+                    val segment = segments.firstOrNull { item ->
+                        readCursor in item.startOffset until item.endOffset
+                    }
                     if (segment != null) {
-                        val sourceOffset = (cursor - segment.startOffset).toInt()
+                        val sourceOffset = (readCursor - segment.startOffset).toInt()
                         val copied = minOf(length, segment.bytes.size - sourceOffset)
                         segment.bytes.copyInto(buffer, offset, sourceOffset, sourceOffset + copied)
-                        cursor += copied.toLong()
+                        readCursor += copied.toLong()
+                        unconfirmedReadBytes = copied.toLong()
                         return copied
                     }
                     failure?.let { throw it }
@@ -156,15 +201,110 @@ internal class AceLiveMediaBuffer(
                 }
             }
         }
+
+        /** Confirms a full successful socket write/flush and returns the resulting consumer state. */
+        fun confirmDelivered(
+            deliveredBytes: Int,
+            nowMillis: Long = clockMillis()
+        ): AceLiveMediaConsumerSnapshot {
+            require(deliveredBytes >= 0) { "deliveredBytes must be non-negative" }
+            return synchronized(lock) {
+                require(deliveredBytes.toLong() == unconfirmedReadBytes) {
+                    "confirmed Ace live bytes must match the pending read"
+                }
+                if (deliveredBytes > 0) {
+                    deliveredCursor = saturatingAdd(deliveredCursor, deliveredBytes.toLong())
+                    totalDeliveredBytes = saturatingAdd(
+                        totalDeliveredBytes,
+                        deliveredBytes.toLong()
+                    )
+                    recordDeliveryRateLocked(deliveredBytes.toLong(), nowMillis.coerceAtLeast(0L))
+                }
+                unconfirmedReadBytes = 0L
+                snapshotLocked()
+            }
+        }
+
+        /** Snapshot of confirmed delivery only; an unflushed read never consumes playable headroom. */
+        fun snapshot(): AceLiveMediaConsumerSnapshot = synchronized(lock) {
+            snapshotLocked()
+        }
+
+        private fun snapshotLocked(): AceLiveMediaConsumerSnapshot {
+            val behindCurrentFloor = deliveredCursor < firstOffset
+            if (behindCurrentFloor) fellBehind = true
+            val effectiveConsumerOffset = maxOf(deliveredCursor, firstOffset)
+                .coerceAtMost(nextOffset)
+            return AceLiveMediaConsumerSnapshot(
+                readerId = readerId,
+                consumerOffset = effectiveConsumerOffset,
+                liveEdgeOffset = nextOffset,
+                playableBytes = (nextOffset - effectiveConsumerOffset).coerceAtLeast(0L),
+                consumerBytesPerSecond = ewmaBytesPerSecond.takeIf { it > 0L },
+                totalDeliveredBytes = totalDeliveredBytes,
+                fellBehind = fellBehind
+            )
+        }
+
+        private fun recordDeliveryRateLocked(deliveredBytes: Long, nowMillis: Long) {
+            val previousAt = lastRateSampleAtMillis
+            if (previousAt == null || nowMillis < previousAt) {
+                lastRateSampleAtMillis = nowMillis
+                bytesSinceRateSample = 0L
+                return
+            }
+
+            bytesSinceRateSample = saturatingAdd(bytesSinceRateSample, deliveredBytes)
+            val elapsedMillis = nowMillis - previousAt
+            if (elapsedMillis < MIN_CONSUMER_RATE_SAMPLE_MILLIS) return
+
+            val instantaneous = safeRate(bytesSinceRateSample, elapsedMillis)
+            ewmaBytesPerSecond = if (ewmaBytesPerSecond <= 0L) {
+                instantaneous
+            } else {
+                weightedAverage(
+                    previous = ewmaBytesPerSecond,
+                    current = instantaneous,
+                    currentWeightPercent = CONSUMER_EWMA_CURRENT_WEIGHT_PERCENT
+                )
+            }
+            lastRateSampleAtMillis = nowMillis
+            bytesSinceRateSample = 0L
+        }
     }
 
     private data class Segment(val startOffset: Long, val bytes: ByteArray) {
         val endOffset: Long = startOffset + bytes.size
     }
 
+    private fun safeRate(bytes: Long, elapsedMillis: Long): Long {
+        if (bytes <= 0L || elapsedMillis <= 0L) return 0L
+        return runCatching {
+            Math.multiplyExact(bytes, 1_000L) / elapsedMillis
+        }.getOrElse { Long.MAX_VALUE }
+    }
+
+    private fun weightedAverage(
+        previous: Long,
+        current: Long,
+        currentWeightPercent: Long
+    ): Long {
+        val previousWeight = 100L - currentWeightPercent
+        return runCatching {
+            val oldPart = Math.multiplyExact(previous, previousWeight)
+            val newPart = Math.multiplyExact(current, currentWeightPercent)
+            Math.addExact(oldPart, newPart) / 100L
+        }.getOrElse { maxOf(previous, current) }
+    }
+
+    private fun saturatingAdd(left: Long, right: Long): Long =
+        runCatching { Math.addExact(left, right) }.getOrElse { Long.MAX_VALUE }
+
     companion object {
         const val DEFAULT_MAX_BUFFERED_BYTES = 4 * 1024 * 1024
         private const val MIN_BUFFERED_BYTES = 188 * 32
+        private const val MIN_CONSUMER_RATE_SAMPLE_MILLIS = 250L
+        private const val CONSUMER_EWMA_CURRENT_WEIGHT_PERCENT = 35L
     }
 }
 
@@ -222,7 +362,8 @@ internal class AceLiveMpegTsResynchronizer {
 
 internal class LoopbackHttpLiveServer(
     private val mediaBuffer: AceLiveMediaBuffer,
-    private val requestedPort: Int = 0
+    private val requestedPort: Int = 0,
+    private val consumerObserver: (AceLiveMediaConsumerSnapshot) -> Unit = {}
 ) : Closeable {
     private val closed = AtomicBoolean(false)
     private val serverSocket = ServerSocket().apply {
@@ -301,6 +442,8 @@ internal class LoopbackHttpLiveServer(
             if (count < 0) return
             output.write(bytes, 0, count)
             output.flush()
+            val snapshot = reader.confirmDelivered(count)
+            runCatching { consumerObserver(snapshot) }
         }
     }
 
