@@ -1,0 +1,30 @@
+name: Apply P2P channel status UI patch
+
+on:
+  push:
+    branches:
+      - agent/p2p-channel-status
+    paths:
+      - tools/apply_p2p_channel_status_patch.py
+      - .github/workflows/apply-p2p-channel-status-ui.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply deterministic source patch
+        run: python3 tools/apply_p2p_channel_status_patch.py
+      - name: Commit patched player UI
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt
+          git diff --cached --check
+          git commit -m "feat(player): show all Torrent TV channels with status"
+          git push origin HEAD:agent/p2p-channel-status
