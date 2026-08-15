@@ -1,0 +1,138 @@
+--- iptv-tv-app-updated/docs/P2P_RUNTIME_NOTES.md	2026-08-15 11:57:02.000000000 +0000
++++ /mnt/data/iptv-src/source/iptv-tv-app-updated/docs/P2P_RUNTIME_NOTES.md	2026-08-15 12:33:50.361045758 +0000
+@@ -69,7 +69,7 @@
+ 
+ The P2P buffer and Media3 LoadControl are currently separate feedback systems. Field logs show some resolved Ace streams spending roughly 66 seconds between `player_start` and `player_ready`, while other streams reach READY in well under a second. Codec absence therefore cannot explain the whole class of failures.
+ 
+-Next telemetry must capture at least first localhost HTTP open/read, media producer rate, consumer rate, retained bytes/seconds, Media3 BUFFERING/READY, first rendered frame and rebuffer count. Only after those measurements should the P2P-specific Media3 LoadControl be tuned.
++V4a captures the missing boundary timings without changing buffering policy: first localhost HTTP open/read plus Media3 BUFFERING/READY, first rendered frame and rebuffer count/duration for P2P sessions. Existing V3 diagnostics continue to provide producer/consumer rate and playable headroom. Only after these measurements are available should the P2P-specific Media3 LoadControl be tuned.
+ 
+ ## Acceptance rule
+ 
+diff -ruN '--exclude=.git' iptv-tv-app-updated/docs/ROADMAP.md /mnt/data/iptv-src/source/iptv-tv-app-updated/docs/ROADMAP.md
+--- iptv-tv-app-updated/docs/ROADMAP.md	2026-08-15 11:57:02.000000000 +0000
++++ /mnt/data/iptv-src/source/iptv-tv-app-updated/docs/ROADMAP.md	2026-08-15 12:33:50.360268895 +0000
+@@ -30,10 +30,11 @@
+ - PR #117 — pressure-aware additive refill `LOW +1 / CRITICAL +2`, без eviction; per-peer quality snapshots подготовлены для replacement; Android CI #515, real smoke и signed ARM TV APK прошли успешно.
+ - PR #118 — bounded replacement деградировавших peers только при свежем sustained `CRITICAL`, с producing/baseline/cooldown guards; Android CI #517, real smoke и signed ARM TV APK прошли успешно.
+ - PR #119 — stable-ready отменяет startup-only DHT probe/full-expansion, но сохраняет normal lightweight refill; Android CI #519 и real Torrent TV smoke без внешнего Ace Engine прошли успешно.
++- PR #120 — bounded recovery игнорирует полностью lagging peer windows при выборе ближайшего future-window; Android CI #522, real Torrent TV smoke, core P2P tests и signed ARM TV APK прошли успешно.
+ 
+ Полевой прогон на ARM/TV Box изменил приоритет работ. Одни и те же публичные Torrent TV источники способны быстро находить tracker/DHT peers, но найденные endpoints не всегда превращаются в устойчивый media-producing pool. В логе встречались `peers=4..7` одновременно с итоговым no-peer/60-second timeout, а несколько успешно resolved потоков затем проводили около 66 секунд между `player_start` и `player_ready`. Это указало не на один общий codec-дефект, а на незавершённую связку peer usefulness → throughput → prebuffer → loopback consumption → player buffering.
+ 
+-V1 исправил дефект startup prebuffer: discovery/handshake latency больше не входит в media-throughput estimate. PR #108–#110 последовательно отделили discovery от реальной peer quality, добавили `windowUseful/unchoked` и persistent structured diagnostics. V2d завершён PR #111. V3a–V3h (PR #112–#119) дали stateful buffer pressure, confirmed consumer telemetry, authoritative reader ownership, bounded request depth, pressure-aware additive refill, консервативный replacement деградировавших peers и корректное завершение startup-only discovery после stable-ready. Текущий **V3i** закрывает bounded recovery regression matrix: полностью lagging peer windows больше не должны маскировать ближайшее полезное future-window при evicted-gap recovery. Recovery timeout/cap, startup/no-peer/stall bounds и wire protocol не меняются.
++V1 исправил дефект startup prebuffer: discovery/handshake latency больше не входит в media-throughput estimate. PR #108–#110 последовательно отделили discovery от реальной peer quality, добавили `windowUseful/unchoked` и persistent structured diagnostics. V2d завершён PR #111. V3a–V3i (PR #112–#120) завершили stateful buffer pressure, confirmed consumer telemetry, authoritative reader ownership, bounded request depth/refill/replacement, stable-ready discovery shutdown и bounded recovery selection. Текущий **V4a** переходит к измеряемой `loopback/player boundary`: first localhost HTTP open/read плюс Media3 `BUFFERING/READY/first-frame` и rebuffer telemetry. P2P-specific LoadControl будет отдельным следующим инкрементом после получения этих измерений.
+ 
+ Следующий порядок P2P-работ:
+ 
+diff -ruN '--exclude=.git' iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/P2pPlayerBoundaryTelemetry.kt /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/P2pPlayerBoundaryTelemetry.kt
+--- iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/P2pPlayerBoundaryTelemetry.kt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/P2pPlayerBoundaryTelemetry.kt	2026-08-15 12:32:03.882408397 +0000
+@@ -0,0 +1,105 @@
++package com.iptv.tv.feature.player
++
++internal enum class P2pPlayerBoundaryEventType(val wireName: String) {
++    BUFFERING("buffering"),
++    READY("ready"),
++    FIRST_VIDEO_FRAME("first_video_frame")
++}
++
++internal data class P2pPlayerBoundaryTelemetry(
++    val sessionId: Long,
++    val event: P2pPlayerBoundaryEventType,
++    val elapsedSincePlaybackStartMillis: Long,
++    val rebufferCount: Int,
++    val totalRebufferDurationMillis: Long,
++    val currentBufferingDurationMillis: Long = 0L
++)
++
++/**
++ * Small state machine for the Media3 side of the localhost P2P boundary.
++ *
++ * Startup buffering is deliberately not counted as a rebuffer. A rebuffer begins only after Media3
++ * has reached READY at least once. Duplicate BUFFERING callbacks while the player is already
++ * buffering do not increment the count.
++ */
++internal class P2pPlayerBoundaryTelemetryTracker(
++    private val sessionId: Long,
++    private val playbackStartedAtMillis: Long
++) {
++    private var readySeen = false
++    private var bufferingSinceMillis: Long? = null
++    private var bufferingIsRebuffer = false
++    private var rebufferCount = 0
++    private var totalRebufferDurationMillis = 0L
++    private var firstFrameReported = false
++
++    init {
++        require(sessionId > 0L) { "sessionId must be positive" }
++        require(playbackStartedAtMillis >= 0L) { "playbackStartedAtMillis must be non-negative" }
++    }
++
++    fun onBuffering(nowMillis: Long): P2pPlayerBoundaryTelemetry {
++        validateClock(nowMillis)
++        if (bufferingSinceMillis == null) {
++            bufferingSinceMillis = nowMillis
++            bufferingIsRebuffer = readySeen
++            if (bufferingIsRebuffer) rebufferCount += 1
++        }
++        return snapshot(P2pPlayerBoundaryEventType.BUFFERING, nowMillis)
++    }
++
++    fun onReady(nowMillis: Long): P2pPlayerBoundaryTelemetry {
++        validateClock(nowMillis)
++        val bufferingStartedAt = bufferingSinceMillis
++        if (bufferingStartedAt != null && bufferingIsRebuffer) {
++            totalRebufferDurationMillis = saturatingAdd(
++                totalRebufferDurationMillis,
++                elapsedSince(bufferingStartedAt, nowMillis)
++            )
++        }
++        bufferingSinceMillis = null
++        bufferingIsRebuffer = false
++        readySeen = true
++        return snapshot(P2pPlayerBoundaryEventType.READY, nowMillis)
++    }
++
++    fun onFirstVideoFrame(nowMillis: Long): P2pPlayerBoundaryTelemetry? {
++        validateClock(nowMillis)
++        if (firstFrameReported) return null
++        firstFrameReported = true
++        return snapshot(P2pPlayerBoundaryEventType.FIRST_VIDEO_FRAME, nowMillis)
++    }
++
++    private fun snapshot(
++        event: P2pPlayerBoundaryEventType,
++        nowMillis: Long
++    ): P2pPlayerBoundaryTelemetry {
++        val bufferingStartedAt = bufferingSinceMillis
++        val currentBufferingDuration = if (
++            bufferingStartedAt != null &&
++            bufferingIsRebuffer
++        ) {
++            elapsedSince(bufferingStartedAt, nowMillis)
++        } else {
++            0L
++        }
++        return P2pPlayerBoundaryTelemetry(
++            sessionId = sessionId,
++            event = event,
++            elapsedSincePlaybackStartMillis = elapsedSince(playbackStartedAtMillis, nowMillis),
++            rebufferCount = rebufferCount,
++            totalRebufferDurationMillis = totalRebufferDurationMillis,
++            currentBufferingDurationMillis = currentBufferingDuration
++        )
++    }
++
++    private fun validateClock(nowMillis: Long) {
++        require(nowMillis >= 0L) { "nowMillis must be non-negative" }
++    }
++
++    private fun elapsedSince(startMillis: Long, nowMillis: Long): Long =
++        (nowMillis - startMillis).coerceAtLeast(0L)
++
++    private fun saturatingAdd(left: Long, right: Long): Long =
++        if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
++}
++diff -ruN '--exclude=.git' iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt
++--- iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt	2026-08-15 11:57:02.000000000 +0000
