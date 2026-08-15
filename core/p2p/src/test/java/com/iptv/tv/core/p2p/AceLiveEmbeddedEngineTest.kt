@@ -2,7 +2,9 @@ package com.iptv.tv.core.p2p
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -53,5 +55,48 @@ class AceLiveEmbeddedEngineTest {
         )
 
         assertTrue(driveStartedWhileRefillWasRunning)
+    }
+
+    @Test
+    fun `startup ready cancels startup-only refill without cancelling lightweight continuation`() =
+        runBlocking {
+            val startup = CompletableDeferred<Unit>()
+            val startupRefillStarted = CompletableDeferred<Unit>()
+            val startupRefillCancelled = CompletableDeferred<Unit>()
+            var lightweightRefillStarted = false
+
+            val runner = launch {
+                runAceLiveStartupRefillUntilReady(startup) {
+                    startupRefillStarted.complete(Unit)
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        startupRefillCancelled.complete(Unit)
+                    }
+                }
+                lightweightRefillStarted = true
+            }
+
+            startupRefillStarted.await()
+            startup.complete(Unit)
+            withTimeout(1_000L) {
+                startupRefillCancelled.await()
+                runner.join()
+            }
+
+            assertTrue(lightweightRefillStarted)
+            assertTrue(runner.isCompleted)
+        }
+
+    @Test
+    fun `already ready startup skips startup-only refill`() = runBlocking {
+        val startup = CompletableDeferred(Unit)
+        var startupRefillCalled = false
+
+        runAceLiveStartupRefillUntilReady(startup) {
+            startupRefillCalled = true
+        }
+
+        assertFalse(startupRefillCalled)
     }
 }
