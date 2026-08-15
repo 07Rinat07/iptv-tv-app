@@ -1,0 +1,30 @@
+name: Apply Ace Live pressure-aware peer refill V3f
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/agent/ace-live-pressure-aware-peer-refill-v3f' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply V3f patch
+        run: python3 .github/scripts/apply_ace_live_pressure_aware_peer_refill_v3f.py
+
+      - name: Validate and commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "feat(p2p): add pressure-aware Ace Live peer refill"
+          git push origin HEAD:agent/ace-live-pressure-aware-peer-refill-v3f
