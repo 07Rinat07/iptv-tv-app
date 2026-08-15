@@ -500,6 +500,38 @@ class AceLivePeerRefillCoordinatorTest {
         }
 
     @Test
+    fun `bounded replacement stops one peer then refills from existing adaptive demand`() = runBlocking {
+        val coordinator = coordinator(target = 6, max = 8, maxStarts = 2)
+        val active = linkedSetOf(1L, 2L, 3L, 4L, 5L, 6L, 7L)
+        var nextId = 8L
+        val replacement = endpoint("192.0.2.88", 8988)
+        val loop = AceLivePeerRefillLoop(
+            coordinator = coordinator,
+            discover = {
+                discovery(
+                    replacement to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)
+                )
+            },
+            activePeerIds = { active.toSet() },
+            evaluateRecovery = { AceLiveRecoveryPlan(poolStale = false) },
+            nextNeededPiece = { 100L },
+            allocatePeerId = { nextId++ },
+            startPeer = { peerId, _ -> active += peerId },
+            adaptiveProbePeers = { 2 },
+            replacementPeerId = { _, _ -> 7L },
+            stopPeer = { peerId -> active -= peerId }
+        )
+
+        val result = loop.runOneCycle(nowMillis = 10_000L)
+
+        assertEquals(7L, result.replacedPeerId)
+        assertTrue(result.discoveryAttempted)
+        assertEquals(1, result.plannedStarts)
+        assertEquals(1, result.startedPeers)
+        assertEquals(setOf(1L, 2L, 3L, 4L, 5L, 6L, 8L), active)
+    }
+
+    @Test
     fun `cancelled start cleanup does not increment peer failure score`() {
         val coordinator = coordinator(target = 1, max = 1, maxStarts = 1)
         val peer = endpoint("192.0.2.60", 8700)

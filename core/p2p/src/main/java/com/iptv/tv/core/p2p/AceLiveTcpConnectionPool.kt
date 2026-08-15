@@ -153,6 +153,7 @@ class AceLiveTcpConnectionPool(
         runtime.transport?.close()
         runtime.writeJob?.cancel()
         runtime.job?.cancelAndJoin()
+        productionTracker.onDisconnected(peerId)
         poolMutex.withLock {
             if (
                 peers[peerId] === runtime &&

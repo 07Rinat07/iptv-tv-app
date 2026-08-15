@@ -26,11 +26,12 @@
 - PR #113 — confirmed per-reader consumer cursor/rate и playable headroom;
 - PR #114 — authoritative active-consumer selection при overlap/reconnect;
 - PR #115 — authoritative lifecycle подключён к реальному loopback и прошёл Android CI #511 + real Torrent TV smoke;
-- PR #116 — authoritative pressure подключён к bounded request depth `HIGH=1 / TARGET=2 / LOW=3 / CRITICAL=4`; Android CI #513, real smoke и signed ARM TV APK прошли успешно.
+- PR #116 — authoritative pressure подключён к bounded request depth `HIGH=1 / TARGET=2 / LOW=3 / CRITICAL=4`; Android CI #513, real smoke и signed ARM TV APK прошли успешно;
+- PR #117 — pressure-aware additive refill `LOW +1 / CRITICAL +2`, без eviction; per-peer quality snapshots подготовлены для replacement; Android CI #515, real smoke и signed ARM TV APK прошли успешно.
 
 Полевой прогон на ARM/TV Box изменил приоритет работ. Одни и те же публичные Torrent TV источники способны быстро находить tracker/DHT peers, но найденные endpoints не всегда превращаются в устойчивый media-producing pool. В логе встречались `peers=4..7` одновременно с итоговым no-peer/60-second timeout, а несколько успешно resolved потоков затем проводили около 66 секунд между `player_start` и `player_ready`. Это указало не на один общий codec-дефект, а на незавершённую связку peer usefulness → throughput → prebuffer → loopback consumption → player buffering.
 
-V1 исправил дефект startup prebuffer: discovery/handshake latency больше не входит в media-throughput estimate. PR #108–#110 последовательно отделили discovery от реальной peer quality, добавили `windowUseful/unchoked` и persistent structured diagnostics. V2d завершён PR #111. V3a–V3e (PR #112–#116) дали stateful buffer pressure, confirmed consumer telemetry, authoritative reader ownership, real loopback lifecycle и bounded adaptive request depth. Текущий **V3f** добавляет pressure-aware additive peer refill: `LOW` разрешает +1 probe-peer, `CRITICAL` +2, без eviction и только в пределах `maxActivePeers`; per-peer quality snapshot готовит следующий bounded replacement шаг. Recovery timing, startup/no-peer/stall bounds и wire protocol пока не меняются.
+V1 исправил дефект startup prebuffer: discovery/handshake latency больше не входит в media-throughput estimate. PR #108–#110 последовательно отделили discovery от реальной peer quality, добавили `windowUseful/unchoked` и persistent structured diagnostics. V2d завершён PR #111. V3a–V3f (PR #112–#117) дали stateful buffer pressure, confirmed consumer telemetry, authoritative reader ownership, bounded request depth и pressure-aware additive refill. Текущий **V3g** добавляет bounded replacement: только sustained `CRITICAL`, только подтверждённо degraded non-producing peer, максимум один за cooldown и только при сохранении baseline requestable pool. Recovery timing, startup/no-peer/stall bounds и wire protocol пока не меняются.
 
 Следующий порядок P2P-работ:
 
