@@ -174,6 +174,25 @@ class AceLivePeerSessionCoordinatorTest {
     }
 
     @Test
+    fun recoveryAdvanceIgnoresLaggingPeerAndTargetsNearestFutureWindow() {
+        val session = recoverySession(maxInFlightPerPeer = 1)
+        session.onPeerWindow(peerWindow(id = 1, min = 90, max = 99, unchoked = true))
+        session.onPeerWindow(peerWindow(id = 2, min = 105, max = 130, unchoked = true))
+
+        assertTrue(session.schedule(head = 130, nowMillis = 0).isEmpty())
+        val advance = requireNotNull(session.evaluateRecovery(nowMillis = 4_000).cursorAdvance)
+        assertEquals(AceLiveCursorAdvance(fromPiece = 100, toPiece = 105), advance)
+
+        val applied = session.applyRecoveryAdvance(advance, nowMillis = 4_000)
+
+        assertEquals(105L, applied.nextNeededPiece)
+        assertEquals(5L, requireNotNull(applied.outputDiscontinuity).skippedPieces)
+        val outbound = session.schedule(head = 105, nowMillis = 4_000)
+        assertTrue(outbound.isNotEmpty())
+        assertTrue(outbound.all { it.request.peerId == 2L && it.request.piece == 105L })
+    }
+
+    @Test
     fun memoryBudgetCapsSchedulingHorizonToWholePieceCapacity() {
         val session = session(
             maxInFlightPerPeer = 4,

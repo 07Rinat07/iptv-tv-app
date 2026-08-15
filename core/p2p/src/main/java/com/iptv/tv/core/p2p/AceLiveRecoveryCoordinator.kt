@@ -204,8 +204,8 @@ class AceLiveRecoveryCoordinator(
             stalledFor >= policy.requestTimeoutMillis &&
             !scheduler.anyUnchokedPeerCovers(nextNeeded)
         ) {
-            val lowestAvailable = scheduler.lowestAvailablePiece()
-            if (lowestAvailable != null && lowestAvailable > nextNeeded) {
+            val lowestAvailable = scheduler.lowestAvailablePieceAfter(nextNeeded)
+            if (lowestAvailable != null) {
                 val distance = lowestAvailable - nextNeeded
                 val boundedDistance = minOf(distance, policy.maxPieceAdvance)
                 cursorAdvance = AceLiveCursorAdvance(
