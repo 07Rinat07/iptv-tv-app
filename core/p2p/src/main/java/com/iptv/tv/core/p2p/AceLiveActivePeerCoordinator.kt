@@ -173,7 +173,8 @@ class AceLiveActivePeerCoordinator(
     fun schedule(
         nextNeeded: Long,
         head: Long,
-        nowMillis: Long
+        nowMillis: Long,
+        maxInFlightPerPeer: Int = Int.MAX_VALUE
     ): List<AceLiveChunkRequest> {
         requireWirePiece(nextNeeded)
         if (head < nextNeeded) return emptyList()
@@ -182,7 +183,12 @@ class AceLiveActivePeerCoordinator(
         val safeHead = minOf(head, reassemblyHead, MAX_ACE_LIVE_WIRE_PIECE)
         if (safeHead < nextNeeded) return emptyList()
 
-        recovery.assign(nextNeeded, safeHead, nowMillis).forEach { assignment ->
+        recovery.assign(
+            nextNeeded = nextNeeded,
+            head = safeHead,
+            nowMillis = nowMillis,
+            maxInFlightPerPeer = maxInFlightPerPeer
+        ).forEach { assignment ->
             val state = RequestedPiece(peerId = assignment.peerId)
             check(requestedPieces.put(assignment.piece, state) == null) {
                 "Scheduler assigned an already tracked Ace Live piece ${assignment.piece}"

@@ -108,10 +108,15 @@ class AceLiveRecoveryCoordinator(
     fun assign(
         nextNeeded: Long,
         head: Long,
-        nowMillis: Long
+        nowMillis: Long,
+        maxInFlightPerPeer: Int = Int.MAX_VALUE
     ): List<AceLivePieceAssignment> {
         observeCursor(nextNeeded, nowMillis)
-        val assignments = scheduler.assign(nextNeeded, head)
+        val assignments = scheduler.assign(
+            nextNeeded = nextNeeded,
+            head = head,
+            maxInFlightPerPeer = maxInFlightPerPeer
+        )
         assignments.forEach { assignment ->
             requestStartedAtMillis[assignment.piece] = nowMillis
         }

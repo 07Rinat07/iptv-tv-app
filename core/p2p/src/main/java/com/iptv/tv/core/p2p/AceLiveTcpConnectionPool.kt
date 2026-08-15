@@ -214,11 +214,16 @@ class AceLiveTcpConnectionPool(
      */
     suspend fun scheduleAndDispatch(
         head: Long,
-        nowMillis: Long = clockMillis()
+        nowMillis: Long = clockMillis(),
+        maxInFlightPerPeer: Int = Int.MAX_VALUE
     ): AceLiveTcpDispatchResult = dispatchMutex.withLock {
         val runtimes = poolMutex.withLock { peers.values.toList() }
         val scheduledAndRoutes = sessionMutex.withLock {
-            val scheduled = session.schedule(head = head, nowMillis = nowMillis)
+            val scheduled = session.schedule(
+                head = head,
+                nowMillis = nowMillis,
+                maxInFlightPerPeer = maxInFlightPerPeer
+            )
             val routes = runtimes.mapNotNull { runtime ->
                 val selected = runtime.connection.selectOutboundRequestFrames(scheduled)
                 if (selected.isEmpty()) null else runtime to selected
