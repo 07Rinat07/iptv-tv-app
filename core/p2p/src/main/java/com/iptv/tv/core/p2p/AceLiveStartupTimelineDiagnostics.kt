@@ -9,7 +9,7 @@ package com.iptv.tv.core.p2p
  */
 internal class AceLiveStartupTimelineDiagnostics(
     startedAtMillis: Long,
-    clockMillis: () -> Long = System::currentTimeMillis,
+    private val clockMillis: () -> Long = System::currentTimeMillis,
     private val diagnosticsObserver: (status: String, message: String) -> Unit
 ) {
     private val timeline = AceLiveStartupTimeline(
