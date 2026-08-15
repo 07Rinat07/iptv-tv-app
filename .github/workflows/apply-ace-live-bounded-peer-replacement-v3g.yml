@@ -1,0 +1,30 @@
+name: Apply Ace Live bounded peer replacement V3g
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/agent/ace-live-bounded-peer-replacement-v3g' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply V3g patch
+        run: python3 .github/scripts/apply_ace_live_bounded_peer_replacement_v3g.py
+
+      - name: Validate and commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "feat(p2p): replace degraded Ace Live peers under critical pressure"
+          git push origin HEAD:agent/ace-live-bounded-peer-replacement-v3g
