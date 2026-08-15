@@ -326,6 +326,7 @@ class AceLiveEmbeddedEngine(
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private val authenticator = AceLiveMediaAuthenticator(transport.publicKeyDer)
         private val resynchronizer = AceLiveMpegTsResynchronizer()
+        private val discontinuityGate = AceLiveTsDiscontinuityGate()
         private val announceLease = AceLiveAnnouncePortLease()
         private val localPeerId = AceLiveNodeIdentity.peerId()
         private val session = AceLivePeerSessionCoordinator(
@@ -647,7 +648,10 @@ class AceLiveEmbeddedEngine(
                             "event=recovery_advance from=${advance.fromPiece} to=${advance.toPiece} " +
                                 "gap_beyond_limit=${recovery.gapBeyondAdvanceLimit}"
                         )
-                        if (applied.outputDiscontinuity != null) resynchronizer.reset()
+                        if (applied.outputDiscontinuity != null) {
+                            resynchronizer.reset()
+                            discontinuityGate.activate()
+                        }
                         emitPieces(applied.emittedPieces)
                     }
                 }
@@ -841,7 +845,7 @@ class AceLiveEmbeddedEngine(
             pieces.forEach { piece ->
                 when (val verified = authenticator.verifyAndStrip(piece.data)) {
                     is P2pResult.Success -> {
-                        val media = resynchronizer.consume(verified.data)
+                        val media = discontinuityGate.consume(resynchronizer.consume(verified.data))
                         if (media.isNotEmpty()) {
                             val acceptedOutputBytes = mediaBuffer.append(media)
                             if (acceptedOutputBytes > 0) {
