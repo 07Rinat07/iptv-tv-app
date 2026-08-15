@@ -69,7 +69,11 @@ PR #111 завершил V2d post-output semantics и уже находится 
 
 PR #112 завершил V3a `LiveBufferController` primitive и уже находится в `main`. Pressure делится на `CRITICAL / LOW / TARGET / HIGH`, positive consumer rate включает duration-authoritative classification, без rate используется byte fallback, а все три границы защищены hysteresis. Exact-head Android CI #504 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно. V3a намеренно не подключал pressure к scheduler.
 
-Текущий V3b закрывает недостающий measurement boundary: реальный playable headroom считается относительно подтверждённого loopback HTTP consumer cursor, а не retained storage window. Scheduler policy этим инкрементом по-прежнему не меняется.
+PR #113 завершил V3b confirmed consumer telemetry и уже находится в `main`. Реальный playable headroom считается относительно подтверждённого loopback HTTP consumer cursor, а не retained storage window; per-reader consumer rate строится по подтверждённым socket deliveries. Exact-head Android CI #506 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
+
+PR #114 завершил V3c authoritative active-consumer selection и уже находится в `main`. Новый HTTP reader не перехватывает ownership только фактом открытия: handoff происходит после подтверждённой доставки. Late delivery старого reader не может вернуть ownership назад, а закрытие active reader выбирает самый новый ещё открытый reader с подтверждённой доставкой. Exact-head Android CI #508 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
+
+Текущий V3d (PR #115) подключает этот ownership primitive к реальному loopback lifecycle. `LoopbackHttpLiveServer` публикует `Opened / Delivered / Closed`; `AceLiveAuthoritativeConsumerPressureTracker` объединяет selection и per-reader hysteresis; runtime persistent buffer-pressure diagnostics получают только authoritative consumer samples. Scheduler request depth, refill и recovery этим инкрементом по-прежнему не меняются.
 
 ## Buffer model
 
@@ -114,7 +118,15 @@ Media3 reconnect/retry может кратковременно создать н
 
 `AceLiveBufferDiagnosticsReporter` сохраняет через уже существующий `diagnosticsObserver` structured event `embedded_ace_live_buffer_pressure`: reader, pressure/signal, playable bytes/ms, consumer B/s/Mbps, consumer/live-edge offsets, total delivered и fall-behind status. Material pressure/signal/fall-behind changes публикуются сразу, стабильные rate/headroom обновляются не чаще одного раза в 5 секунд. Reporter также bounded per reader.
 
-V3b остаётся telemetry-only: pressure snapshot **не** меняет `scheduleAndDispatch`, request depth, refill, recovery или startup/stall bounds. До V3c необходимо определить authoritative active-consumer lifecycle/selection при кратком overlap старого и нового reader; только после этого pressure можно использовать как behavioral scheduler input.
+PR #113 подтвердил этот telemetry boundary exact-head CI #506 и real Torrent TV playback smoke без внешнего Ace Engine; scheduler behavior тогда не менялся.
+
+### V3c/V3d — authoritative consumer ownership and lifecycle
+
+PR #114 добавил `AceLiveActiveConsumerSelector`: `Opened` не делает reader authoritative, первое подтверждённое `Delivered` нового reader выполняет monotonic handoff, late delivery старого reader игнорируется, а `Closed` active reader может вернуть ownership самому новому подтверждённому fallback reader.
+
+V3d проводит эти lifecycle-сигналы через реальный `LoopbackHttpLiveServer`. `Delivered` возникает только после socket `write + flush + confirmDelivered`; `Closed` публикуется из `finally`, поэтому abrupt client/session shutdown не оставляет selector с вечным активным reader. `AceLiveAuthoritativeConsumerPressureTracker` выдаёт pressure sample только для выбранного reader или для реального ownership fallback.
+
+V3d остаётся behavior-neutral: authoritative pressure пока используется для корректных persistent diagnostics, но **не** меняет request depth, peer refill, recovery или startup/stall bounds. Следующий V3-инкремент — bounded adaptive request-depth policy.
 
 ## Adaptive scheduling
 
@@ -152,7 +164,7 @@ P2P runtime и Media3 сейчас имеют независимые buffer loop
 - rebuffer count/duration;
 - backend Media3/LibVLC и точную fallback-причину.
 
-V3b уже даёт confirmed loopback delivery rate/headroom, но ещё не добавляет отдельные first-open/first-read timestamps в player analytics. После стабилизации scheduler feedback вводится отдельный P2P Media3 LoadControl для localhost live stream. Таймауты upstream discovery не используются как способ скрыть плохое player-buffer взаимодействие.
+V3d уже даёт фактические loopback lifecycle-сигналы и authoritative confirmed delivery rate/headroom, но ещё не экспортирует отдельные first-open/first-read timestamps в player analytics. После стабилизации scheduler feedback вводится отдельный P2P Media3 LoadControl для localhost live stream. Таймауты upstream discovery не используются как способ скрыть плохое player-buffer взаимодействие.
 
 ## MPEG-TS / discontinuity
 
@@ -216,9 +228,12 @@ Media-format логика не переносится внутрь peer schedule
 
 - [x] pure `critical/low/target/high` pressure primitive with bytes/duration and hysteresis (PR #112);
 - [x] exact-head CI + real Torrent TV smoke for V3a (Android CI #504 / PR #112);
-- [x] implement confirmed consumer-cursor/playable-headroom telemetry and persistent pressure diagnostics (V3b branch);
-- [ ] exact-head CI + real Torrent TV smoke for V3b;
-- [ ] authoritative active-consumer lifecycle/selection for scheduler feedback;
+- [x] confirmed consumer-cursor/playable-headroom telemetry and persistent pressure diagnostics (PR #113);
+- [x] exact-head CI + real Torrent TV smoke for V3b (Android CI #506 / PR #113);
+- [x] authoritative active-consumer lifecycle/selection primitive (PR #114);
+- [x] exact-head CI + real Torrent TV smoke for V3c (Android CI #508 / PR #114);
+- [ ] wire loopback `Opened / Delivered / Closed` into authoritative pressure path (PR #115, under acceptance);
+- [ ] exact-head CI + real Torrent TV smoke for V3d;
 - [ ] adaptive request depth/in-flight;
 - [ ] peer replacement based on producing quality;
 - [ ] startup discovery shutdown after stable-ready;

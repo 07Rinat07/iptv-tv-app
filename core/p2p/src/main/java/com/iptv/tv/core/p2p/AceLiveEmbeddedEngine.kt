@@ -259,14 +259,15 @@ class AceLiveEmbeddedEngine(
         private val diagnosticsObserver: (status: String, message: String) -> Unit
     ) : Closeable {
         private val startupBufferPolicy = AceLiveStartupBufferPolicy(bufferSettings)
-        private val consumerPressureTracker = AceLiveConsumerBufferPressureTracker()
+        private val authoritativeConsumerPressureTracker =
+            AceLiveAuthoritativeConsumerPressureTracker()
         private val bufferDiagnosticsReporter = AceLiveBufferDiagnosticsReporter(diagnosticsObserver)
         val startup = CompletableDeferred<Unit>()
         val startupTimeoutMillis = startupBufferPolicy.startupTimeoutMillis()
         val mediaBuffer = AceLiveMediaBuffer(maxBufferedBytes = startupBufferPolicy.outputBufferBytes())
         val server = LoopbackHttpLiveServer(
             mediaBuffer = mediaBuffer,
-            consumerObserver = ::onConsumerProgress
+            consumerLifecycleObserver = ::onConsumerLifecycle
         )
 
         private val closed = AtomicBoolean(false)
@@ -562,11 +563,11 @@ class AceLiveEmbeddedEngine(
             }
         }
 
-        private fun onConsumerProgress(consumer: AceLiveMediaConsumerSnapshot) {
-            val pressure = consumerPressureTracker.evaluate(consumer)
+        private fun onConsumerLifecycle(event: AceLiveConsumerLifecycleEvent) {
+            val sample = authoritativeConsumerPressureTracker.onEvent(event) ?: return
             bufferDiagnosticsReporter.maybeReport(
-                consumer = consumer,
-                pressure = pressure,
+                consumer = sample.consumer,
+                pressure = sample.pressure,
                 nowMillis = System.currentTimeMillis()
             )
         }
