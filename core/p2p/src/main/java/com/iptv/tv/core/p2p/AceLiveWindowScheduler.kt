@@ -192,9 +192,24 @@ class AceLiveWindowScheduler(
     }
 
     /**
-     * Lowest piece that any unchoked peer currently advertises. Recovery may use this only after
-     * explicitly deciding that [nextNeeded] has been evicted everywhere.
+     * Lowest piece strictly ahead of [cursor] that any unchoked peer can still serve.
+     *
+     * Peers whose advertised window is entirely behind the authoritative cursor are intentionally
+     * ignored. Otherwise one lagging/stale peer can mask a useful future live window and prevent the
+     * recovery layer from surfacing an evicted-gap cursor advance.
      */
+    fun lowestAvailablePieceAfter(cursor: Long): Long? {
+        require(cursor >= 0) { "cursor must be non-negative" }
+        if (cursor == Long.MAX_VALUE) return null
+        return peers.values
+            .asSequence()
+            .filter { it.unchoked }
+            .filter { it.maxPiece > cursor }
+            .map { peer -> maxOf(peer.minPiece, cursor + 1) }
+            .minOrNull()
+    }
+
+    /** Lowest advertised piece across all requestable peers, retained for diagnostics/tests. */
     fun lowestAvailablePiece(): Long? = peers.values
         .asSequence()
         .filter { it.unchoked }

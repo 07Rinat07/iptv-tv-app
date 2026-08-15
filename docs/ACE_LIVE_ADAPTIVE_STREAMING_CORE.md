@@ -81,7 +81,9 @@ PR #117 завершил V3f pressure-aware bounded peer refill и уже нах
 
 PR #118 завершил V3g bounded replacement и уже находится в `main`: replacement разрешён только при свежем sustained `CRITICAL`; producing peer никогда не кандидат, degradation должна сохраняться отдельное evidence window, после удаления обязаны оставаться минимум baseline requestable/producing peers, а cooldown разрешает максимум один replacement за цикл/окно. Android CI #517, real Torrent TV playback smoke без внешнего Ace Engine, lint, все unit tests и signed ARM TV APK прошли успешно.
 
-Текущий V3h завершает startup discovery lifecycle. Startup-specific bounded DHT probe/full-expansion должен быть отменён сразу после stable `startup_buffer_ready`, даже если DHT walk уже выполняется; при этом cancellation не должна прекращать обычный long-running lightweight refill. Recovery timing, startup/no-peer/stall bounds, request-depth/refill/replacement policies и wire protocol этим PR не меняются.
+PR #119 завершил V3h startup discovery lifecycle и уже находится в `main`: startup-specific bounded DHT probe/full-expansion отменяется после stable `startup_buffer_ready`, даже если startup-only work уже выполняется; cancellation не прекращает обычный long-running lightweight refill. Android CI #519 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
+
+Текущий V3i фиксирует bounded recovery selection semantics. При evicted-gap recovery peer window, полностью находящееся позади authoritative cursor, не должно маскировать ближайшее requestable future-window. Recovery по-прежнему разрешён только после существующего request-timeout, учитывает только unchoked windows и остаётся ограничен `maxPieceAdvance`; timeout/cursor ownership/wire protocol этим инкрементом не расширяются.
 
 ## Buffer model
 
