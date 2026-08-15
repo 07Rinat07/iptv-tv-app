@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'chore: trigger V4a patch apply'
+    if: "${{ github.event.head_commit.message == 'chore: trigger V4a patch apply' }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
