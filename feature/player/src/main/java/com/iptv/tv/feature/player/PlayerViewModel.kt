@@ -63,7 +63,9 @@ data class InternalPlaybackSession(
     val bufferConfig: BufferConfig,
     val recoveryPolicy: BufferingRecoveryPolicy,
     val bufferPlanSummary: String,
-    val requestId: Long = 0L
+    val requestId: Long = 0L,
+    val playbackStartedAtMillis: Long = 0L,
+    val isP2pPlayback: Boolean = false
 )
 
 enum class MultiviewMode(val paneCount: Int) {
@@ -1229,6 +1231,23 @@ class PlayerViewModel @Inject constructor(
         _uiState.update { it.copy(isStartingPlayback = false, lastError = null) }
     }
 
+    internal fun onP2pPlayerBoundaryTelemetry(telemetry: P2pPlayerBoundaryTelemetry) {
+        val state = _uiState.value
+        val session = state.internalSession ?: return
+        if (session.sessionId != telemetry.sessionId || !session.isP2pPlayback) return
+
+        logAsync(
+            status = "player_p2p_boundary",
+            message = "event=${telemetry.event.wireName}, sessionId=${telemetry.sessionId}, " +
+                "requestId=${session.requestId}, backend=media3, " +
+                "elapsed_ms=${telemetry.elapsedSincePlaybackStartMillis}, " +
+                "rebuffer_count=${telemetry.rebufferCount}, " +
+                "rebuffer_ms=${telemetry.totalRebufferDurationMillis}, " +
+                "current_buffering_ms=${telemetry.currentBufferingDurationMillis}",
+            playlistId = state.selectedPlaylistId
+        )
+    }
+
     fun onSecondaryPlaybackReady() {
         onAdditionalPlaybackReady(2)
     }
@@ -2107,6 +2126,12 @@ class PlayerViewModel @Inject constructor(
         )
         val preparedStream = parseKodiStyleStream(channel.streamUrl)
         val nextSessionId = primaryPlaybackOwnership.nextSessionId()
+        val playbackStartedAtMillis = System.currentTimeMillis()
+        val originalSourceUrl = state.channels
+            .firstOrNull { candidate -> candidate.id == channel.id }
+            ?.streamUrl
+            ?: channel.streamUrl
+        val isP2pPlayback = PlayerP2pDescriptor.detect(originalSourceUrl) != null
         _uiState.update {
             it.copy(
                 internalSession = InternalPlaybackSession(
@@ -2118,7 +2143,9 @@ class PlayerViewModel @Inject constructor(
                     bufferConfig = plan.config,
                     recoveryPolicy = plan.recoveryPolicy,
                     bufferPlanSummary = plan.summary,
-                    requestId = requestId
+                    requestId = requestId,
+                    playbackStartedAtMillis = playbackStartedAtMillis,
+                    isP2pPlayback = isP2pPlayback
                 ),
                 adaptiveBufferSummary = plan.summary,
                 isStartingPlayback = true,
@@ -2131,7 +2158,7 @@ class PlayerViewModel @Inject constructor(
                 lastError = null
             )
         }
-        internalStartElapsedMs = System.currentTimeMillis()
+        internalStartElapsedMs = playbackStartedAtMillis
         addToHistory(channel)
         viewModelScope.launch {
             diagnosticsRepository.addLog(

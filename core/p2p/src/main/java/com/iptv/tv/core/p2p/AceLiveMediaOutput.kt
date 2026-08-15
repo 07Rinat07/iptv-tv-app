@@ -364,7 +364,8 @@ internal class LoopbackHttpLiveServer(
     private val mediaBuffer: AceLiveMediaBuffer,
     private val requestedPort: Int = 0,
     private val consumerObserver: (AceLiveMediaConsumerSnapshot) -> Unit = {},
-    private val consumerLifecycleObserver: (AceLiveConsumerLifecycleEvent) -> Unit = {}
+    private val consumerLifecycleObserver: (AceLiveConsumerLifecycleEvent) -> Unit = {},
+    private val firstReadObserver: (readerId: Long, byteCount: Int) -> Unit = { _, _ -> }
 ) : Closeable {
     private val closed = AtomicBoolean(false)
     private val serverSocket = ServerSocket().apply {
@@ -441,10 +442,15 @@ internal class LoopbackHttpLiveServer(
             consumerLifecycleObserver(AceLiveConsumerLifecycleEvent.Opened(reader.readerId))
         }
         val bytes = ByteArray(64 * 1024)
+        var firstReadReported = false
         try {
             while (!closed.get()) {
                 val count = reader.read(bytes, 0, bytes.size)
                 if (count < 0) return
+                if (!firstReadReported && count > 0) {
+                    firstReadReported = true
+                    runCatching { firstReadObserver(reader.readerId, count) }
+                }
                 output.write(bytes, 0, count)
                 output.flush()
                 val snapshot = reader.confirmDelivered(count)

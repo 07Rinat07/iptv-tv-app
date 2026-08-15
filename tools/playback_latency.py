@@ -19,6 +19,9 @@ CHANNEL_ID_RE = re.compile(r"\bchannelId=(?P<value>\d+)\b")
 PLAYLIST_ID_RE = re.compile(r"\bplaylistId=(?P<value>\d+)\b")
 STREAM_KIND_RE = re.compile(r"\bstreamKind=(?P<value>.+?)(?:,\s|$)")
 STARTUP_MS_RE = re.compile(r"\bstartupMs=(?P<value>\d+)\b")
+BOUNDARY_EVENT_RE = re.compile(r"\bevent=(?P<value>[a-z_]+)\b")
+REBUFFER_COUNT_RE = re.compile(r"\brebuffer_count=(?P<value>\d+)\b")
+REBUFFER_MS_RE = re.compile(r"\brebuffer_ms=(?P<value>\d+)\b")
 
 
 @dataclass(frozen=True)
@@ -41,8 +44,15 @@ class PlaybackRequest:
     startup_buffer_ready_at_ms: int | None = None
     resolved_at_ms: int | None = None
     player_start_at_ms: int | None = None
+    loopback_open_at_ms: int | None = None
+    loopback_first_read_at_ms: int | None = None
+    media3_first_buffering_at_ms: int | None = None
+    media3_boundary_ready_at_ms: int | None = None
+    first_video_frame_at_ms: int | None = None
     player_ready_at_ms: int | None = None
     player_reported_startup_ms: int | None = None
+    rebuffer_count: int = 0
+    rebuffer_ms: int = 0
     completed_at_ms: int | None = None
     outcome: str = "pending"
     detail: str = ""
@@ -69,6 +79,26 @@ class PlaybackRequest:
         return self.elapsed(self.player_start_at_ms)
 
     @property
+    def loopback_open_ms(self) -> int | None:
+        return self.elapsed(self.loopback_open_at_ms)
+
+    @property
+    def loopback_first_read_ms(self) -> int | None:
+        return self.elapsed(self.loopback_first_read_at_ms)
+
+    @property
+    def media3_first_buffering_ms(self) -> int | None:
+        return self.elapsed(self.media3_first_buffering_at_ms)
+
+    @property
+    def media3_boundary_ready_ms(self) -> int | None:
+        return self.elapsed(self.media3_boundary_ready_at_ms)
+
+    @property
+    def first_video_frame_ms(self) -> int | None:
+        return self.elapsed(self.first_video_frame_at_ms)
+
+    @property
     def player_ready_ms(self) -> int | None:
         return self.elapsed(self.player_ready_at_ms)
 
@@ -89,8 +119,15 @@ class PlaybackRequest:
             "startup_buffer_ms": self.startup_buffer_ms,
             "resolve_ms": self.resolve_ms,
             "player_start_ms": self.player_start_ms,
+            "loopback_open_ms": self.loopback_open_ms,
+            "loopback_first_read_ms": self.loopback_first_read_ms,
+            "media3_first_buffering_ms": self.media3_first_buffering_ms,
+            "media3_boundary_ready_ms": self.media3_boundary_ready_ms,
+            "first_video_frame_ms": self.first_video_frame_ms,
             "player_ready_ms": self.player_ready_ms,
             "player_reported_startup_ms": self.player_reported_startup_ms,
+            "rebuffer_count": self.rebuffer_count,
+            "rebuffer_ms": self.rebuffer_ms,
             "total_ms": self.total_ms,
             "outcome": self.outcome,
             "detail": self.detail,
@@ -193,6 +230,11 @@ def _extract_stream_kind(message: str) -> str | None:
     return match.group("value").strip() if match else None
 
 
+def _extract_boundary_event(message: str) -> str | None:
+    match = BOUNDARY_EVENT_RE.search(message)
+    return match.group("value").strip() if match else None
+
+
 def _latest_pending(
     requests: Sequence[PlaybackRequest],
     *,
@@ -258,6 +300,37 @@ def analyze_events(events: Iterable[LogEvent]) -> PlaybackAnalysis:
             request = _latest_pending(requests, channel_id=channel_id)
             if request is not None:
                 request.player_start_at_ms = event.timestamp_ms
+            continue
+
+        if status == "embedded_ace_live_loopback_http_open":
+            request = _latest_pending(requests, require_started=True)
+            if request is not None and request.loopback_open_at_ms is None:
+                request.loopback_open_at_ms = event.timestamp_ms
+            continue
+
+        if status == "embedded_ace_live_loopback_first_read":
+            request = _latest_pending(requests, require_started=True)
+            if request is not None and request.loopback_first_read_at_ms is None:
+                request.loopback_first_read_at_ms = event.timestamp_ms
+            continue
+
+        if status == "player_p2p_boundary":
+            request = _latest_pending(requests, require_started=True)
+            if request is not None:
+                boundary_event = _extract_boundary_event(event.message)
+                if boundary_event == "buffering" and request.media3_first_buffering_at_ms is None:
+                    request.media3_first_buffering_at_ms = event.timestamp_ms
+                elif boundary_event == "ready":
+                    request.media3_boundary_ready_at_ms = event.timestamp_ms
+                elif boundary_event == "first_video_frame" and request.first_video_frame_at_ms is None:
+                    request.first_video_frame_at_ms = event.timestamp_ms
+
+                rebuffer_count = _extract_int(REBUFFER_COUNT_RE, event.message)
+                rebuffer_ms = _extract_int(REBUFFER_MS_RE, event.message)
+                if rebuffer_count is not None:
+                    request.rebuffer_count = max(request.rebuffer_count, rebuffer_count)
+                if rebuffer_ms is not None:
+                    request.rebuffer_ms = max(request.rebuffer_ms, rebuffer_ms)
             continue
 
         if status == "player_ready":
@@ -357,7 +430,12 @@ def render_table(analysis: PlaybackAnalysis) -> str:
         "buffer",
         "resolve",
         "start",
+        "http-open",
+        "first-read",
+        "buffering",
         "ready",
+        "first-frame",
+        "rebuf",
         "outcome",
     ]
     rows: list[list[str]] = []
@@ -372,7 +450,12 @@ def render_table(analysis: PlaybackAnalysis) -> str:
                 _fmt_ms(request.startup_buffer_ms),
                 _fmt_ms(request.resolve_ms),
                 _fmt_ms(request.player_start_ms),
+                _fmt_ms(request.loopback_open_ms),
+                _fmt_ms(request.loopback_first_read_ms),
+                _fmt_ms(request.media3_first_buffering_ms),
                 _fmt_ms(request.player_ready_ms),
+                _fmt_ms(request.first_video_frame_ms),
+                f"{request.rebuffer_count}/{_fmt_ms(request.rebuffer_ms)}",
                 request.outcome,
             ]
         )

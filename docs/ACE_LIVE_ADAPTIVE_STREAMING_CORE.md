@@ -83,7 +83,9 @@ PR #118 завершил V3g bounded replacement и уже находится в
 
 PR #119 завершил V3h startup discovery lifecycle и уже находится в `main`: startup-specific bounded DHT probe/full-expansion отменяется после stable `startup_buffer_ready`, даже если startup-only work уже выполняется; cancellation не прекращает обычный long-running lightweight refill. Android CI #519 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
 
-Текущий V3i фиксирует bounded recovery selection semantics. При evicted-gap recovery peer window, полностью находящееся позади authoritative cursor, не должно маскировать ближайшее requestable future-window. Recovery по-прежнему разрешён только после существующего request-timeout, учитывает только unchoked windows и остаётся ограничен `maxPieceAdvance`; timeout/cursor ownership/wire protocol этим инкрементом не расширяются.
+PR #120 завершил V3i bounded recovery selection semantics и уже находится в `main`. При evicted-gap recovery peer window, полностью находящееся позади authoritative cursor, больше не маскирует ближайшее requestable future-window. Recovery по-прежнему разрешён только после существующего request-timeout, учитывает только unchoked windows и остаётся ограничен `maxPieceAdvance`. Android CI #522 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
+
+Текущий V4a вводит измеряемую player-boundary telemetry без изменения Media3 buffering policy: отдельные first localhost HTTP open/read events, Media3 `BUFFERING/READY/first-frame`, rebuffer count/duration и session correlation для P2P playback. P2P-specific LoadControl остаётся следующим отдельным инкрементом и не тюнингуется до получения этих измерений.
 
 ## Buffer model
 
@@ -247,8 +249,8 @@ Media-format логика не переносится внутрь peer schedule
 - [x] adaptive request depth/in-flight (PR #116);
 - [x] pressure-aware bounded peer refill (PR #117);
 - [x] peer replacement based on producing quality (PR #118);
-- [ ] startup discovery shutdown after stable-ready (V3h);
-- [ ] bounded recovery regression matrix.
+- [x] startup discovery shutdown after stable-ready (PR #119);
+- [x] bounded recovery regression matrix (PR #120).
 
 ### V4 — player/TS boundary
 
