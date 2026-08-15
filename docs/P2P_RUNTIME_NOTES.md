@@ -69,7 +69,9 @@ The current pipeline is:
 
 The P2P buffer and Media3 LoadControl are currently separate feedback systems. Field logs show some resolved Ace streams spending roughly 66 seconds between `player_start` and `player_ready`, while other streams reach READY in well under a second. Codec absence therefore cannot explain the whole class of failures.
 
-V4a captures the missing boundary timings without changing buffering policy: first localhost HTTP open/read plus Media3 BUFFERING/READY, first rendered frame and rebuffer count/duration for P2P sessions. Existing V3 diagnostics continue to provide producer/consumer rate and playable headroom. Only after these measurements are available should the P2P-specific Media3 LoadControl be tuned.
+V4a/PR #121 captures the missing boundary timings without changing buffering policy: first localhost HTTP open/read plus Media3 BUFFERING/READY, first rendered frame and rebuffer count/duration for P2P sessions. Existing V3 diagnostics continue to provide producer/consumer rate and playable headroom.
+
+V4b now isolates a P2P-only Media3 LoadControl policy for the localhost live stream. It keeps generic IPTV settings untouched, caps duplicate Media3 read-ahead at 30 seconds / 32 MiB, keeps startup at or below 2 seconds and uses a 4-second post-rebuffer floor bounded by the effective min buffer. These are conservative initial bounds; field tuning remains driven by V4a telemetry rather than by widening upstream discovery or recovery timeouts.
 
 ## Acceptance rule
 

@@ -188,6 +188,51 @@ fun adaptiveBufferPlan(
     )
 }
 
+private const val P2P_MEDIA3_MIN_BUFFER_CAP_MS = 10_000
+private const val P2P_MEDIA3_MAX_BUFFER_CAP_MS = 30_000
+private const val P2P_MEDIA3_START_BUFFER_CAP_MS = 2_000
+private const val P2P_MEDIA3_REBUFFER_FLOOR_MS = 4_000
+private const val P2P_MEDIA3_TARGET_BUFFER_CAP_BYTES = 32 * 1024 * 1024
+
+/**
+ * Bounds the second-stage Media3 buffer for localhost P2P playback.
+ *
+ * Ace Live already owns the upstream live buffer and its pressure feedback. Media3 therefore should
+ * not duplicate a generic IPTV-sized read-ahead window on top of that buffer. Startup remains fast,
+ * while recovery after a real rebuffer gets a stronger floor to avoid immediate BUFFERING/READY
+ * oscillation. The policy never changes the user's generic IPTV BufferConfig instance.
+ */
+fun p2pMedia3BufferConfig(requested: BufferConfig): BufferConfig {
+    val boundedMax = requested.maxBufferMs
+        .coerceAtMost(P2P_MEDIA3_MAX_BUFFER_CAP_MS)
+        .coerceAtLeast(1_000)
+    val boundedMin = requested.minBufferMs
+        .coerceAtMost(P2P_MEDIA3_MIN_BUFFER_CAP_MS)
+        .coerceAtMost(boundedMax)
+        .coerceAtLeast(1_000)
+    val boundedStart = requested.bufferForPlaybackMs
+        .coerceAtMost(P2P_MEDIA3_START_BUFFER_CAP_MS)
+        .coerceAtMost(boundedMin)
+        .coerceAtLeast(250)
+    val boundedRebuffer = requested.bufferForPlaybackAfterRebufferMs
+        .coerceAtLeast(P2P_MEDIA3_REBUFFER_FLOOR_MS.coerceAtMost(boundedMin))
+        .coerceAtMost(boundedMin)
+        .coerceAtLeast(250)
+    val boundedTargetBytes = if (requested.targetBufferBytes > 0) {
+        requested.targetBufferBytes.coerceAtMost(P2P_MEDIA3_TARGET_BUFFER_CAP_BYTES)
+    } else {
+        P2P_MEDIA3_TARGET_BUFFER_CAP_BYTES
+    }
+
+    return BufferConfig(
+        minBufferMs = boundedMin,
+        maxBufferMs = boundedMax,
+        bufferForPlaybackMs = boundedStart,
+        bufferForPlaybackAfterRebufferMs = boundedRebuffer,
+        targetBufferBytes = boundedTargetBytes
+    )
+}
+
 @UnstableApi
 fun BufferConfig.toLoadControl(): DefaultLoadControl {
     val builder = DefaultLoadControl.Builder()
