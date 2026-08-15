@@ -79,7 +79,9 @@ PR #116 завершил V3e bounded adaptive request depth и уже наход
 
 PR #117 завершил V3f pressure-aware bounded peer refill и уже находится в `main`: `TARGET/HIGH` не расширяют normal pool, `LOW` разрешает +1 probe-peer, `CRITICAL` +2, всегда в пределах `maxActivePeers`; recovery и pressure demand используют максимум, а не сумму. Per-peer quality snapshots публикуют lifecycle/requestability/production/freshness/rate evidence. Exact-head Android CI #515, real Torrent TV playback smoke без внешнего Ace Engine, lint, все unit tests и signed ARM TV APK прошли успешно.
 
-Текущий V3g вводит bounded replacement только при устойчивом `CRITICAL`: producing peer никогда не кандидат, degradation должна сохраняться отдельное evidence window, после удаления обязаны оставаться минимум baseline requestable/producing peers, а cooldown разрешает максимум один replacement за цикл/окно. Replacement использует только свежий authoritative pressure sample; исчезнувший loopback consumer не может оставить старый `CRITICAL` как бессрочное основание для eviction. Recovery timing, startup/no-peer/stall bounds и wire protocol этим PR не меняются.
+PR #118 завершил V3g bounded replacement и уже находится в `main`: replacement разрешён только при свежем sustained `CRITICAL`; producing peer никогда не кандидат, degradation должна сохраняться отдельное evidence window, после удаления обязаны оставаться минимум baseline requestable/producing peers, а cooldown разрешает максимум один replacement за цикл/окно. Android CI #517, real Torrent TV playback smoke без внешнего Ace Engine, lint, все unit tests и signed ARM TV APK прошли успешно.
+
+Текущий V3h завершает startup discovery lifecycle. Startup-specific bounded DHT probe/full-expansion должен быть отменён сразу после stable `startup_buffer_ready`, даже если DHT walk уже выполняется; при этом cancellation не должна прекращать обычный long-running lightweight refill. Recovery timing, startup/no-peer/stall bounds, request-depth/refill/replacement policies и wire protocol этим PR не меняются.
 
 ## Buffer model
 
@@ -132,7 +134,7 @@ PR #114 добавил `AceLiveActiveConsumerSelector`: `Opened` не делае
 
 V3d проводит эти lifecycle-сигналы через реальный `LoopbackHttpLiveServer`. `Delivered` возникает только после socket `write + flush + confirmDelivered`; `Closed` публикуется из `finally`, поэтому abrupt client/session shutdown не оставляет selector с вечным активным reader. `AceLiveAuthoritativeConsumerPressureTracker` выдаёт pressure sample только для выбранного reader или для реального ownership fallback.
 
-V3d завершён как behavior-neutral lifecycle boundary. PR #116/V3e добавил bounded request-depth feedback, PR #117/V3f — additive refill `LOW +1 / CRITICAL +2`. V3g использует накопленные per-peer quality snapshots для консервативного replacement: только sustained `CRITICAL`, только non-producing degraded peer, только при сохранении baseline requestable peers и с cooldown. Сам stop проходит через существующий TCP/session disconnect cleanup, поэтому piece ownership requeue остаётся в прежнем recovery boundary.
+V3d завершён как behavior-neutral lifecycle boundary. PR #116/V3e добавил bounded request-depth feedback, PR #117/V3f — additive refill `LOW +1 / CRITICAL +2`, PR #118/V3g — консервативный replacement только при sustained `CRITICAL` и подтверждённой degradation. Сам stop проходит через существующий TCP/session disconnect cleanup, поэтому piece ownership requeue остаётся в прежнем recovery boundary. V3h отдельно завершает startup discovery lifecycle: после stable-ready startup-only DHT expansion прекращается, но normal lightweight refill продолжает поддерживать peer pool.
 
 ## Adaptive scheduling
 
@@ -238,11 +240,12 @@ Media-format логика не переносится внутрь peer schedule
 - [x] exact-head CI + real Torrent TV smoke for V3b (Android CI #506 / PR #113);
 - [x] authoritative active-consumer lifecycle/selection primitive (PR #114);
 - [x] exact-head CI + real Torrent TV smoke for V3c (Android CI #508 / PR #114);
-- [ ] wire loopback `Opened / Delivered / Closed` into authoritative pressure path (PR #115, under acceptance);
-- [ ] exact-head CI + real Torrent TV smoke for V3d;
-- [ ] adaptive request depth/in-flight;
-- [ ] peer replacement based on producing quality;
-- [ ] startup discovery shutdown after stable-ready;
+- [x] wire loopback `Opened / Delivered / Closed` into authoritative pressure path (PR #115);
+- [x] exact-head CI + real Torrent TV smoke for V3d (Android CI #511 / PR #115);
+- [x] adaptive request depth/in-flight (PR #116);
+- [x] pressure-aware bounded peer refill (PR #117);
+- [x] peer replacement based on producing quality (PR #118);
+- [ ] startup discovery shutdown after stable-ready (V3h);
 - [ ] bounded recovery regression matrix.
 
 ### V4 — player/TS boundary

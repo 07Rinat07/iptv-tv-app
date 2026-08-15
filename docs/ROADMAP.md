@@ -6,7 +6,7 @@
 
 Целевой ориентир P2P — не просто функциональная совместимость, а измеримое качество: быстрый zap здорового swarm, минимальный rebuffer, bounded recovery, отсутствие stale-session гонок и длительная стабильность на реальном TV Box. Внешний Ace Stream Engine не является runtime-стратегией, fallback или требованием проекта; сторонние приложения/движки используются только как поведенческий benchmark при A/B-проверке тех же каналов и устройств.
 
-## Текущий срез — 14 августа 2026
+## Текущий срез — 15 августа 2026
 
 Автономный Torrent TV маршрут работает без внешнего Ace Engine. Базовая цепочка уже включает public tracker/DHT discovery, TCP peer pool, Ace Live handshake/window/chunk scheduling, bounded recovery, MPEG-TS resync, sliding loopback output и Media3/LibVLC playback.
 
@@ -28,10 +28,11 @@
 - PR #115 — authoritative lifecycle подключён к реальному loopback и прошёл Android CI #511 + real Torrent TV smoke;
 - PR #116 — authoritative pressure подключён к bounded request depth `HIGH=1 / TARGET=2 / LOW=3 / CRITICAL=4`; Android CI #513, real smoke и signed ARM TV APK прошли успешно;
 - PR #117 — pressure-aware additive refill `LOW +1 / CRITICAL +2`, без eviction; per-peer quality snapshots подготовлены для replacement; Android CI #515, real smoke и signed ARM TV APK прошли успешно.
+- PR #118 — bounded replacement деградировавших peers только при свежем sustained `CRITICAL`, с producing/baseline/cooldown guards; Android CI #517, real smoke и signed ARM TV APK прошли успешно.
 
 Полевой прогон на ARM/TV Box изменил приоритет работ. Одни и те же публичные Torrent TV источники способны быстро находить tracker/DHT peers, но найденные endpoints не всегда превращаются в устойчивый media-producing pool. В логе встречались `peers=4..7` одновременно с итоговым no-peer/60-second timeout, а несколько успешно resolved потоков затем проводили около 66 секунд между `player_start` и `player_ready`. Это указало не на один общий codec-дефект, а на незавершённую связку peer usefulness → throughput → prebuffer → loopback consumption → player buffering.
 
-V1 исправил дефект startup prebuffer: discovery/handshake latency больше не входит в media-throughput estimate. PR #108–#110 последовательно отделили discovery от реальной peer quality, добавили `windowUseful/unchoked` и persistent structured diagnostics. V2d завершён PR #111. V3a–V3f (PR #112–#117) дали stateful buffer pressure, confirmed consumer telemetry, authoritative reader ownership, bounded request depth и pressure-aware additive refill. Текущий **V3g** добавляет bounded replacement: только sustained `CRITICAL`, только подтверждённо degraded non-producing peer, максимум один за cooldown и только при сохранении baseline requestable pool. Recovery timing, startup/no-peer/stall bounds и wire protocol пока не меняются.
+V1 исправил дефект startup prebuffer: discovery/handshake latency больше не входит в media-throughput estimate. PR #108–#110 последовательно отделили discovery от реальной peer quality, добавили `windowUseful/unchoked` и persistent structured diagnostics. V2d завершён PR #111. V3a–V3g (PR #112–#118) дали stateful buffer pressure, confirmed consumer telemetry, authoritative reader ownership, bounded request depth, pressure-aware additive refill и консервативный replacement деградировавших peers. Текущий **V3h** закрывает startup discovery lifecycle: startup-specific DHT probe/full expansion прекращается после stable-ready, при этом normal lightweight refill остаётся активным. Recovery timing, startup/no-peer/stall bounds и wire protocol не меняются.
 
 Следующий порядок P2P-работ:
 

@@ -58,6 +58,32 @@ internal suspend fun runAceLiveSessionWithBackgroundPeerRefill(
     }
 }
 
+/**
+ * Runs startup-only discovery work until it finishes naturally or startup reaches a terminal state.
+ *
+ * Cancelling startup-specific DHT work must not cancel the enclosing background refill coroutine:
+ * after media-ready the normal lightweight refill loop still owns long-running peer maintenance.
+ */
+internal suspend fun runAceLiveStartupRefillUntilReady(
+    startup: CompletableDeferred<Unit>,
+    startupRefill: suspend () -> Unit
+) = coroutineScope {
+    if (startup.isCompleted) return@coroutineScope
+
+    val startupRefillJob = launch {
+        if (!startup.isCompleted) startupRefill()
+    }
+    val startupCompletionJob = launch {
+        startup.join()
+        startupRefillJob.cancel()
+    }
+    try {
+        startupRefillJob.join()
+    } finally {
+        startupCompletionJob.cancel()
+    }
+}
+
 /** End-to-end autonomous playback for public Ace Live content IDs. */
 class AceLiveEmbeddedEngine(
     okHttpClient: OkHttpClient,
@@ -396,50 +422,62 @@ class AceLiveEmbeddedEngine(
                     }
                     runAceLiveSessionWithBackgroundPeerRefill(
                         backgroundRefill = {
-                            while (
-                                startupDhtProbeRefillPending.get() &&
-                                !startup.isCompleted
-                            ) {
-                                // One DHT endpoint frequently accepts no useful live session. A
-                                // bounded four-candidate batch gives the TCP pool several chances in
-                                // a few seconds, while two independent rounds reduce dependence on a
-                                // single routing-table path. Neither walk blocks scheduling or media
-                                // ingestion from candidates already in the pool.
-                                val probeRefill = refillLoop.runOneCycle()
-                                val completedRounds = startupDhtProbeRounds.get()
-                                val returnedDhtPeers = lastStartupDhtProbePeerCount.get()
-                                startupDhtProbeRefillPending.set(
-                                    aceLiveStartupDhtProbeShouldContinue(completedRounds)
-                                )
-                                Log.i(
-                                    LOG_TAG,
-                                    "event=startup_dht_probe " +
-                                        "round=$completedRounds " +
-                                        "returned_peers=$returnedDhtPeers " +
-                                        "started_peers=${probeRefill.startedPeers}"
-                                )
-                                // Discovery can be skipped if enough candidates became active while
-                                // this coroutine was scheduled. Do not spin on an unconsumed flag.
-                                if (!probeRefill.discoveryAttempted) break
+                            try {
+                                runAceLiveStartupRefillUntilReady(startup) {
+                                    while (
+                                        startupDhtProbeRefillPending.get() &&
+                                        !startup.isCompleted
+                                    ) {
+                                        // One DHT endpoint frequently accepts no useful live session. A
+                                        // bounded four-candidate batch gives the TCP pool several chances in
+                                        // a few seconds, while two independent rounds reduce dependence on a
+                                        // single routing-table path. Neither walk blocks scheduling or media
+                                        // ingestion from candidates already in the pool.
+                                        val probeRefill = refillLoop.runOneCycle()
+                                        val completedRounds = startupDhtProbeRounds.get()
+                                        val returnedDhtPeers = lastStartupDhtProbePeerCount.get()
+                                        startupDhtProbeRefillPending.set(
+                                            aceLiveStartupDhtProbeShouldContinue(completedRounds)
+                                        )
+                                        Log.i(
+                                            LOG_TAG,
+                                            "event=startup_dht_probe " +
+                                                "round=$completedRounds " +
+                                                "returned_peers=$returnedDhtPeers " +
+                                                "started_peers=${probeRefill.startedPeers}"
+                                        )
+                                        // Discovery can be skipped if enough candidates became active while
+                                        // this coroutine was scheduled. Do not spin on an unconsumed flag.
+                                        if (!probeRefill.discoveryAttempted) break
+                                    }
+                                    if (
+                                        startupDhtProbeRounds.get() > 0 &&
+                                        !startup.isCompleted
+                                    ) {
+                                        startupDhtFullExpansionPending.set(true)
+                                    }
+                                    if (
+                                        startupDhtFullExpansionPending.get() &&
+                                        !startup.isCompleted
+                                    ) {
+                                        // Once the first DHT candidate is being probed concurrently by the
+                                        // session, collect the wider candidate set for resiliency and stale-
+                                        // peer recovery. This second pass remains off the critical path.
+                                        val expandedRefill = refillLoop.runOneCycle()
+                                        Log.i(
+                                            LOG_TAG,
+                                            "event=startup_dht_expansion " +
+                                                "started_peers=${expandedRefill.startedPeers}"
+                                        )
+                                    }
+                                }
+                            } finally {
+                                startupDhtProbeRefillPending.set(false)
+                                startupDhtFullExpansionPending.set(false)
                             }
-                            if (
-                                startupDhtProbeRounds.get() > 0 &&
-                                !startup.isCompleted
-                            ) {
-                                startupDhtFullExpansionPending.set(true)
+                            if (currentCoroutineContext().isActive) {
+                                refillLoop.run()
                             }
-                            if (startupDhtFullExpansionPending.get()) {
-                                // Once the first DHT candidate is being probed concurrently by the
-                                // session, collect the wider candidate set for resiliency and stale-
-                                // peer recovery. This second pass remains off the critical path.
-                                val expandedRefill = refillLoop.runOneCycle()
-                                Log.i(
-                                    LOG_TAG,
-                                    "event=startup_dht_expansion " +
-                                        "started_peers=${expandedRefill.startedPeers}"
-                                )
-                            }
-                            refillLoop.run()
                         },
                         driveSession = ::driveSession
                     )
@@ -477,9 +515,12 @@ class AceLiveEmbeddedEngine(
                 announcePort = announceLease.port
             )
             val isInitialDiscovery = initialPeerDiscovery.compareAndSet(true, false)
-            val useStartupDhtProbeRefill = !isInitialDiscovery &&
+            val startupDiscoveryActive = !startup.isCompleted
+            val useStartupDhtProbeRefill = startupDiscoveryActive &&
+                !isInitialDiscovery &&
                 startupDhtProbeRefillPending.compareAndSet(true, false)
-            val useStartupDhtFullExpansion = !isInitialDiscovery &&
+            val useStartupDhtFullExpansion = startupDiscoveryActive &&
+                !isInitialDiscovery &&
                 !useStartupDhtProbeRefill &&
                 startupDhtFullExpansionPending.compareAndSet(true, false)
             val discoveryPolicy = if (isInitialDiscovery) {
