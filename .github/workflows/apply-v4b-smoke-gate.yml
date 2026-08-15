@@ -12,26 +12,26 @@ permissions:
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Extend Torrent TV smoke detector for P2P player boundary changes
-        shell: python
+        shell: bash
         run: |
+          set -euo pipefail
+          python - <<'PY'
           from pathlib import Path
 
           path = Path('.github/workflows/android.yml')
           text = path.read_text()
-          old = """            '^(app/src/androidTest/java/com/iptv/tv/(TorrentTvPlaybackSmokeTest|HiltTestRunner)\\.kt|app/src/main/java/com/iptv/tv/ApplicationEngineEntryPoint\\.kt|core/(p2p|engine)/|core/data/src/main/java/com/iptv/tv/core/data/repository/(HybridEngineRepositoryImpl|CoalescingEngineRepository)\\.kt)' \\
-"""
-          new = """            '^(app/src/androidTest/java/com/iptv/tv/(TorrentTvPlaybackSmokeTest|HiltTestRunner)\\.kt|app/src/main/java/com/iptv/tv/ApplicationEngineEntryPoint\\.kt|core/(p2p|engine)/|core/player/src/main/java/com/iptv/tv/core/player/PlayerContracts\\.kt|feature/player/src/main/java/com/iptv/tv/feature/player/(StablePlayerVideoSurface|StablePlayerScreenReplacement|P2pPlayerBoundaryTelemetry)\\.kt|core/data/src/main/java/com/iptv/tv/core/data/repository/(HybridEngineRepositoryImpl|CoalescingEngineRepository)\\.kt)' \\
-"""
+          old = "|core/(p2p|engine)/|core/data/src/main/java/com/iptv/tv/core/data/repository/"
+          new = "|core/(p2p|engine)/|core/player/src/main/java/com/iptv/tv/core/player/PlayerContracts\\.kt|feature/player/src/main/java/com/iptv/tv/feature/player/(StablePlayerVideoSurface|StablePlayerScreenReplacement|P2pPlayerBoundaryTelemetry)\\.kt|core/data/src/main/java/com/iptv/tv/core/data/repository/"
           if text.count(old) != 1:
-              raise SystemExit(f'expected detector pattern exactly once, found {text.count(old)}')
+              raise SystemExit(f'expected detector anchor exactly once, found {text.count(old)}')
           path.write_text(text.replace(old, new, 1))
+          PY
       - name: Commit detector fix and remove staging workflow
         shell: bash
         run: |
