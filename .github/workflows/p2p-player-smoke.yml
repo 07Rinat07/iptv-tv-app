@@ -60,7 +60,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$ANDROID_SDK_ROOT" "$ANDROID_AVD_HOME"
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null
           sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
             'platform-tools' \
             "platforms;android-${ANDROID_API_LEVEL}" \
