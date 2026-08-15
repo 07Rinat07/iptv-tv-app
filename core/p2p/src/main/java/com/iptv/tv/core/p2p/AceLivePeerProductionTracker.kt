@@ -18,6 +18,19 @@ data class AceLivePeerProductionSnapshot(
     val freshestMediaAgeMillis: Long?
 )
 
+data class AceLivePeerQualitySnapshot(
+    val peerId: Long,
+    val connected: Boolean,
+    val handshaked: Boolean,
+    val windowUseful: Boolean,
+    val unchoked: Boolean,
+    val producing: Boolean,
+    val recentBytesPerSecond: Long,
+    val mediaAgeMillis: Long?,
+    val connectedAgeMillis: Long,
+    val totalMediaBytes: Long
+)
+
 internal class AceLivePeerProductionTracker(
     private val producingFreshnessMillis: Long = DEFAULT_PRODUCING_FRESHNESS_MILLIS,
     private val ewmaCurrentWeightPercent: Long = DEFAULT_EWMA_CURRENT_WEIGHT_PERCENT
@@ -129,11 +142,7 @@ internal class AceLivePeerProductionTracker(
         val handshaked = connected.filter { it.handshaked }
         val windowUseful = handshaked.filter { it.windowUseful }
         val unchoked = handshaked.filter { it.unchoked }
-        val producing = handshaked.filter { peer ->
-            peer.windowUseful &&
-                peer.unchoked &&
-                peer.lastMediaAtMillis?.let { now - it <= producingFreshnessMillis } == true
-        }
+        val producing = handshaked.filter { peer -> isProducing(peer, now) }
         AceLivePeerProductionSnapshot(
             discoveredCandidates = discoveredCandidates,
             connectedPeers = connected.size,
@@ -149,6 +158,40 @@ internal class AceLivePeerProductionTracker(
             }.minOrNull()
         )
     }
+
+    fun peerSnapshots(nowMillis: Long): List<AceLivePeerQualitySnapshot> = synchronized(lock) {
+        val now = nowMillis.coerceAtLeast(0L)
+        peers.entries
+            .map { (peerId, peer) ->
+                val mediaAge = peer.lastMediaAtMillis?.let { last ->
+                    (now - last).coerceAtLeast(0L)
+                }
+                AceLivePeerQualitySnapshot(
+                    peerId = peerId,
+                    connected = peer.connected,
+                    handshaked = peer.connected && peer.handshaked,
+                    windowUseful = peer.connected && peer.handshaked && peer.windowUseful,
+                    unchoked = peer.connected && peer.handshaked && peer.unchoked,
+                    producing = isProducing(peer, now),
+                    recentBytesPerSecond = peer.ewmaBytesPerSecond.coerceAtLeast(0L),
+                    mediaAgeMillis = mediaAge,
+                    connectedAgeMillis = if (peer.connected) {
+                        (now - peer.connectedAtMillis).coerceAtLeast(0L)
+                    } else {
+                        0L
+                    },
+                    totalMediaBytes = peer.totalMediaBytes.coerceAtLeast(0L)
+                )
+            }
+            .sortedBy { snapshot -> snapshot.peerId }
+    }
+
+    private fun isProducing(peer: PeerState, nowMillis: Long): Boolean =
+        peer.connected &&
+            peer.handshaked &&
+            peer.windowUseful &&
+            peer.unchoked &&
+            peer.lastMediaAtMillis?.let { nowMillis - it <= producingFreshnessMillis } == true
 
     private fun safeRate(bytes: Long, elapsedMillis: Long): Long {
         if (bytes <= 0L || elapsedMillis <= 0L) return 0L

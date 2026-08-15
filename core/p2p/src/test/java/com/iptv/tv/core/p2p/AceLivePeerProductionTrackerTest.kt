@@ -161,6 +161,43 @@ class AceLivePeerProductionTrackerTest {
     }
 
     @Test
+    fun `per peer snapshots preserve requestability production and freshness evidence`() {
+        val tracker = AceLivePeerProductionTracker(
+            producingFreshnessMillis = 2_000L,
+            ewmaCurrentWeightPercent = 100L
+        )
+        tracker.onTransportConnected(peerId = 20L, nowMillis = 100L)
+        tracker.onHandshakeAccepted(peerId = 20L)
+        tracker.onPeerRequestability(peerId = 20L, windowUseful = true, unchoked = true)
+        tracker.onMediaProduced(peerId = 20L, mediaBytes = 100_000L, nowMillis = 1_000L)
+        tracker.onMediaProduced(peerId = 20L, mediaBytes = 200_000L, nowMillis = 2_000L)
+        tracker.onTransportConnected(peerId = 21L, nowMillis = 500L)
+        tracker.onHandshakeAccepted(peerId = 21L)
+        tracker.onPeerRequestability(peerId = 21L, windowUseful = false, unchoked = true)
+
+        val peers = tracker.peerSnapshots(nowMillis = 2_500L)
+
+        assertEquals(listOf(20L, 21L), peers.map { it.peerId })
+        val producing = peers[0]
+        assertEquals(true, producing.connected)
+        assertEquals(true, producing.handshaked)
+        assertEquals(true, producing.windowUseful)
+        assertEquals(true, producing.unchoked)
+        assertEquals(true, producing.producing)
+        assertEquals(200_000L, producing.recentBytesPerSecond)
+        assertEquals(500L, producing.mediaAgeMillis)
+        assertEquals(2_400L, producing.connectedAgeMillis)
+        assertEquals(300_000L, producing.totalMediaBytes)
+
+        val idle = peers[1]
+        assertEquals(true, idle.connected)
+        assertEquals(true, idle.handshaked)
+        assertEquals(false, idle.windowUseful)
+        assertEquals(false, idle.producing)
+        assertEquals(null, idle.mediaAgeMillis)
+    }
+
+    @Test
     fun `aggregate rate includes only fresh requestable producing peers`() {
         val tracker = AceLivePeerProductionTracker(
             producingFreshnessMillis = 2_500L,

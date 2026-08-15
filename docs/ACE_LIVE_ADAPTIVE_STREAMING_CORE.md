@@ -75,7 +75,9 @@ PR #114 завершил V3c authoritative active-consumer selection и уже �
 
 PR #115 завершил V3d authoritative consumer lifecycle wiring и уже находится в `main`. `LoopbackHttpLiveServer` публикует `Opened / Delivered / Closed`; `AceLiveAuthoritativeConsumerPressureTracker` объединяет selection и per-reader hysteresis; runtime persistent buffer-pressure diagnostics получают только authoritative consumer samples. Exact-head Android CI #511 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
 
-Текущий V3e впервые подаёт этот authoritative pressure в scheduler behavior через bounded adaptive request depth. До первого consumer sample сохраняется прежний baseline `2` pieces/peer; `TARGET=2`, `HIGH=1`, `LOW=3`, `CRITICAL=4`. Изменение depth влияет только на новые piece assignments, не отменяет уже выданные requests и остаётся ограничено существующим reassembly/memory horizon. Peer refill, recovery timing, startup/no-peer/stall bounds и wire protocol этим инкрементом не меняются.
+PR #116 завершил V3e bounded adaptive request depth и уже находится в `main`: authoritative pressure выбирает `HIGH=1 / TARGET=2 / LOW=3 / CRITICAL=4`, до первого consumer sample сохраняется baseline `2`, а снижение depth не отменяет уже выданные piece ownership. Exact-head Android CI #513, real Torrent TV playback smoke без внешнего Ace Engine, lint, все unit tests и signed ARM TV APK прошли успешно.
+
+Текущий V3f добавляет pressure-aware bounded peer refill без эвристического eviction: `TARGET/HIGH` не расширяют normal pool, `LOW` разрешает один дополнительный probe-peer, `CRITICAL` — два, всегда в пределах существующего `maxActivePeers`. Recovery-stale и pressure probe requests не суммируются — используется больший bounded запрос. Для следующего replacement-инкремента tracker также публикует immutable per-peer quality snapshots с lifecycle/requestability/production/freshness/rate evidence. Принудительное отключение active peers, recovery timing и startup/no-peer/stall bounds этим PR не меняются.
 
 ## Buffer model
 
@@ -128,7 +130,7 @@ PR #114 добавил `AceLiveActiveConsumerSelector`: `Opened` не делае
 
 V3d проводит эти lifecycle-сигналы через реальный `LoopbackHttpLiveServer`. `Delivered` возникает только после socket `write + flush + confirmDelivered`; `Closed` публикуется из `finally`, поэтому abrupt client/session shutdown не оставляет selector с вечным активным reader. `AceLiveAuthoritativeConsumerPressureTracker` выдаёт pressure sample только для выбранного reader или для реального ownership fallback.
 
-V3d завершён как behavior-neutral lifecycle boundary. V3e добавляет первый scheduler feedback: stable authoritative pressure выбирает bounded per-peer request depth `HIGH=1 / TARGET=2 / LOW=3 / CRITICAL=4`. Понижение не requeue/cancel существующие assignments, а лишь блокирует новые до естественного снижения in-flight. Верхний предел остаётся hard-capped, а общий scheduling horizon по-прежнему ограничен `maxReassemblerAheadPieces` и memory budget. Peer refill/replacement и recovery policy остаются следующими отдельными инкрементами.
+V3d завершён как behavior-neutral lifecycle boundary. PR #116/V3e добавил первый scheduler feedback: stable authoritative pressure выбирает bounded per-peer request depth `HIGH=1 / TARGET=2 / LOW=3 / CRITICAL=4`. Понижение не requeue/cancel существующие assignments, а лишь блокирует новые до естественного снижения in-flight. V3f расширяет ту же feedback-цепочку только на bounded additive refill: `LOW +1`, `CRITICAL +2`, без eviction. Per-peer quality snapshots готовят доказательную базу для следующего отдельного replacement-инкремента, где отключение peer должно зависеть от подтверждённой деградации, а не от одного low-buffer sample.
 
 ## Adaptive scheduling
 

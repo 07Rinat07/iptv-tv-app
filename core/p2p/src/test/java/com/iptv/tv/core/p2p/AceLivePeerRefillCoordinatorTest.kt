@@ -422,6 +422,84 @@ class AceLivePeerRefillCoordinatorTest {
     }
 
     @Test
+    fun `adaptive probes expand healthy target without requiring stale recovery`() {
+        val coordinator = coordinator(target = 2, max = 4, staleProbe = 2, maxStarts = 4)
+        coordinator.ingestDiscovery(
+            discovery(
+                endpoint("198.51.100.70", 8800) to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT),
+                endpoint("198.51.100.71", 8801) to setOf(AceLivePeerDiscoverySource.UDP_TRACKER)
+            ),
+            nowMillis = 1_000
+        )
+
+        val plan = coordinator.planRefill(
+            activePeerIds = setOf(1L, 2L),
+            nextNeededPiece = 10L,
+            poolStale = false,
+            nowMillis = 1_000L,
+            extraProbePeers = 1
+        )
+
+        assertEquals(3, plan.desiredActivePeers)
+        assertEquals(1, plan.candidates.size)
+        assertFalse(plan.staleProbe)
+    }
+
+    @Test
+    fun `recovery and pressure probes use larger request instead of adding`() {
+        val coordinator = coordinator(target = 2, max = 5, staleProbe = 2, maxStarts = 5)
+        coordinator.ingestDiscovery(
+            discovery(
+                endpoint("198.51.100.80", 8810) to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT),
+                endpoint("198.51.100.81", 8811) to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT),
+                endpoint("198.51.100.82", 8812) to setOf(AceLivePeerDiscoverySource.UDP_TRACKER)
+            ),
+            nowMillis = 1_000
+        )
+
+        val plan = coordinator.planRefill(
+            activePeerIds = setOf(1L, 2L),
+            nextNeededPiece = 10L,
+            poolStale = true,
+            nowMillis = 1_000L,
+            extraProbePeers = 1
+        )
+
+        assertEquals(4, plan.desiredActivePeers)
+        assertEquals(2, plan.candidates.size)
+        assertTrue(plan.staleProbe)
+    }
+
+    @Test
+    fun `adaptive background demand triggers discovery when normal target is already full`() =
+        runBlocking {
+            var discoveryCalls = 0
+            var nextId = 100L
+            val peer = endpoint("192.0.2.70", 8900)
+            val coordinator = coordinator(target = 2, max = 4, maxStarts = 2)
+            val loop = AceLivePeerRefillLoop(
+                coordinator = coordinator,
+                discover = {
+                    discoveryCalls += 1
+                    discovery(peer to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT))
+                },
+                activePeerIds = { setOf(1L, 2L) },
+                evaluateRecovery = { AceLiveRecoveryPlan(poolStale = false) },
+                nextNeededPiece = { 10L },
+                allocatePeerId = { nextId++ },
+                startPeer = { _, _ -> Unit },
+                adaptiveProbePeers = { 1 }
+            )
+
+            val result = loop.runOneCycle(nowMillis = 1_000L)
+
+            assertTrue(result.discoveryAttempted)
+            assertEquals(1, discoveryCalls)
+            assertEquals(1, result.plannedStarts)
+            assertEquals(1, result.startedPeers)
+        }
+
+    @Test
     fun `cancelled start cleanup does not increment peer failure score`() {
         val coordinator = coordinator(target = 1, max = 1, maxStarts = 1)
         val peer = endpoint("192.0.2.60", 8700)

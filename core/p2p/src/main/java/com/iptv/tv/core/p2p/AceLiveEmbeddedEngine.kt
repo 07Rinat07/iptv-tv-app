@@ -262,7 +262,9 @@ class AceLiveEmbeddedEngine(
         private val authoritativeConsumerPressureTracker =
             AceLiveAuthoritativeConsumerPressureTracker()
         private val adaptiveRequestDepthPolicy = AceLiveAdaptiveRequestDepthPolicy()
+        private val adaptivePeerRefillPolicy = AceLiveAdaptivePeerRefillPolicy()
         private val schedulerRequestDepth = AtomicInteger(BASELINE_IN_FLIGHT_PER_PEER)
+        private val adaptivePeerProbePeers = AtomicInteger(0)
         private val bufferDiagnosticsReporter = AceLiveBufferDiagnosticsReporter(diagnosticsObserver)
         val startup = CompletableDeferred<Unit>()
         val startupTimeoutMillis = startupBufferPolicy.startupTimeoutMillis()
@@ -336,7 +338,8 @@ class AceLiveEmbeddedEngine(
                     localPeerId = localPeerId
                 )
                 firstPeerStartAtMillis.compareAndSet(0L, System.currentTimeMillis())
-            }
+            },
+            adaptiveProbePeers = { adaptivePeerProbePeers.get() }
         )
         private var runner: Job? = null
 
@@ -570,20 +573,52 @@ class AceLiveEmbeddedEngine(
 
         private fun onConsumerLifecycle(event: AceLiveConsumerLifecycleEvent) {
             val sample = authoritativeConsumerPressureTracker.onEvent(event) ?: return
-            val requestDepth = adaptiveRequestDepthPolicy.depthFor(sample.pressure.pressure)
+            val pressure = sample.pressure.pressure
+            val requestDepth = adaptiveRequestDepthPolicy.depthFor(pressure)
             val previousDepth = schedulerRequestDepth.getAndSet(requestDepth)
             if (previousDepth != requestDepth) {
                 Log.i(
                     LOG_TAG,
-                    "event=request_depth pressure=${sample.pressure.pressure} " +
+                    "event=request_depth pressure=$pressure " +
                         "signal=${sample.pressure.signal} from=$previousDepth to=$requestDepth"
                 )
                 runCatching {
                     diagnosticsObserver(
                         "embedded_ace_live_request_depth",
                         "depth=$requestDepth, previous=$previousDepth, " +
-                            "pressure=${sample.pressure.pressure}, signal=${sample.pressure.signal}"
+                            "pressure=$pressure, signal=${sample.pressure.signal}"
                     )
+                }
+            }
+
+            val extraProbePeers = adaptivePeerRefillPolicy.extraProbePeersFor(pressure)
+            val previousProbePeers = adaptivePeerProbePeers.getAndSet(extraProbePeers)
+            if (previousProbePeers != extraProbePeers) {
+                Log.i(
+                    LOG_TAG,
+                    "event=peer_refill_pressure pressure=$pressure " +
+                        "from=$previousProbePeers to=$extraProbePeers"
+                )
+                runCatching {
+                    diagnosticsObserver(
+                        "embedded_ace_live_peer_refill",
+                        "extra_probe_peers=$extraProbePeers, previous=$previousProbePeers, " +
+                            "pressure=$pressure"
+                    )
+                }
+                if (extraProbePeers > previousProbePeers && !closed.get()) {
+                    scope.launch {
+                        runCatching { refillLoop.runOneCycle() }
+                            .onFailure { error ->
+                                if (!closed.get()) {
+                                    Log.w(
+                                        LOG_TAG,
+                                        "event=adaptive_peer_refill_failed " +
+                                            "reason=${error.javaClass.simpleName}"
+                                    )
+                                }
+                            }
+                    }
                 }
             }
             bufferDiagnosticsReporter.maybeReport(
