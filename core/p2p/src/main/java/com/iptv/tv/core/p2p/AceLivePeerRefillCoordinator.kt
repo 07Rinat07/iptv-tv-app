@@ -70,7 +70,8 @@ data class AceLivePeerRefillCycleResult(
     val plannedStarts: Int,
     val startedPeers: Int,
     val immediateStartFailures: Int,
-    val poolStale: Boolean
+    val poolStale: Boolean,
+    val replacedPeerId: Long? = null
 )
 
 /**
@@ -421,12 +422,33 @@ class AceLivePeerRefillLoop(
     private val allocatePeerId: () -> Long,
     private val startPeer: suspend (peerId: Long, endpoint: AceLiveTcpPeerEndpoint) -> Unit,
     private val clockMillis: () -> Long = System::currentTimeMillis,
-    private val adaptiveProbePeers: suspend () -> Int = { 0 }
+    private val adaptiveProbePeers: suspend () -> Int = { 0 },
+    private val replacementPeerId: suspend (activePeerIds: Set<Long>, nowMillis: Long) -> Long? =
+        { _, _ -> null },
+    private val stopPeer: suspend (peerId: Long) -> Unit = {}
 ) {
     suspend fun runOneCycle(nowMillis: Long = clockMillis()): AceLivePeerRefillCycleResult {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
-        val active = activePeerIds()
+        var active = activePeerIds()
         coordinator.syncActivePeerIds(active)
+        var replacedPeerId: Long? = null
+        val selectedForReplacement = replacementPeerId(active, nowMillis)
+            ?.takeIf { peerId -> peerId in active }
+        if (selectedForReplacement != null) {
+            try {
+                stopPeer(selectedForReplacement)
+                replacedPeerId = selectedForReplacement
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // Replacement is an optimization. A failed explicit stop must not fail playback.
+            }
+            active = activePeerIds()
+            if (selectedForReplacement !in active) {
+                replacedPeerId = selectedForReplacement
+            }
+            coordinator.syncActivePeerIds(active)
+        }
         val recovery = evaluateRecovery()
         val requestedAdaptiveProbePeers = adaptiveProbePeers().coerceAtLeast(0)
         val adaptiveDesired = (
@@ -442,7 +464,8 @@ class AceLivePeerRefillLoop(
                 plannedStarts = 0,
                 startedPeers = 0,
                 immediateStartFailures = 0,
-                poolStale = recovery.poolStale
+                poolStale = recovery.poolStale,
+                replacedPeerId = replacedPeerId
             )
         }
 
@@ -490,7 +513,8 @@ class AceLivePeerRefillLoop(
             plannedStarts = plan.candidates.size,
             startedPeers = started,
             immediateStartFailures = failed,
-            poolStale = recovery.poolStale
+            poolStale = recovery.poolStale,
+            replacedPeerId = replacedPeerId
         )
     }
 

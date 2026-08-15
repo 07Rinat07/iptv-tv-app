@@ -82,6 +82,10 @@ class AceLiveTcpConnectionPoolTest {
         }
 
         pool.stopPeer(7)
+        val stopped = pool.peerQualitySnapshots(nowMillis = 2L).single { it.peerId == 7L }
+        assertFalse(stopped.connected)
+        assertFalse(stopped.handshaked)
+        assertFalse(stopped.producing)
     }
 
     @Test

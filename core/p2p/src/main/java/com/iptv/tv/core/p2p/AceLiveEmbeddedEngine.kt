@@ -7,6 +7,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -263,8 +264,13 @@ class AceLiveEmbeddedEngine(
             AceLiveAuthoritativeConsumerPressureTracker()
         private val adaptiveRequestDepthPolicy = AceLiveAdaptiveRequestDepthPolicy()
         private val adaptivePeerRefillPolicy = AceLiveAdaptivePeerRefillPolicy()
+        private val peerReplacementPolicy = AceLivePeerReplacementPolicy(
+            AceLivePeerReplacementSettings(targetActivePeers = TARGET_ACTIVE_PEERS)
+        )
         private val schedulerRequestDepth = AtomicInteger(BASELINE_IN_FLIGHT_PER_PEER)
         private val adaptivePeerProbePeers = AtomicInteger(0)
+        private val authoritativeBufferPressure = AtomicReference<AceLiveBufferPressure?>(null)
+        private val authoritativePressureSampleAtMillis = AtomicLong(0L)
         private val bufferDiagnosticsReporter = AceLiveBufferDiagnosticsReporter(diagnosticsObserver)
         val startup = CompletableDeferred<Unit>()
         val startupTimeoutMillis = startupBufferPolicy.startupTimeoutMillis()
@@ -339,7 +345,43 @@ class AceLiveEmbeddedEngine(
                 )
                 firstPeerStartAtMillis.compareAndSet(0L, System.currentTimeMillis())
             },
-            adaptiveProbePeers = { adaptivePeerProbePeers.get() }
+            adaptiveProbePeers = { adaptivePeerProbePeers.get() },
+            replacementPeerId = { activePeerIds, nowMillis ->
+                val pressureAt = authoritativePressureSampleAtMillis.get()
+                val freshPressure = authoritativeBufferPressure.get().takeIf {
+                    pressureAt > 0L &&
+                        nowMillis - pressureAt <= BUFFER_PRESSURE_SAMPLE_FRESHNESS_MILLIS
+                }
+                peerReplacementPolicy.selectCandidate(
+                    pressure = freshPressure,
+                    activePeerIds = activePeerIds,
+                    peers = pool.peerQualitySnapshots(nowMillis),
+                    nowMillis = nowMillis
+                )?.also { decision ->
+                    Log.w(
+                        LOG_TAG,
+                        "event=peer_replacement_selected peer=${decision.peerId} " +
+                            "reason=${decision.reason} degraded_ms=${decision.degradedForMillis}"
+                    )
+                    runCatching {
+                        diagnosticsObserver(
+                            "embedded_ace_live_peer_replacement",
+                            "phase=selected, peer=${decision.peerId}, reason=${decision.reason}, " +
+                                "degraded_ms=${decision.degradedForMillis}"
+                        )
+                    }
+                }?.peerId
+            },
+            stopPeer = { peerId ->
+                pool.stopPeer(peerId)
+                Log.w(LOG_TAG, "event=peer_replacement_applied peer=$peerId")
+                runCatching {
+                    diagnosticsObserver(
+                        "embedded_ace_live_peer_replacement",
+                        "phase=applied, peer=$peerId"
+                    )
+                }
+            }
         )
         private var runner: Job? = null
 
@@ -574,6 +616,8 @@ class AceLiveEmbeddedEngine(
         private fun onConsumerLifecycle(event: AceLiveConsumerLifecycleEvent) {
             val sample = authoritativeConsumerPressureTracker.onEvent(event) ?: return
             val pressure = sample.pressure.pressure
+            authoritativeBufferPressure.set(pressure)
+            authoritativePressureSampleAtMillis.set(System.currentTimeMillis())
             val requestDepth = adaptiveRequestDepthPolicy.depthFor(pressure)
             val previousDepth = schedulerRequestDepth.getAndSet(requestDepth)
             if (previousDepth != requestDepth) {
@@ -801,6 +845,7 @@ class AceLiveEmbeddedEngine(
         const val MAX_REASSEMBLY_BYTES = 12L * 1024L * 1024L
         const val SCHEDULER_TICK_MILLIS = 200L
         const val PEER_REFRESH_INTERVAL_MILLIS = 10_000L
+        const val BUFFER_PRESSURE_SAMPLE_FRESHNESS_MILLIS = 10_000L
         const val PROGRESS_LOG_INTERVAL_MILLIS = 5_000L
         const val LOG_TAG = "P2P/AceLive"
     }
