@@ -85,9 +85,9 @@ data class AceLivePeerRefillCycleResult(
  * keeps selection plus reservation atomic when background refill cycles overlap on different
  * dispatcher threads without giving this policy layer ownership of coroutines or sockets.
  *
- * This coordinator never evicts an active peer. A stale-but-reachable pool may temporarily request
- * extra probe peers up to [AceLivePeerRefillPolicy.maxActivePeers], preserving the existing recovery
- * contract that staleness is not equivalent to peer failure.
+ * This coordinator never evicts an active peer. Recovery staleness or authoritative low-buffer
+ * pressure may temporarily request extra probe peers up to [AceLivePeerRefillPolicy.maxActivePeers].
+ * When both signals are present the larger bounded probe request wins; they are not added together.
  */
 class AceLivePeerRefillCoordinator(
     val policy: AceLivePeerRefillPolicy = AceLivePeerRefillPolicy()
@@ -130,20 +130,22 @@ class AceLivePeerRefillCoordinator(
         activePeerIds: Set<Long>,
         nextNeededPiece: Long?,
         poolStale: Boolean,
-        nowMillis: Long
+        nowMillis: Long,
+        extraProbePeers: Int = 0
     ): AceLivePeerRefillPlan = withStateLock {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
         require(nextNeededPiece == null || nextNeededPiece >= 0) {
             "nextNeededPiece must be non-negative when present"
         }
+        require(extraProbePeers >= 0) { "extraProbePeers must be non-negative" }
         syncActivePeerIdsLocked(activePeerIds)
         pruneExpiredCandidatesLocked(nowMillis)
 
-        val desired = if (poolStale) {
-            (policy.targetActivePeers + policy.staleProbePeers).coerceAtMost(policy.maxActivePeers)
-        } else {
-            policy.targetActivePeers
-        }
+        val recoveryProbePeers = if (poolStale) policy.staleProbePeers else 0
+        val requestedProbePeers = maxOf(recoveryProbePeers, extraProbePeers)
+            .coerceAtMost(policy.maxActivePeers)
+        val desired = (policy.targetActivePeers + requestedProbePeers)
+            .coerceAtMost(policy.maxActivePeers)
         val reservedPending = candidates.values.count { state -> state.startReserved }
         val managedPending = peerIdToEndpointKey.keys.count { peerId -> peerId !in activePeerIds }
         val committedPeers = activePeerIds.size + reservedPending + managedPending
@@ -418,14 +420,22 @@ class AceLivePeerRefillLoop(
     private val nextNeededPiece: suspend () -> Long?,
     private val allocatePeerId: () -> Long,
     private val startPeer: suspend (peerId: Long, endpoint: AceLiveTcpPeerEndpoint) -> Unit,
-    private val clockMillis: () -> Long = System::currentTimeMillis
+    private val clockMillis: () -> Long = System::currentTimeMillis,
+    private val adaptiveProbePeers: suspend () -> Int = { 0 }
 ) {
     suspend fun runOneCycle(nowMillis: Long = clockMillis()): AceLivePeerRefillCycleResult {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
         val active = activePeerIds()
         coordinator.syncActivePeerIds(active)
         val recovery = evaluateRecovery()
-        val needsDiscovery = active.size < coordinator.policy.targetActivePeers || recovery.poolStale
+        val requestedAdaptiveProbePeers = adaptiveProbePeers().coerceAtLeast(0)
+        val adaptiveDesired = (
+            coordinator.policy.targetActivePeers + requestedAdaptiveProbePeers
+        ).coerceAtMost(coordinator.policy.maxActivePeers)
+        val needsDiscovery =
+            active.size < coordinator.policy.targetActivePeers ||
+                recovery.poolStale ||
+                active.size < adaptiveDesired
         if (!needsDiscovery) {
             return AceLivePeerRefillCycleResult(
                 discoveryAttempted = false,
@@ -442,7 +452,8 @@ class AceLivePeerRefillLoop(
             activePeerIds = active,
             nextNeededPiece = nextNeededPiece(),
             poolStale = recovery.poolStale,
-            nowMillis = nowMillis
+            nowMillis = nowMillis,
+            extraProbePeers = requestedAdaptiveProbePeers
         )
 
         var started = 0

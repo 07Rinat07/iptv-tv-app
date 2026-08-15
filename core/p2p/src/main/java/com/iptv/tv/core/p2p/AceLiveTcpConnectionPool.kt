@@ -185,9 +185,13 @@ class AceLiveTcpConnectionPool(
     suspend fun activePeerIds(): Set<Long> =
         poolMutex.withLock { peers.keys.toSet() }
 
-    /** Latest quality snapshot for scheduler/diagnostics without exposing mutable peer internals. */
+    /** Latest aggregate quality snapshot for scheduler/diagnostics. */
     fun peerProductionSnapshot(nowMillis: Long = clockMillis()): AceLivePeerProductionSnapshot =
         productionTracker.snapshot(nowMillis)
+
+    /** Immutable per-peer evidence for future bounded replacement/scoring decisions. */
+    fun peerQualitySnapshots(nowMillis: Long = clockMillis()): List<AceLivePeerQualitySnapshot> =
+        productionTracker.peerSnapshots(nowMillis)
 
     /** Discovery remains outside this pool, but its candidate count belongs in the same snapshot. */
     fun recordDiscoveredCandidateCount(candidateCount: Int) {
