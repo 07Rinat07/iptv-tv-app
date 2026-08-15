@@ -261,6 +261,8 @@ class AceLiveEmbeddedEngine(
         private val startupBufferPolicy = AceLiveStartupBufferPolicy(bufferSettings)
         private val authoritativeConsumerPressureTracker =
             AceLiveAuthoritativeConsumerPressureTracker()
+        private val adaptiveRequestDepthPolicy = AceLiveAdaptiveRequestDepthPolicy()
+        private val schedulerRequestDepth = AtomicInteger(BASELINE_IN_FLIGHT_PER_PEER)
         private val bufferDiagnosticsReporter = AceLiveBufferDiagnosticsReporter(diagnosticsObserver)
         val startup = CompletableDeferred<Unit>()
         val startupTimeoutMillis = startupBufferPolicy.startupTimeoutMillis()
@@ -294,7 +296,7 @@ class AceLiveEmbeddedEngine(
         private val session = AceLivePeerSessionCoordinator(
             geometry = transport.geometry,
             initialNextNeededPiece = 0L,
-            maxInFlightPerPeer = MAX_IN_FLIGHT_PER_PEER,
+            maxInFlightPerPeer = MAX_ADAPTIVE_IN_FLIGHT_PER_PEER,
             recoveryPolicy = AceLiveRecoveryPolicy(
                 requestTimeoutMillis = REQUEST_TIMEOUT_MILLIS,
                 staleUpstreamTimeoutMillis = STALE_UPSTREAM_TIMEOUT_MILLIS,
@@ -546,7 +548,10 @@ class AceLiveEmbeddedEngine(
                 }
                 val head = latestHead.get()
                 if (head >= 0L) {
-                    pool.scheduleAndDispatch(head)
+                    pool.scheduleAndDispatch(
+                        head = head,
+                        maxInFlightPerPeer = schedulerRequestDepth.get()
+                    )
                     val recovery = pool.evaluateRecovery()
                     recovery.cursorAdvance?.let { advance ->
                         val applied = pool.applyRecoveryAdvance(advance)
@@ -565,6 +570,22 @@ class AceLiveEmbeddedEngine(
 
         private fun onConsumerLifecycle(event: AceLiveConsumerLifecycleEvent) {
             val sample = authoritativeConsumerPressureTracker.onEvent(event) ?: return
+            val requestDepth = adaptiveRequestDepthPolicy.depthFor(sample.pressure.pressure)
+            val previousDepth = schedulerRequestDepth.getAndSet(requestDepth)
+            if (previousDepth != requestDepth) {
+                Log.i(
+                    LOG_TAG,
+                    "event=request_depth pressure=${sample.pressure.pressure} " +
+                        "signal=${sample.pressure.signal} from=$previousDepth to=$requestDepth"
+                )
+                runCatching {
+                    diagnosticsObserver(
+                        "embedded_ace_live_request_depth",
+                        "depth=$requestDepth, previous=$previousDepth, " +
+                            "pressure=${sample.pressure.pressure}, signal=${sample.pressure.signal}"
+                    )
+                }
+            }
             bufferDiagnosticsReporter.maybeReport(
                 consumer = sample.consumer,
                 pressure = sample.pressure,
@@ -736,7 +757,8 @@ class AceLiveEmbeddedEngine(
         const val MAX_ACTIVE_PEERS = 10
         const val STALE_PROBE_PEERS = 2
         const val MAX_PEER_STARTS_PER_CYCLE = 4
-        const val MAX_IN_FLIGHT_PER_PEER = 2
+        const val BASELINE_IN_FLIGHT_PER_PEER = 2
+        const val MAX_ADAPTIVE_IN_FLIGHT_PER_PEER = 4
         const val REQUEST_TIMEOUT_MILLIS = 6_000L
         const val STALE_UPSTREAM_TIMEOUT_MILLIS = 18_000L
         const val REQUEST_CHECK_INTERVAL_MILLIS = 1_000L

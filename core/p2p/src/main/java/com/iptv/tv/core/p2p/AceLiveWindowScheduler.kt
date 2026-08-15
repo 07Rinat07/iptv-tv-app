@@ -125,14 +125,26 @@ class AceLiveWindowScheduler(
      * Work stops at the first unassigned piece that no active unchoked peer currently covers. This
      * deliberately separates normal scheduling from the later "evicted gap" recovery decision.
      */
-    fun assign(nextNeeded: Long, head: Long): List<AceLivePieceAssignment> {
+    fun assign(
+        nextNeeded: Long,
+        head: Long,
+        maxInFlightPerPeer: Int = Int.MAX_VALUE
+    ): List<AceLivePieceAssignment> {
         require(nextNeeded >= 0) { "nextNeeded must be non-negative" }
         if (head < nextNeeded || peers.isEmpty()) return emptyList()
 
         pruneBefore(nextNeeded)
 
+        // Runtime pressure may lower or raise the active depth, but never above the constructor
+        // bound. Lowering depth does not cancel existing ownership; it only stops new assignments
+        // until each peer naturally falls back under the new limit.
+        val effectiveMaxInFlight = maxInFlightPerPeer.coerceIn(1, maxInFlight)
         val spareSlots = peers.values.sumOf { peer ->
-            if (peer.unchoked) (maxInFlight - peer.inFlight.size).coerceAtLeast(0) else 0
+            if (peer.unchoked) {
+                (effectiveMaxInFlight - peer.inFlight.size).coerceAtLeast(0)
+            } else {
+                0
+            }
         }
         if (spareSlots == 0) return emptyList()
 
@@ -153,7 +165,7 @@ class AceLiveWindowScheduler(
             val candidate = peers.values
                 .asSequence()
                 .filter { it.unchoked }
-                .filter { it.inFlight.size < maxInFlight }
+                .filter { it.inFlight.size < effectiveMaxInFlight }
                 .filter { piece in it.minPiece..it.maxPiece }
                 .minWithOrNull(
                     compareBy<ActivePeer> { it.inFlight.size }

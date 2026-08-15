@@ -144,9 +144,18 @@ class AceLivePeerSessionCoordinator(
         is AceLivePeerWireMessage.Unknown -> AceLivePeerMessageResult(handled = false)
     }
 
-    fun schedule(head: Long, nowMillis: Long): List<AceLiveOutboundPeerFrame> {
+    fun schedule(
+        head: Long,
+        nowMillis: Long,
+        maxInFlightPerPeer: Int = Int.MAX_VALUE
+    ): List<AceLiveOutboundPeerFrame> {
         val nextNeeded = reassembler.nextNeededPiece() ?: return emptyList()
-        return activePeers.schedule(nextNeeded, head, nowMillis).map { request ->
+        return activePeers.schedule(
+            nextNeeded = nextNeeded,
+            head = head,
+            nowMillis = nowMillis,
+            maxInFlightPerPeer = maxInFlightPerPeer
+        ).map { request ->
             AceLiveOutboundPeerFrame(
                 request = request,
                 bytes = wireCodec.encodeChunkRequestFrame(request)

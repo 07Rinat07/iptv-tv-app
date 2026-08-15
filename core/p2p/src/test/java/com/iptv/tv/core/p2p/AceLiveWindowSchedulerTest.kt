@@ -156,6 +156,62 @@ class AceLiveWindowSchedulerTest {
         assertFalse(scheduler.anyUnchokedPeerCovers(45))
     }
 
+    @Test
+    fun runtimeDepthCanIncreaseWithinConstructorHardCap() {
+        val scheduler = AceLiveWindowScheduler(maxInFlightPerPeer = 4)
+        scheduler.updatePeer(peer(id = 1, min = 0, max = 20, unchoked = true))
+
+        val baseline = scheduler.assign(
+            nextNeeded = 0,
+            head = 20,
+            maxInFlightPerPeer = 2
+        )
+        assertEquals(listOf(0L, 1L), baseline.map { it.piece })
+
+        scheduler.complete(0)
+        val raised = scheduler.assign(
+            nextNeeded = 1,
+            head = 20,
+            maxInFlightPerPeer = 4
+        )
+
+        assertEquals(listOf(2L, 3L, 4L), raised.map { it.piece })
+        assertEquals(4, scheduler.peerInFlightCount(1))
+    }
+
+    @Test
+    fun loweringRuntimeDepthDoesNotCancelExistingOwnership() {
+        val scheduler = AceLiveWindowScheduler(maxInFlightPerPeer = 4)
+        scheduler.updatePeer(peer(id = 1, min = 10, max = 30, unchoked = true))
+        scheduler.assign(nextNeeded = 10, head = 30, maxInFlightPerPeer = 4)
+
+        val whileOverTarget = scheduler.assign(
+            nextNeeded = 10,
+            head = 30,
+            maxInFlightPerPeer = 1
+        )
+
+        assertTrue(whileOverTarget.isEmpty())
+        assertEquals(4, scheduler.peerInFlightCount(1))
+        assertEquals(1L, scheduler.ownerOf(10))
+        assertEquals(1L, scheduler.ownerOf(13))
+    }
+
+    @Test
+    fun runtimeDepthCannotExceedConstructorHardCap() {
+        val scheduler = AceLiveWindowScheduler(maxInFlightPerPeer = 3)
+        scheduler.updatePeer(peer(id = 1, min = 0, max = 100, unchoked = true))
+
+        val assigned = scheduler.assign(
+            nextNeeded = 0,
+            head = 100,
+            maxInFlightPerPeer = 99
+        )
+
+        assertEquals(listOf(0L, 1L, 2L), assigned.map { it.piece })
+        assertEquals(3, scheduler.peerInFlightCount(1))
+    }
+
     private fun peer(
         id: Long,
         min: Long,

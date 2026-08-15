@@ -20,11 +20,16 @@
 - PR #107 — adaptive prebuffer v1: throughput clock начинается с first-media, используется EWMA media delivery, усилен startup reserve без увеличения failure bounds;
 - PR #108 — media-producing peer accounting: discovered endpoints отделены от connected/handshaked/producing peers, добавлены freshness и aggregate EWMA media rate; exact-head Android CI #495 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно;
 - PR #109 — requestability quality: `windowUseful/unchoked` привязаны к authoritative cursor и реальному peer-wire state; Android CI #497 и real smoke прошли успешно;
-- PR #110 — persistent peer-quality diagnostics: structured snapshot хранится в существующем `SyncLogDao` path; Android CI #500 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
+- PR #110 — persistent peer-quality diagnostics: structured snapshot хранится в существующем `SyncLogDao` path; Android CI #500 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно;
+- PR #111 — media-producing evidence перенесён за authentication/resync/live-output boundary;
+- PR #112 — добавлен `LiveBufferController` с `CRITICAL/LOW/TARGET/HIGH` и hysteresis;
+- PR #113 — confirmed per-reader consumer cursor/rate и playable headroom;
+- PR #114 — authoritative active-consumer selection при overlap/reconnect;
+- PR #115 — authoritative lifecycle подключён к реальному loopback и прошёл Android CI #511 + real Torrent TV smoke.
 
 Полевой прогон на ARM/TV Box изменил приоритет работ. Одни и те же публичные Torrent TV источники способны быстро находить tracker/DHT peers, но найденные endpoints не всегда превращаются в устойчивый media-producing pool. В логе встречались `peers=4..7` одновременно с итоговым no-peer/60-second timeout, а несколько успешно resolved потоков затем проводили около 66 секунд между `player_start` и `player_ready`. Это указало не на один общий codec-дефект, а на незавершённую связку peer usefulness → throughput → prebuffer → loopback consumption → player buffering.
 
-V1 исправил дефект startup prebuffer: discovery/handshake latency больше не входит в media-throughput estimate. PR #108–#110 последовательно отделили discovery от реальной peer quality, добавили `windowUseful/unchoked` и persistent structured diagnostics. Текущий **V2d** переносит production evidence за фактическую media-output границу: peer contribution должен пройти authentication, MPEG-TS resync и быть принят `AceLiveMediaBuffer`; reassembler сохраняет verified `sourcePeerId`, а поздний output buffered piece не может воскресить уже disconnected peer. Startup/stall bounds, scheduler depth, recovery policy и wire protocol не меняются.
+V1 исправил дефект startup prebuffer: discovery/handshake latency больше не входит в media-throughput estimate. PR #108–#110 последовательно отделили discovery от реальной peer quality, добавили `windowUseful/unchoked` и persistent structured diagnostics. V2d завершён PR #111. V3a–V3d (PR #112–#115) уже дали stateful buffer pressure, confirmed consumer telemetry, authoritative reader ownership и реальный loopback lifecycle. Текущий **V3e** включает первый bounded scheduler feedback: authoritative pressure меняет только per-peer request depth (`HIGH=1 / TARGET=2 / LOW=3 / CRITICAL=4`) при сохранении существующих reassembly/memory caps. Peer refill/replacement, recovery timing, startup/no-peer/stall bounds и wire protocol пока не меняются.
 
 Следующий порядок P2P-работ:
 
