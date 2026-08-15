@@ -222,11 +222,12 @@ class TorrentTvPlaybackSmokeTest {
         val knownIndex = playlistCandidates.indexOfFirst { it.source == knownSource }
             .takeIf { it >= 0 }
             ?: 0
-        val fallbackOffsets = listOf(
-            1,
-            maxOf(1, playlistCandidates.size / 3),
-            maxOf(1, playlistCandidates.size * 2 / 3)
-        )
+        val fallbackOffsets = buildList {
+            add(1)
+            (1 until MAX_CONTENT_ID_CANDIDATES).forEach { slot ->
+                add(maxOf(1, playlistCandidates.size * slot / MAX_CONTENT_ID_CANDIDATES))
+            }
+        }.distinct()
         return buildList {
             add(knownSample)
             fallbackOffsets.forEach { offset ->
@@ -421,7 +422,7 @@ class TorrentTvPlaybackSmokeTest {
             "(?:[?&](?:id|content_id)=)([0-9a-fA-F]{40})(?:[&#]|$)",
             RegexOption.IGNORE_CASE
         )
-        const val MAX_CONTENT_ID_CANDIDATES = 4
+        const val MAX_CONTENT_ID_CANDIDATES = 8
         const val MAX_PROBE_BYTES = 128 * 1024
         const val PLAYER_READY_TIMEOUT_MS = 45_000L
         const val PLAYBACK_STABILITY_MS = 45_000L

@@ -87,7 +87,9 @@ PR #120 завершил V3i bounded recovery selection semantics и уже на
 
 PR #121 завершил V4a player-boundary telemetry и уже находится в `main`: first localhost HTTP open/read отделены от confirmed delivery, Media3 публикует `BUFFERING/READY/first-frame`, rebuffer count/duration и session correlation только для актуальной P2P session. Android CI #524, playback-latency tooling и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
 
-Текущий V4b выделяет отдельный bounded Media3 LoadControl для localhost P2P playback. Generic IPTV `BufferConfig` остаётся неизменным; P2P policy ограничивает дублирующий Media3 read-ahead (`min <= 10s`, `max <= 30s`, startup <= 2s, target <= 32 MiB) и усиливает post-rebuffer floor до 4s, но никогда выше `minBuffer`. Это initial bounded policy поверх уже существующего Ace Live upstream buffer; дальнейшая hardware tuning должна опираться на V4a boundary telemetry, а не на увеличение discovery/recovery timeout.
+V4b/PR #122 завершён: отдельный bounded Media3 LoadControl применяется только к localhost P2P playback; Android CI #531 и dedicated real Torrent TV smoke #2 прошли успешно.
+
+Текущий V4c усиливает explicit `outputDiscontinuity` boundary. После подтверждённого recovery jump runtime сначала заново получает stable MPEG-TS sync, затем bounded gate удерживает output до свежего PAT, соответствующего PMT с video PID и random-access evidence на этом PID. Evidence принимается из MPEG-TS `random_access_indicator` либо H.264 IDR / H.265 IRAP NAL. Request timeout, `maxPieceAdvance`, ownership/requeue, refill/replacement и startup/stall failure bounds не меняются.
 
 ## Buffer model
 
