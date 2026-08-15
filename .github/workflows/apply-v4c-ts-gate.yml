@@ -1,0 +1,69 @@
+name: Apply V4c TS discontinuity gate
+
+on:
+  push:
+    branches:
+      - agent/ace-live-ts-discontinuity-gate-v4c
+    paths:
+      - '.github/workflows/apply-v4c-ts-gate.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Wire V4c recovery gate and docs
+        shell: python
+        run: |
+          from pathlib import Path
+
+          engine = Path('core/p2p/src/main/java/com/iptv/tv/core/p2p/AceLiveEmbeddedEngine.kt')
+          text = engine.read_text()
+          text = text.replace(
+              'private val resynchronizer = AceLiveMpegTsResynchronizer()',
+              'private val resynchronizer = AceLiveMpegTsResynchronizer()\n        private val discontinuityGate = AceLiveTsDiscontinuityGate()',
+              1,
+          )
+          text = text.replace(
+              'if (applied.outputDiscontinuity != null) resynchronizer.reset()',
+              'if (applied.outputDiscontinuity != null) {\n                            resynchronizer.reset()\n                            discontinuityGate.activate()\n                        }',
+              1,
+          )
+          text = text.replace(
+              'val media = resynchronizer.consume(verified.data)',
+              'val media = discontinuityGate.consume(resynchronizer.consume(verified.data))',
+              1,
+          )
+          engine.write_text(text)
+
+          roadmap = Path('docs/ROADMAP.md')
+          text = roadmap.read_text()
+          anchor = '- PR #121 — V4a добавил first localhost HTTP open/read, Media3 `BUFFERING/READY/first-frame` и rebuffer telemetry для P2P; Android CI #524, playback-latency tooling и real Torrent TV smoke прошли успешно.'
+          text = text.replace(anchor, anchor + '\n- PR #122 — V4b выделил bounded P2P-specific Media3 LoadControl и dedicated P2P player smoke gate; Android CI #531 и dedicated real Torrent TV smoke #2 прошли успешно.', 1)
+          old = 'V4a/PR #121 закрыл измеряемую `loopback/player boundary`: first localhost HTTP open/read плюс Media3 `BUFFERING/READY/first-frame` и rebuffer telemetry. Текущий **V4b** выделяет отдельный bounded Media3 LoadControl только для P2P localhost playback; generic IPTV buffer policy, P2P scheduler/recovery и failure bounds не меняются.'
+          new = 'V4a/PR #121 закрыл измеряемую `loopback/player boundary`: first localhost HTTP open/read плюс Media3 `BUFFERING/READY/first-frame` и rebuffer telemetry. V4b/PR #122 выделил отдельный bounded Media3 LoadControl только для P2P localhost playback. Текущий **V4c** начинает discontinuity/TS hardening: после подтверждённого recovery jump output заново проходит stable TS sync и ждёт свежие PAT/PMT плюс video random-access/IDR evidence перед возобновлением Media3; scheduler/recovery bounds не меняются.'
+          text = text.replace(old, new, 1)
+          roadmap.write_text(text)
+
+          adaptive = Path('docs/ACE_LIVE_ADAPTIVE_STREAMING_CORE.md')
+          text = adaptive.read_text()
+          old = 'Текущий V4b выделяет отдельный bounded Media3 LoadControl для localhost P2P playback. Generic IPTV `BufferConfig` остаётся неизменным; P2P policy ограничивает дублирующий Media3 read-ahead (`min <= 10s`, `max <= 30s`, startup <= 2s, target <= 32 MiB) и усиливает post-rebuffer floor до 4s, но никогда выше `minBuffer`. Это initial bounded policy поверх уже существующего Ace Live upstream buffer; дальнейшая hardware tuning должна опираться на V4a boundary telemetry, а не на увеличение discovery/recovery timeout.'
+          new = 'V4b/PR #122 завершён: отдельный bounded Media3 LoadControl применяется только к localhost P2P playback; Android CI #531 и dedicated real Torrent TV smoke #2 прошли успешно.\n\nТекущий V4c усиливает explicit `outputDiscontinuity` boundary. После подтверждённого recovery jump runtime сначала заново получает stable MPEG-TS sync, затем bounded gate удерживает output до свежего PAT, соответствующего PMT с video PID и random-access evidence на этом PID. Evidence принимается из MPEG-TS `random_access_indicator` либо H.264 IDR / H.265 IRAP NAL. Request timeout, `maxPieceAdvance`, ownership/requeue, refill/replacement и startup/stall failure bounds не меняются.'
+          text = text.replace(old, new, 1)
+          adaptive.write_text(text)
+      - name: Commit V4c wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add core/p2p/src/main/java/com/iptv/tv/core/p2p/AceLiveEmbeddedEngine.kt docs/ROADMAP.md docs/ACE_LIVE_ADAPTIVE_STREAMING_CORE.md
+          git diff --cached --check
+          git commit -m 'feat(p2p): wire TS discontinuity recovery gate'
+          git push origin HEAD:${GITHUB_REF_NAME}
