@@ -1,0 +1,205 @@
++                            ?.let(onP2pBoundaryTelemetry)
+                         if (!readyReported) {
+                             readyReported = true
+                             onReady()
+@@ -292,7 +315,11 @@
+                     }
+ 
+                     Player.STATE_BUFFERING -> {
+-                        if (bufferingSinceMs == 0L) bufferingSinceMs = System.currentTimeMillis()
++                        val now = System.currentTimeMillis()
++                        if (bufferingSinceMs == 0L) bufferingSinceMs = now
++                        p2pBoundaryTelemetryTracker
++                            ?.onBuffering(now)
++                            ?.let(onP2pBoundaryTelemetry)
+                     }
+ 
+                     else -> bufferingSinceMs = 0L
+@@ -307,6 +334,9 @@
+ 
+             override fun onRenderedFirstFrame() {
+                 firstVideoFrameRendered = true
++                p2pBoundaryTelemetryTracker
++                    ?.onFirstVideoFrame(System.currentTimeMillis())
++                    ?.let(onP2pBoundaryTelemetry)
+                 if (videoWidth > 0 && videoHeight > 0) diagnosticMessage = null
+             }
+ 
+diff -ruN '--exclude=.git' iptv-tv-app-updated/feature/player/src/test/java/com/iptv/tv/feature/player/P2pPlayerBoundaryTelemetryTest.kt /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/test/java/com/iptv/tv/feature/player/P2pPlayerBoundaryTelemetryTest.kt
+--- iptv-tv-app-updated/feature/player/src/test/java/com/iptv/tv/feature/player/P2pPlayerBoundaryTelemetryTest.kt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/test/java/com/iptv/tv/feature/player/P2pPlayerBoundaryTelemetryTest.kt	2026-08-15 12:32:03.882755803 +0000
+@@ -0,0 +1,60 @@
++package com.iptv.tv.feature.player
++
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertNull
++import org.junit.Test
++
++class P2pPlayerBoundaryTelemetryTest {
++    @Test
++    fun startupBufferingIsNotCountedAsRebuffer() {
++        val tracker = P2pPlayerBoundaryTelemetryTracker(
++            sessionId = 7L,
++            playbackStartedAtMillis = 1_000L
++        )
++
++        val buffering = tracker.onBuffering(nowMillis = 1_250L)
++        val ready = tracker.onReady(nowMillis = 2_000L)
++
++        assertEquals(P2pPlayerBoundaryEventType.BUFFERING, buffering.event)
++        assertEquals(250L, buffering.elapsedSincePlaybackStartMillis)
++        assertEquals(0, buffering.rebufferCount)
++        assertEquals(0L, buffering.totalRebufferDurationMillis)
++        assertEquals(0, ready.rebufferCount)
++        assertEquals(0L, ready.totalRebufferDurationMillis)
++    }
++
++    @Test
++    fun repeatedBufferingCallbacksCountSingleRebufferAndDuration() {
++        val tracker = P2pPlayerBoundaryTelemetryTracker(
++            sessionId = 11L,
++            playbackStartedAtMillis = 1_000L
++        )
++        tracker.onReady(nowMillis = 1_500L)
++
++        val first = tracker.onBuffering(nowMillis = 2_000L)
++        val duplicate = tracker.onBuffering(nowMillis = 2_250L)
++        val recovered = tracker.onReady(nowMillis = 2_800L)
++
++        assertEquals(1, first.rebufferCount)
++        assertEquals(0L, first.currentBufferingDurationMillis)
++        assertEquals(1, duplicate.rebufferCount)
++        assertEquals(250L, duplicate.currentBufferingDurationMillis)
++        assertEquals(1, recovered.rebufferCount)
++        assertEquals(800L, recovered.totalRebufferDurationMillis)
++        assertEquals(0L, recovered.currentBufferingDurationMillis)
++    }
++
++    @Test
++    fun firstVideoFrameIsReportedOnce() {
++        val tracker = P2pPlayerBoundaryTelemetryTracker(
++            sessionId = 13L,
++            playbackStartedAtMillis = 5_000L
++        )
++
++        val first = tracker.onFirstVideoFrame(nowMillis = 5_900L)
++
++        assertEquals(P2pPlayerBoundaryEventType.FIRST_VIDEO_FRAME, first?.event)
++        assertEquals(900L, first?.elapsedSincePlaybackStartMillis)
++        assertNull(tracker.onFirstVideoFrame(nowMillis = 6_100L))
++    }
++}
+diff -ruN '--exclude=.git' iptv-tv-app-updated/tools/analyze_playback_latency.py /mnt/data/iptv-src/source/iptv-tv-app-updated/tools/analyze_playback_latency.py
+--- iptv-tv-app-updated/tools/analyze_playback_latency.py	2026-08-15 11:57:02.000000000 +0000
++++ /mnt/data/iptv-src/source/iptv-tv-app-updated/tools/analyze_playback_latency.py	2026-08-15 12:36:47.472576913 +0000
+@@ -11,7 +11,7 @@
+     parser = argparse.ArgumentParser(
+         description=(
+             "Analyze a Diagnostics TXT export and correlate primary playback requests with "
+-            "resolve/start/READY timing."
++            "resolve, localhost loopback, Media3 buffering/READY/first-frame timing."
+         )
+     )
+     parser.add_argument("log_file", type=Path, help="Diagnostics TXT export")
+diff -ruN '--exclude=.git' iptv-tv-app-updated/tools/playback_latency.py /mnt/data/iptv-src/source/iptv-tv-app-updated/tools/playback_latency.py
+--- iptv-tv-app-updated/tools/playback_latency.py	2026-08-15 11:57:02.000000000 +0000
++++ /mnt/data/iptv-src/source/iptv-tv-app-updated/tools/playback_latency.py	2026-08-15 12:36:17.889495981 +0000
+@@ -19,6 +19,9 @@
+ PLAYLIST_ID_RE = re.compile(r"\bplaylistId=(?P<value>\d+)\b")
+ STREAM_KIND_RE = re.compile(r"\bstreamKind=(?P<value>.+?)(?:,\s|$)")
+ STARTUP_MS_RE = re.compile(r"\bstartupMs=(?P<value>\d+)\b")
++BOUNDARY_EVENT_RE = re.compile(r"\bevent=(?P<value>[a-z_]+)\b")
++REBUFFER_COUNT_RE = re.compile(r"\brebuffer_count=(?P<value>\d+)\b")
++REBUFFER_MS_RE = re.compile(r"\brebuffer_ms=(?P<value>\d+)\b")
+ 
+ 
+ @dataclass(frozen=True)
+@@ -41,8 +44,15 @@
+     startup_buffer_ready_at_ms: int | None = None
+     resolved_at_ms: int | None = None
+     player_start_at_ms: int | None = None
++    loopback_open_at_ms: int | None = None
++    loopback_first_read_at_ms: int | None = None
++    media3_first_buffering_at_ms: int | None = None
++    media3_boundary_ready_at_ms: int | None = None
++    first_video_frame_at_ms: int | None = None
+     player_ready_at_ms: int | None = None
+     player_reported_startup_ms: int | None = None
++    rebuffer_count: int = 0
++    rebuffer_ms: int = 0
+     completed_at_ms: int | None = None
+     outcome: str = "pending"
+     detail: str = ""
+@@ -69,6 +79,26 @@
+         return self.elapsed(self.player_start_at_ms)
+ 
+     @property
++    def loopback_open_ms(self) -> int | None:
++        return self.elapsed(self.loopback_open_at_ms)
++
++    @property
++    def loopback_first_read_ms(self) -> int | None:
++        return self.elapsed(self.loopback_first_read_at_ms)
++
++    @property
++    def media3_first_buffering_ms(self) -> int | None:
++        return self.elapsed(self.media3_first_buffering_at_ms)
++
++    @property
++    def media3_boundary_ready_ms(self) -> int | None:
++        return self.elapsed(self.media3_boundary_ready_at_ms)
++
++    @property
++    def first_video_frame_ms(self) -> int | None:
++        return self.elapsed(self.first_video_frame_at_ms)
++
++    @property
+     def player_ready_ms(self) -> int | None:
+         return self.elapsed(self.player_ready_at_ms)
+ 
+@@ -89,8 +119,15 @@
+             "startup_buffer_ms": self.startup_buffer_ms,
+             "resolve_ms": self.resolve_ms,
+             "player_start_ms": self.player_start_ms,
++            "loopback_open_ms": self.loopback_open_ms,
++            "loopback_first_read_ms": self.loopback_first_read_ms,
++            "media3_first_buffering_ms": self.media3_first_buffering_ms,
++            "media3_boundary_ready_ms": self.media3_boundary_ready_ms,
++            "first_video_frame_ms": self.first_video_frame_ms,
+             "player_ready_ms": self.player_ready_ms,
+             "player_reported_startup_ms": self.player_reported_startup_ms,
++            "rebuffer_count": self.rebuffer_count,
++            "rebuffer_ms": self.rebuffer_ms,
+             "total_ms": self.total_ms,
+             "outcome": self.outcome,
+             "detail": self.detail,
+@@ -193,6 +230,11 @@
+     return match.group("value").strip() if match else None
+ 
+ 
++def _extract_boundary_event(message: str) -> str | None:
++    match = BOUNDARY_EVENT_RE.search(message)
++    return match.group("value").strip() if match else None
++
++
+ def _latest_pending(
+     requests: Sequence[PlaybackRequest],
+     *,
+@@ -260,6 +302,37 @@
+                 request.player_start_at_ms = event.timestamp_ms
+             continue
+ 
++        if status == "embedded_ace_live_loopback_http_open":
++            request = _latest_pending(requests, require_started=True)
++            if request is not None and request.loopback_open_at_ms is None:
++                request.loopback_open_at_ms = event.timestamp_ms
++            continue
++
++        if status == "embedded_ace_live_loopback_first_read":
++            request = _latest_pending(requests, require_started=True)
++            if request is not None and request.loopback_first_read_at_ms is None:
++                request.loopback_first_read_at_ms = event.timestamp_ms
++            continue
++
++        if status == "player_p2p_boundary":
++            request = _latest_pending(requests, require_started=True)
