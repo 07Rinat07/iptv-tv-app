@@ -85,6 +85,7 @@ class AceLiveRecoveryCoordinatorTest {
         coordinator.updatePeer(peer(id = 1, min = 90, max = 99, unchoked = true))
         coordinator.updatePeer(peer(id = 2, min = 112, max = 140, unchoked = true))
         coordinator.updatePeer(peer(id = 3, min = 105, max = 130, unchoked = true))
+        assertTrue(coordinator.assign(100, 140, nowMillis = 0).isEmpty())
 
         val plan = coordinator.evaluate(100, nowMillis = 4_000)
 
@@ -96,6 +97,7 @@ class AceLiveRecoveryCoordinatorTest {
         val coordinator = coordinator()
         coordinator.updatePeer(peer(id = 1, min = 90, max = 99, unchoked = true))
         coordinator.updatePeer(peer(id = 2, min = 105, max = 130, unchoked = false))
+        assertTrue(coordinator.assign(100, 130, nowMillis = 0).isEmpty())
 
         val plan = coordinator.evaluate(100, nowMillis = 4_000)
 
@@ -108,6 +110,7 @@ class AceLiveRecoveryCoordinatorTest {
         val coordinator = coordinator()
         coordinator.updatePeer(peer(id = 1, min = 80, max = 90, unchoked = true))
         coordinator.updatePeer(peer(id = 2, min = 91, max = 99, unchoked = true))
+        assertTrue(coordinator.assign(100, 100, nowMillis = 0).isEmpty())
 
         val plan = coordinator.evaluate(100, nowMillis = 4_000)
 
