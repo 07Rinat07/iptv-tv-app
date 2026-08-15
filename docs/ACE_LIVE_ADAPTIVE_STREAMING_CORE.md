@@ -85,7 +85,9 @@ PR #119 завершил V3h startup discovery lifecycle и уже находи�
 
 PR #120 завершил V3i bounded recovery selection semantics и уже находится в `main`. При evicted-gap recovery peer window, полностью находящееся позади authoritative cursor, больше не маскирует ближайшее requestable future-window. Recovery по-прежнему разрешён только после существующего request-timeout, учитывает только unchoked windows и остаётся ограничен `maxPieceAdvance`. Android CI #522 и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
 
-Текущий V4a вводит измеряемую player-boundary telemetry без изменения Media3 buffering policy: отдельные first localhost HTTP open/read events, Media3 `BUFFERING/READY/first-frame`, rebuffer count/duration и session correlation для P2P playback. P2P-specific LoadControl остаётся следующим отдельным инкрементом и не тюнингуется до получения этих измерений.
+PR #121 завершил V4a player-boundary telemetry и уже находится в `main`: first localhost HTTP open/read отделены от confirmed delivery, Media3 публикует `BUFFERING/READY/first-frame`, rebuffer count/duration и session correlation только для актуальной P2P session. Android CI #524, playback-latency tooling и real Torrent TV playback smoke без внешнего Ace Engine прошли успешно.
+
+Текущий V4b выделяет отдельный bounded Media3 LoadControl для localhost P2P playback. Generic IPTV `BufferConfig` остаётся неизменным; P2P policy ограничивает дублирующий Media3 read-ahead (`min <= 10s`, `max <= 30s`, startup <= 2s, target <= 32 MiB) и усиливает post-rebuffer floor до 4s, но никогда выше `minBuffer`. Это initial bounded policy поверх уже существующего Ace Live upstream buffer; дальнейшая hardware tuning должна опираться на V4a boundary telemetry, а не на увеличение discovery/recovery timeout.
 
 ## Buffer model
 
@@ -254,9 +256,9 @@ Media-format логика не переносится внутрь peer schedule
 
 ### V4 — player/TS boundary
 
-- [ ] first-open/first-read and Media3-boundary telemetry beyond V3 confirmed-delivery input;
-- [ ] P2P-specific Media3 LoadControl;
-- [ ] BUFFERING/READY/first-frame telemetry;
+- [x] first-open/first-read and Media3-boundary telemetry beyond V3 confirmed-delivery input (PR #121);
+- [ ] P2P-specific Media3 LoadControl (current V4b);
+- [x] BUFFERING/READY/first-frame telemetry (PR #121);
 - [ ] TS discontinuity/PAT/PMT/random-access recovery.
 
 ### V5 — hardware acceptance

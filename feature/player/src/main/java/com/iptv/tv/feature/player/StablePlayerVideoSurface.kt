@@ -40,6 +40,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.iptv.tv.core.player.p2pMedia3BufferConfig
 import com.iptv.tv.core.player.toLoadControl
 import com.iptv.tv.core.playervlc.LibVlcFallbackPolicy
 import java.util.Locale
@@ -171,9 +172,17 @@ private fun StableMedia3VideoSurface(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val media3BufferConfig = remember(session.bufferConfig, session.isP2pPlayback) {
+        if (session.isP2pPlayback) {
+            p2pMedia3BufferConfig(session.bufferConfig)
+        } else {
+            session.bufferConfig
+        }
+    }
     // Keep the expensive Media3/MediaCodec stack alive while zapping between ordinary IPTV
-    // channels. Rebuild only when the HTTP transport or buffering policy actually changes.
-    val playerResult = remember(session.requestHeaders, session.bufferConfig) {
+    // channels. P2P gets its own bounded localhost LoadControl, so crossing IPTV <-> P2P is also
+    // a buffering-policy boundary and must rebuild the Media3 stack.
+    val playerResult = remember(session.requestHeaders, media3BufferConfig, session.isP2pPlayback) {
         runCatching {
             val requestHeaders = session.requestHeaders
                 .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
@@ -207,7 +216,7 @@ private fun StableMedia3VideoSurface(
 
             ExoPlayer.Builder(context, renderersFactory)
                 .setTrackSelector(trackSelector)
-                .setLoadControl(session.bufferConfig.toLoadControl())
+                .setLoadControl(media3BufferConfig.toLoadControl())
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
                 .build()
                 .apply {
