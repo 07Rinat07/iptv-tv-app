@@ -1,0 +1,41 @@
+name: Apply V4b P2P LoadControl patch
+
+on:
+  push:
+    branches:
+      - agent/p2p-media3-load-control-v4b
+    paths:
+      - '.v4b-patch.patch'
+      - '.github/workflows/v4b-apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'apply V4b P2P LoadControl patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply verified V4b patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 5e9c38eebfc808ce634107e11499cc6d7fb53f4a HEAD
+          echo '124ab31222c11e38c992d71dfc208f8d5972347f75c23409273d71802a07896b  .v4b-patch.patch' | sha256sum -c -
+          git apply --check .v4b-patch.patch
+          git apply .v4b-patch.patch
+          git diff --check
+      - name: Commit V4b implementation and remove staging files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .v4b-patch.patch .github/workflows/v4b-apply.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat(player): add P2P-specific Media3 LoadControl'
+          git push origin HEAD:${GITHUB_REF_NAME}
