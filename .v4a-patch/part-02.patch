@@ -1,0 +1,188 @@
++++ /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt	2026-08-15 12:34:07.313514141 +0000
+@@ -63,7 +63,9 @@
+     val bufferConfig: BufferConfig,
+     val recoveryPolicy: BufferingRecoveryPolicy,
+     val bufferPlanSummary: String,
+-    val requestId: Long = 0L
++    val requestId: Long = 0L,
++    val playbackStartedAtMillis: Long = 0L,
++    val isP2pPlayback: Boolean = false
+ )
+ 
+ enum class MultiviewMode(val paneCount: Int) {
+@@ -1229,6 +1231,23 @@
+         _uiState.update { it.copy(isStartingPlayback = false, lastError = null) }
+     }
+ 
++    internal fun onP2pPlayerBoundaryTelemetry(telemetry: P2pPlayerBoundaryTelemetry) {
++        val state = _uiState.value
++        val session = state.internalSession ?: return
++        if (session.sessionId != telemetry.sessionId || !session.isP2pPlayback) return
++
++        logAsync(
++            status = "player_p2p_boundary",
++            message = "event=${telemetry.event.wireName}, sessionId=${telemetry.sessionId}, " +
++                "requestId=${session.requestId}, backend=media3, " +
++                "elapsed_ms=${telemetry.elapsedSincePlaybackStartMillis}, " +
++                "rebuffer_count=${telemetry.rebufferCount}, " +
++                "rebuffer_ms=${telemetry.totalRebufferDurationMillis}, " +
++                "current_buffering_ms=${telemetry.currentBufferingDurationMillis}",
++            playlistId = state.selectedPlaylistId
++        )
++    }
++
+     fun onSecondaryPlaybackReady() {
+         onAdditionalPlaybackReady(2)
+     }
+@@ -2107,6 +2126,12 @@
+         )
+         val preparedStream = parseKodiStyleStream(channel.streamUrl)
+         val nextSessionId = primaryPlaybackOwnership.nextSessionId()
++        val playbackStartedAtMillis = System.currentTimeMillis()
++        val originalSourceUrl = state.channels
++            .firstOrNull { candidate -> candidate.id == channel.id }
++            ?.streamUrl
++            ?: channel.streamUrl
++        val isP2pPlayback = PlayerP2pDescriptor.detect(originalSourceUrl) != null
+         _uiState.update {
+             it.copy(
+                 internalSession = InternalPlaybackSession(
+@@ -2118,7 +2143,9 @@
+                     bufferConfig = plan.config,
+                     recoveryPolicy = plan.recoveryPolicy,
+                     bufferPlanSummary = plan.summary,
+-                    requestId = requestId
++                    requestId = requestId,
++                    playbackStartedAtMillis = playbackStartedAtMillis,
++                    isP2pPlayback = isP2pPlayback
+                 ),
+                 adaptiveBufferSummary = plan.summary,
+                 isStartingPlayback = true,
+@@ -2131,7 +2158,7 @@
+                 lastError = null
+             )
+         }
+-        internalStartElapsedMs = System.currentTimeMillis()
++        internalStartElapsedMs = playbackStartedAtMillis
+         addToHistory(channel)
+         viewModelScope.launch {
+             diagnosticsRepository.addLog(
+diff -ruN '--exclude=.git' iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt
+--- iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt	2026-08-15 11:57:02.000000000 +0000
++++ /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt	2026-08-15 12:33:31.567630580 +0000
+@@ -365,6 +365,7 @@
+                 onVolumeChange = ::setVolume,
+                 onToggleMute = ::toggleMute,
+                 onReady = { viewModel.onInternalPlaybackReady(it) },
++                onP2pBoundaryTelemetry = viewModel::onP2pPlayerBoundaryTelemetry,
+                 onError = { sessionId, message ->
+                     viewModel.onInternalPlaybackError(message, context, sessionId)
+                 },
+@@ -407,6 +408,7 @@
+                             onVolumeChange = ::setVolume,
+                             onToggleMute = ::toggleMute,
+                             onReady = viewModel::onInternalPlaybackReady,
++                            onP2pBoundaryTelemetry = viewModel::onP2pPlayerBoundaryTelemetry,
+                             onError = { sessionId, message ->
+                                 viewModel.onInternalPlaybackError(message, context, sessionId)
+                             },
+@@ -467,6 +469,7 @@
+                             onVolumeChange = ::setVolume,
+                             onToggleMute = ::toggleMute,
+                             onReady = viewModel::onInternalPlaybackReady,
++                            onP2pBoundaryTelemetry = viewModel::onP2pPlayerBoundaryTelemetry,
+                             onError = { sessionId, message ->
+                                 viewModel.onInternalPlaybackError(message, context, sessionId)
+                             },
+@@ -605,6 +608,7 @@
+     onVolumeChange: (Float) -> Unit,
+     onToggleMute: () -> Unit,
+     onReady: (Long?) -> Unit,
++    onP2pBoundaryTelemetry: (P2pPlayerBoundaryTelemetry) -> Unit,
+     onError: (Long?, String) -> Unit,
+     onPlaySelected: () -> Unit,
+     onToggleFullscreen: () -> Unit,
+@@ -638,6 +642,7 @@
+                         onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
+                         onToggleMute = onToggleMute,
+                         onReady = { onReady(session.sessionId) },
++                        onP2pBoundaryTelemetry = onP2pBoundaryTelemetry,
+                         onError = { onError(session.sessionId, it) },
+                         onToggleFullscreen = onToggleFullscreen,
+                         onPreviousChannel = onPreviousChannel,
+@@ -1136,6 +1141,7 @@
+     onVolumeChange: (Float) -> Unit,
+     onToggleMute: () -> Unit,
+     onReady: (Long) -> Unit,
++    onP2pBoundaryTelemetry: (P2pPlayerBoundaryTelemetry) -> Unit,
+     onError: (Long?, String) -> Unit,
+     onToggleFullscreen: () -> Unit,
+     onPreviousChannel: () -> Unit,
+@@ -1157,6 +1163,7 @@
+                 onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
+                 onToggleMute = onToggleMute,
+                 onReady = { onReady(session.sessionId) },
++                onP2pBoundaryTelemetry = onP2pBoundaryTelemetry,
+                 onError = { onError(session.sessionId, it) },
+                 onToggleFullscreen = onToggleFullscreen,
+                 onPreviousChannel = onPreviousChannel,
+diff -ruN '--exclude=.git' iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerVideoSurface.kt /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerVideoSurface.kt
+--- iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerVideoSurface.kt	2026-08-15 11:57:02.000000000 +0000
++++ /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerVideoSurface.kt	2026-08-15 12:33:18.590833205 +0000
+@@ -75,6 +75,7 @@
+     onToggleMute: () -> Unit,
+     onReady: () -> Unit,
+     onError: (String) -> Unit,
++    onP2pBoundaryTelemetry: (P2pPlayerBoundaryTelemetry) -> Unit = {},
+     onToggleFullscreen: () -> Unit,
+     onPreviousChannel: () -> Unit,
+     onNextChannel: () -> Unit,
+@@ -96,6 +97,7 @@
+                 onVolumeDown = onVolumeDown,
+                 onToggleMute = onToggleMute,
+                 onReady = onReady,
++                onP2pBoundaryTelemetry = onP2pBoundaryTelemetry,
+                 onError = { message ->
+                     val decision = LibVlcFallbackPolicy.evaluate(message)
+                     if (decision.shouldFallback) {
+@@ -161,6 +163,7 @@
+     onVolumeDown: () -> Unit,
+     onToggleMute: () -> Unit,
+     onReady: () -> Unit,
++    onP2pBoundaryTelemetry: (P2pPlayerBoundaryTelemetry) -> Unit,
+     onError: (String) -> Unit,
+     onToggleFullscreen: () -> Unit,
+     onPreviousChannel: () -> Unit,
+@@ -265,6 +268,22 @@
+     var videoRecoveryStartedAt by remember(session.sessionId) { mutableLongStateOf(0L) }
+     var videoFailureReported by remember(session.sessionId) { mutableStateOf(false) }
+     var diagnosticMessage by remember(session.sessionId) { mutableStateOf<String?>(null) }
++    val p2pBoundaryTelemetryTracker = remember(
++        session.sessionId,
++        session.playbackStartedAtMillis,
++        session.isP2pPlayback
++    ) {
++        if (session.isP2pPlayback) {
++            P2pPlayerBoundaryTelemetryTracker(
++                sessionId = session.sessionId,
++                playbackStartedAtMillis = session.playbackStartedAtMillis
++                    .takeIf { it > 0L }
++                    ?: System.currentTimeMillis()
++            )
++        } else {
++            null
++        }
++    }
+ 
+     DisposableEffect(player) {
+         onDispose {
+@@ -283,8 +302,12 @@
+             override fun onPlaybackStateChanged(playbackState: Int) {
+                 when (playbackState) {
+                     Player.STATE_READY -> {
++                        val now = System.currentTimeMillis()
+                         bufferingSinceMs = 0L
+-                        if (readySinceMs == 0L) readySinceMs = System.currentTimeMillis()
++                        if (readySinceMs == 0L) readySinceMs = now
++                        p2pBoundaryTelemetryTracker
++                            ?.onReady(now)
