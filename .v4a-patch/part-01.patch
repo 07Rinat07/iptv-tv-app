@@ -134,5 +134,5 @@ diff -ruN '--exclude=.git' iptv-tv-app-updated/feature/player/src/main/java/com/
 +    private fun saturatingAdd(left: Long, right: Long): Long =
 +        if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
 +}
-+diff -ruN '--exclude=.git' iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt
-+--- iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt	2026-08-15 11:57:02.000000000 +0000
+diff -ruN '--exclude=.git' iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt /mnt/data/iptv-src/source/iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt
+--- iptv-tv-app-updated/feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt	2026-08-15 11:57:02.000000000 +0000
