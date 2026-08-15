@@ -363,7 +363,8 @@ internal class AceLiveMpegTsResynchronizer {
 internal class LoopbackHttpLiveServer(
     private val mediaBuffer: AceLiveMediaBuffer,
     private val requestedPort: Int = 0,
-    private val consumerObserver: (AceLiveMediaConsumerSnapshot) -> Unit = {}
+    private val consumerObserver: (AceLiveMediaConsumerSnapshot) -> Unit = {},
+    private val consumerLifecycleObserver: (AceLiveConsumerLifecycleEvent) -> Unit = {}
 ) : Closeable {
     private val closed = AtomicBoolean(false)
     private val serverSocket = ServerSocket().apply {
@@ -436,14 +437,26 @@ internal class LoopbackHttpLiveServer(
 
         socket.soTimeout = 0
         val reader = mediaBuffer.openReader()
+        runCatching {
+            consumerLifecycleObserver(AceLiveConsumerLifecycleEvent.Opened(reader.readerId))
+        }
         val bytes = ByteArray(64 * 1024)
-        while (!closed.get()) {
-            val count = reader.read(bytes, 0, bytes.size)
-            if (count < 0) return
-            output.write(bytes, 0, count)
-            output.flush()
-            val snapshot = reader.confirmDelivered(count)
-            runCatching { consumerObserver(snapshot) }
+        try {
+            while (!closed.get()) {
+                val count = reader.read(bytes, 0, bytes.size)
+                if (count < 0) return
+                output.write(bytes, 0, count)
+                output.flush()
+                val snapshot = reader.confirmDelivered(count)
+                runCatching { consumerObserver(snapshot) }
+                runCatching {
+                    consumerLifecycleObserver(AceLiveConsumerLifecycleEvent.Delivered(snapshot))
+                }
+            }
+        } finally {
+            runCatching {
+                consumerLifecycleObserver(AceLiveConsumerLifecycleEvent.Closed(reader.readerId))
+            }
         }
     }
 
