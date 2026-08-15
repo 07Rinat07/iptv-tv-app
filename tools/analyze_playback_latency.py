@@ -11,7 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Analyze a Diagnostics TXT export and correlate primary playback requests with "
-            "resolve/start/READY timing."
+            "resolve, localhost loopback, Media3 buffering/READY/first-frame timing."
         )
     )
     parser.add_argument("log_file", type=Path, help="Diagnostics TXT export")

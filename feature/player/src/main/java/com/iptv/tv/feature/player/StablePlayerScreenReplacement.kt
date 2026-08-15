@@ -365,6 +365,7 @@ fun StablePlayerScreen(
                 onVolumeChange = ::setVolume,
                 onToggleMute = ::toggleMute,
                 onReady = { viewModel.onInternalPlaybackReady(it) },
+                onP2pBoundaryTelemetry = viewModel::onP2pPlayerBoundaryTelemetry,
                 onError = { sessionId, message ->
                     viewModel.onInternalPlaybackError(message, context, sessionId)
                 },
@@ -407,6 +408,7 @@ fun StablePlayerScreen(
                             onVolumeChange = ::setVolume,
                             onToggleMute = ::toggleMute,
                             onReady = viewModel::onInternalPlaybackReady,
+                            onP2pBoundaryTelemetry = viewModel::onP2pPlayerBoundaryTelemetry,
                             onError = { sessionId, message ->
                                 viewModel.onInternalPlaybackError(message, context, sessionId)
                             },
@@ -467,6 +469,7 @@ fun StablePlayerScreen(
                             onVolumeChange = ::setVolume,
                             onToggleMute = ::toggleMute,
                             onReady = viewModel::onInternalPlaybackReady,
+                            onP2pBoundaryTelemetry = viewModel::onP2pPlayerBoundaryTelemetry,
                             onError = { sessionId, message ->
                                 viewModel.onInternalPlaybackError(message, context, sessionId)
                             },
@@ -605,6 +608,7 @@ private fun StableCenterPaneReplacement(
     onVolumeChange: (Float) -> Unit,
     onToggleMute: () -> Unit,
     onReady: (Long?) -> Unit,
+    onP2pBoundaryTelemetry: (P2pPlayerBoundaryTelemetry) -> Unit,
     onError: (Long?, String) -> Unit,
     onPlaySelected: () -> Unit,
     onToggleFullscreen: () -> Unit,
@@ -638,6 +642,7 @@ private fun StableCenterPaneReplacement(
                         onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
                         onToggleMute = onToggleMute,
                         onReady = { onReady(session.sessionId) },
+                        onP2pBoundaryTelemetry = onP2pBoundaryTelemetry,
                         onError = { onError(session.sessionId, it) },
                         onToggleFullscreen = onToggleFullscreen,
                         onPreviousChannel = onPreviousChannel,
@@ -1136,6 +1141,7 @@ private fun StableFullscreenPlayerReplacement(
     onVolumeChange: (Float) -> Unit,
     onToggleMute: () -> Unit,
     onReady: (Long) -> Unit,
+    onP2pBoundaryTelemetry: (P2pPlayerBoundaryTelemetry) -> Unit,
     onError: (Long?, String) -> Unit,
     onToggleFullscreen: () -> Unit,
     onPreviousChannel: () -> Unit,
@@ -1157,6 +1163,7 @@ private fun StableFullscreenPlayerReplacement(
                 onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
                 onToggleMute = onToggleMute,
                 onReady = { onReady(session.sessionId) },
+                onP2pBoundaryTelemetry = onP2pBoundaryTelemetry,
                 onError = { onError(session.sessionId, it) },
                 onToggleFullscreen = onToggleFullscreen,
                 onPreviousChannel = onPreviousChannel,

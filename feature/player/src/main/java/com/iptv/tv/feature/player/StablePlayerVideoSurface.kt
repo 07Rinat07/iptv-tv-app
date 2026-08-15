@@ -75,6 +75,7 @@ internal fun StableVideoSurface(
     onToggleMute: () -> Unit,
     onReady: () -> Unit,
     onError: (String) -> Unit,
+    onP2pBoundaryTelemetry: (P2pPlayerBoundaryTelemetry) -> Unit = {},
     onToggleFullscreen: () -> Unit,
     onPreviousChannel: () -> Unit,
     onNextChannel: () -> Unit,
@@ -96,6 +97,7 @@ internal fun StableVideoSurface(
                 onVolumeDown = onVolumeDown,
                 onToggleMute = onToggleMute,
                 onReady = onReady,
+                onP2pBoundaryTelemetry = onP2pBoundaryTelemetry,
                 onError = { message ->
                     val decision = LibVlcFallbackPolicy.evaluate(message)
                     if (decision.shouldFallback) {
@@ -161,6 +163,7 @@ private fun StableMedia3VideoSurface(
     onVolumeDown: () -> Unit,
     onToggleMute: () -> Unit,
     onReady: () -> Unit,
+    onP2pBoundaryTelemetry: (P2pPlayerBoundaryTelemetry) -> Unit,
     onError: (String) -> Unit,
     onToggleFullscreen: () -> Unit,
     onPreviousChannel: () -> Unit,
@@ -265,6 +268,22 @@ private fun StableMedia3VideoSurface(
     var videoRecoveryStartedAt by remember(session.sessionId) { mutableLongStateOf(0L) }
     var videoFailureReported by remember(session.sessionId) { mutableStateOf(false) }
     var diagnosticMessage by remember(session.sessionId) { mutableStateOf<String?>(null) }
+    val p2pBoundaryTelemetryTracker = remember(
+        session.sessionId,
+        session.playbackStartedAtMillis,
+        session.isP2pPlayback
+    ) {
+        if (session.isP2pPlayback) {
+            P2pPlayerBoundaryTelemetryTracker(
+                sessionId = session.sessionId,
+                playbackStartedAtMillis = session.playbackStartedAtMillis
+                    .takeIf { it > 0L }
+                    ?: System.currentTimeMillis()
+            )
+        } else {
+            null
+        }
+    }
 
     DisposableEffect(player) {
         onDispose {
@@ -283,8 +302,12 @@ private fun StableMedia3VideoSurface(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_READY -> {
+                        val now = System.currentTimeMillis()
                         bufferingSinceMs = 0L
-                        if (readySinceMs == 0L) readySinceMs = System.currentTimeMillis()
+                        if (readySinceMs == 0L) readySinceMs = now
+                        p2pBoundaryTelemetryTracker
+                            ?.onReady(now)
+                            ?.let(onP2pBoundaryTelemetry)
                         if (!readyReported) {
                             readyReported = true
                             onReady()
@@ -292,7 +315,11 @@ private fun StableMedia3VideoSurface(
                     }
 
                     Player.STATE_BUFFERING -> {
-                        if (bufferingSinceMs == 0L) bufferingSinceMs = System.currentTimeMillis()
+                        val now = System.currentTimeMillis()
+                        if (bufferingSinceMs == 0L) bufferingSinceMs = now
+                        p2pBoundaryTelemetryTracker
+                            ?.onBuffering(now)
+                            ?.let(onP2pBoundaryTelemetry)
                     }
 
                     else -> bufferingSinceMs = 0L
@@ -307,6 +334,9 @@ private fun StableMedia3VideoSurface(
 
             override fun onRenderedFirstFrame() {
                 firstVideoFrameRendered = true
+                p2pBoundaryTelemetryTracker
+                    ?.onFirstVideoFrame(System.currentTimeMillis())
+                    ?.let(onP2pBoundaryTelemetry)
                 if (videoWidth > 0 && videoHeight > 0) diagnosticMessage = null
             }
 

@@ -16,9 +16,13 @@ class LoopbackHttpLiveServerLifecycleTest {
         val events = Collections.synchronizedList(
             mutableListOf<AceLiveConsumerLifecycleEvent>()
         )
+        val firstReads = Collections.synchronizedList(
+            mutableListOf<Pair<Long, Int>>()
+        )
         val server = LoopbackHttpLiveServer(
             mediaBuffer = mediaBuffer,
-            consumerLifecycleObserver = { event -> events += event }
+            consumerLifecycleObserver = { event -> events += event },
+            firstReadObserver = { readerId, byteCount -> firstReads += readerId to byteCount }
         )
         val uri = URI(server.url)
         val socket = Socket(uri.host, uri.port)
@@ -51,6 +55,10 @@ class LoopbackHttpLiveServerLifecycleTest {
         val delivered = snapshot.filterIsInstance<AceLiveConsumerLifecycleEvent.Delivered>().first()
         val closed = snapshot.filterIsInstance<AceLiveConsumerLifecycleEvent.Closed>().single()
 
+        val firstReadSnapshot = synchronized(firstReads) { firstReads.toList() }
+        assertEquals(1, firstReadSnapshot.size)
+        assertEquals(opened.readerId, firstReadSnapshot.single().first)
+        assertTrue(firstReadSnapshot.single().second > 0)
         assertEquals(opened.readerId, delivered.readerId)
         assertEquals(opened.readerId, closed.readerId)
         assertTrue(snapshot.indexOf(opened) < snapshot.indexOf(delivered))
@@ -64,9 +72,13 @@ class LoopbackHttpLiveServerLifecycleTest {
         val events = Collections.synchronizedList(
             mutableListOf<AceLiveConsumerLifecycleEvent>()
         )
+        val firstReads = Collections.synchronizedList(
+            mutableListOf<Pair<Long, Int>>()
+        )
         val server = LoopbackHttpLiveServer(
             mediaBuffer = mediaBuffer,
-            consumerLifecycleObserver = { event -> events += event }
+            consumerLifecycleObserver = { event -> events += event },
+            firstReadObserver = { readerId, byteCount -> firstReads += readerId to byteCount }
         )
         val uri = URI(server.url)
 
@@ -90,6 +102,7 @@ class LoopbackHttpLiveServerLifecycleTest {
         }
 
         assertTrue(events.isEmpty())
+        assertTrue(firstReads.isEmpty())
     }
 
     private fun readHeaders(socket: Socket) {

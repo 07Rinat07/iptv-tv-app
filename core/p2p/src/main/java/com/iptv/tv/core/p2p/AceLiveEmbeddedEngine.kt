@@ -303,7 +303,8 @@ class AceLiveEmbeddedEngine(
         val mediaBuffer = AceLiveMediaBuffer(maxBufferedBytes = startupBufferPolicy.outputBufferBytes())
         val server = LoopbackHttpLiveServer(
             mediaBuffer = mediaBuffer,
-            consumerLifecycleObserver = ::onConsumerLifecycle
+            consumerLifecycleObserver = ::onConsumerLifecycle,
+            firstReadObserver = ::onLoopbackFirstRead
         )
 
         private val closed = AtomicBoolean(false)
@@ -654,7 +655,29 @@ class AceLiveEmbeddedEngine(
             }
         }
 
+        private fun onLoopbackFirstRead(readerId: Long, byteCount: Int) {
+            val now = System.currentTimeMillis()
+            runCatching {
+                diagnosticsObserver(
+                    "embedded_ace_live_loopback_first_read",
+                    "reader=$readerId, bytes=$byteCount, retained_bytes=${mediaBuffer.retainedBytes()}, " +
+                        "elapsed_ms=${startupElapsedMillis(now)}"
+                )
+            }
+        }
+
         private fun onConsumerLifecycle(event: AceLiveConsumerLifecycleEvent) {
+            if (event is AceLiveConsumerLifecycleEvent.Opened) {
+                val now = System.currentTimeMillis()
+                runCatching {
+                    diagnosticsObserver(
+                        "embedded_ace_live_loopback_http_open",
+                        "reader=${event.readerId}, retained_bytes=${mediaBuffer.retainedBytes()}, " +
+                            "elapsed_ms=${startupElapsedMillis(now)}"
+                    )
+                }
+            }
+
             val sample = authoritativeConsumerPressureTracker.onEvent(event) ?: return
             val pressure = sample.pressure.pressure
             authoritativeBufferPressure.set(pressure)

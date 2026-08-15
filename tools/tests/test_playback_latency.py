@@ -94,6 +94,30 @@ class PlaybackLatencyAnalyzerTest(unittest.TestCase):
         self.assertEqual("ready", request.outcome)
         self.assertIn("Ace Stream", request.stream_kind)
 
+    def test_tracks_v4a_loopback_and_media3_boundary_telemetry(self) -> None:
+        text = """=== Structured diagnostics (latest 120 rows) ===
+1710000010500 | player_ready | playlist=7 | Internal ready, startupMs=2500, sessionId=9
+1710000010400 | player_p2p_boundary | playlist=7 | event=first_video_frame, sessionId=9, requestId=4, backend=media3, elapsed_ms=2400, rebuffer_count=1, rebuffer_ms=350, current_buffering_ms=0
+1710000010300 | player_p2p_boundary | playlist=7 | event=ready, sessionId=9, requestId=4, backend=media3, elapsed_ms=2300, rebuffer_count=1, rebuffer_ms=350, current_buffering_ms=0
+1710000010200 | player_p2p_boundary | playlist=7 | event=buffering, sessionId=9, requestId=4, backend=media3, elapsed_ms=2200, rebuffer_count=1, rebuffer_ms=0, current_buffering_ms=0
+1710000009000 | embedded_ace_live_loopback_first_read | playlist=7 | reader=2, bytes=65536, retained_bytes=1048576, elapsed_ms=5000
+1710000008800 | embedded_ace_live_loopback_http_open | playlist=7 | reader=2, retained_bytes=1048576, elapsed_ms=4800
+1710000008000 | player_start | playlist=7 | Internal playback start: channelId=77
+1710000007000 | player_resolve_ok | playlist=7 | channelId=77, streamKind=Ace Stream / Torrent TV
+1710000005000 | player_play_request | playlist=7 | channelId=77, playlistId=7, requestedPlayer=INTERNAL, forceAce=false
+"""
+
+        analysis = analyze_text(text)
+        request = analysis.requests[0]
+
+        self.assertEqual(3800, request.loopback_open_ms)
+        self.assertEqual(4000, request.loopback_first_read_ms)
+        self.assertEqual(5200, request.media3_first_buffering_ms)
+        self.assertEqual(5500, request.player_ready_ms)
+        self.assertEqual(5400, request.first_video_frame_ms)
+        self.assertEqual(1, request.rebuffer_count)
+        self.assertEqual(350, request.rebuffer_ms)
+
     def test_resolve_error_and_duplicate_request_are_counted(self) -> None:
         text = """=== Structured diagnostics (latest 120 rows) ===
 1710000003000 | player_resolve_error | playlist=2 | channelId=5, reason=no peers

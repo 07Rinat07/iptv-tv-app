@@ -69,7 +69,7 @@ The current pipeline is:
 
 The P2P buffer and Media3 LoadControl are currently separate feedback systems. Field logs show some resolved Ace streams spending roughly 66 seconds between `player_start` and `player_ready`, while other streams reach READY in well under a second. Codec absence therefore cannot explain the whole class of failures.
 
-Next telemetry must capture at least first localhost HTTP open/read, media producer rate, consumer rate, retained bytes/seconds, Media3 BUFFERING/READY, first rendered frame and rebuffer count. Only after those measurements should the P2P-specific Media3 LoadControl be tuned.
+V4a captures the missing boundary timings without changing buffering policy: first localhost HTTP open/read plus Media3 BUFFERING/READY, first rendered frame and rebuffer count/duration for P2P sessions. Existing V3 diagnostics continue to provide producer/consumer rate and playable headroom. Only after these measurements are available should the P2P-specific Media3 LoadControl be tuned.
 
 ## Acceptance rule
 
