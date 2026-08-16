@@ -91,15 +91,16 @@ internal enum class AceLiveStartupDhtRefillPlan {
 }
 
 /**
- * Classifies the DHT-only work required after a deliberately small startup result.
+ * Classifies the DHT-only work required after the deliberately permissive tracker-first startup.
  *
- * A one-to-three-peer tracker result satisfies the startup threshold of one, so the first TCP
- * attempt can begin without waiting for DHT. It is still weaker than the normal refill threshold of
- * four. A weak startup result therefore schedules short DHT probes before the full background
- * expansion. Each startup probe returns after the first valid DHT endpoint so TCP validation of an
- * alternative candidate can begin immediately instead of waiting to accumulate a four-peer batch.
- * Two independent rounds still reduce dependence on one routing-table path, and the later full
- * expansion remains bounded background work.
+ * Tracker count is discovery evidence, not qualification evidence. A tracker-only result can contain
+ * several endpoints that all fail TCP/Ace qualification, as the R3 TV Box run demonstrated. The
+ * tracker fast path must therefore remain non-blocking for the first TCP attempts while scheduling
+ * bounded DHT diversity work in the background until startup reaches media-ready. Short probes still
+ * return after the first DHT endpoint and the existing full expansion remains bounded/cancellable.
+ *
+ * A weak DHT fast path (one to three endpoints) uses the same bounded probe/expansion sequence. A
+ * normal DHT batch does not schedule another duplicate startup expansion.
  */
 internal fun aceLiveStartupNeedsImmediateDhtOnlyRefill(
     result: AceLivePeerDiscoveryOrchestrationResult,
@@ -118,17 +119,17 @@ internal fun aceLiveStartupDhtRefillPlan(
     require(normalTrackerFastPathMinPeers > 0) {
         "normalTrackerFastPathMinPeers must be positive"
     }
-    val weakTrackerFastPath =
+    val trackerOnlyFastPath =
         result.dht.status == AceLivePeerDiscoverySourceStatus.NOT_REQUESTED &&
         result.tracker.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
-        result.tracker.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
+        result.tracker.returnedPeerCount > 0
     val weakDhtFastPath =
         result.dht.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
         result.dht.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
     return when {
-        // A single tracker or DHT endpoint is only a candidate, not proof that it publishes this
-        // swarm. Probe alternative endpoints before the full DHT traversal.
-        weakTrackerFastPath || weakDhtFastPath ->
+        // Tracker endpoints are only candidates. Keep their immediate startup advantage, but obtain
+        // independent DHT alternatives in the background in case tracker peers cannot qualify.
+        trackerOnlyFastPath || weakDhtFastPath ->
             AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND
         else -> AceLiveStartupDhtRefillPlan.NONE
     }
@@ -185,10 +186,12 @@ internal fun aceLiveDhtHasHeapHeadroom(
  * Aggregates independent Ace Live discovery sources before the TCP connection pool.
  *
  * For live startup, a healthy UDP tracker is intentionally the fast path. If it already returns a
- * useful first batch of peers, Mainline DHT is not started, avoiding the old 15-second DHT gate
- * before TCP startup. If the tracker is weak or fails, DHT remains the fallback. DHT is also
- * suppressed under critical JVM heap pressure so peer discovery fails/refills cleanly instead of
- * turning a low-memory condition into a process-killing coroutine OOM.
+ * useful first batch of peers, Mainline DHT is not started in that same discovery call, avoiding the
+ * old 15-second DHT gate before TCP startup. Startup policy separately schedules bounded DHT-only
+ * diversity probes in the background because tracker count alone does not prove peer qualification.
+ * If the tracker is weak or fails, DHT remains the synchronous fallback. DHT is also suppressed under
+ * critical JVM heap pressure so peer discovery fails/refills cleanly instead of turning a low-memory
+ * condition into a process-killing coroutine OOM.
  *
  * Multiple orchestrator instances may be active while content-id startup races metadata resolution.
  * Their DHT fallbacks are process-wide serialized and re-check heap headroom after acquiring the
