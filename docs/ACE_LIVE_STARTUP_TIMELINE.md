@@ -27,7 +27,7 @@ PR #128 wired the bridge to authoritative existing events and passed exact-head 
 
 ## Player boundary contract
 
-The next V4d boundary is intentionally split into a contract PR and a wiring PR so Media3 instrumentation cannot silently change playback behaviour.
+The V4d player boundary is intentionally split into a contract PR and a wiring PR so Media3 instrumentation cannot silently change playback behaviour. PR #129 passed Android CI #551 plus P2P player smoke #4 and was merged as `aa27a73cdd4740af3e70fa903df6c7cd1f3dcb00`.
 
 `P2pPlayerBoundaryTelemetryTracker` already owns P2P-only `BUFFERING`, `READY`, first-frame and rebuffer accounting. The contract is extended with:
 
@@ -38,7 +38,9 @@ The next V4d boundary is intentionally split into a contract PR and a wiring PR 
 
 Repeated successful live-chunk load starts/completions do not each emit a record, preventing the same bounded-diagnostics flood previously seen with volatile peer-quality events. Internal counters still advance so a later error/retry record can show how much load activity preceded it. This contract owns no retry, seek, timeout, LoadControl or P2P policy.
 
-The immediately following wiring PR must connect this contract to the actual Media3 P2P session and extend localhost evidence with request method, `Range`/requested offset, reader close/reopen and close reason. It must also correlate `READY`/first-frame evidence with the active P2P request/session. Until that wiring lands, player `elapsed_ms` remains relative to the existing player-start timestamp and must not be misrepresented as the core preparation-origin clock.
+The current wiring increment connects this contract to the actual Media3 P2P session. Media3 1.5.1 load start/completion/error callbacks emit the bounded `player_p2p_boundary` event while task id, requested byte position/length, bytes loaded and duration are retained in the persistent `P2pBoundaryLoad` detail; a progressive localhost load error that Media3 keeps for retry is recorded as `load_retry` without scheduling any retry itself. `first_audio` is emitted once when the Media3 audio position first advances. Existing `READY`, rebuffer and first-frame evidence stays unchanged.
+
+The live localhost boundary now records GET method, raw `Range`, parsed requested start, the actual retained-floor offset used by the reader, live-edge offset, close reason, total delivered bytes and reader lifetime. These fields are observation only: the server still returns its existing live response and does **not** seek/resume to the requested Range in this increment. Reopen events therefore expose whether requested and actual offsets diverge before any resume behaviour is introduced. Player `elapsed_ms` remains relative to the existing player-start timestamp and must not be misrepresented as the core preparation-origin clock; session/request ids provide cross-layer correlation.
 
 ## Field update — 16 августа 2026
 
@@ -53,9 +55,9 @@ Detailed evidence is recorded in [`ACE_LIVE_FIELD_VALIDATION_2026-08-16.md`](ACE
 ## Remaining V4d sequence
 
 1. ✅ Canonical core runtime timeline: PR #128, exact-head Android CI #549, merged to `main`.
-2. 🚧 P2P player load telemetry contract: typed bounded load start/completion/error/retry evidence with focused unit coverage.
-3. Wire the player contract to actual Media3 Analytics/load callbacks and add localhost request method/`Range`, reader close/reopen reason, track readiness, `READY` and first-frame correlation without changing generic IPTV behaviour.
-4. Use measured Media3 requests to decide whether bounded logical-offset HTTP reopen/resume is required; do not implement resume speculatively.
+2. ✅ P2P player load telemetry contract: PR #129, Android CI #551 + P2P player smoke #4, merged to `main`.
+3. 🚧 Wire the contract to real Media3 load/audio callbacks and localhost request/reader lifecycle evidence, including requested-vs-actual offsets and close/reopen reason, without changing generic IPTV behaviour.
+4. Use the resulting TV Box logs to decide whether bounded logical-offset HTTP reopen/resume is required; do not implement resume before that evidence.
 5. Add a bounded forward playback reserve around the authoritative consumer cursor if the field timeline still shows the player living near the live edge.
 6. Correct pre-READY pressure authority so parser/read bursts cannot masquerade as playback bitrate; preserve post-READY authoritative reader semantics.
 7. If the producer set still remains at one handshaked peer with insufficient headroom, add bounded competitive/fresh-candidate diversity based on connected/handshaked/useful evidence rather than discovered-count alone.

@@ -7,10 +7,25 @@ package com.iptv.tv.core.p2p
  * This prevents speculative/replacement HTTP connections from stealing buffer-pressure ownership
  * before Media3 has consumed any bytes from them.
  */
+internal enum class AceLiveConsumerCloseReason(val wireName: String) {
+    END_OF_STREAM("end_of_stream"),
+    CLIENT_DISCONNECTED("client_disconnected"),
+    SERVER_CLOSED("server_closed"),
+    SOURCE_IO("source_io"),
+    UNKNOWN("unknown")
+}
+
 internal sealed interface AceLiveConsumerLifecycleEvent {
     val readerId: Long
 
-    data class Opened(override val readerId: Long) : AceLiveConsumerLifecycleEvent
+    data class Opened(
+        override val readerId: Long,
+        val method: String = "GET",
+        val rangeHeader: String? = null,
+        val requestedStartOffset: Long? = null,
+        val actualStartOffset: Long = 0L,
+        val liveEdgeOffset: Long = 0L
+    ) : AceLiveConsumerLifecycleEvent
 
     data class Delivered(
         val consumer: AceLiveMediaConsumerSnapshot
@@ -19,7 +34,12 @@ internal sealed interface AceLiveConsumerLifecycleEvent {
             get() = consumer.readerId
     }
 
-    data class Closed(override val readerId: Long) : AceLiveConsumerLifecycleEvent
+    data class Closed(
+        override val readerId: Long,
+        val reason: AceLiveConsumerCloseReason = AceLiveConsumerCloseReason.UNKNOWN,
+        val totalDeliveredBytes: Long = 0L,
+        val durationMillis: Long = 0L
+    ) : AceLiveConsumerLifecycleEvent
 }
 
 /**

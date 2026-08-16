@@ -130,7 +130,7 @@ class AceLiveStartupTimelineDiagnosticsTest {
             ),
             diagnostics.snapshot().map { it.milestone }
         )
-        assertEquals(12, records.size)
+        assertEquals(13, records.size)
     }
 
     @Test
@@ -184,6 +184,53 @@ class AceLiveStartupTimelineDiagnosticsTest {
             diagnostics.snapshot().first {
                 it.milestone == AceLiveStartupMilestone.FIRST_MEDIA
             }.elapsedMillis
+        )
+    }
+
+    @Test
+    fun `loopback lifecycle records range offset and close reason without changing milestones`() {
+        val records = mutableListOf<Pair<String, String>>()
+        val diagnostics = AceLiveStartupTimelineDiagnostics(
+            startedAtMillis = 50_000L,
+            diagnosticsObserver = { status, message -> records += status to message }
+        )
+
+        diagnostics.onConsumerLifecycle(
+            AceLiveConsumerLifecycleEvent.Opened(
+                readerId = 9L,
+                method = "GET",
+                rangeHeader = "bytes=4096-",
+                requestedStartOffset = 4_096L,
+                actualStartOffset = 1_024L,
+                liveEdgeOffset = 8_192L
+            ),
+            atMillis = 50_100L
+        )
+        diagnostics.onConsumerLifecycle(
+            AceLiveConsumerLifecycleEvent.Closed(
+                readerId = 9L,
+                reason = AceLiveConsumerCloseReason.CLIENT_DISCONNECTED,
+                totalDeliveredBytes = 2_048L,
+                durationMillis = 350L
+            ),
+            atMillis = 50_450L
+        )
+
+        assertEquals(
+            listOf(AceLiveStartupMilestone.HTTP_READER_OPEN),
+            diagnostics.snapshot().map { it.milestone }
+        )
+        val lifecycle = records.filter { it.first == AceLiveStartupTimelineDiagnostics.LOOPBACK_LIFECYCLE_STATUS }
+        assertEquals(2, lifecycle.size)
+        assertEquals(
+            "event=open, reader=9, method=GET, range=bytes=4096-, requested_start=4096, " +
+                "actual_start=1024, live_edge=8192, elapsed_ms=100",
+            lifecycle[0].second
+        )
+        assertEquals(
+            "event=close, reader=9, reason=client_disconnected, delivered_bytes=2048, " +
+                "duration_ms=350, elapsed_ms=450",
+            lifecycle[1].second
         )
     }
 

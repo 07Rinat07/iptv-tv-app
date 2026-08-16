@@ -5,6 +5,7 @@ import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.Collections
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,6 +33,7 @@ class LoopbackHttpLiveServerLifecycleTest {
             val request = buildString {
                 append("GET ").append(uri.path).append(" HTTP/1.1\r\n")
                 append("Host: ").append(uri.host).append("\r\n")
+                append("Range: bytes=1024-\r\n")
                 append("Connection: close\r\n\r\n")
             }
             socket.getOutputStream().apply {
@@ -59,11 +61,28 @@ class LoopbackHttpLiveServerLifecycleTest {
         assertEquals(1, firstReadSnapshot.size)
         assertEquals(opened.readerId, firstReadSnapshot.single().first)
         assertTrue(firstReadSnapshot.single().second > 0)
+        assertEquals("GET", opened.method)
+        assertEquals("bytes=1024-", opened.rangeHeader)
+        assertEquals(1_024L, opened.requestedStartOffset)
+        assertEquals(0L, opened.actualStartOffset)
+        assertEquals(188L * 8L, opened.liveEdgeOffset)
         assertEquals(opened.readerId, delivered.readerId)
         assertEquals(opened.readerId, closed.readerId)
         assertTrue(snapshot.indexOf(opened) < snapshot.indexOf(delivered))
         assertTrue(snapshot.indexOf(delivered) < snapshot.indexOf(closed))
         assertTrue(delivered.consumer.totalDeliveredBytes > 0L)
+        assertTrue(closed.totalDeliveredBytes >= delivered.consumer.totalDeliveredBytes)
+        assertTrue(closed.durationMillis >= 0L)
+        assertTrue(closed.reason != AceLiveConsumerCloseReason.UNKNOWN)
+    }
+
+    @Test
+    fun rangeStartParserIsBoundedAndDoesNotInventUnsupportedOffsets() {
+        assertEquals(1_024L, aceLiveRequestedStartOffset("bytes=1024-"))
+        assertEquals(1_024L, aceLiveRequestedStartOffset("bytes=1024-2047"))
+        assertNull(aceLiveRequestedStartOffset("bytes=-500"))
+        assertNull(aceLiveRequestedStartOffset("bytes=1-2,4-5"))
+        assertNull(aceLiveRequestedStartOffset("items=10-20"))
     }
 
     @Test

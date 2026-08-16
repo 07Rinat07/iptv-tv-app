@@ -12,7 +12,7 @@ package com.iptv.tv.core.p2p
  * accepted handshake and a useful live window remain separate evidence stages.
  */
 internal class AceLiveStartupTimelineDiagnostics(
-    startedAtMillis: Long,
+    private val startedAtMillis: Long,
     private val clockMillis: () -> Long = System::currentTimeMillis,
     private val diagnosticsObserver: (status: String, message: String) -> Unit
 ) {
@@ -98,11 +98,36 @@ internal class AceLiveStartupTimelineDiagnostics(
         event: AceLiveConsumerLifecycleEvent,
         atMillis: Long = clockMillis()
     ): AceLiveStartupTimelineEntry? = when (event) {
-        is AceLiveConsumerLifecycleEvent.Opened ->
+        is AceLiveConsumerLifecycleEvent.Opened -> {
+            emitLoopbackLifecycle(
+                "event=open, reader=${event.readerId}, method=${event.method}, " +
+                    "range=${event.rangeHeader?.diagnosticValue() ?: "none"}, " +
+                    "requested_start=${event.requestedStartOffset ?: "none"}, " +
+                    "actual_start=${event.actualStartOffset}, live_edge=${event.liveEdgeOffset}, " +
+                    "elapsed_ms=${elapsedSinceStart(atMillis)}"
+            )
             mark(AceLiveStartupMilestone.HTTP_READER_OPEN, atMillis)
-        is AceLiveConsumerLifecycleEvent.Delivered,
-        is AceLiveConsumerLifecycleEvent.Closed -> null
+        }
+        is AceLiveConsumerLifecycleEvent.Delivered -> null
+        is AceLiveConsumerLifecycleEvent.Closed -> {
+            emitLoopbackLifecycle(
+                "event=close, reader=${event.readerId}, reason=${event.reason.wireName}, " +
+                    "delivered_bytes=${event.totalDeliveredBytes}, duration_ms=${event.durationMillis}, " +
+                    "elapsed_ms=${elapsedSinceStart(atMillis)}"
+            )
+            null
+        }
     }
+
+    private fun emitLoopbackLifecycle(message: String) {
+        runCatching { diagnosticsObserver(LOOPBACK_LIFECYCLE_STATUS, message) }
+    }
+
+    private fun elapsedSinceStart(atMillis: Long): Long =
+        (atMillis - startedAtMillis).coerceAtLeast(0L)
+
+    private fun String.diagnosticValue(): String =
+        replace(',', ';').replace('\n', ' ').replace('\r', ' ').take(160)
 
     fun onFirstRead(atMillis: Long = clockMillis()) =
         mark(AceLiveStartupMilestone.HTTP_FIRST_READ, atMillis)
@@ -111,5 +136,6 @@ internal class AceLiveStartupTimelineDiagnostics(
 
     companion object {
         const val STATUS = "embedded_ace_live_startup_timeline"
+        const val LOOPBACK_LIFECYCLE_STATUS = "embedded_ace_live_loopback_http_lifecycle"
     }
 }

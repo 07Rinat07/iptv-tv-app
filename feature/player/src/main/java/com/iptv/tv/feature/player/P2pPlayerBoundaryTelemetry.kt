@@ -7,8 +7,18 @@ internal enum class P2pPlayerBoundaryEventType(val wireName: String) {
     LOAD_RETRY("load_retry"),
     BUFFERING("buffering"),
     READY("ready"),
+    FIRST_AUDIO("first_audio"),
     FIRST_VIDEO_FRAME("first_video_frame")
 }
+
+internal data class P2pLoadBoundaryEvidence(
+    val taskId: Long,
+    val positionBytes: Long,
+    val lengthBytes: Long?,
+    val bytesLoaded: Long,
+    val wasCanceled: Boolean? = null,
+    val errorType: String? = null
+)
 
 internal data class P2pPlayerBoundaryTelemetry(
     val sessionId: Long,
@@ -21,7 +31,8 @@ internal data class P2pPlayerBoundaryTelemetry(
     val loadCompletedCount: Int = 0,
     val loadErrorCount: Int = 0,
     val loadRetryCount: Int = 0,
-    val loadEventDurationMillis: Long = 0L
+    val loadEventDurationMillis: Long = 0L,
+    val loadEvidence: P2pLoadBoundaryEvidence? = null
 )
 
 /**
@@ -49,6 +60,7 @@ internal class P2pPlayerBoundaryTelemetryTracker(
     private var rebufferCount = 0
     private var totalRebufferDurationMillis = 0L
     private var firstFrameReported = false
+    private var firstAudioReported = false
     private var firstLoadStartedReported = false
     private var firstLoadCompletedReported = false
     private var loadAttemptCount = 0
@@ -61,17 +73,25 @@ internal class P2pPlayerBoundaryTelemetryTracker(
         require(playbackStartedAtMillis >= 0L) { "playbackStartedAtMillis must be non-negative" }
     }
 
-    fun onLoadStarted(nowMillis: Long): P2pPlayerBoundaryTelemetry? {
+    fun onLoadStarted(
+        nowMillis: Long,
+        evidence: P2pLoadBoundaryEvidence? = null
+    ): P2pPlayerBoundaryTelemetry? {
         validateClock(nowMillis)
         loadAttemptCount = saturatingIncrement(loadAttemptCount)
         if (firstLoadStartedReported) return null
         firstLoadStartedReported = true
-        return snapshot(P2pPlayerBoundaryEventType.LOAD_STARTED, nowMillis)
+        return snapshot(
+            event = P2pPlayerBoundaryEventType.LOAD_STARTED,
+            nowMillis = nowMillis,
+            loadEvidence = evidence
+        )
     }
 
     fun onLoadCompleted(
         nowMillis: Long,
-        loadDurationMillis: Long
+        loadDurationMillis: Long,
+        evidence: P2pLoadBoundaryEvidence? = null
     ): P2pPlayerBoundaryTelemetry? {
         validateClock(nowMillis)
         require(loadDurationMillis >= 0L) { "loadDurationMillis must be non-negative" }
@@ -81,13 +101,15 @@ internal class P2pPlayerBoundaryTelemetryTracker(
         return snapshot(
             event = P2pPlayerBoundaryEventType.LOAD_COMPLETED,
             nowMillis = nowMillis,
-            loadEventDurationMillis = loadDurationMillis
+            loadEventDurationMillis = loadDurationMillis,
+            loadEvidence = evidence
         )
     }
 
     fun onLoadError(
         nowMillis: Long,
-        loadDurationMillis: Long
+        loadDurationMillis: Long,
+        evidence: P2pLoadBoundaryEvidence? = null
     ): P2pPlayerBoundaryTelemetry {
         validateClock(nowMillis)
         require(loadDurationMillis >= 0L) { "loadDurationMillis must be non-negative" }
@@ -95,14 +117,22 @@ internal class P2pPlayerBoundaryTelemetryTracker(
         return snapshot(
             event = P2pPlayerBoundaryEventType.LOAD_ERROR,
             nowMillis = nowMillis,
-            loadEventDurationMillis = loadDurationMillis
+            loadEventDurationMillis = loadDurationMillis,
+            loadEvidence = evidence
         )
     }
 
-    fun onLoadRetry(nowMillis: Long): P2pPlayerBoundaryTelemetry {
+    fun onLoadRetry(
+        nowMillis: Long,
+        evidence: P2pLoadBoundaryEvidence? = null
+    ): P2pPlayerBoundaryTelemetry {
         validateClock(nowMillis)
         loadRetryCount = saturatingIncrement(loadRetryCount)
-        return snapshot(P2pPlayerBoundaryEventType.LOAD_RETRY, nowMillis)
+        return snapshot(
+            event = P2pPlayerBoundaryEventType.LOAD_RETRY,
+            nowMillis = nowMillis,
+            loadEvidence = evidence
+        )
     }
 
     fun onBuffering(nowMillis: Long): P2pPlayerBoundaryTelemetry {
@@ -130,6 +160,13 @@ internal class P2pPlayerBoundaryTelemetryTracker(
         return snapshot(P2pPlayerBoundaryEventType.READY, nowMillis)
     }
 
+    fun onFirstAudio(nowMillis: Long): P2pPlayerBoundaryTelemetry? {
+        validateClock(nowMillis)
+        if (firstAudioReported) return null
+        firstAudioReported = true
+        return snapshot(P2pPlayerBoundaryEventType.FIRST_AUDIO, nowMillis)
+    }
+
     fun onFirstVideoFrame(nowMillis: Long): P2pPlayerBoundaryTelemetry? {
         validateClock(nowMillis)
         if (firstFrameReported) return null
@@ -140,7 +177,8 @@ internal class P2pPlayerBoundaryTelemetryTracker(
     private fun snapshot(
         event: P2pPlayerBoundaryEventType,
         nowMillis: Long,
-        loadEventDurationMillis: Long = 0L
+        loadEventDurationMillis: Long = 0L,
+        loadEvidence: P2pLoadBoundaryEvidence? = null
     ): P2pPlayerBoundaryTelemetry {
         val bufferingStartedAt = bufferingSinceMillis
         val currentBufferingDuration = if (
@@ -162,7 +200,8 @@ internal class P2pPlayerBoundaryTelemetryTracker(
             loadCompletedCount = loadCompletedCount,
             loadErrorCount = loadErrorCount,
             loadRetryCount = loadRetryCount,
-            loadEventDurationMillis = loadEventDurationMillis
+            loadEventDurationMillis = loadEventDurationMillis,
+            loadEvidence = loadEvidence
         )
     }
 
