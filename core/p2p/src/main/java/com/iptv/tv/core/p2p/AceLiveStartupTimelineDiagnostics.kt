@@ -8,8 +8,8 @@ package com.iptv.tv.core.p2p
  * occurrence of that milestone.
  *
  * Runtime adapters below keep the event-to-milestone mapping in one place. They intentionally do
- * not infer success from discovery alone: a candidate, TCP connection, accepted handshake and useful
- * live window remain separate evidence stages.
+ * not infer success from discovery alone: discovery completion, a candidate, TCP connection, an
+ * accepted handshake and a useful live window remain separate evidence stages.
  */
 internal class AceLiveStartupTimelineDiagnostics(
     startedAtMillis: Long,
@@ -41,6 +41,9 @@ internal class AceLiveStartupTimelineDiagnostics(
     fun onMetadataAttempt(atMillis: Long = clockMillis()) =
         mark(AceLiveStartupMilestone.METADATA_ATTEMPT, atMillis)
 
+    fun onDiscoveryCompleted(atMillis: Long = clockMillis()) =
+        mark(AceLiveStartupMilestone.DISCOVERY_COMPLETED, atMillis)
+
     fun onDiscoveryCandidates(
         candidateCount: Int,
         atMillis: Long = clockMillis()
@@ -70,6 +73,16 @@ internal class AceLiveStartupTimelineDiagnostics(
         atMillis: Long = clockMillis()
     ): AceLiveStartupTimelineEntry? =
         if (peer.windowUseful) {
+            mark(AceLiveStartupMilestone.USEFUL_WINDOW, atMillis)
+        } else {
+            null
+        }
+
+    fun onPeerProduction(
+        snapshot: AceLivePeerProductionSnapshot,
+        atMillis: Long = clockMillis()
+    ): AceLiveStartupTimelineEntry? =
+        if (snapshot.windowUsefulPeers > 0) {
             mark(AceLiveStartupMilestone.USEFUL_WINDOW, atMillis)
         } else {
             null
