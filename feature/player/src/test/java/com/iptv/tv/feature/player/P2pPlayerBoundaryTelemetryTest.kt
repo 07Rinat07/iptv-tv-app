@@ -57,4 +57,79 @@ class P2pPlayerBoundaryTelemetryTest {
         assertEquals(900L, first?.elapsedSincePlaybackStartMillis)
         assertNull(tracker.onFirstVideoFrame(nowMillis = 6_100L))
     }
+
+    @Test
+    fun firstLoadStartAndCompletionAreBoundedButCountersKeepAdvancing() {
+        val tracker = P2pPlayerBoundaryTelemetryTracker(
+            sessionId = 17L,
+            playbackStartedAtMillis = 10_000L
+        )
+
+        val firstStart = tracker.onLoadStarted(nowMillis = 10_100L)
+        val duplicateStart = tracker.onLoadStarted(nowMillis = 10_150L)
+        val firstCompleted = tracker.onLoadCompleted(
+            nowMillis = 10_500L,
+            loadDurationMillis = 400L
+        )
+        val duplicateCompleted = tracker.onLoadCompleted(
+            nowMillis = 10_700L,
+            loadDurationMillis = 200L
+        )
+        val laterError = tracker.onLoadError(
+            nowMillis = 10_900L,
+            loadDurationMillis = 180L
+        )
+
+        assertEquals(P2pPlayerBoundaryEventType.LOAD_STARTED, firstStart?.event)
+        assertEquals(1, firstStart?.loadAttemptCount)
+        assertNull(duplicateStart)
+        assertEquals(P2pPlayerBoundaryEventType.LOAD_COMPLETED, firstCompleted?.event)
+        assertEquals(2, firstCompleted?.loadAttemptCount)
+        assertEquals(1, firstCompleted?.loadCompletedCount)
+        assertEquals(400L, firstCompleted?.loadEventDurationMillis)
+        assertNull(duplicateCompleted)
+        assertEquals(2, laterError.loadAttemptCount)
+        assertEquals(2, laterError.loadCompletedCount)
+        assertEquals(1, laterError.loadErrorCount)
+    }
+
+    @Test
+    fun loadErrorsAndRetriesRemainObservableWithIndependentCounters() {
+        val tracker = P2pPlayerBoundaryTelemetryTracker(
+            sessionId = 19L,
+            playbackStartedAtMillis = 20_000L
+        )
+        tracker.onLoadStarted(nowMillis = 20_050L)
+
+        val firstError = tracker.onLoadError(
+            nowMillis = 20_400L,
+            loadDurationMillis = 350L
+        )
+        val retry = tracker.onLoadRetry(nowMillis = 20_450L)
+        tracker.onLoadStarted(nowMillis = 20_500L)
+        val secondError = tracker.onLoadError(
+            nowMillis = 20_650L,
+            loadDurationMillis = 150L
+        )
+
+        assertEquals(P2pPlayerBoundaryEventType.LOAD_ERROR, firstError.event)
+        assertEquals(1, firstError.loadErrorCount)
+        assertEquals(350L, firstError.loadEventDurationMillis)
+        assertEquals(P2pPlayerBoundaryEventType.LOAD_RETRY, retry.event)
+        assertEquals(1, retry.loadRetryCount)
+        assertEquals(2, secondError.loadAttemptCount)
+        assertEquals(2, secondError.loadErrorCount)
+        assertEquals(1, secondError.loadRetryCount)
+        assertEquals(150L, secondError.loadEventDurationMillis)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun negativeLoadDurationIsRejected() {
+        val tracker = P2pPlayerBoundaryTelemetryTracker(
+            sessionId = 23L,
+            playbackStartedAtMillis = 1_000L
+        )
+
+        tracker.onLoadError(nowMillis = 1_100L, loadDurationMillis = -1L)
+    }
 }
