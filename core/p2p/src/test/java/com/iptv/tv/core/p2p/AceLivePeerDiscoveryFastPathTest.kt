@@ -123,11 +123,12 @@ class AceLivePeerDiscoveryFastPathTest {
     }
 
     @Test
-    fun `startup dht probe runs exactly two bounded rounds`() {
+    fun `startup dht probe releases each alternative peer immediately and stays bounded`() {
         assertFalse(aceLiveStartupDhtProbeShouldContinue(completedRounds = 0))
         assertTrue(aceLiveStartupDhtProbeShouldContinue(completedRounds = 1))
         assertFalse(aceLiveStartupDhtProbeShouldContinue(completedRounds = 2))
-        assertEquals(4, ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS)
+        assertEquals(1, ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS)
+        assertEquals(2, ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS)
         assertEquals(7_000L, ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS)
     }
 
