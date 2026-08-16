@@ -123,6 +123,51 @@ class P2pPlayerBoundaryTelemetryTest {
         assertEquals(150L, secondError.loadEventDurationMillis)
     }
 
+    @Test
+    fun loadEvidenceIsPreservedOnErrorAndRetry() {
+        val tracker = P2pPlayerBoundaryTelemetryTracker(
+            sessionId = 29L,
+            playbackStartedAtMillis = 30_000L
+        )
+        val evidence = P2pLoadBoundaryEvidence(
+            taskId = 77L,
+            positionBytes = 1_024L,
+            lengthBytes = null,
+            bytesLoaded = 4_096L,
+            wasCanceled = false,
+            errorType = "HttpDataSourceException"
+        )
+
+        val error = tracker.onLoadError(
+            nowMillis = 30_500L,
+            loadDurationMillis = 450L,
+            evidence = evidence
+        )
+        val retry = tracker.onLoadRetry(
+            nowMillis = 30_510L,
+            evidence = evidence
+        )
+
+        assertEquals(evidence, error.loadEvidence)
+        assertEquals(evidence, retry.loadEvidence)
+        assertEquals(1, error.loadErrorCount)
+        assertEquals(1, retry.loadRetryCount)
+    }
+
+    @Test
+    fun firstAudioIsReportedOnce() {
+        val tracker = P2pPlayerBoundaryTelemetryTracker(
+            sessionId = 31L,
+            playbackStartedAtMillis = 40_000L
+        )
+
+        val first = tracker.onFirstAudio(nowMillis = 40_650L)
+
+        assertEquals(P2pPlayerBoundaryEventType.FIRST_AUDIO, first?.event)
+        assertEquals(650L, first?.elapsedSincePlaybackStartMillis)
+        assertNull(tracker.onFirstAudio(nowMillis = 40_900L))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun negativeLoadDurationIsRejected() {
         val tracker = P2pPlayerBoundaryTelemetryTracker(

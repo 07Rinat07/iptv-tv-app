@@ -6,8 +6,9 @@
 
 - PR #127 (`weak-swarm startup peer diversity`) полностью прошёл exact-head Android CI #547 и был squash-merged в `main` как `aee83cbe76a1f7dbdbe43728290fbf308ce2415e`.
 - PR #128 (`canonical Ace Live startup timeline`) полностью прошёл exact-head Android CI #549, включая real Torrent TV playback smoke без внешнего Ace Engine, core P2P и остальные unit-модули, lint, debug/instrumentation build, signed ARM TV APK и source packaging; затем был squash-merged в `main` как `dea23c65a2b6c0865f91870806a4db53e5b0d0f3`.
+- PR #129 (`bounded P2P load telemetry contract`) прошёл exact-head Android CI #551 и отдельный P2P player smoke #4 с real Torrent TV playback без внешнего Ace Engine; затем был squash-merged в `main` как `aa27a73cdd4740af3e70fa903df6c7cd1f3dcb00`.
 
-Текущий узкий инкремент V4d — **P2P player load telemetry contract**. Он остаётся observational: никаких timeout, scheduler/recovery, buffer-policy, TS-discontinuity, HTTP resume или generic IPTV/Media3 policy изменений.
+Текущий узкий инкремент V4d — **real Media3 + localhost reopen telemetry wiring**. Он остаётся observational: никаких timeout, scheduler/recovery, buffer-policy, TS-discontinuity, HTTP resume или generic IPTV/Media3 policy изменений.
 
 ## Обновлённая последовательность V4d
 
@@ -27,18 +28,20 @@
 
 3. 🚧 **Player/HTTP boundary evidence — только наблюдение.**
 
-   **3a. P2P player load telemetry contract.**
+   **3a. ✅ PR #129 — P2P player load telemetry contract.**
    - типизированные `load_started`, `load_completed`, `load_error`, `load_retry`;
    - первый успешный start/completion не должен flood-ить bounded diagnostics на каждом live chunk;
    - error/retry остаются наблюдаемыми и несут counters;
    - rebuffer/READY/first-frame semantics сохраняются без изменения playback policy.
 
-   **3b. Реальное Media3 + localhost wiring отдельным следующим PR.**
-   - подключить AnalyticsListener/load callbacks только для P2P localhost session;
-   - localhost request method, `Range`, logical requested offset;
-   - reader open/first-read/close и close reason;
-   - `BUFFERING/READY`, first rendered video frame и track readiness;
-   - сопоставить player evidence с canonical preparation timeline через session/request correlation, не подменяя core timeline clock;
+   **3b. 🚧 Реальное Media3 + localhost wiring — текущий инкремент.**
+   - подключить Media3 1.5.1 AnalyticsListener load callbacks только для P2P localhost session;
+   - оставить bounded `player_p2p_boundary` event и писать task/position/length/bytes/duration/retry detail в persistent `P2pBoundaryLoad`;
+   - localhost request method, raw `Range`, parsed requested offset и фактический retained-floor reader offset;
+   - reader open/first-read/close, delivered bytes, lifetime и close reason;
+   - сохранить `BUFFERING/READY`, first rendered video frame и добавить first-audio evidence из реального audio-position advancement;
+   - сопоставлять player evidence через existing session/request correlation, не подменяя core preparation clock;
+   - `Range` в этом инкременте только наблюдается: сервер всё ещё не делает logical-offset resume;
    - не менять generic IPTV player path.
 
 4. **Bounded live HTTP reopen/resume semantics.**

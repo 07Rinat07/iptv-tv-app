@@ -360,6 +360,16 @@ internal class AceLiveMpegTsResynchronizer {
     }
 }
 
+internal fun aceLiveRequestedStartOffset(rangeHeader: String?): Long? {
+    val value = rangeHeader?.trim().orEmpty()
+    if (!value.startsWith("bytes=", ignoreCase = true)) return null
+    val spec = value.substringAfter('=', missingDelimiterValue = "").trim()
+    if (spec.isBlank() || ',' in spec) return null
+    val dash = spec.indexOf('-')
+    if (dash <= 0) return null
+    return spec.substring(0, dash).trim().toLongOrNull()?.takeIf { it >= 0L }
+}
+
 internal class LoopbackHttpLiveServer(
     private val mediaBuffer: AceLiveMediaBuffer,
     private val requestedPort: Int = 0,
@@ -418,7 +428,7 @@ internal class LoopbackHttpLiveServer(
         if (parts.size != 3) return writeStatus(output, 400, "Bad Request")
         val method = parts[0].uppercase(Locale.US)
         val path = parts[1].substringBefore('?')
-        if (!consumeHeaders(input)) return writeStatus(output, 400, "Bad Request")
+        val headers = readHeaders(input) ?: return writeStatus(output, 400, "Bad Request")
         if (path != STREAM_PATH) return writeStatus(output, 404, "Not Found")
         if (method != "GET" && method != "HEAD") {
             return writeStatus(output, 405, "Method Not Allowed", mapOf("Allow" to "GET, HEAD"))
@@ -438,41 +448,94 @@ internal class LoopbackHttpLiveServer(
 
         socket.soTimeout = 0
         val reader = mediaBuffer.openReader()
+        val openedAtMillis = System.currentTimeMillis()
+        val initialSnapshot = reader.snapshot()
+        val rawRangeHeader = headers["range"]
+        val rangeHeader = rawRangeHeader?.take(MAX_RANGE_HEADER_DIAGNOSTIC_CHARS)
         runCatching {
-            consumerLifecycleObserver(AceLiveConsumerLifecycleEvent.Opened(reader.readerId))
+            consumerLifecycleObserver(
+                AceLiveConsumerLifecycleEvent.Opened(
+                    readerId = reader.readerId,
+                    method = method,
+                    rangeHeader = rangeHeader,
+                    requestedStartOffset = aceLiveRequestedStartOffset(rawRangeHeader),
+                    actualStartOffset = initialSnapshot.consumerOffset,
+                    liveEdgeOffset = initialSnapshot.liveEdgeOffset
+                )
+            )
         }
         val bytes = ByteArray(64 * 1024)
         var firstReadReported = false
+        var closeReason = AceLiveConsumerCloseReason.UNKNOWN
         try {
             while (!closed.get()) {
-                val count = reader.read(bytes, 0, bytes.size)
-                if (count < 0) return
+                val count = try {
+                    reader.read(bytes, 0, bytes.size)
+                } catch (error: IOException) {
+                    closeReason = if (closed.get()) {
+                        AceLiveConsumerCloseReason.SERVER_CLOSED
+                    } else {
+                        AceLiveConsumerCloseReason.SOURCE_IO
+                    }
+                    throw error
+                }
+                if (count < 0) {
+                    closeReason = AceLiveConsumerCloseReason.END_OF_STREAM
+                    return
+                }
                 if (!firstReadReported && count > 0) {
                     firstReadReported = true
                     runCatching { firstReadObserver(reader.readerId, count) }
                 }
-                output.write(bytes, 0, count)
-                output.flush()
+                try {
+                    output.write(bytes, 0, count)
+                    output.flush()
+                } catch (error: IOException) {
+                    closeReason = if (closed.get()) {
+                        AceLiveConsumerCloseReason.SERVER_CLOSED
+                    } else {
+                        AceLiveConsumerCloseReason.CLIENT_DISCONNECTED
+                    }
+                    throw error
+                }
                 val snapshot = reader.confirmDelivered(count)
                 runCatching { consumerObserver(snapshot) }
                 runCatching {
                     consumerLifecycleObserver(AceLiveConsumerLifecycleEvent.Delivered(snapshot))
                 }
             }
+            closeReason = AceLiveConsumerCloseReason.SERVER_CLOSED
         } finally {
+            if (closeReason == AceLiveConsumerCloseReason.UNKNOWN && closed.get()) {
+                closeReason = AceLiveConsumerCloseReason.SERVER_CLOSED
+            }
+            val finalSnapshot = reader.snapshot()
+            val durationMillis = (System.currentTimeMillis() - openedAtMillis).coerceAtLeast(0L)
             runCatching {
-                consumerLifecycleObserver(AceLiveConsumerLifecycleEvent.Closed(reader.readerId))
+                consumerLifecycleObserver(
+                    AceLiveConsumerLifecycleEvent.Closed(
+                        readerId = reader.readerId,
+                        reason = closeReason,
+                        totalDeliveredBytes = finalSnapshot.totalDeliveredBytes,
+                        durationMillis = durationMillis
+                    )
+                )
             }
         }
     }
 
-    private fun consumeHeaders(input: InputStream): Boolean {
+    private fun readHeaders(input: InputStream): Map<String, String>? {
+        val headers = linkedMapOf<String, String>()
         repeat(MAX_HEADER_LINES) {
-            val line = input.readHttpLine() ?: return false
-            if (line.isEmpty()) return true
-            if (line.indexOf(':') <= 0) return false
+            val line = input.readHttpLine() ?: return null
+            if (line.isEmpty()) return headers
+            val separator = line.indexOf(':')
+            if (separator <= 0) return null
+            val name = line.substring(0, separator).trim().lowercase(Locale.US)
+            if (name.isBlank()) return null
+            headers[name] = line.substring(separator + 1).trim()
         }
-        return false
+        return null
     }
 
     private fun writeStatus(
@@ -527,5 +590,6 @@ internal class LoopbackHttpLiveServer(
         const val REQUEST_TIMEOUT_MILLIS = 10_000
         const val MAX_HEADER_LINES = 64
         const val MAX_LINE_LENGTH = 8 * 1024
+        const val MAX_RANGE_HEADER_DIAGNOSTIC_CHARS = 160
     }
 }

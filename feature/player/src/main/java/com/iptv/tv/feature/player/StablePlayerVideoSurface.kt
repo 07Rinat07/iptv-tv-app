@@ -36,13 +36,18 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.iptv.tv.core.player.p2pMedia3BufferConfig
 import com.iptv.tv.core.player.toLoadControl
 import com.iptv.tv.core.playervlc.LibVlcFallbackPolicy
+import com.iptv.tv.core.utils.FileLogger
+import java.io.IOException
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -307,6 +312,105 @@ private fun StableMedia3VideoSurface(
     }
 
     DisposableEffect(session.sessionId, player) {
+        fun emitP2pBoundaryTelemetry(telemetry: P2pPlayerBoundaryTelemetry) {
+            onP2pBoundaryTelemetry(telemetry)
+            val evidence = telemetry.loadEvidence ?: return
+            FileLogger.write(
+                context = context,
+                level = "INFO",
+                tag = "P2pBoundaryLoad",
+                message = "event=${telemetry.event.wireName}, sessionId=${telemetry.sessionId}, " +
+                    "requestId=${session.requestId}, elapsed_ms=${telemetry.elapsedSincePlaybackStartMillis}, " +
+                    "load_attempts=${telemetry.loadAttemptCount}, " +
+                    "load_completed=${telemetry.loadCompletedCount}, " +
+                    "load_errors=${telemetry.loadErrorCount}, load_retries=${telemetry.loadRetryCount}, " +
+                    "load_event_ms=${telemetry.loadEventDurationMillis}, task=${evidence.taskId}, " +
+                    "position=${evidence.positionBytes}, length=${evidence.lengthBytes ?: "none"}, " +
+                    "bytes=${evidence.bytesLoaded}, canceled=${evidence.wasCanceled ?: "none"}, " +
+                    "error_type=${evidence.errorType ?: "none"}"
+            )
+        }
+
+        fun loadEvidence(
+            loadEventInfo: LoadEventInfo,
+            wasCanceled: Boolean? = null,
+            errorType: String? = null
+        ) = P2pLoadBoundaryEvidence(
+            taskId = loadEventInfo.loadTaskId,
+            positionBytes = loadEventInfo.dataSpec.position,
+            lengthBytes = loadEventInfo.dataSpec.length.takeIf { it >= 0L },
+            bytesLoaded = loadEventInfo.bytesLoaded.coerceAtLeast(0L),
+            wasCanceled = wasCanceled,
+            errorType = errorType?.take(80)
+        )
+
+        val analyticsListener = object : AnalyticsListener {
+            override fun onLoadStarted(
+                eventTime: AnalyticsListener.EventTime,
+                loadEventInfo: LoadEventInfo,
+                mediaLoadData: MediaLoadData
+            ) {
+                val tracker = p2pBoundaryTelemetryTracker ?: return
+                tracker.onLoadStarted(
+                    nowMillis = System.currentTimeMillis(),
+                    evidence = loadEvidence(loadEventInfo)
+                )?.let(::emitP2pBoundaryTelemetry)
+            }
+
+            override fun onLoadCompleted(
+                eventTime: AnalyticsListener.EventTime,
+                loadEventInfo: LoadEventInfo,
+                mediaLoadData: MediaLoadData
+            ) {
+                val tracker = p2pBoundaryTelemetryTracker ?: return
+                tracker.onLoadCompleted(
+                    nowMillis = System.currentTimeMillis(),
+                    loadDurationMillis = loadEventInfo.loadDurationMs.coerceAtLeast(0L),
+                    evidence = loadEvidence(loadEventInfo)
+                )?.let(::emitP2pBoundaryTelemetry)
+            }
+
+            override fun onLoadError(
+                eventTime: AnalyticsListener.EventTime,
+                loadEventInfo: LoadEventInfo,
+                mediaLoadData: MediaLoadData,
+                error: IOException,
+                wasCanceled: Boolean
+            ) {
+                val tracker = p2pBoundaryTelemetryTracker ?: return
+                val now = System.currentTimeMillis()
+                val evidence = loadEvidence(
+                    loadEventInfo = loadEventInfo,
+                    wasCanceled = wasCanceled,
+                    errorType = error.javaClass.simpleName
+                )
+                tracker.onLoadError(
+                    nowMillis = now,
+                    loadDurationMillis = loadEventInfo.loadDurationMs.coerceAtLeast(0L),
+                    evidence = evidence
+                ).let(::emitP2pBoundaryTelemetry)
+
+                // The P2P localhost .ts source is a progressive Media3 period. In Media3 1.5.1
+                // wasCanceled=false means its load-error policy selected a retry action. Record
+                // that decision without changing the policy or scheduling another retry ourselves.
+                if (!wasCanceled) {
+                    tracker.onLoadRetry(
+                        nowMillis = now,
+                        evidence = evidence
+                    ).let(::emitP2pBoundaryTelemetry)
+                }
+            }
+
+            override fun onAudioPositionAdvancing(
+                eventTime: AnalyticsListener.EventTime,
+                playoutStartSystemTimeMs: Long
+            ) {
+                p2pBoundaryTelemetryTracker
+                    ?.onFirstAudio(System.currentTimeMillis())
+                    ?.let(::emitP2pBoundaryTelemetry)
+            }
+        }
+
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
@@ -316,7 +420,7 @@ private fun StableMedia3VideoSurface(
                         if (readySinceMs == 0L) readySinceMs = now
                         p2pBoundaryTelemetryTracker
                             ?.onReady(now)
-                            ?.let(onP2pBoundaryTelemetry)
+                            ?.let(::emitP2pBoundaryTelemetry)
                         if (!readyReported) {
                             readyReported = true
                             onReady()
@@ -328,7 +432,7 @@ private fun StableMedia3VideoSurface(
                         if (bufferingSinceMs == 0L) bufferingSinceMs = now
                         p2pBoundaryTelemetryTracker
                             ?.onBuffering(now)
-                            ?.let(onP2pBoundaryTelemetry)
+                            ?.let(::emitP2pBoundaryTelemetry)
                     }
 
                     else -> bufferingSinceMs = 0L
@@ -345,7 +449,7 @@ private fun StableMedia3VideoSurface(
                 firstVideoFrameRendered = true
                 p2pBoundaryTelemetryTracker
                     ?.onFirstVideoFrame(System.currentTimeMillis())
-                    ?.let(onP2pBoundaryTelemetry)
+                    ?.let(::emitP2pBoundaryTelemetry)
                 if (videoWidth > 0 && videoHeight > 0) diagnosticMessage = null
             }
 
@@ -369,6 +473,7 @@ private fun StableMedia3VideoSurface(
         }
 
         player.addListener(listener)
+        player.addAnalyticsListener(analyticsListener)
         runCatching {
             player.playWhenReady = false
             player.stop()
@@ -383,6 +488,7 @@ private fun StableMedia3VideoSurface(
         }.onFailure { onError(it.message ?: it.javaClass.simpleName) }
 
         onDispose {
+            player.removeAnalyticsListener(analyticsListener)
             player.removeListener(listener)
         }
     }
