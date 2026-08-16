@@ -4,27 +4,32 @@
 
 ## Текущий gate
 
-PR #127 (`weak-swarm startup peer diversity`) остаётся первым незавершённым шагом. Первый exact-head Android CI run прошёл real Torrent TV playback smoke без внешнего Ace Engine, lint и предыдущие unit-модули, но остановился на `Unit tests core P2P`: legacy assertion в `AceLivePeerDiscoveryFastPathTest` всё ещё ожидал старое значение startup DHT probe batch `4`, хотя новый контракт намеренно освобождает первый альтернативный DHT peer при `1`. Тест синхронизирован с новым bounded контрактом; merge разрешён только после нового полного exact-head green gate.
+PR #127 (`weak-swarm startup peer diversity`) полностью прошёл exact-head Android CI #547, включая real Torrent TV playback smoke без внешнего Ace Engine, lint, core P2P и остальные unit-модули, debug/instrumentation build, signed ARM TV APK и source packaging, после чего был squash-merged в `main` как `aee83cbe76a1f7dbdbe43728290fbf308ce2415e`.
+
+Текущий инкремент V4d — **canonical runtime startup timeline**. Он строится отдельной веткой от этого fresh `main` и остаётся исключительно observational: никаких timeout, scheduler/recovery, buffer-policy, TS-discontinuity или generic IPTV/Media3 изменений.
 
 ## Обновлённая последовательность V4d
 
-1. **Закрыть PR #127 и peer-quality diagnostics retention.**
+1. ✅ **PR #127 — peer diversity + diagnostic retention.**
    - первый startup DHT alternative освобождается сразу, без ожидания batch из четырёх;
    - максимум два bounded startup probe-round;
    - volatile `windowUseful/producing` не вытесняют lifecycle/timeline evidence;
    - никаких увеличений глобальных timeout/recovery bounds.
 
-2. **Canonical runtime startup timeline.**
-   - один timeline object на playback preparation;
-   - timestamps: `play_request -> direct/metadata -> discovery -> first candidate -> dial/TCP connected -> handshake -> useful window -> first media -> startup buffer ready -> localhost exposed/open -> first HTTP read`;
-   - reconnect/reopen не переписывает first-occurrence timestamps.
+2. 🚧 **Canonical runtime startup timeline.**
+   - один timeline на playback preparation, общий для direct/metadata race;
+   - authoritative milestones: `transport_selection -> direct/metadata -> discovery_completed -> first_candidate -> connected -> handshake -> useful_window -> first_media -> buffer_ready -> http_reader_open -> http_first_read`;
+   - `discovery_completed` не означает наличие candidate;
+   - `first_media` фиксируется только после auth/resync и принятия bytes live-output buffer;
+   - reconnect/refill/reopen не переписывают first-occurrence timestamps;
+   - существующий runtime startup clock, управляющий policy/guards, не заменяется diagnostics clock.
 
 3. **Отдельный player-layer timeline.**
    - Media3 load start/error/retry;
    - localhost request method, `Range`, logical start offset;
    - reader open/first-read/close и close reason;
    - `BUFFERING/READY`, first rendered video frame и first audio evidence, если API даёт надёжный signal;
-   - этот инкремент не меняет P2P scheduler.
+   - этот инкремент не меняет P2P scheduler и generic IPTV policy.
 
 4. **Bounded live HTTP reopen/resume semantics.**
    - сначала подтвердить фактическое Media3 поведение логами;

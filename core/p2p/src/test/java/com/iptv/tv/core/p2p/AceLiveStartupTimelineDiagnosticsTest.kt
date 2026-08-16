@@ -84,7 +84,8 @@ class AceLiveStartupTimelineDiagnosticsTest {
         diagnostics.onTransportSelection(atMillis = 10_010L)
         diagnostics.onDirectAttempt(atMillis = 10_020L)
         diagnostics.onMetadataAttempt(atMillis = 10_030L)
-        assertNull(diagnostics.onDiscoveryCandidates(candidateCount = 0, atMillis = 10_040L))
+        diagnostics.onDiscoveryCompleted(atMillis = 10_040L)
+        assertNull(diagnostics.onDiscoveryCandidates(candidateCount = 0, atMillis = 10_045L))
         diagnostics.onDiscoveryCandidates(candidateCount = 2, atMillis = 10_050L)
         diagnostics.onPoolEvent(
             AceLiveTcpPoolEvent.TransportConnected(peerId = 7L, reconnectAttempt = 0),
@@ -94,12 +95,14 @@ class AceLiveStartupTimelineDiagnosticsTest {
             AceLiveTcpPoolEvent.HandshakeAccepted(peerId = 7L),
             atMillis = 10_070L
         )
-        diagnostics.onPeerQuality(
-            peer = peerQuality(peerId = 7L, windowUseful = false),
-            atMillis = 10_080L
+        assertNull(
+            diagnostics.onPeerProduction(
+                snapshot = peerProduction(windowUsefulPeers = 0),
+                atMillis = 10_080L
+            )
         )
-        diagnostics.onPeerQuality(
-            peer = peerQuality(peerId = 7L, windowUseful = true),
+        diagnostics.onPeerProduction(
+            snapshot = peerProduction(windowUsefulPeers = 1),
             atMillis = 10_090L
         )
         diagnostics.onFirstMedia(atMillis = 10_100L)
@@ -115,6 +118,7 @@ class AceLiveStartupTimelineDiagnosticsTest {
                 AceLiveStartupMilestone.TRANSPORT_SELECTION,
                 AceLiveStartupMilestone.DIRECT_ATTEMPT,
                 AceLiveStartupMilestone.METADATA_ATTEMPT,
+                AceLiveStartupMilestone.DISCOVERY_COMPLETED,
                 AceLiveStartupMilestone.FIRST_CANDIDATE,
                 AceLiveStartupMilestone.TRANSPORT_CONNECTED,
                 AceLiveStartupMilestone.HANDSHAKE_ACCEPTED,
@@ -126,16 +130,18 @@ class AceLiveStartupTimelineDiagnosticsTest {
             ),
             diagnostics.snapshot().map { it.milestone }
         )
-        assertEquals(11, records.size)
+        assertEquals(12, records.size)
     }
 
     @Test
-    fun `reconnect reopen and repeated media cannot overwrite first runtime evidence`() {
+    fun `reconnect reopen repeated discovery and media cannot overwrite first runtime evidence`() {
         val diagnostics = AceLiveStartupTimelineDiagnostics(
             startedAtMillis = 20_000L,
             diagnosticsObserver = { _, _ -> }
         )
 
+        diagnostics.onDiscoveryCompleted(atMillis = 20_050L)
+        diagnostics.onDiscoveryCompleted(atMillis = 20_800L)
         diagnostics.onPoolEvent(
             AceLiveTcpPoolEvent.TransportConnected(peerId = 1L, reconnectAttempt = 0),
             atMillis = 20_100L
@@ -156,6 +162,12 @@ class AceLiveStartupTimelineDiagnosticsTest {
         diagnostics.onFirstMedia(atMillis = 21_300L)
 
         assertEquals(
+            50L,
+            diagnostics.snapshot().first {
+                it.milestone == AceLiveStartupMilestone.DISCOVERY_COMPLETED
+            }.elapsedMillis
+        )
+        assertEquals(
             100L,
             diagnostics.snapshot().first {
                 it.milestone == AceLiveStartupMilestone.TRANSPORT_CONNECTED
@@ -175,19 +187,14 @@ class AceLiveStartupTimelineDiagnosticsTest {
         )
     }
 
-    private fun peerQuality(
-        peerId: Long,
-        windowUseful: Boolean
-    ) = AceLivePeerQualitySnapshot(
-        peerId = peerId,
-        connected = true,
-        handshaked = true,
-        windowUseful = windowUseful,
-        unchoked = true,
-        producing = false,
-        recentBytesPerSecond = 0L,
-        mediaAgeMillis = null,
-        connectedAgeMillis = 0L,
-        totalMediaBytes = 0L
+    private fun peerProduction(windowUsefulPeers: Int) = AceLivePeerProductionSnapshot(
+        discoveredCandidates = 2,
+        connectedPeers = 1,
+        handshakedPeers = 1,
+        windowUsefulPeers = windowUsefulPeers,
+        unchokedPeers = 1,
+        producingPeers = 0,
+        aggregateBytesPerSecond = 0L,
+        freshestMediaAgeMillis = null
     )
 }

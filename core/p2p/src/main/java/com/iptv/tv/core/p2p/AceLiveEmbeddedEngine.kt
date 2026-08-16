@@ -102,6 +102,11 @@ class AceLiveEmbeddedEngine(
         val swarmKey = AceLiveSwarmKey.parseHex(contentId)
             ?: return P2pResult.Error("Ace content ID must contain exactly 40 hexadecimal characters")
         val totalStartedAt = System.currentTimeMillis()
+        val startupTimeline = AceLiveStartupTimelineDiagnostics(
+            startedAtMillis = totalStartedAt,
+            diagnosticsObserver = diagnosticsObserver
+        )
+        startupTimeline.onTransportSelection(totalStartedAt)
 
         // Public live content IDs are sometimes directly usable as peer-wire swarm keys, but a dead
         // direct swarm must not serialize a 60-second wait in front of transport metadata. Resolve
@@ -109,10 +114,12 @@ class AceLiveEmbeddedEngine(
         return raceP2pDirectAgainstMetadata(
             directSoftTimeoutMillis = DIRECT_STARTUP_SOFT_TIMEOUT_MILLIS,
             directAttempt = {
+                startupTimeline.onDirectAttempt()
                 val startedAt = System.currentTimeMillis()
                 prepareResolvedTransport(
                     token = token,
-                    transport = directLiveTransport(swarmKey)
+                    transport = directLiveTransport(swarmKey),
+                    startupTimeline = startupTimeline
                 ).also { result ->
                     Log.i(
                         LOG_TAG,
@@ -122,6 +129,7 @@ class AceLiveEmbeddedEngine(
                 }
             },
             metadataResolve = {
+                startupTimeline.onMetadataAttempt()
                 val startedAt = System.currentTimeMillis()
                 resolveContentTransport(swarmKey.toHex()).also { result ->
                     Log.i(
@@ -133,7 +141,11 @@ class AceLiveEmbeddedEngine(
             },
             metadataAttempt = { transport ->
                 val startedAt = System.currentTimeMillis()
-                prepareResolvedTransport(token, transport).also { result ->
+                prepareResolvedTransport(
+                    token = token,
+                    transport = transport,
+                    startupTimeline = startupTimeline
+                ).also { result ->
                     Log.i(
                         LOG_TAG,
                         "event=content_metadata_startup_result elapsed_ms=${System.currentTimeMillis() - startedAt} " +
@@ -155,16 +167,37 @@ class AceLiveEmbeddedEngine(
         val token = generation.incrementAndGet()
         val swarmKey = AceLiveSwarmKey.parseHex(infoHash)
             ?: return P2pResult.Error("Ace Live infohash must contain exactly 40 hexadecimal characters")
-        return prepareResolvedTransport(token, directLiveTransport(swarmKey))
+        val startedAt = System.currentTimeMillis()
+        val startupTimeline = AceLiveStartupTimelineDiagnostics(
+            startedAtMillis = startedAt,
+            diagnosticsObserver = diagnosticsObserver
+        )
+        startupTimeline.onTransportSelection(startedAt)
+        startupTimeline.onDirectAttempt(startedAt)
+        return prepareResolvedTransport(
+            token = token,
+            transport = directLiveTransport(swarmKey),
+            startupTimeline = startupTimeline
+        )
     }
 
     suspend fun prepareTransportFile(bytes: ByteArray): P2pResult<AceLivePreparedStream> {
         val token = generation.incrementAndGet()
+        val startedAt = System.currentTimeMillis()
+        val startupTimeline = AceLiveStartupTimelineDiagnostics(
+            startedAtMillis = startedAt,
+            diagnosticsObserver = diagnosticsObserver
+        )
+        startupTimeline.onTransportSelection(startedAt)
         val transport = when (val decoded = AceTransportDescriptorDecoder.decodeLive(bytes)) {
             is P2pResult.Success -> decoded.data
             is P2pResult.Error -> return decoded
         }
-        return prepareResolvedTransport(token, transport)
+        return prepareResolvedTransport(
+            token = token,
+            transport = transport,
+            startupTimeline = startupTimeline
+        )
     }
 
     private suspend fun resolveContentTransport(
@@ -185,7 +218,8 @@ class AceLiveEmbeddedEngine(
 
     private suspend fun prepareResolvedTransport(
         token: Long,
-        transport: AceResolvedLiveTransport
+        transport: AceResolvedLiveTransport,
+        startupTimeline: AceLiveStartupTimelineDiagnostics
     ): P2pResult<AceLivePreparedStream> {
         if (generation.get() != token) return superseded()
 
@@ -197,7 +231,8 @@ class AceLiveEmbeddedEngine(
                     transport = transport,
                     bufferSettings = bufferSettings,
                     eventObserver = eventObserver,
-                    diagnosticsObserver = diagnosticsObserver
+                    diagnosticsObserver = diagnosticsObserver,
+                    startupTimelineDiagnostics = startupTimeline
                 ).also { created -> activeRuntime = created }
             }
         } ?: return superseded()
@@ -283,7 +318,8 @@ class AceLiveEmbeddedEngine(
         private val transport: AceResolvedLiveTransport,
         bufferSettings: AceLiveBufferSettings,
         private val eventObserver: (AceLiveTcpPoolEvent) -> Unit,
-        private val diagnosticsObserver: (status: String, message: String) -> Unit
+        private val diagnosticsObserver: (status: String, message: String) -> Unit,
+        private val startupTimelineDiagnostics: AceLiveStartupTimelineDiagnostics
     ) : Closeable {
         private val startupBufferPolicy = AceLiveStartupBufferPolicy(bufferSettings)
         private val authoritativeConsumerPressureTracker =
@@ -564,7 +600,13 @@ class AceLiveEmbeddedEngine(
                     }
                 )
             )
+            val discoveryCompletedAt = System.currentTimeMillis()
             pool.recordDiscoveredCandidateCount(result.peers.size)
+            startupTimelineDiagnostics.onDiscoveryCompleted(discoveryCompletedAt)
+            startupTimelineDiagnostics.onDiscoveryCandidates(
+                candidateCount = result.peers.size,
+                atMillis = discoveryCompletedAt
+            )
             if (isInitialDiscovery) {
                 when (aceLiveStartupDhtRefillPlan(result)) {
                     AceLiveStartupDhtRefillPlan.NONE -> Unit
@@ -602,9 +644,14 @@ class AceLiveEmbeddedEngine(
         private suspend fun driveSession() {
             while (currentCoroutineContext().isActive) {
                 val now = System.currentTimeMillis()
+                val peerProductionSnapshot = pool.peerProductionSnapshot(now)
                 peerDiagnosticsReporter.maybeReport(
-                    snapshot = pool.peerProductionSnapshot(now),
+                    snapshot = peerProductionSnapshot,
                     nowMillis = now
+                )
+                startupTimelineDiagnostics.onPeerProduction(
+                    snapshot = peerProductionSnapshot,
+                    atMillis = now
                 )
                 if (
                     aceLiveStartupHasNoConnectedPeerTooLong(
@@ -661,6 +708,7 @@ class AceLiveEmbeddedEngine(
 
         private fun onLoopbackFirstRead(readerId: Long, byteCount: Int) {
             val now = System.currentTimeMillis()
+            startupTimelineDiagnostics.onFirstRead(now)
             runCatching {
                 diagnosticsObserver(
                     "embedded_ace_live_loopback_first_read",
@@ -671,6 +719,7 @@ class AceLiveEmbeddedEngine(
         }
 
         private fun onConsumerLifecycle(event: AceLiveConsumerLifecycleEvent) {
+            startupTimelineDiagnostics.onConsumerLifecycle(event, System.currentTimeMillis())
             if (event is AceLiveConsumerLifecycleEvent.Opened) {
                 val now = System.currentTimeMillis()
                 runCatching {
@@ -741,7 +790,9 @@ class AceLiveEmbeddedEngine(
         }
 
         private fun onPoolEvent(event: AceLiveTcpPoolEvent) {
-            refillCoordinator.onPoolEvent(event, System.currentTimeMillis())
+            val now = System.currentTimeMillis()
+            refillCoordinator.onPoolEvent(event, now)
+            startupTimelineDiagnostics.onPoolEvent(event, now)
             runCatching { eventObserver(event) }
             if (closed.get()) return
             if (event !is AceLiveTcpPoolEvent.Ingress) {
@@ -850,6 +901,7 @@ class AceLiveEmbeddedEngine(
                             val acceptedOutputBytes = mediaBuffer.append(media)
                             if (acceptedOutputBytes > 0) {
                                 val now = System.currentTimeMillis()
+                                startupTimelineDiagnostics.onFirstMedia(now)
                                 val attributableBytes = minOf(
                                     acceptedOutputBytes,
                                     verified.data.size
@@ -866,6 +918,7 @@ class AceLiveEmbeddedEngine(
                                         elapsedMillis = (now - startupStartedAtMillis.get()).coerceAtLeast(1L)
                                     )
                                     if (decision.ready) {
+                                        startupTimelineDiagnostics.onBufferReady(now)
                                         Log.i(
                                             LOG_TAG,
                                             "event=startup_buffer_ready buffered_bytes=${mediaBuffer.retainedBytes()} " +

@@ -66,11 +66,12 @@ internal data class AceLiveStartupTimelineEntry(
     val elapsedMillis: Long
 )
 
-/** Ordered field-validation contract from transport selection to visible playback. */
+/** Ordered field-validation contract from playback preparation to visible playback. */
 internal enum class AceLiveStartupMilestone(val wireName: String) {
     TRANSPORT_SELECTION("transport_selection"),
     DIRECT_ATTEMPT("direct_attempt"),
     METADATA_ATTEMPT("metadata_attempt"),
+    DISCOVERY_COMPLETED("discovery_completed"),
     FIRST_CANDIDATE("first_candidate"),
     TRANSPORT_CONNECTED("connected"),
     HANDSHAKE_ACCEPTED("handshake"),
