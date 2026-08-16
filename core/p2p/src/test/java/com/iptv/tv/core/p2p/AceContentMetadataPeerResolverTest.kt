@@ -18,7 +18,7 @@ class AceContentMetadataPeerResolverTest {
         val localPeerId = AceLiveNodeIdentity.peerId()
         val remotePeerId = AceLiveNodeIdentity.peerId()
         val transportBytes = testTransport()
-        val peerHandshake = AceLivePeerHandshakeCodec().encode(
+        val peerHandshake = AceContentMetadataPeerHandshakeCodec().encode(
             contentId.toByteArray(),
             remotePeerId
         )
@@ -64,9 +64,37 @@ class AceContentMetadataPeerResolverTest {
         assertEquals("Metadata Test", resolved.name)
         assertEquals(1_048_576, resolved.geometry.pieceLengthBytes)
         assertEquals(3, fake.writes.size)
+
+        val outerHandshake = fake.writes[0]
+        assertEquals(AceContentMetadataPeerHandshakeCodec.HANDSHAKE_BYTES, outerHandshake.size)
+        assertEquals(
+            AceContentMetadataPeerHandshakeCodec.PROTOCOL_NAME,
+            outerHandshake.copyOfRange(1, 20).toString(StandardCharsets.US_ASCII)
+        )
+        val reservedStart = 1 + AceContentMetadataPeerHandshakeCodec.PROTOCOL_NAME.length
+        assertTrue(
+            outerHandshake[reservedStart + AceContentMetadataPeerHandshakeCodec.EXTENSION_RESERVED_BYTE]
+                .toInt() and AceContentMetadataPeerHandshakeCodec.EXTENSION_RESERVED_MASK != 0
+        )
         assertEquals(20, fake.writes[1][4].toInt() and 0xff)
         assertEquals(20, fake.writes[2][4].toInt() and 0xff)
         assertEquals(5, fake.writes[2][5].toInt() and 0xff)
+    }
+
+    @Test
+    fun metadataHandshakeRejectsPeerWithoutExtensionProtocol() {
+        val infoHash = ByteArray(20) { 0x11 }
+        val peerId = ByteArray(20) { 0x22 }
+        val codec = AceContentMetadataPeerHandshakeCodec()
+        val peerHandshake = codec.encode(infoHash, peerId).also { bytes ->
+            val reservedStart = 1 + AceContentMetadataPeerHandshakeCodec.PROTOCOL_NAME.length
+            bytes[reservedStart + AceContentMetadataPeerHandshakeCodec.EXTENSION_RESERVED_BYTE] = 0
+        }
+
+        val error = runCatching { codec.decode(peerHandshake, infoHash) }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
+        assertTrue(error?.message?.contains("extension protocol") == true)
     }
 
     private fun testTransport(): ByteArray {
