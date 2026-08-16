@@ -73,8 +73,9 @@ class AceContentMetadataPeerResolverTest {
         )
         val reservedStart = 1 + AceContentMetadataPeerHandshakeCodec.PROTOCOL_NAME.length
         assertTrue(
-            outerHandshake[reservedStart + AceContentMetadataPeerHandshakeCodec.EXTENSION_RESERVED_BYTE]
-                .toInt() and AceContentMetadataPeerHandshakeCodec.EXTENSION_RESERVED_MASK != 0
+            (outerHandshake[
+                reservedStart + AceContentMetadataPeerHandshakeCodec.EXTENSION_RESERVED_BYTE
+            ].toInt() and AceContentMetadataPeerHandshakeCodec.EXTENSION_RESERVED_MASK) != 0
         )
         assertEquals(20, fake.writes[1][4].toInt() and 0xff)
         assertEquals(20, fake.writes[2][4].toInt() and 0xff)
