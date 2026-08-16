@@ -13,7 +13,7 @@ import org.junit.Test
 
 class AceLivePeerDiscoveryFastPathTest {
     @Test
-    fun `tracker fast path avoids dht when tracker already has a useful peer batch`() = runBlocking {
+    fun `tracker fast path starts immediately and schedules background dht diversity`() = runBlocking {
         val swarm = swarm(21)
         var dhtCalled = false
         val trackerPeers = listOf(
@@ -39,7 +39,11 @@ class AceLivePeerDiscoveryFastPathTest {
         assertEquals(trackerPeers, result.tcpEndpoints())
         assertEquals(AceLivePeerDiscoverySourceStatus.NOT_REQUESTED, result.dht.status)
         assertEquals(AceLivePeerDiscoverySourceStatus.SUCCEEDED, result.tracker.status)
-        assertFalse(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+        assertTrue(aceLiveStartupNeedsImmediateDhtOnlyRefill(result))
+        assertEquals(
+            AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND,
+            aceLiveStartupDhtRefillPlan(result)
+        )
     }
 
     @Test
