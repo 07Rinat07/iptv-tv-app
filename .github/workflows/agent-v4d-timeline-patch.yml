@@ -1,0 +1,114 @@
+name: Apply V4d timeline wiring
+
+on:
+  push:
+    branches:
+      - agent/ace-live-canonical-startup-timeline-v4d
+    paths:
+      - .github/workflows/agent-v4d-timeline-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/ace-live-canonical-startup-timeline-v4d
+          fetch-depth: 0
+      - name: Apply exact runtime wiring patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('core/p2p/src/main/java/com/iptv/tv/core/p2p/AceLiveEmbeddedEngine.kt')
+          text = path.read_text()
+
+          def replace_once(old: str, new: str):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one match, got {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''        val totalStartedAt = System.currentTimeMillis()\n\n        // Public live content IDs''',
+              '''        val totalStartedAt = System.currentTimeMillis()\n        val startupTimeline = AceLiveStartupTimelineDiagnostics(\n            startedAtMillis = totalStartedAt,\n            diagnosticsObserver = diagnosticsObserver\n        )\n        startupTimeline.onTransportSelection(totalStartedAt)\n\n        // Public live content IDs'''
+          )
+          replace_once(
+              '''            directAttempt = {\n                val startedAt = System.currentTimeMillis()\n                prepareResolvedTransport(\n                    token = token,\n                    transport = directLiveTransport(swarmKey)\n                ).also { result ->''',
+              '''            directAttempt = {\n                startupTimeline.onDirectAttempt()\n                val startedAt = System.currentTimeMillis()\n                prepareResolvedTransport(\n                    token = token,\n                    transport = directLiveTransport(swarmKey),\n                    startupTimeline = startupTimeline\n                ).also { result ->'''
+          )
+          replace_once(
+              '''            metadataResolve = {\n                val startedAt = System.currentTimeMillis()\n                resolveContentTransport(swarmKey.toHex()).also { result ->''',
+              '''            metadataResolve = {\n                startupTimeline.onMetadataAttempt()\n                val startedAt = System.currentTimeMillis()\n                resolveContentTransport(swarmKey.toHex()).also { result ->'''
+          )
+          replace_once(
+              '''                prepareResolvedTransport(token, transport).also { result ->''',
+              '''                prepareResolvedTransport(\n                    token = token,\n                    transport = transport,\n                    startupTimeline = startupTimeline\n                ).also { result ->'''
+          )
+          replace_once(
+              '''        val swarmKey = AceLiveSwarmKey.parseHex(infoHash)\n            ?: return P2pResult.Error("Ace Live infohash must contain exactly 40 hexadecimal characters")\n        return prepareResolvedTransport(token, directLiveTransport(swarmKey))''',
+              '''        val swarmKey = AceLiveSwarmKey.parseHex(infoHash)\n            ?: return P2pResult.Error("Ace Live infohash must contain exactly 40 hexadecimal characters")\n        val startedAt = System.currentTimeMillis()\n        val startupTimeline = AceLiveStartupTimelineDiagnostics(\n            startedAtMillis = startedAt,\n            diagnosticsObserver = diagnosticsObserver\n        )\n        startupTimeline.onTransportSelection(startedAt)\n        startupTimeline.onDirectAttempt(startedAt)\n        return prepareResolvedTransport(\n            token = token,\n            transport = directLiveTransport(swarmKey),\n            startupTimeline = startupTimeline\n        )'''
+          )
+          replace_once(
+              '''    suspend fun prepareTransportFile(bytes: ByteArray): P2pResult<AceLivePreparedStream> {\n        val token = generation.incrementAndGet()\n        val transport = when (val decoded = AceTransportDescriptorDecoder.decodeLive(bytes)) {''',
+              '''    suspend fun prepareTransportFile(bytes: ByteArray): P2pResult<AceLivePreparedStream> {\n        val token = generation.incrementAndGet()\n        val startedAt = System.currentTimeMillis()\n        val startupTimeline = AceLiveStartupTimelineDiagnostics(\n            startedAtMillis = startedAt,\n            diagnosticsObserver = diagnosticsObserver\n        )\n        startupTimeline.onTransportSelection(startedAt)\n        val transport = when (val decoded = AceTransportDescriptorDecoder.decodeLive(bytes)) {'''
+          )
+          replace_once(
+              '''        return prepareResolvedTransport(token, transport)\n    }\n\n    private suspend fun resolveContentTransport''',
+              '''        return prepareResolvedTransport(\n            token = token,\n            transport = transport,\n            startupTimeline = startupTimeline\n        )\n    }\n\n    private suspend fun resolveContentTransport'''
+          )
+          replace_once(
+              '''    private suspend fun prepareResolvedTransport(\n        token: Long,\n        transport: AceResolvedLiveTransport\n    ): P2pResult<AceLivePreparedStream> {''',
+              '''    private suspend fun prepareResolvedTransport(\n        token: Long,\n        transport: AceResolvedLiveTransport,\n        startupTimeline: AceLiveStartupTimelineDiagnostics\n    ): P2pResult<AceLivePreparedStream> {'''
+          )
+          replace_once(
+              '''                    bufferSettings = bufferSettings,\n                    eventObserver = eventObserver,\n                    diagnosticsObserver = diagnosticsObserver\n                ).also''',
+              '''                    bufferSettings = bufferSettings,\n                    eventObserver = eventObserver,\n                    diagnosticsObserver = diagnosticsObserver,\n                    startupTimelineDiagnostics = startupTimeline\n                ).also'''
+          )
+          replace_once(
+              '''        private val eventObserver: (AceLiveTcpPoolEvent) -> Unit,\n        private val diagnosticsObserver: (status: String, message: String) -> Unit\n    ) : Closeable {''',
+              '''        private val eventObserver: (AceLiveTcpPoolEvent) -> Unit,\n        private val diagnosticsObserver: (status: String, message: String) -> Unit,\n        private val startupTimelineDiagnostics: AceLiveStartupTimelineDiagnostics\n    ) : Closeable {'''
+          )
+          replace_once(
+              '''            pool.recordDiscoveredCandidateCount(result.peers.size)\n            if (isInitialDiscovery) {''',
+              '''            val discoveryCompletedAt = System.currentTimeMillis()\n            pool.recordDiscoveredCandidateCount(result.peers.size)\n            startupTimelineDiagnostics.onDiscoveryCompleted(discoveryCompletedAt)\n            startupTimelineDiagnostics.onDiscoveryCandidates(\n                candidateCount = result.peers.size,\n                atMillis = discoveryCompletedAt\n            )\n            if (isInitialDiscovery) {'''
+          )
+          replace_once(
+              '''                peerDiagnosticsReporter.maybeReport(\n                    snapshot = pool.peerProductionSnapshot(now),\n                    nowMillis = now\n                )''',
+              '''                val peerProductionSnapshot = pool.peerProductionSnapshot(now)\n                peerDiagnosticsReporter.maybeReport(\n                    snapshot = peerProductionSnapshot,\n                    nowMillis = now\n                )\n                startupTimelineDiagnostics.onPeerProduction(\n                    snapshot = peerProductionSnapshot,\n                    atMillis = now\n                )'''
+          )
+          replace_once(
+              '''        private fun onLoopbackFirstRead(readerId: Long, byteCount: Int) {\n            val now = System.currentTimeMillis()\n            runCatching {''',
+              '''        private fun onLoopbackFirstRead(readerId: Long, byteCount: Int) {\n            val now = System.currentTimeMillis()\n            startupTimelineDiagnostics.onFirstRead(now)\n            runCatching {'''
+          )
+          replace_once(
+              '''        private fun onConsumerLifecycle(event: AceLiveConsumerLifecycleEvent) {\n            if (event is AceLiveConsumerLifecycleEvent.Opened) {''',
+              '''        private fun onConsumerLifecycle(event: AceLiveConsumerLifecycleEvent) {\n            startupTimelineDiagnostics.onConsumerLifecycle(event, System.currentTimeMillis())\n            if (event is AceLiveConsumerLifecycleEvent.Opened) {'''
+          )
+          replace_once(
+              '''        private fun onPoolEvent(event: AceLiveTcpPoolEvent) {\n            refillCoordinator.onPoolEvent(event, System.currentTimeMillis())\n            runCatching { eventObserver(event) }''',
+              '''        private fun onPoolEvent(event: AceLiveTcpPoolEvent) {\n            val now = System.currentTimeMillis()\n            refillCoordinator.onPoolEvent(event, now)\n            startupTimelineDiagnostics.onPoolEvent(event, now)\n            runCatching { eventObserver(event) }'''
+          )
+          replace_once(
+              '''                                val now = System.currentTimeMillis()\n                                val attributableBytes = minOf(''',
+              '''                                val now = System.currentTimeMillis()\n                                startupTimelineDiagnostics.onFirstMedia(now)\n                                val attributableBytes = minOf('''
+          )
+          replace_once(
+              '''                                    if (decision.ready) {\n                                        Log.i(''',
+              '''                                    if (decision.ready) {\n                                        startupTimelineDiagnostics.onBufferReady(now)\n                                        Log.i('''
+          )
+
+          path.write_text(text)
+      - name: Remove one-shot patch workflow
+        run: git rm .github/workflows/agent-v4d-timeline-patch.yml
+      - name: Commit runtime wiring
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/p2p/src/main/java/com/iptv/tv/core/p2p/AceLiveEmbeddedEngine.kt
+          git commit -m "feat(p2p): wire canonical Ace Live startup timeline"
+          git push origin HEAD:agent/ace-live-canonical-startup-timeline-v4d
