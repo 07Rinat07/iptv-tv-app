@@ -28,6 +28,21 @@ internal class AceLiveStartupTimeline(
         return entry(milestone, recordedAt)
     }
 
+    /**
+     * Records [milestone] only when this call wins the first-write race.
+     *
+     * This is intended for diagnostic emitters that must not duplicate a canonical startup phase
+     * when peer reconnects, HTTP reader reopens or Media3 retries repeat the same boundary.
+     */
+    fun markIfFirst(
+        milestone: AceLiveStartupMilestone,
+        atMillis: Long = clockMillis()
+    ): AceLiveStartupTimelineEntry? {
+        val normalizedAt = atMillis.coerceAtLeast(startedAtMillis)
+        val previous = milestones.putIfAbsent(milestone, normalizedAt)
+        return if (previous == null) entry(milestone, normalizedAt) else null
+    }
+
     fun entry(milestone: AceLiveStartupMilestone): AceLiveStartupTimelineEntry? =
         milestones[milestone]?.let { recordedAt -> entry(milestone, recordedAt) }
 
