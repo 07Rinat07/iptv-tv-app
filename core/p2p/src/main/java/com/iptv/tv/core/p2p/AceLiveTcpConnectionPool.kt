@@ -352,7 +352,7 @@ class AceLiveTcpConnectionPool(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Throwable) {
-                    val retrying = reconnectAttempt < policy.maxReconnectAttempts
+                    val retrying = reconnectAttempt < reconnectBudget(runtime)
                     emit(AceLiveTcpPoolEvent.ConnectFailed(runtime.peerId, retrying))
                     if (!retrying) break
                     reconnectAttempt += 1
@@ -379,7 +379,7 @@ class AceLiveTcpConnectionPool(
                     runtime.connection.onTransportDisconnected()
                 }
                 val retrying =
-                    exit.retryable && reconnectAttempt < policy.maxReconnectAttempts &&
+                    exit.retryable && reconnectAttempt < reconnectBudget(runtime) &&
                         currentCoroutineContext().isActive
                 emit(
                     AceLiveTcpPoolEvent.Disconnected(
@@ -414,6 +414,13 @@ class AceLiveTcpConnectionPool(
             }
         }
     }
+
+    private fun reconnectBudget(runtime: PeerRuntime): Int =
+        if (runtime.handshakeAcceptedAtLeastOnce) {
+            policy.maxReconnectAttempts
+        } else {
+            policy.maxPreHandshakeReconnectAttempts
+        }
 
     private suspend fun runConnectedTransport(
         runtime: PeerRuntime,
@@ -521,6 +528,7 @@ class AceLiveTcpConnectionPool(
                                 ConnectionExit(AceLiveTcpDisconnectReason.IO_ERROR, retryable = true)
                             )
                         }
+                        runtime.handshakeAcceptedAtLeastOnce = true
                         emit(AceLiveTcpPoolEvent.HandshakeAccepted(runtime.peerId))
 
                         if (handshakeBuffer.size > decoded.consumedBytes) {
@@ -666,6 +674,9 @@ class AceLiveTcpConnectionPool(
 
         @Volatile
         var writeJob: Deferred<Boolean>? = null
+
+        @Volatile
+        var handshakeAcceptedAtLeastOnce: Boolean = false
     }
 
     private data class PeerRequestability(
