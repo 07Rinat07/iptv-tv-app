@@ -95,9 +95,11 @@ internal enum class AceLiveStartupDhtRefillPlan {
  *
  * A one-to-three-peer tracker result satisfies the startup threshold of one, so the first TCP
  * attempt can begin without waiting for DHT. It is still weaker than the normal refill threshold of
- * four. A weak startup result therefore schedules short DHT probe batches before the full
- * background expansion. The batches return as soon as four candidates are available and give the
- * TCP pool several independent endpoints without recreating the old 15-second startup gate.
+ * four. A weak startup result therefore schedules short DHT probes before the full background
+ * expansion. Each startup probe returns after the first valid DHT endpoint so TCP validation of an
+ * alternative candidate can begin immediately instead of waiting to accumulate a four-peer batch.
+ * Two independent rounds still reduce dependence on one routing-table path, and the later full
+ * expansion remains bounded background work.
  */
 internal fun aceLiveStartupNeedsImmediateDhtOnlyRefill(
     result: AceLivePeerDiscoveryOrchestrationResult,
@@ -125,7 +127,7 @@ internal fun aceLiveStartupDhtRefillPlan(
         result.dht.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
     return when {
         // A single tracker or DHT endpoint is only a candidate, not proof that it publishes this
-        // swarm. Probe several endpoints in small batches before the full DHT traversal.
+        // swarm. Probe alternative endpoints before the full DHT traversal.
         weakTrackerFastPath || weakDhtFastPath ->
             AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND
         else -> AceLiveStartupDhtRefillPlan.NONE
@@ -142,7 +144,7 @@ internal fun aceLiveStartupDhtProbeShouldContinue(
 }
 
 internal const val ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS = 1
-internal const val ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS = 4
+internal const val ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS = 1
 internal const val ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS = 7_000L
 internal const val ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS = 2
 
