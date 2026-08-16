@@ -1,17 +1,81 @@
 # V4d field execution addendum — 16 августа 2026
 
-Этот файл уточняет текущий блок `Startup/zap latency parity (V4d)` из основного ROADMAP по результатам второго TV Box прогона. Верхнеуровневый порядок проекта не меняется: V4d остаётся blocker перед broad acceptance.
+Этот файл уточняет текущий блок `Startup/zap latency parity (V4d)` из основного ROADMAP по результатам второго TV Box прогона и последующего сравнения с открытыми streaming reference TorrServer/webtor. Верхнеуровневый порядок проекта не меняется: V4d остаётся blocker перед broad acceptance.
 
-## Подтверждённые приоритеты
+## Текущий gate
 
-1. Сохранить startup evidence в bounded diagnostics: volatile `windowUseful/producing` не должны вытеснять lifecycle/timeline события.
-2. Ускорить первый альтернативный peer при weak tracker fast-path: первый startup DHT endpoint передаётся в TCP path сразу, без ожидания batch из четырёх endpoints.
-3. Подключить canonical startup timeline к реальным runtime hook points: transport/discovery/connect/handshake/useful-window/first-media/buffer-ready/HTTP open/read.
-4. Отдельно подключить Media3 READY/first-frame/load-retry evidence.
-5. После нового полевого timeline проверить direct 8-second soft-window → metadata serialization; не менять soft-window до подтверждения.
-6. Исправить pre-READY pressure authority: parser/read burst не должен считаться безусловным playback bitrate.
-7. Если после раннего peer diversity остаётся один handshaked producer и около одной секунды headroom, ввести bounded fresh-candidate diversity по handshaked/useful evidence, а не по discovered count.
-8. После закрытия startup/zap и steady-state starvation перейти к fixed A/B matrix, 20 rapid switches, weak network, peer loss и 2h/8h ARM soak.
+PR #127 (`weak-swarm startup peer diversity`) остаётся первым незавершённым шагом. Первый exact-head Android CI run прошёл real Torrent TV playback smoke без внешнего Ace Engine, lint и предыдущие unit-модули, но остановился на `Unit tests core P2P`: legacy assertion в `AceLivePeerDiscoveryFastPathTest` всё ещё ожидал старое значение startup DHT probe batch `4`, хотя новый контракт намеренно освобождает первый альтернативный DHT peer при `1`. Тест синхронизирован с новым bounded контрактом; merge разрешён только после нового полного exact-head green gate.
+
+## Обновлённая последовательность V4d
+
+1. **Закрыть PR #127 и peer-quality diagnostics retention.**
+   - первый startup DHT alternative освобождается сразу, без ожидания batch из четырёх;
+   - максимум два bounded startup probe-round;
+   - volatile `windowUseful/producing` не вытесняют lifecycle/timeline evidence;
+   - никаких увеличений глобальных timeout/recovery bounds.
+
+2. **Canonical runtime startup timeline.**
+   - один timeline object на playback preparation;
+   - timestamps: `play_request -> direct/metadata -> discovery -> first candidate -> dial/TCP connected -> handshake -> useful window -> first media -> startup buffer ready -> localhost exposed/open -> first HTTP read`;
+   - reconnect/reopen не переписывает first-occurrence timestamps.
+
+3. **Отдельный player-layer timeline.**
+   - Media3 load start/error/retry;
+   - localhost request method, `Range`, logical start offset;
+   - reader open/first-read/close и close reason;
+   - `BUFFERING/READY`, first rendered video frame и first audio evidence, если API даёт надёжный signal;
+   - этот инкремент не меняет P2P scheduler.
+
+4. **Bounded live HTTP reopen/resume semantics.**
+   - сначала подтвердить фактическое Media3 поведение логами;
+   - если player делает Range/reopen, продолжать логический stream с подтверждённого offset, а не молча открывать новый reader с текущего retained floor;
+   - expired live range должен иметь явный bounded outcome/recovery path;
+   - обычный generic IPTV HTTP path не затрагивать.
+
+5. **Forward playback reserve как отдельный invariant.**
+   - не путать размер sliding storage с реально playable bytes ahead;
+   - поддерживать bounded запас впереди authoritative consumer cursor;
+   - ориентироваться на bytes, estimated duration и фактическую live piece geometry;
+   - рабочее направление priority gradient: `NOW -> NEXT -> READAHEAD -> PROBE`, реализованный самостоятельно под Ace Live.
+
+6. **Pre-READY pressure authority.**
+   - до trustworthy player-ready transition socket/parser read rate не является authoritative playback bitrate;
+   - pre-READY использовать producer/media-growth estimate и byte/time floors;
+   - после READY consumer-rate подключается к pressure model через явный trust transition, а не автоматически после первого burst-read.
+
+7. **Competitive useful-peer acquisition.**
+   - измерять `candidate -> dial -> connected -> handshake -> useful -> producing`;
+   - держать небольшой bounded half-open/alternative candidate budget;
+   - принимать решение о diversity по handshaked/useful/producing evidence, не по `discovered` count;
+   - если после PR #127 поле всё ещё показывает один useful producer, расширять конкурентный dial отдельным узким инкрементом.
+
+8. **Decoder-safe startup warmup.**
+   - накопление не только byte-count, но contiguous MPEG-TS;
+   - использовать уже существующие V4c guarantees: TS sync, PAT, matching PMT, video PID и random-access/IDR/IRAP evidence;
+   - localhost/player start остаётся bounded существующим startup failure contract.
+
+9. **Проверить direct soft-window -> metadata serialization.**
+   - сохраняется как измеряемая гипотеза;
+   - 8-second soft-window не менять до появления полного timeline, доказывающего сериализованный penalty;
+   - если подтверждено, metadata/direct startup должны конкурировать за полезный runtime progress, а не последовательно платить одинаковые discovery delays.
+
+10. **Acceptance после закрытия V4d.**
+    - fixed same-device A/B matrix на одних и тех же Torrent TV каналах;
+    - p50/p95 startup и zap;
+    - success rate и rebuffer evidence;
+    - 20 rapid switches;
+    - weak network и peer loss;
+    - 2h/8h ARM TV Box soak;
+    - healthy-swarm target — стремиться к наблюдаемому same-device ориентиру порядка 2–4 s без внешнего Ace Engine как runtime dependency.
+
+## Подтверждённые field invariants
+
+- `discovered=4` не означает четыре полезных peers: в последнем окне устойчиво был только один `handshaked` producer;
+- authoritative playable headroom держался около `458656` bytes, примерно около одной секунды media, и оставался `CRITICAL`;
+- consumer cursor продолжал двигаться и `fell_behind=false`, поэтому симптом нельзя объяснить только отвалом HTTP reader;
+- UI timeout-текст про «возможно устаревший content ID» не является доказательством stale metadata;
+- pre-READY parser/extractor burst может давать ложные consumer-rate оценки в десятки/сотни Mbit/s;
+- прошлый pattern `reader #1 долго BUFFERING -> reader #2 -> почти сразу READY` делает reopen/resume semantics обязательным объектом измерения.
 
 ## Не менять вслепую
 
@@ -20,6 +84,11 @@
 - request timeout и recovery `maxPieceAdvance`;
 - TS discontinuity gate;
 - generic IPTV/Media3 policy;
-- output buffer capacity как самостоятельное «лечение» starvation.
+- output buffer capacity или cache size как самостоятельное «лечение» starvation;
+- чужие TorrServer/webtor buffer/readahead значения как magic constants.
 
-Подробные измерения: [`ACE_LIVE_FIELD_VALIDATION_2026-08-16.md`](ACE_LIVE_FIELD_VALIDATION_2026-08-16.md).
+## Внешние reference и clean-room правило
+
+TorrServer GPLv3 используется только как архитектурный reference; его код в проект не переносится. Webtor MIT используется как технический reference, но Ace Live решения всё равно проектируются под собственный Kotlin runtime. Подробный разбор: [`ACE_LIVE_EXTERNAL_STREAMING_REFERENCES_2026-08-16.md`](ACE_LIVE_EXTERNAL_STREAMING_REFERENCES_2026-08-16.md).
+
+Полевые измерения: [`ACE_LIVE_FIELD_VALIDATION_2026-08-16.md`](ACE_LIVE_FIELD_VALIDATION_2026-08-16.md).
