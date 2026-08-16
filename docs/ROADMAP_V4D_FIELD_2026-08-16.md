@@ -1,12 +1,13 @@
 # V4d field execution addendum — 16 августа 2026
 
-Этот файл уточняет текущий блок `Startup/zap latency parity (V4d)` из основного ROADMAP по результатам второго TV Box прогона и последующего сравнения с открытыми streaming reference TorrServer/webtor. Верхнеуровневый порядок проекта не меняется: V4d остаётся blocker перед broad acceptance.
+Этот файл уточняет текущий блок `Startup/zap latency parity (V4d)` из основного ROADMAP по результатам TV Box прогонов и сравнения с открытыми streaming reference TorrServer/webtor. Верхнеуровневый порядок проекта не меняется: V4d остаётся blocker перед broad acceptance.
 
 ## Текущий gate
 
-PR #127 (`weak-swarm startup peer diversity`) полностью прошёл exact-head Android CI #547, включая real Torrent TV playback smoke без внешнего Ace Engine, lint, core P2P и остальные unit-модули, debug/instrumentation build, signed ARM TV APK и source packaging, после чего был squash-merged в `main` как `aee83cbe76a1f7dbdbe43728290fbf308ce2415e`.
+- PR #127 (`weak-swarm startup peer diversity`) полностью прошёл exact-head Android CI #547 и был squash-merged в `main` как `aee83cbe76a1f7dbdbe43728290fbf308ce2415e`.
+- PR #128 (`canonical Ace Live startup timeline`) полностью прошёл exact-head Android CI #549, включая real Torrent TV playback smoke без внешнего Ace Engine, core P2P и остальные unit-модули, lint, debug/instrumentation build, signed ARM TV APK и source packaging; затем был squash-merged в `main` как `dea23c65a2b6c0865f91870806a4db53e5b0d0f3`.
 
-Текущий инкремент V4d — **canonical runtime startup timeline**. Он строится отдельной веткой от этого fresh `main` и остаётся исключительно observational: никаких timeout, scheduler/recovery, buffer-policy, TS-discontinuity или generic IPTV/Media3 изменений.
+Текущий узкий инкремент V4d — **P2P player load telemetry contract**. Он остаётся observational: никаких timeout, scheduler/recovery, buffer-policy, TS-discontinuity, HTTP resume или generic IPTV/Media3 policy изменений.
 
 ## Обновлённая последовательность V4d
 
@@ -16,23 +17,32 @@ PR #127 (`weak-swarm startup peer diversity`) полностью прошёл ex
    - volatile `windowUseful/producing` не вытесняют lifecycle/timeline evidence;
    - никаких увеличений глобальных timeout/recovery bounds.
 
-2. 🚧 **Canonical runtime startup timeline.**
+2. ✅ **PR #128 — canonical runtime startup timeline.**
    - один timeline на playback preparation, общий для direct/metadata race;
    - authoritative milestones: `transport_selection -> direct/metadata -> discovery_completed -> first_candidate -> connected -> handshake -> useful_window -> first_media -> buffer_ready -> http_reader_open -> http_first_read`;
    - `discovery_completed` не означает наличие candidate;
    - `first_media` фиксируется только после auth/resync и принятия bytes live-output buffer;
    - reconnect/refill/reopen не переписывают first-occurrence timestamps;
-   - существующий runtime startup clock, управляющий policy/guards, не заменяется diagnostics clock.
+   - runtime startup clock, управляющий policy/guards, не заменён diagnostics clock.
 
-3. **Отдельный player-layer timeline.**
-   - Media3 load start/error/retry;
-   - localhost request method, `Range`, logical start offset;
+3. 🚧 **Player/HTTP boundary evidence — только наблюдение.**
+
+   **3a. P2P player load telemetry contract.**
+   - типизированные `load_started`, `load_completed`, `load_error`, `load_retry`;
+   - первый успешный start/completion не должен flood-ить bounded diagnostics на каждом live chunk;
+   - error/retry остаются наблюдаемыми и несут counters;
+   - rebuffer/READY/first-frame semantics сохраняются без изменения playback policy.
+
+   **3b. Реальное Media3 + localhost wiring отдельным следующим PR.**
+   - подключить AnalyticsListener/load callbacks только для P2P localhost session;
+   - localhost request method, `Range`, logical requested offset;
    - reader open/first-read/close и close reason;
-   - `BUFFERING/READY`, first rendered video frame и first audio evidence, если API даёт надёжный signal;
-   - этот инкремент не меняет P2P scheduler и generic IPTV policy.
+   - `BUFFERING/READY`, first rendered video frame и track readiness;
+   - сопоставить player evidence с canonical preparation timeline через session/request correlation, не подменяя core timeline clock;
+   - не менять generic IPTV player path.
 
 4. **Bounded live HTTP reopen/resume semantics.**
-   - сначала подтвердить фактическое Media3 поведение логами;
+   - сначала подтвердить фактическое Media3 поведение логами после 3b;
    - если player делает Range/reopen, продолжать логический stream с подтверждённого offset, а не молча открывать новый reader с текущего retained floor;
    - expired live range должен иметь явный bounded outcome/recovery path;
    - обычный generic IPTV HTTP path не затрагивать.
@@ -56,12 +66,12 @@ PR #127 (`weak-swarm startup peer diversity`) полностью прошёл ex
 
 8. **Decoder-safe startup warmup.**
    - накопление не только byte-count, но contiguous MPEG-TS;
-   - использовать уже существующие V4c guarantees: TS sync, PAT, matching PMT, video PID и random-access/IDR/IRAP evidence;
+   - использовать существующие V4c guarantees: TS sync, PAT, matching PMT, video PID и random-access/IDR/IRAP evidence;
    - localhost/player start остаётся bounded существующим startup failure contract.
 
 9. **Проверить direct soft-window -> metadata serialization.**
    - сохраняется как измеряемая гипотеза;
-   - 8-second soft-window не менять до появления полного timeline, доказывающего сериализованный penalty;
+   - 8-second soft-window не менять до полного field timeline;
    - если подтверждено, metadata/direct startup должны конкурировать за полезный runtime progress, а не последовательно платить одинаковые discovery delays.
 
 10. **Acceptance после закрытия V4d.**

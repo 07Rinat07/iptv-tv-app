@@ -6,26 +6,39 @@ V4d closes the startup/zap latency blocker with field evidence before changing t
 
 `transport_selection → direct_attempt / metadata_attempt → discovery_completed → first_candidate → connected → handshake → useful_window → first_media → buffer_ready → http_reader_open → http_first_read → media3_ready → first_frame`
 
-Each exported milestone carries `elapsed_ms` relative to the same preparation origin. Missing milestones remain missing rather than receiving synthetic timestamps. `discovery_completed` is intentionally separate from `first_candidate`: an empty or failed discovery round is timing evidence, but it is not peer availability evidence.
+Each exported core milestone carries `elapsed_ms` relative to the same Ace Live preparation origin. Missing milestones remain missing rather than receiving synthetic timestamps. `discovery_completed` is intentionally separate from `first_candidate`: an empty or failed discovery round is timing evidence, but it is not peer availability evidence.
 
 ## Runtime diagnostics bridge
 
-`AceLiveStartupTimelineDiagnostics` is the observational bridge used by runtime hook points. A first occurrence emits the stable status `embedded_ace_live_startup_timeline` with `phase=<milestone>, elapsed_ms=<value>`. Reconnects, repeated discovery/refill rounds and reader reopens cannot re-emit the canonical milestone because the underlying timeline is first-write-wins.
+`AceLiveStartupTimelineDiagnostics` is the observational bridge used by core runtime hook points. A first occurrence emits the stable status `embedded_ace_live_startup_timeline` with `phase=<milestone>, elapsed_ms=<value>`. Reconnects, repeated discovery/refill rounds and reader reopens cannot re-emit the canonical milestone because the underlying timeline is first-write-wins.
 
 The bridge deliberately catches diagnostics-sink failures after recording the milestone. Diagnostics therefore cannot change startup ownership, scheduler decisions, retry behaviour, buffer state or failure bounds.
 
-The runtime bridge is now wired to authoritative existing events:
+PR #128 wired the bridge to authoritative existing events and passed exact-head Android CI #549 before merge to `main` as `dea23c65a2b6c0865f91870806a4db53e5b0d0f3`:
 
-- one timeline is created at each Ace Live playback preparation origin; the same timeline is shared by the speculative direct and metadata branches of a `content_id` race;
+- one timeline is created at each Ace Live playback preparation origin; the same timeline is shared by speculative direct and metadata branches of a `content_id` race;
 - transport selection, speculative direct start and metadata-resolution start map only to their explicit phases;
 - completion of the first real peer-discovery orchestration marks `discovery_completed`; `first_candidate` is emitted only when that result actually contains at least one endpoint;
 - TCP `TransportConnected` and accepted peer handshake remain separate milestones;
-- `useful_window` is emitted from the existing peer-production snapshot only after requestability has been evaluated against the authoritative live cursor;
-- the first authenticated, MPEG-TS-resynchronized byte range accepted by `AceLiveMediaBuffer` marks `first_media`;
+- `useful_window` is emitted from existing peer-production/requestability evidence;
+- first authenticated, MPEG-TS-resynchronized bytes accepted by `AceLiveMediaBuffer` mark `first_media`;
 - the existing startup-buffer policy decision separately marks `buffer_ready` immediately before startup completion;
 - a real live-loopback consumer open marks `http_reader_open`, while the first positive loopback delivery marks `http_first_read`.
 
-`media3_ready` and `first_frame` deliberately remain unwired in this increment. They belong to the next player-layer PR together with Media3 load/retry and localhost request/reopen evidence, so generic IPTV/Media3 behaviour is not mixed with transport instrumentation.
+## Player boundary contract
+
+The next V4d boundary is intentionally split into a contract PR and a wiring PR so Media3 instrumentation cannot silently change playback behaviour.
+
+`P2pPlayerBoundaryTelemetryTracker` already owns P2P-only `BUFFERING`, `READY`, first-frame and rebuffer accounting. The contract is extended with:
+
+- `load_started` — first Media3 P2P load start only;
+- `load_completed` — first successful Media3 P2P load completion only;
+- `load_error` — sparse failure evidence with an explicit load-duration value and cumulative count;
+- `load_retry` — explicit recovery/retry evidence with a cumulative count.
+
+Repeated successful live-chunk load starts/completions do not each emit a record, preventing the same bounded-diagnostics flood previously seen with volatile peer-quality events. Internal counters still advance so a later error/retry record can show how much load activity preceded it. This contract owns no retry, seek, timeout, LoadControl or P2P policy.
+
+The immediately following wiring PR must connect this contract to the actual Media3 P2P session and extend localhost evidence with request method, `Range`/requested offset, reader close/reopen and close reason. It must also correlate `READY`/first-frame evidence with the active P2P request/session. Until that wiring lands, player `elapsed_ms` remains relative to the existing player-start timestamp and must not be misrepresented as the core preparation-origin clock.
 
 ## Field update — 16 августа 2026
 
@@ -39,14 +52,15 @@ Detailed evidence is recorded in [`ACE_LIVE_FIELD_VALIDATION_2026-08-16.md`](ACE
 
 ## Remaining V4d sequence
 
-1. Gate this canonical runtime timeline bridge on exact-head Android CI, including core P2P tests and the real Torrent TV smoke without external Ace Engine.
-2. In a separate player-layer increment, record Media3 load/retry, localhost request method/`Range`, reader close/reopen reason, `READY` and first-frame evidence without changing generic IPTV behaviour.
-3. Use measured Media3 requests to decide whether bounded logical-offset HTTP reopen/resume is required; do not implement resume speculatively.
-4. Add a bounded forward playback reserve around the authoritative consumer cursor if the field timeline still shows the player living near the live edge.
-5. Correct pre-READY pressure authority so parser/read bursts cannot masquerade as playback bitrate; preserve post-READY authoritative reader semantics.
-6. If the producer set still remains at one handshaked peer with insufficient headroom, add bounded competitive/fresh-candidate diversity based on connected/handshaked/useful evidence rather than discovered-count alone.
-7. Add decoder-safe startup warmup using the existing TS sync/PAT/PMT/random-access evidence only after the preceding boundaries are measured.
-8. Only then proceed to the fixed same-device A/B matrix, 20 rapid switches, weak network, peer loss, and 2h/8h ARM soak.
+1. ✅ Canonical core runtime timeline: PR #128, exact-head Android CI #549, merged to `main`.
+2. 🚧 P2P player load telemetry contract: typed bounded load start/completion/error/retry evidence with focused unit coverage.
+3. Wire the player contract to actual Media3 Analytics/load callbacks and add localhost request method/`Range`, reader close/reopen reason, track readiness, `READY` and first-frame correlation without changing generic IPTV behaviour.
+4. Use measured Media3 requests to decide whether bounded logical-offset HTTP reopen/resume is required; do not implement resume speculatively.
+5. Add a bounded forward playback reserve around the authoritative consumer cursor if the field timeline still shows the player living near the live edge.
+6. Correct pre-READY pressure authority so parser/read bursts cannot masquerade as playback bitrate; preserve post-READY authoritative reader semantics.
+7. If the producer set still remains at one handshaked peer with insufficient headroom, add bounded competitive/fresh-candidate diversity based on connected/handshaked/useful evidence rather than discovered-count alone.
+8. Add decoder-safe startup warmup using the existing TS sync/PAT/PMT/random-access evidence only after the preceding boundaries are measured.
+9. Only then proceed to the fixed same-device A/B matrix, 20 rapid switches, weak network, peer loss, and 2h/8h ARM soak.
 
 ## Invariants
 
