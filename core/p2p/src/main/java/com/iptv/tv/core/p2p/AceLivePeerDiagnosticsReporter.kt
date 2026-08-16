@@ -5,15 +5,17 @@ import java.util.Locale
 /**
  * Converts the immutable peer-production snapshot into a bounded persistent diagnostics stream.
  *
- * Stage-count changes are material and are emitted immediately. Delivery rate and media freshness
- * naturally drift while the stage counts stay stable, so those values are refreshed periodically
- * instead of writing a database row on every 200 ms scheduler tick or every media chunk.
+ * Discovery/connection/handshake changes are lifecycle evidence and are emitted immediately.
+ * Requestability and production can legitimately oscillate at the live-window boundary every few
+ * hundred milliseconds, so those volatile stages are retained in the payload but refreshed only
+ * periodically. This prevents steady-state live churn from evicting startup/zap evidence from the
+ * bounded structured-diagnostics history.
  */
 internal class AceLivePeerDiagnosticsReporter(
     private val observer: (status: String, message: String) -> Unit,
     private val periodicIntervalMillis: Long = DEFAULT_PERIODIC_INTERVAL_MILLIS
 ) {
-    private var lastSignature: StageSignature? = null
+    private var lastLifecycleSignature: LifecycleSignature? = null
     private var lastReportedAtMillis: Long? = null
 
     init {
@@ -22,14 +24,14 @@ internal class AceLivePeerDiagnosticsReporter(
 
     fun maybeReport(snapshot: AceLivePeerProductionSnapshot, nowMillis: Long) {
         val now = nowMillis.coerceAtLeast(0L)
-        val signature = StageSignature.from(snapshot)
-        val previousSignature = lastSignature
+        val lifecycleSignature = LifecycleSignature.from(snapshot)
+        val previousSignature = lastLifecycleSignature
         val previousReportAt = lastReportedAtMillis
-        val materialStageChange = previousSignature == null || previousSignature != signature
+        val materialLifecycleChange = previousSignature == null || previousSignature != lifecycleSignature
         val periodicRefresh = previousReportAt == null || now - previousReportAt >= periodicIntervalMillis
-        if (!materialStageChange && !periodicRefresh) return
+        if (!materialLifecycleChange && !periodicRefresh) return
 
-        lastSignature = signature
+        lastLifecycleSignature = lifecycleSignature
         lastReportedAtMillis = now
         runCatching {
             observer(STATUS, formatMessage(snapshot))
@@ -65,22 +67,16 @@ internal class AceLivePeerDiagnosticsReporter(
         }
     }
 
-    private data class StageSignature(
+    private data class LifecycleSignature(
         val discovered: Int,
         val connected: Int,
-        val handshaked: Int,
-        val windowUseful: Int,
-        val unchoked: Int,
-        val producing: Int
+        val handshaked: Int
     ) {
         companion object {
-            fun from(snapshot: AceLivePeerProductionSnapshot) = StageSignature(
+            fun from(snapshot: AceLivePeerProductionSnapshot) = LifecycleSignature(
                 discovered = snapshot.discoveredCandidates,
                 connected = snapshot.connectedPeers,
-                handshaked = snapshot.handshakedPeers,
-                windowUseful = snapshot.windowUsefulPeers,
-                unchoked = snapshot.unchokedPeers,
-                producing = snapshot.producingPeers
+                handshaked = snapshot.handshakedPeers
             )
         }
     }
