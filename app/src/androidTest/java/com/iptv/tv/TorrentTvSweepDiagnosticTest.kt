@@ -36,7 +36,7 @@ import org.junit.runner.RunWith
  * Diagnostic-only sweep for the exact production code under test.
  *
  * This class is intentionally not part of the normal merge gate. It is used from a temporary
- * build/* branch to exercise several real Torrent TV samples against the embedded Ace Live engine,
+ * diagnostic branch to exercise several real Torrent TV samples against the embedded Ace Live engine,
  * render them through Media3, save screenshots, and leave explicit per-sample boundaries in logcat.
  */
 @RunWith(AndroidJUnit4::class)
