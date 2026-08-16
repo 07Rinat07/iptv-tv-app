@@ -36,6 +36,7 @@ data class AceLiveTcpConnectionPolicy(
     val readBufferBytes: Int = 64 * 1024,
     val maxConcurrentPeers: Int = 16,
     val maxReconnectAttempts: Int = 2,
+    val maxPreHandshakeReconnectAttempts: Int = 0,
     val reconnectDelayMillis: Long = 500
 ) {
     init {
@@ -59,6 +60,9 @@ data class AceLiveTcpConnectionPolicy(
         }
         require(maxReconnectAttempts in 0..MAX_RECONNECT_ATTEMPTS) {
             "maxReconnectAttempts must be in 0..$MAX_RECONNECT_ATTEMPTS"
+        }
+        require(maxPreHandshakeReconnectAttempts in 0..MAX_RECONNECT_ATTEMPTS) {
+            "maxPreHandshakeReconnectAttempts must be in 0..$MAX_RECONNECT_ATTEMPTS"
         }
         require(reconnectDelayMillis in 0..MAX_RECONNECT_DELAY_MILLIS) {
             "reconnectDelayMillis must be in 0..$MAX_RECONNECT_DELAY_MILLIS"
