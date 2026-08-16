@@ -41,7 +41,7 @@ class AceLivePeerDiagnosticsReporterTest {
     }
 
     @Test
-    fun stableStagesDoNotSpamObserverBeforePeriodicRefresh() {
+    fun stableLifecycleDoesNotSpamObserverBeforePeriodicRefresh() {
         val messages = mutableListOf<String>()
         val reporter = AceLivePeerDiagnosticsReporter(
             observer = { _, message -> messages += message },
@@ -58,16 +58,41 @@ class AceLivePeerDiagnosticsReporterTest {
     }
 
     @Test
-    fun materialStageChangeIsReportedImmediately() {
+    fun volatileUsefulAndProducingFlipsAreRateLimited() {
         val messages = mutableListOf<String>()
         val reporter = AceLivePeerDiagnosticsReporter(
             observer = { _, message -> messages += message },
             periodicIntervalMillis = 5_000L
         )
 
-        reporter.maybeReport(snapshot(connected = 1, handshaked = 1), nowMillis = 1_000L)
+        reporter.maybeReport(
+            snapshot(connected = 1, handshaked = 1, windowUseful = 1, unchoked = 1, producing = 1),
+            nowMillis = 1_000L
+        )
+        reporter.maybeReport(
+            snapshot(connected = 1, handshaked = 1, windowUseful = 0, unchoked = 1, producing = 0),
+            nowMillis = 1_400L
+        )
+        reporter.maybeReport(
+            snapshot(connected = 1, handshaked = 1, windowUseful = 1, unchoked = 1, producing = 1),
+            nowMillis = 1_900L
+        )
+
+        assertEquals(1, messages.size)
+    }
+
+    @Test
+    fun lifecycleStageChangeIsReportedImmediately() {
+        val messages = mutableListOf<String>()
+        val reporter = AceLivePeerDiagnosticsReporter(
+            observer = { _, message -> messages += message },
+            periodicIntervalMillis = 5_000L
+        )
+
+        reporter.maybeReport(snapshot(discovered = 4, connected = 1, handshaked = 0), nowMillis = 1_000L)
         reporter.maybeReport(
             snapshot(
+                discovered = 4,
                 connected = 1,
                 handshaked = 1,
                 windowUseful = 1,
@@ -79,11 +104,12 @@ class AceLivePeerDiagnosticsReporterTest {
         )
 
         assertEquals(2, messages.size)
+        assertTrue(messages.last().contains("handshaked=1"))
         assertTrue(messages.last().contains("producing=1"))
     }
 
     @Test
-    fun stableStagesAreRefreshedPeriodicallyForRateAndFreshness() {
+    fun volatileStagesAreRefreshedPeriodicallyForRateAndFreshness() {
         val messages = mutableListOf<String>()
         val reporter = AceLivePeerDiagnosticsReporter(
             observer = { _, message -> messages += message },
@@ -93,6 +119,10 @@ class AceLivePeerDiagnosticsReporterTest {
         reporter.maybeReport(
             snapshot(producing = 1, aggregateBytesPerSecond = 100_000L, freshestMediaAgeMillis = 100L),
             nowMillis = 1_000L
+        )
+        reporter.maybeReport(
+            snapshot(producing = 0, aggregateBytesPerSecond = 0L, freshestMediaAgeMillis = null),
+            nowMillis = 2_000L
         )
         reporter.maybeReport(
             snapshot(producing = 1, aggregateBytesPerSecond = 500_000L, freshestMediaAgeMillis = 700L),
