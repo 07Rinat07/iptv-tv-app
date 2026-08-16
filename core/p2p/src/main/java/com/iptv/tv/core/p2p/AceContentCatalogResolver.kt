@@ -1,5 +1,6 @@
 package com.iptv.tv.core.p2p
 
+import android.util.Log
 import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -41,7 +42,10 @@ class AceContentCatalogResolver(
 
         cache[normalized]
             ?.takeIf { entry -> clockMillis() - entry.resolvedAtMillis < CACHE_TTL_MILLIS }
-            ?.let { entry -> return P2pResult.Success(entry.transport) }
+            ?.let { entry ->
+                Log.i(DIAGNOSTIC_TAG, "event=catalog_success source=cache")
+                return P2pResult.Success(entry.transport)
+            }
 
         val resolved = firstSuccessfulP2p(
             items = CATALOG_HOSTS,
@@ -49,17 +53,36 @@ class AceContentCatalogResolver(
             failureMessage = "Ace transport catalog did not return valid live metadata"
         ) { host ->
             currentCoroutineContext().ensureActive()
+            val hostIndex = CATALOG_HOSTS.indexOf(host).coerceAtLeast(0)
             try {
                 when (val decoded = AceTransportDescriptorDecoder.decodeLive(fetch(host, normalized))) {
-                    is P2pResult.Success -> decoded
-                    is P2pResult.Error -> P2pResult.Error(
-                        message = "Ace catalog $host returned invalid live metadata: ${decoded.message}",
-                        cause = decoded.cause
-                    )
+                    is P2pResult.Success -> {
+                        Log.i(
+                            DIAGNOSTIC_TAG,
+                            "event=catalog_host_success host_index=$hostIndex stage=transport_decode"
+                        )
+                        decoded
+                    }
+                    is P2pResult.Error -> {
+                        Log.w(
+                            DIAGNOSTIC_TAG,
+                            "event=catalog_host_failure host_index=$hostIndex stage=transport_decode " +
+                                "type=DecodeError reason=${diagnosticReason(decoded.message)}"
+                        )
+                        P2pResult.Error(
+                            message = "Ace catalog $host returned invalid live metadata: ${decoded.message}",
+                            cause = decoded.cause
+                        )
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
+                Log.w(
+                    DIAGNOSTIC_TAG,
+                    "event=catalog_host_failure host_index=$hostIndex stage=fetch " +
+                        "type=${error.javaClass.simpleName} reason=${diagnosticReason(error.message)}"
+                )
                 P2pResult.Error(
                     message = "Ace catalog $host failed: ${error.message ?: error.javaClass.simpleName}",
                     cause = error
@@ -68,12 +91,15 @@ class AceContentCatalogResolver(
         }
 
         if (resolved is P2pResult.Success) {
+            Log.i(DIAGNOSTIC_TAG, "event=catalog_success source=network")
             if (cache.size >= MAX_CACHE_ENTRIES) {
                 cache.entries.minByOrNull { it.value.resolvedAtMillis }?.let { oldest ->
                     cache.remove(oldest.key, oldest.value)
                 }
             }
             cache[normalized] = CacheEntry(resolved.data, clockMillis())
+        } else {
+            Log.w(DIAGNOSTIC_TAG, "event=catalog_result success=false")
         }
         return resolved
     }
@@ -195,7 +221,15 @@ class AceContentCatalogResolver(
         private const val MAX_BASE64_CHARS = 1_400_000
         private const val MAX_CACHE_ENTRIES = 64
         private const val CACHE_TTL_MILLIS = 10L * 60L * 1000L
+        private const val DIAGNOSTIC_TAG = "P2P/AceCatalog"
 
         private fun securePositiveLong(): Long = (RANDOM.nextLong() and Long.MAX_VALUE).coerceAtLeast(1L)
+
+        private fun diagnosticReason(value: String?): String = value
+            .orEmpty()
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(160)
+            .ifEmpty { "-" }
     }
 }
