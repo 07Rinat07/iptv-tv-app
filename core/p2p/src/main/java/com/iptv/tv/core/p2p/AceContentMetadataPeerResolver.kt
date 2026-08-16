@@ -59,13 +59,10 @@ class AceContentMetadataPeerResolver(
             currentCoroutineContext().ensureActive()
             transport = transportFactory.connect(endpoint, METADATA_CONNECTION_POLICY)
             val socket = requireNotNull(transport)
-            val handshakeCodec = AceLivePeerHandshakeCodec()
+            val handshakeCodec = AceContentMetadataPeerHandshakeCodec()
             socket.write(handshakeCodec.encode(contentId.toByteArray(), peerId))
-            val peerHandshake = readExactly(socket, AceLivePeerHandshakeCodec.HANDSHAKE_BYTES)
-            require(
-                handshakeCodec.decode(peerHandshake, contentId.toByteArray())
-                    is AceLivePeerHandshakeDecodeResult.Decoded
-            ) { "Ace metadata peer rejected the outer handshake" }
+            val peerHandshake = readExactly(socket, AceContentMetadataPeerHandshakeCodec.HANDSHAKE_BYTES)
+            handshakeCodec.decode(peerHandshake, contentId.toByteArray())
 
             socket.write(
                 identity.signedMetadataExtendedHandshake(System.currentTimeMillis() / 1000L)
