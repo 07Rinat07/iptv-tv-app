@@ -57,15 +57,18 @@ internal class AceLiveStartupTimelineDiagnostics(
     fun onPoolEvent(
         event: AceLiveTcpPoolEvent,
         atMillis: Long = clockMillis()
-    ): AceLiveStartupTimelineEntry? = when (event) {
-        is AceLiveTcpPoolEvent.TransportConnected ->
-            mark(AceLiveStartupMilestone.TRANSPORT_CONNECTED, atMillis)
-        is AceLiveTcpPoolEvent.HandshakeAccepted ->
-            mark(AceLiveStartupMilestone.HANDSHAKE_ACCEPTED, atMillis)
-        is AceLiveTcpPoolEvent.HandshakeRejected,
-        is AceLiveTcpPoolEvent.ConnectFailed,
-        is AceLiveTcpPoolEvent.Disconnected,
-        is AceLiveTcpPoolEvent.Ingress -> null
+    ): AceLiveStartupTimelineEntry? {
+        emitPeerLifecycle(event, atMillis)
+        return when (event) {
+            is AceLiveTcpPoolEvent.TransportConnected ->
+                mark(AceLiveStartupMilestone.TRANSPORT_CONNECTED, atMillis)
+            is AceLiveTcpPoolEvent.HandshakeAccepted ->
+                mark(AceLiveStartupMilestone.HANDSHAKE_ACCEPTED, atMillis)
+            is AceLiveTcpPoolEvent.HandshakeRejected,
+            is AceLiveTcpPoolEvent.ConnectFailed,
+            is AceLiveTcpPoolEvent.Disconnected,
+            is AceLiveTcpPoolEvent.Ingress -> null
+        }
     }
 
     fun onPeerQuality(
@@ -123,6 +126,29 @@ internal class AceLiveStartupTimelineDiagnostics(
         runCatching { diagnosticsObserver(LOOPBACK_LIFECYCLE_STATUS, message) }
     }
 
+    private fun emitPeerLifecycle(event: AceLiveTcpPoolEvent, atMillis: Long) {
+        val detail = when (event) {
+            is AceLiveTcpPoolEvent.TransportConnected ->
+                "event=connected, peer=${event.peerId}, reconnect_attempt=${event.reconnectAttempt}"
+            is AceLiveTcpPoolEvent.HandshakeAccepted ->
+                "event=handshake_accepted, peer=${event.peerId}"
+            is AceLiveTcpPoolEvent.HandshakeRejected ->
+                "event=handshake_rejected, peer=${event.peerId}, reject_reason=${event.reason}"
+            is AceLiveTcpPoolEvent.ConnectFailed ->
+                "event=connect_failed, peer=${event.peerId}, retrying=${event.retrying}"
+            is AceLiveTcpPoolEvent.Disconnected ->
+                "event=disconnected, peer=${event.peerId}, reason=${event.reason}, " +
+                    "retrying=${event.retrying}, requeued_pieces=${event.requeuedPieces.size}"
+            is AceLiveTcpPoolEvent.Ingress -> return
+        }
+        runCatching {
+            diagnosticsObserver(
+                PEER_LIFECYCLE_STATUS,
+                "$detail, startup_id=$startedAtMillis, elapsed_ms=${elapsedSinceStart(atMillis)}"
+            )
+        }
+    }
+
     private fun elapsedSinceStart(atMillis: Long): Long =
         (atMillis - startedAtMillis).coerceAtLeast(0L)
 
@@ -137,5 +163,6 @@ internal class AceLiveStartupTimelineDiagnostics(
     companion object {
         const val STATUS = "embedded_ace_live_startup_timeline"
         const val LOOPBACK_LIFECYCLE_STATUS = "embedded_ace_live_loopback_http_lifecycle"
+        const val PEER_LIFECYCLE_STATUS = "embedded_ace_live_peer_lifecycle"
     }
 }
