@@ -1,5 +1,6 @@
 package com.iptv.tv.core.p2p
 
+import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CancellationException
@@ -26,6 +27,7 @@ class AceContentMetadataPeerResolver(
                     .distinctBy { endpoint -> "${endpoint.host}:${endpoint.port}" }
                     .shuffled()
                     .take(MAX_METADATA_PEERS)
+                Log.i(DIAGNOSTIC_TAG, "event=metadata_discovery candidates=${peers.size}")
                 if (peers.isEmpty()) {
                     return@use P2pResult.Error("Ace metadata swarm returned no peer candidates")
                 }
@@ -41,6 +43,11 @@ class AceContentMetadataPeerResolver(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
+            Log.w(
+                DIAGNOSTIC_TAG,
+                "event=metadata_resolver_failure stage=discovery type=${error.javaClass.simpleName} " +
+                    "reason=${diagnosticReason(error.message)}"
+            )
             P2pResult.Error(
                 error.message ?: "Ace metadata swarm resolution failed",
                 error
@@ -55,30 +62,60 @@ class AceContentMetadataPeerResolver(
         identity: AceLiveNodeIdentity
     ): P2pResult<AceResolvedLiveTransport> {
         var transport: AceLiveTcpTransport? = null
+        var stage = "connect"
         return try {
             currentCoroutineContext().ensureActive()
             transport = transportFactory.connect(endpoint, METADATA_CONNECTION_POLICY)
             val socket = requireNotNull(transport)
+
+            stage = "outer_handshake"
             val handshakeCodec = AceContentMetadataPeerHandshakeCodec()
             socket.write(handshakeCodec.encode(contentId.toByteArray(), peerId))
             val peerHandshake = readExactly(socket, AceContentMetadataPeerHandshakeCodec.HANDSHAKE_BYTES)
             handshakeCodec.decode(peerHandshake, contentId.toByteArray())
 
+            stage = "extended_handshake"
             socket.write(
                 identity.signedMetadataExtendedHandshake(System.currentTimeMillis() / 1000L)
             )
             val frames = PeerFrameReader(socket)
             val metadata = readMetadataParameters(frames)
+
+            stage = "metadata_fetch"
             val transportBytes = fetchMetadata(
                 frames = frames,
                 transport = socket,
                 peerMetadataExtensionId = metadata.extensionId,
                 metadataSize = metadata.sizeBytes
             )
-            AceTransportDescriptorDecoder.decodeLive(transportBytes)
+
+            stage = "transport_decode"
+            when (val decoded = AceTransportDescriptorDecoder.decodeLive(transportBytes)) {
+                is P2pResult.Success -> {
+                    Log.i(
+                        DIAGNOSTIC_TAG,
+                        "event=metadata_peer_success endpoint=${endpoint.host}:${endpoint.port}"
+                    )
+                    decoded
+                }
+                is P2pResult.Error -> {
+                    Log.w(
+                        DIAGNOSTIC_TAG,
+                        "event=metadata_peer_failure endpoint=${endpoint.host}:${endpoint.port} " +
+                            "stage=$stage type=DecodeError reason=${diagnosticReason(decoded.message)}"
+                    )
+                    decoded
+                }
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
+            Log.w(
+                DIAGNOSTIC_TAG,
+                "event=metadata_peer_failure endpoint=${endpoint.host}:${endpoint.port} " +
+                    "stage=$stage type=${error.javaClass.simpleName} " +
+                    "reason=${diagnosticReason(error.message)}"
+            )
             P2pResult.Error(
                 error.message ?: "Ace metadata peer did not return a transport descriptor",
                 error
@@ -254,6 +291,14 @@ class AceContentMetadataPeerResolver(
         const val MAX_HANDSHAKE_FRAMES = 32
         const val MAX_FRAMES_PER_METADATA_PIECE = 4
         const val READ_BUFFER_BYTES = 64 * 1024
+        const val DIAGNOSTIC_TAG = "P2P/AceMetadata"
+
+        fun diagnosticReason(value: String?): String = value
+            .orEmpty()
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(160)
+            .ifEmpty { "-" }
     }
 }
 
