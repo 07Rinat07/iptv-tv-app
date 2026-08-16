@@ -54,7 +54,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$ANDROID_SDK_ROOT" "$ANDROID_AVD_HOME"
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null
+          # setup-android has already accepted SDK licenses. Avoid `yes | sdkmanager --licenses`
+          # here because GitHub's bash runs with pipefail and `yes` exits on SIGPIPE after
+          # sdkmanager closes stdin, incorrectly failing the diagnostic harness before any test.
           sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
             'platform-tools' \
             "platforms;android-${ANDROID_API_LEVEL}" \
