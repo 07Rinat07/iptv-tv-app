@@ -130,7 +130,7 @@ class AceLiveStartupTimelineDiagnosticsTest {
             ),
             diagnostics.snapshot().map { it.milestone }
         )
-        assertEquals(13, records.size)
+        assertEquals(15, records.size)
     }
 
     @Test
@@ -220,7 +220,9 @@ class AceLiveStartupTimelineDiagnosticsTest {
             listOf(AceLiveStartupMilestone.HTTP_READER_OPEN),
             diagnostics.snapshot().map { it.milestone }
         )
-        val lifecycle = records.filter { it.first == AceLiveStartupTimelineDiagnostics.LOOPBACK_LIFECYCLE_STATUS }
+        val lifecycle = records.filter {
+            it.first == AceLiveStartupTimelineDiagnostics.LOOPBACK_LIFECYCLE_STATUS
+        }
         assertEquals(2, lifecycle.size)
         assertEquals(
             "event=open, reader=9, method=GET, range=bytes=4096-, requested_start=4096, " +
@@ -231,6 +233,60 @@ class AceLiveStartupTimelineDiagnosticsTest {
             "event=close, reader=9, reason=client_disconnected, delivered_bytes=2048, " +
                 "duration_ms=350, elapsed_ms=450",
             lifecycle[1].second
+        )
+    }
+
+    @Test
+    fun `peer lifecycle persists exact reasons retries and startup correlation`() {
+        val records = mutableListOf<Pair<String, String>>()
+        val diagnostics = AceLiveStartupTimelineDiagnostics(
+            startedAtMillis = 70_000L,
+            diagnosticsObserver = { status, message -> records += status to message }
+        )
+
+        diagnostics.onPoolEvent(
+            AceLiveTcpPoolEvent.TransportConnected(peerId = 4L, reconnectAttempt = 2),
+            atMillis = 70_100L
+        )
+        diagnostics.onPoolEvent(
+            AceLiveTcpPoolEvent.ConnectFailed(peerId = 5L, retrying = false),
+            atMillis = 70_200L
+        )
+        diagnostics.onPoolEvent(
+            AceLiveTcpPoolEvent.HandshakeRejected(
+                peerId = 6L,
+                reason = AceLivePeerHandshakeRejectReason.SWARM_KEY_MISMATCH
+            ),
+            atMillis = 70_300L
+        )
+        diagnostics.onPoolEvent(
+            AceLiveTcpPoolEvent.HandshakeAccepted(peerId = 7L),
+            atMillis = 70_400L
+        )
+        diagnostics.onPoolEvent(
+            AceLiveTcpPoolEvent.Disconnected(
+                peerId = 8L,
+                reason = AceLiveTcpDisconnectReason.HANDSHAKE_TIMEOUT,
+                requeuedPieces = listOf(10L, 11L),
+                retrying = false
+            ),
+            atMillis = 70_500L
+        )
+
+        val lifecycle = records.filter {
+            it.first == AceLiveStartupTimelineDiagnostics.PEER_LIFECYCLE_STATUS
+        }.map { it.second }
+        assertEquals(
+            listOf(
+                "event=connected, peer=4, reconnect_attempt=2, startup_id=70000, elapsed_ms=100",
+                "event=connect_failed, peer=5, retrying=false, startup_id=70000, elapsed_ms=200",
+                "event=handshake_rejected, peer=6, reject_reason=SWARM_KEY_MISMATCH, " +
+                    "startup_id=70000, elapsed_ms=300",
+                "event=handshake_accepted, peer=7, startup_id=70000, elapsed_ms=400",
+                "event=disconnected, peer=8, reason=HANDSHAKE_TIMEOUT, retrying=false, " +
+                    "requeued_pieces=2, startup_id=70000, elapsed_ms=500"
+            ),
+            lifecycle
         )
     }
 

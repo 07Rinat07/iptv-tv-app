@@ -8,8 +8,9 @@
 - ✅ PR #128 (`canonical Ace Live startup timeline`) — exact-head Android CI #549, включая real Torrent TV smoke без внешнего Ace Engine, merged.
 - ✅ PR #129 (`bounded P2P load telemetry contract`) — Android CI #551 + P2P player smoke #4, merged.
 - ✅ PR #130 (`Media3 + localhost reopen telemetry`) — Android CI #553 + P2P player smoke #6, включая real Torrent TV playback без внешнего Ace Engine, merged в `main` как `f3a76bd32edc80cd522e4fca26a78a2587714db8`.
+- ✅ PR #131 (`bounded pre-handshake peer qualification`) — exact-head Android CI #557, включая real Torrent TV playback smoke без внешнего Ace Engine, core P2P/unit tests, lint, debug/instrumentation build, signed ARM TV APK/source packaging; squash-merged в `main` как `41a883d9ba6c26321d673c9e636a052580201076`.
 
-Второй field-run после PR #130 показал, что текущий критический путь находится **до Media3/localhost consumption**. Поэтому следующий узкий V4d-инкремент — **bounded pre-handshake peer qualification**.
+Второй field-run после PR #130 показал, что текущий критический путь находится **до Media3/localhost consumption**. Поведенческий qualification-fix #131 уже закрыт. Следующий узкий V4d-инкремент — **sparse persistent peer lifecycle reason telemetry**, без изменения retry/playback policy.
 
 ## Что подтвердил field-run R2
 
@@ -68,22 +69,27 @@ HTTP request был `GET`, `Range=none`, `requested_start=none`. В retained suc
    - не вводить resume без реального Range/reopen evidence;
    - если future field-run покажет Range/reopen mismatch, вернуться к bounded logical-offset semantics отдельным PR.
 
-5. 🚧 **Текущий инкремент: bounded pre-handshake peer qualification.**
-   - измеренный successful peer прошёл handshake примерно за 192 ms после TCP connect;
+5. ✅ **Bounded pre-handshake peer qualification (#131).**
+   - measured successful peer прошёл handshake примерно за 192 ms после TCP connect;
    - failed sessions находили candidates и TCP connect, но не достигали handshake;
-   - endpoint, который ещё ни разу не прошёл Ace handshake, не должен расходовать обычный established-peer reconnect budget;
+   - endpoint, который ещё ни разу не прошёл Ace handshake, больше не расходует обычный established-peer reconnect budget;
    - runtime default: `maxPreHandshakeReconnectAttempts=0`;
-   - после первого успешного handshake сохранить существующий `maxReconnectAttempts=2`;
-   - final pre-handshake failure немедленно освобождает ownership в pool/refill path, где уже действует bounded exponential backoff;
-   - permanent ban не вводить;
-   - absolute 60-second startup bound не увеличивать.
+   - после первого успешного handshake сохранён существующий `maxReconnectAttempts=2`;
+   - final pre-handshake failure освобождает ownership в pool/refill path, где уже действует bounded exponential backoff;
+   - permanent ban не вводился;
+   - absolute 60-second startup bound не увеличен.
 
-6. **Peer lifecycle reason telemetry.**
-   - отдельным observational increment экспортировать sparse `connected / connect_failed / handshake accepted/rejected / disconnected`;
-   - фиксировать `HANDSHAKE_TIMEOUT`, reject reason, remote close, retrying, requeued pieces и startup elapsed;
-   - не превращать diagnostics в новый retry policy.
+6. 🚧 **Текущий инкремент: peer lifecycle reason telemetry.**
+   - отдельный observational increment экспортирует sparse `connected / connect_failed / handshake_accepted / handshake_rejected / disconnected`;
+   - `connected`: peer id + reconnect attempt;
+   - `connect_failed`: peer id + retrying;
+   - `handshake_rejected`: peer id + exact reject reason;
+   - `disconnected`: exact reason (`HANDSHAKE_TIMEOUT`, `HANDSHAKE_REJECTED`, `REMOTE_CLOSED`, `IO_ERROR`, `PROTOCOL_REJECTED`), retrying, requeued-piece count;
+   - все lifecycle rows получают `startup_id` и `elapsed_ms` из того же canonical startup clock;
+   - persistent status: `embedded_ace_live_peer_lifecycle`;
+   - diagnostics не меняют retry policy и playback behavior.
 
-7. **Competitive useful-peer acquisition — только если R2 qualification недостаточно.**
+7. **Competitive useful-peer acquisition — только если post-#131 field evidence покажет необходимость.**
    - оценивать `candidate -> dial -> connected -> handshake -> useful -> producing`;
    - при необходимости добавить небольшой bounded half-open/alternative budget;
    - diversity считать по handshaked/useful/producing, а не по discovered count;
@@ -134,3 +140,4 @@ HTTP request был `GET`, `Range=none`, `requested_start=none`. В retained suc
 - [`ACE_LIVE_EXTERNAL_STREAMING_REFERENCES_2026-08-16.md`](ACE_LIVE_EXTERNAL_STREAMING_REFERENCES_2026-08-16.md) — clean-room TorrServer/webtor analysis.
 - [`ACE_LIVE_FIELD_VALIDATION_2026-08-16.md`](ACE_LIVE_FIELD_VALIDATION_2026-08-16.md) — first field pass.
 - [`ACE_LIVE_FIELD_VALIDATION_2026-08-16_R2.md`](ACE_LIVE_FIELD_VALIDATION_2026-08-16_R2.md) — second field pass after #130 and the decision to prioritize pre-handshake peer qualification.
+- [`ACE_LIVE_PEER_LIFECYCLE_TELEMETRY_2026-08-16.md`](ACE_LIVE_PEER_LIFECYCLE_TELEMETRY_2026-08-16.md) — exact peer lifecycle diagnostics contract after #131.
