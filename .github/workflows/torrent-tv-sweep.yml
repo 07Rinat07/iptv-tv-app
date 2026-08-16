@@ -28,14 +28,20 @@ jobs:
       - name: Checkout exact diagnostic head
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Record production base
         shell: bash
         run: |
+          set -euo pipefail
+          readonly EXPECTED_BASE='0baa1939dbe1782fbacbd28a91876db5027b8dfb'
           echo "Diagnostic head: $(git rev-parse HEAD)"
+          echo "Expected diagnostic head: ${{ github.event.pull_request.head.sha }}"
           echo "Production base: ${{ github.event.pull_request.base.sha }}"
-          git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test "${{ github.event.pull_request.base.sha }}" = "$EXPECTED_BASE"
+          git diff --name-only "$EXPECTED_BASE" HEAD
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -67,7 +73,7 @@ jobs:
           chmod +x ./gradlew
 
       - name: Compile sweep instrumentation
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebugAndroidTest
+        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
 
       - name: Run real multi-channel Torrent TV sweep
         id: sweep-run
@@ -108,10 +114,27 @@ jobs:
             exit 1
           fi
 
+          APP_APK="$(find app/build/outputs/apk/debug -type f -name '*x86_64*.apk' -print -quit)"
+          TEST_APK="$(find app/build/outputs/apk/androidTest/debug -type f -name '*.apk' -print -quit)"
+          test -n "$APP_APK"
+          test -n "$TEST_APK"
+          echo "Installing app APK: $APP_APK"
+          echo "Installing test APK: $TEST_APK"
+          adb install -r "$APP_APK"
+          adb install -r "$TEST_APK"
+
           adb logcat -c || true
-          ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest \
-            -Pandroid.testInstrumentationRunnerArguments.class=com.iptv.tv.TorrentTvSweepDiagnosticTest \
+          set +e
+          adb shell am instrument -w -r \
+            -e class com.iptv.tv.TorrentTvSweepDiagnosticTest \
+            com.iptv.tv.test/com.iptv.tv.HiltTestRunner \
             2>&1 | tee build-artifacts/torrent-tv-sweep/instrumentation-output.log
+          instrument_status=${PIPESTATUS[0]}
+          set -e
+
+          # Unlike connectedDebugAndroidTest, direct instrumentation does not uninstall the app
+          # before the evidence collection step, so summary.tsv and PNG screenshots remain pullable.
+          exit "$instrument_status"
 
       - name: Collect sweep logs and screenshots
         if: always()
@@ -128,10 +151,10 @@ jobs:
             /storage/emulated/0/Android/data/com.iptv.tv/files/torrent-tv-sweep \
             build-artifacts/torrent-tv-sweep/device/ || true
           grep -E \
-            'TORRENT_TV_SWEEP|embedded_ace_live_peer_discovery|embedded_ace_live_peer_lifecycle|embedded_ace_live_peer_quality|embedded_ace_live_startup_timeline|embedded_ace_live_buffer_pressure|P2pBoundaryLoad|player_p2p_boundary|FATAL EXCEPTION|AndroidRuntime' \
+            'TORRENT_TV_SWEEP|embedded_ace_live_peer_discovery|embedded_ace_live_peer_lifecycle|embedded_ace_live_peer_quality|embedded_ace_live_startup_timeline|embedded_ace_live_buffer_pressure|P2pBoundaryLoad|player_p2p_boundary|FATAL EXCEPTION|AndroidRuntime|P2P/AceCatalog|P2P/AceMetadata' \
             build-artifacts/torrent-tv-sweep/adb-logcat.txt \
             > build-artifacts/torrent-tv-sweep/p2p-filtered-logcat.txt || true
-          find build-artifacts/torrent-tv-sweep -maxdepth 4 -type f -print | sort
+          find build-artifacts/torrent-tv-sweep -maxdepth 5 -type f -print | sort
           timeout 15s adb emu kill >/dev/null 2>&1 || true
 
       - name: Upload sweep evidence
