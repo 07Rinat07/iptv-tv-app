@@ -1,7 +1,11 @@
 package com.iptv.tv.core.p2p
 
+import java.io.IOException
 import okhttp3.OkHttpClient
+import okio.Buffer
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AceContentCatalogResolverTest {
@@ -22,5 +26,27 @@ class AceContentCatalogResolverTest {
             "c7c3cd3c7268be1a48144653cdbd7912991cb337",
             resolver.signature(contentId, 3_472_462_845_767_567_311L)
         )
+    }
+
+    @Test
+    fun boundedCatalogReadAcceptsShortUnknownLengthResponse() {
+        val expected = "<response>short catalog body</response>".toByteArray()
+        val source = Buffer().write(expected)
+
+        val actual = resolver.readBoundedResponse(source, declaredLength = -1L)
+
+        assertArrayEquals(expected, actual)
+    }
+
+    @Test
+    fun boundedCatalogReadRejectsUnknownLengthResponseAboveLimit() {
+        val source = Buffer().write(ByteArray(1024 * 1024 + 1) { 0x2a })
+
+        val failure = runCatching {
+            resolver.readBoundedResponse(source, declaredLength = -1L)
+        }.exceptionOrNull()
+
+        assertTrue(failure is IOException)
+        assertEquals("Ace catalog response exceeds the size limit", failure?.message)
     }
 }
