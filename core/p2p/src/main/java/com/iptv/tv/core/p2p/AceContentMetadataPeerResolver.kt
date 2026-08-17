@@ -303,7 +303,6 @@ class AceContentMetadataPeerResolver(
         const val MAX_HANDSHAKE_FRAMES = 32
         const val MAX_FRAMES_PER_METADATA_PIECE = 4
         const val READ_BUFFER_BYTES = 64 * 1024
-        const val METADATA_DHT_RETURN_AFTER_PEERS = 4
     }
 }
 
@@ -312,19 +311,22 @@ private suspend fun discoverDefaultMetadataPeers(
     peerId: ByteArray,
     announcePort: Int
 ): List<AceLiveTcpPeerEndpoint> = withContext(Dispatchers.IO) {
-    // Metadata peers are not the live playback pool. Field evidence showed that returning the first
-    // DHT candidate commonly leaves only one or two metadata candidates, with the only responsive
-    // peer reaching BEP-10 but not serving ut_metadata piece 0. Ask this metadata-only walk for a
-    // small bounded batch so concurrent metadata probes have independent alternatives, while the
-    // direct live startup policy, DHT budgets, connection timeouts, and 24-peer ceiling stay intact.
+    // Field sweep #15 showed metadata tracker batches of 5-8 endpoints could trigger the generic
+    // tracker-count fast path even when every tracker endpoint then failed TCP connection. Metadata
+    // acquisition therefore must not treat tracker count as qualification evidence. Keep the existing
+    // one-peer bounded DHT return condition, but race that independent source with the tracker so a
+    // healthy-sized stale tracker batch cannot suppress DHT alternatives.
     val startupDhtDiscovery = AceLiveDhtDiscovery(
         policy = AceLiveDhtPolicy(
-            returnAfterPeers = METADATA_DHT_RETURN_AFTER_PEERS
+            returnAfterPeers = ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS
         ),
         reuseRecentResults = true
     )
     val result = AceLivePeerDiscoveryOrchestrator(
-        dhtDiscover = startupDhtDiscovery::discover
+        dhtDiscover = startupDhtDiscovery::discover,
+        policy = AceLivePeerDiscoveryOrchestrationPolicy(
+            preferTrackerFastPath = false
+        )
     ).discover(
         AceLivePeerDiscoveryOrchestrationRequest(
             dhtRequest = AceLiveDhtDiscoveryRequest(
