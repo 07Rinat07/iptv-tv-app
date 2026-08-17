@@ -303,6 +303,7 @@ class AceContentMetadataPeerResolver(
         const val MAX_HANDSHAKE_FRAMES = 32
         const val MAX_FRAMES_PER_METADATA_PIECE = 4
         const val READ_BUFFER_BYTES = 64 * 1024
+        const val METADATA_DHT_RETURN_AFTER_PEERS = 4
     }
 }
 
@@ -311,12 +312,14 @@ private suspend fun discoverDefaultMetadataPeers(
     peerId: ByteArray,
     announcePort: Int
 ): List<AceLiveTcpPeerEndpoint> = withContext(Dispatchers.IO) {
-    // Content metadata races direct live startup for the same public content id. Returning the first
-    // DHT candidate lets metadata probing begin without owning the process-wide DHT gate for the
-    // complete 15-second walk; the direct runtime performs its own non-blocking full expansion.
+    // Metadata peers are not the live playback pool. Field evidence showed that returning the first
+    // DHT candidate commonly leaves only one or two metadata candidates, with the only responsive
+    // peer reaching BEP-10 but not serving ut_metadata piece 0. Ask this metadata-only walk for a
+    // small bounded batch so concurrent metadata probes have independent alternatives, while the
+    // direct live startup policy, DHT budgets, connection timeouts, and 24-peer ceiling stay intact.
     val startupDhtDiscovery = AceLiveDhtDiscovery(
         policy = AceLiveDhtPolicy(
-            returnAfterPeers = ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS
+            returnAfterPeers = METADATA_DHT_RETURN_AFTER_PEERS
         ),
         reuseRecentResults = true
     )
