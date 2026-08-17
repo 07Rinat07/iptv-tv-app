@@ -1,10 +1,10 @@
-# V4d Content-ID transport resolution gate — 16 августа 2026
+# V4d Content-ID transport resolution gate — 16–17 августа 2026
 
 ## Почему приоритет изменён
 
 После PR #134 был выполнен отдельный real Torrent TV sweep на свежем `main` (`0baa1939dbe1782fbacbd28a91876db5027b8dfb`) без внешнего Ace Stream Engine.
 
-Результат sweep:
+Первичный post-#134 baseline:
 
 - 8 реальных источников;
 - 3 источника дошли до Media3 READY + first frame;
@@ -17,55 +17,78 @@
 
 `content_id -> transport descriptor -> derived live swarm key -> live peer acquisition`.
 
-`content_id` и live swarm key не должны считаться взаимозаменяемыми по умолчанию. Direct use `content_id` как live swarm key остаётся только speculative fast path, а не authoritative resolution.
+`content_id` и live swarm key не считаются взаимозаменяемыми по умолчанию. Direct use `content_id` как live swarm key остаётся speculative fast path, а не authoritative transport resolution.
 
-## Найденная protocol mismatch
+## Первый protocol mismatch, закрытый в #136
 
-Текущий `AceContentMetadataPeerResolver` описывает обмен как BEP-9 `ut_metadata`, но до #136 открывал metadata peer соединение через live-media outer handshake `AceStreamProtocol`.
+До #136 `AceContentMetadataPeerResolver` описывал обмен как BEP-9 `ut_metadata`, но открывал metadata peer соединение через live-media outer handshake `AceStreamProtocol`.
 
-BEP-9 использует BEP-10 extension protocol, а BEP-10 договаривается после стандартного BitTorrent peer handshake. Поэтому metadata swarm и Ace live-media swarm должны иметь разные outer-handshake codecs.
+Metadata swarm и Ace live-media swarm теперь имеют разные outer-handshake boundaries:
 
-## Текущий bounded fix — PR #136
+- metadata peer outer handshake: стандартный `BitTorrent protocol`;
+- выставляется BEP-10 extension bit;
+- remote handshake проверяется по protocol name, ожидаемому 20-byte content identity/info-hash и extension support;
+- live-media peer path продолжает использовать `AceStreamProtocol` и не изменён.
 
-PR #136 меняет только Content-ID metadata peer wire boundary:
+Exact-head Android CI #581 для первой версии #136 был зелёным, включая real Torrent TV playback smoke без внешнего Ace Engine.
 
-- metadata peer outer handshake: `BitTorrent protocol`;
-- выставляется BEP-10 reserved bit `reserved[5] & 0x10`;
-- проверяются protocol name, Content-ID/info-hash bytes и support extension protocol у remote peer;
-- существующий signed extended handshake и `ut_metadata` transfer остаются без изменения;
-- `AceLivePeerHandshakeCodec` для live-media peers остаётся `AceStreamProtocol`;
-- DHT/tracker budgets, peer target/max, startup/no-peer timeout, request/handshake timeout, scheduler, HTTP/Media3, TS recovery и output buffer не меняются.
+## Что показал следующий diagnostic sweep
 
-## Field gate для #136
+Повторный multi-channel sweep после исправления outer handshake подтвердил прогресс, но не прошёл production field gate:
 
-Решение считается подтверждённым только после exact-head CI и повторного real Torrent TV sweep на том же 8-channel классе выборки.
+- known-infohash control снова дошёл до playback;
+- один `content_id` sample также дошёл до playback через speculative direct-live path;
+- остальные content-id samples завершились bounded timeout;
+- metadata peer теперь доходил до `peer_accepted` и BEP-10 extended handshake;
+- реальная ошибка сместилась с outer-handshake mismatch на `Peer metadata handshake did not advertise metadata_size`;
+- genuine `content_metadata_result success=true` по-прежнему не появился.
 
-Обязательные проверки:
+Это важно: визуально воспроизведённый `content_id` sample сам по себе не доказывает исправление metadata resolver, потому что direct-live race может выиграть независимо от metadata transport resolution.
 
-1. core P2P/unit tests + lint/build gates green;
-2. real Torrent TV playback smoke без внешнего Ace Stream Engine green;
-3. multi-channel sweep не регрессирует ранее успешные live paths;
-4. `content_metadata_result success=true` появляется хотя бы на реальном `content_id` sample;
-5. при metadata success transport descriptor должен дать derived live swarm key, после чего startup идёт по обычному live path.
+## Текущий bounded fix
 
-Если пункт 4 остаётся false для всех samples, #136 не считается достаточным исправлением только потому, что unit tests зелёные.
+Полевые peers рекламируют `m.ut_metadata`, но часть из них не включает `metadata_size` в extended handshake. BEP-9 data message для metadata piece содержит `total_size` с теми же size semantics, поэтому resolver теперь поддерживает совместимый bounded fallback:
 
-## Следующий шаг, только если #136 не даёт real metadata success
+1. если handshake содержит валидный `metadata_size`, сохраняется прежний bounded multi-piece flow;
+2. если `ut_metadata` есть, но `metadata_size` отсутствует, resolver запрашивает только piece 0;
+3. первый `ut_metadata` data response обязан сообщить `total_size`;
+4. `total_size` проверяется тем же upper bound, после чего выделяется точный буфер;
+5. piece 0 валидируется и копируется;
+6. только после этого запрашиваются оставшиеся pieces;
+7. missing/invalid `total_size`, reject, partial piece или изменение размера остаются hard failure этого peer.
 
-Не менять live peer pool вслепую. Следующий отдельный observational increment должен разделить Content-ID resolver по стадиям:
+Regression test покрывает реальный compatibility case: extended handshake без `metadata_size`, затем piece 0 с `total_size`, после чего descriptor успешно декодируется.
 
-`metadata discovery -> TCP connect -> outer BitTorrent handshake -> BEP-10 extended handshake -> ut_metadata blocks -> transport decode`.
+## Что намеренно не меняется
 
-Отдельно фиксировать catalog outcome и metadata-swarm outcome. После этого менять только доказанную сломанную стадию.
+- live Ace peer wire и live handshake;
+- live peer target/max и refill policy;
+- DHT query/time budgets;
+- 60-second preparation deadline и no-connected-peer guard;
+- handshake/request timeout live runtime;
+- scheduler/request depth/replacement/recovery;
+- TS auth/resync/discontinuity gate;
+- HTTP Range/resume и Media3 policy;
+- output buffer/cache capacity;
+- ordinary IPTV и ordinary BitTorrent;
+- внешний Ace Stream Engine не становится runtime dependency или fallback.
 
-Возможные решения после такого evidence:
+## Merge gate для #136
 
-- нет metadata candidates -> исправлять metadata discovery/tracker/DHT path;
-- TCP есть, outer handshake отклоняется -> проверять metadata peer protocol/identity;
-- outer handshake проходит, BEP-10 не проходит -> исправлять extended-handshake negotiation;
-- `ut_metadata` reject/partial -> исправлять extension-id/framing/block exchange;
-- transport bytes получены, decode падает -> исправлять descriptor compatibility;
-- transport resolution стабилен, но live startup всё ещё падает -> возвращаться к outcome-aware unseen endpoint acquisition.
+#136 разрешено merge только при одновременном выполнении двух условий:
+
+1. exact-head Android CI полностью зелёный: real Torrent TV smoke без Ace Engine, lint, core P2P/unit tests, debug/instrumentation build, signed ARM TV APK/source packaging;
+2. свежий diagnostic multi-channel sweep показывает хотя бы один **genuine metadata/catalog success** для реального `content_id`, а known-infohash control не регрессирует.
+
+Diagnostic sweep branch не является production-кодом и не должен merge в `main`.
+
+## Следующее решение после field gate
+
+- Если metadata resolution начинает успешно возвращать transport descriptor, #136 закрывает текущий Content-ID transport blocker. Затем live startup снова оценивается по derived live swarm key и lifecycle evidence.
+- Если metadata peers теперь отвечают data frames, но descriptor decode падает, следующий PR должен быть только descriptor-compatibility fix.
+- Если peers рекламируют `ut_metadata`, но не отвечают даже на bounded piece-0 request, следующий PR должен разбирать extension-id/framing/request compatibility, не live peer pool.
+- Только после transport-resolution parity разрешено возвращаться к outcome-aware unseen endpoint acquisition / competitive live-peer qualification, если свежий live lifecycle по-прежнему показывает repeated failed endpoints.
+- Forward reserve, pre-READY pressure и decoder warmup остаются gated на наличие стабильного useful/producing peer evidence.
 
 ## Обновлённый порядок V4d
 
@@ -73,12 +96,17 @@ PR #136 меняет только Content-ID metadata peer wire boundary:
 2. ✅ #132 — persistent live-peer lifecycle reasons.
 3. ✅ #133 — R3 field gate.
 4. ✅ #134 — tracker fast path + bounded DHT startup diversity.
-5. 🚧 **#136 — Content-ID transport metadata peer-wire correctness.**
-6. ⏳ Повторный exact-head 8-channel sweep и сравнение с baseline 3/8 + metadata 0/7.
-7. ⏳ Если metadata path всё ещё не работает — stage diagnostics, затем один узкий resolver fix.
-8. ⏳ Только после transport-resolution parity — outcome-aware unseen DHT endpoint acquisition, если live lifecycle всё ещё показывает repeated failed endpoints.
-9. ⏳ Competitive live-peer acquisition — только если свежих endpoints достаточно, но они реально квалифицируются недостаточно конкурентно.
-10. ⏳ Forward reserve / pre-READY pressure / decoder warmup — только после доказанного producing peer и соответствующего buffer/player evidence.
+5. 🚧 #136 — Content-ID metadata transport correctness:
+   - ✅ standard BitTorrent/BEP-10 outer handshake;
+   - ✅ field evidence дошёл до extended handshake;
+   - ✅ bounded BEP-9 `total_size` fallback добавлен;
+   - ⏳ fresh exact-head CI;
+   - ⏳ fresh multi-channel field sweep with genuine metadata success.
+6. ⏳ Если transport resolution всё ещё не проходит — один узкий fix по фактической stage evidence.
+7. ⏳ После transport-resolution parity — outcome-aware unseen endpoint acquisition, только если live lifecycle требует этого.
+8. ⏳ Competitive live-peer acquisition — только если свежих endpoints достаточно, но qualification underutilizes их.
+9. ⏳ Forward reserve / pre-READY pressure / decoder warmup — только по соответствующей producer/buffer/player telemetry.
+10. ⏳ Broad acceptance — fixed TV Box matrix, rapid-zap, weak-network/peer-loss и 2h/8h ARM soak.
 
 ## Инварианты
 
@@ -92,4 +120,4 @@ PR #136 меняет только Content-ID metadata peer wire boundary:
 - recovery `maxPieceAdvance`;
 - output buffer/cache capacity.
 
-Не вводить HTTP logical-offset resume без реального Range/reopen mismatch. Не добавлять внешний Ace Stream Engine как runtime dependency.
+Не вводить HTTP logical-offset resume без реального Range/reopen mismatch. Не считать generic UI-текст о stale content ID доказательством stale source. Не добавлять внешний Ace Stream Engine как runtime dependency.
