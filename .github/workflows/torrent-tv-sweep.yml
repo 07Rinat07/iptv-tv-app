@@ -1,0 +1,145 @@
+name: Torrent TV Sweep
+
+# Disposable diagnostic field gate for PR #136. Never merge this workflow into main.
+on:
+  pull_request:
+    paths:
+      - 'app/src/androidTest/java/com/iptv/tv/TorrentTvSweepDiagnosticTest.kt'
+      - '.github/workflows/torrent-tv-sweep.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      ANDROID_HOME: ${{ github.workspace }}/.android-sdk
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/.android-sdk
+      ANDROID_AVD_HOME: /tmp/android-avd
+      ANDROID_API_LEVEL: '35'
+      ANDROID_BUILD_TOOLS: '35.0.0'
+      GRADLE_OPTS: -Dorg.gradle.workers.max=2
+      TZ: UTC
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    steps:
+      - name: Checkout exact diagnostic head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Verify diagnostic base and production ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          readonly EXPECTED_MAIN='42bdac813c160bd48a191ee173a17d0610abf544'
+          readonly EXPECTED_PRODUCTION_HEAD='1c6e42f8eb1e2778f0203c75f2a9db5d92155f41'
+          echo "Diagnostic head: $(git rev-parse HEAD)"
+          echo "PR base: ${{ github.event.pull_request.base.sha }}"
+          test "${{ github.event.pull_request.base.sha }}" = "$EXPECTED_MAIN"
+          git merge-base --is-ancestor "$EXPECTED_PRODUCTION_HEAD" HEAD
+          git diff --name-only "$EXPECTED_PRODUCTION_HEAD" HEAD
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          java-package: jdk
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      - name: Install Android SDK and emulator
+        shell: bash
+        run: |
+          mkdir -p "$ANDROID_SDK_ROOT" "$ANDROID_AVD_HOME"
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
+            'platform-tools' \
+            "platforms;android-${ANDROID_API_LEVEL}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            'emulator' \
+            "system-images;android-${ANDROID_API_LEVEL};google_apis;x86_64"
+          printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > local.properties
+          chmod +x ./gradlew
+
+      - name: Compile sweep instrumentation
+        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
+
+      - name: Run real multi-channel Torrent TV sweep
+        id: sweep-run
+        continue-on-error: true
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts/torrent-tv-sweep "$ANDROID_AVD_HOME"
+          echo 'no' | avdmanager create avd --force --name iptv-sweep \
+            --package "system-images;android-${ANDROID_API_LEVEL};google_apis;x86_64"
+          sudo chmod 666 /dev/kvm || true
+          nohup "$ANDROID_SDK_ROOT/emulator/emulator" \
+            -avd iptv-sweep -no-window -no-audio -no-boot-anim \
+            -gpu swiftshader_indirect -no-snapshot -no-metrics \
+            > build-artifacts/torrent-tv-sweep/emulator.log 2>&1 &
+          timeout 45 adb wait-for-device
+          timeout 240 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb shell input keyevent 82 || true
+          if adb shell pm list packages | grep -Eqi 'acestream|torrentstream'; then
+            echo 'Unexpected external Ace/TorrentStream package found on clean emulator'
+            exit 1
+          fi
+          APP_APK="$(find app/build/outputs/apk/debug -type f -name '*x86_64*.apk' -print -quit)"
+          TEST_APK="$(find app/build/outputs/apk/androidTest/debug -type f -name '*.apk' -print -quit)"
+          test -n "$APP_APK" && test -n "$TEST_APK"
+          adb install -r "$APP_APK"
+          adb install -r "$TEST_APK"
+          adb logcat -c || true
+          set +e
+          adb shell am instrument -w -r \
+            -e class com.iptv.tv.TorrentTvSweepDiagnosticTest \
+            com.iptv.tv.test/com.iptv.tv.HiltTestRunner \
+            2>&1 | tee build-artifacts/torrent-tv-sweep/instrumentation-output.log
+          instrument_status=${PIPESTATUS[0]}
+          set -e
+          exit "$instrument_status"
+
+      - name: Collect sweep evidence
+        if: always()
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set +e
+          mkdir -p build-artifacts/torrent-tv-sweep/device
+          timeout 25s adb logcat -d -v threadtime > build-artifacts/torrent-tv-sweep/adb-logcat.txt 2>&1 || true
+          timeout 30s adb pull /storage/emulated/0/Android/data/com.iptv.tv/files/torrent-tv-sweep \
+            build-artifacts/torrent-tv-sweep/device/ || true
+          grep -E 'TORRENT_TV_SWEEP|content_metadata|catalog_result|P2P/AceCatalog|P2P/AceMetadata|embedded_ace_live_peer_discovery|embedded_ace_live_peer_lifecycle|embedded_ace_live_startup_timeline|player_ready|FATAL EXCEPTION|AndroidRuntime' \
+            build-artifacts/torrent-tv-sweep/adb-logcat.txt \
+            > build-artifacts/torrent-tv-sweep/p2p-filtered-logcat.txt || true
+          find build-artifacts/torrent-tv-sweep -maxdepth 6 -type f -print | sort
+          timeout 15s adb emu kill >/dev/null 2>&1 || true
+
+      - name: Upload sweep evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: torrent-tv-sweep-evidence
+          path: build-artifacts/torrent-tv-sweep/**
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce sweep execution result
+        if: always() && steps.sweep-run.outcome == 'failure'
+        run: |
+          echo 'Torrent TV sweep failed. Inspect torrent-tv-sweep-evidence.'
+          exit 1
