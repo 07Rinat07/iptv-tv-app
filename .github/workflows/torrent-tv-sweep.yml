@@ -120,7 +120,9 @@ jobs:
           instrument_status=${PIPESTATUS[0]}
           set -e
           if [ "$instrument_status" -ne 0 ] || \
-             grep -Eq 'INSTRUMENTATION_CODE: -1|FAILURES!!!|Tests run: [0-9]+, +Failures: [1-9][0-9]*' \
+             grep -Eq 'FAILURES!!!|Tests run: [0-9]+, +Failures: [1-9][0-9]*' \
+               build-artifacts/torrent-tv-sweep/instrumentation-output.log || \
+             ! grep -Eq 'OK \([0-9]+ test(s)?\)' \
                build-artifacts/torrent-tv-sweep/instrumentation-output.log; then
             echo "Torrent TV instrumentation failed (adb_status=$instrument_status)"
             exit 1
