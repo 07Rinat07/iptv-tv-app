@@ -83,6 +83,60 @@ class AceContentMetadataPeerResolverTest {
     }
 
     @Test
+    fun fetchesTransportDescriptorWhenPeerOmitsMetadataSizeFromHandshake() = runBlocking {
+        val contentId = AceLiveSwarmKey.parseHex("50bc2f512793f1e745fb5bd5b5a6afca199c2d19")!!
+        val localPeerId = AceLiveNodeIdentity.peerId()
+        val remotePeerId = AceLiveNodeIdentity.peerId()
+        val transportBytes = testTransport()
+        val peerHandshake = AceContentMetadataPeerHandshakeCodec().encode(
+            contentId.toByteArray(),
+            remotePeerId
+        )
+        val extendedHandshake = frame(
+            id = 20,
+            payload = byteArrayOf(0) + AceBencodeEncoder.encode(
+                AceBencodeValue.Dictionary(
+                    mapOf(
+                        "m" to AceBencodeValue.Dictionary(
+                            mapOf("ut_metadata" to AceBencodeValue.Integer(5))
+                        )
+                    )
+                )
+            )
+        )
+        val metadataData = frame(
+            id = 20,
+            payload = byteArrayOf(2) + AceBencodeEncoder.encode(
+                AceBencodeValue.Dictionary(
+                    mapOf(
+                        "msg_type" to AceBencodeValue.Integer(1),
+                        "piece" to AceBencodeValue.Integer(0),
+                        "total_size" to AceBencodeValue.Integer(transportBytes.size.toLong())
+                    )
+                )
+            ) + transportBytes
+        )
+        val fake = ScriptedTransport(peerHandshake + extendedHandshake + metadataData)
+        val resolver = AceContentMetadataPeerResolver(
+            transportFactory = AceLiveTcpTransportFactory { _, _ -> fake }
+        )
+
+        val result = resolver.fetchFromPeer(
+            endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9000),
+            contentId = contentId,
+            peerId = localPeerId,
+            identity = AceLiveNodeIdentity.generate()
+        )
+
+        assertTrue(result is P2pResult.Success)
+        val resolved = (result as P2pResult.Success).data
+        assertEquals("Metadata Test", resolved.name)
+        assertEquals(3, fake.writes.size)
+        assertEquals(20, fake.writes[2][4].toInt() and 0xff)
+        assertEquals(5, fake.writes[2][5].toInt() and 0xff)
+    }
+
+    @Test
     fun metadataHandshakeRejectsPeerWithoutExtensionProtocol() {
         val infoHash = ByteArray(20) { 0x11 }
         val peerId = ByteArray(20) { 0x22 }
