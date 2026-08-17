@@ -1,15 +1,27 @@
 # Документация Rinat IPTV
 
-Здесь находятся только актуальные документы проекта.
+В этом каталоге находятся актуальные архитектурные документы, текущий план и датированные field-evidence материалы. Датированные отчёты сохраняются как исторические свидетельства и не переписываются под более новое состояние проекта.
 
-## Основное
+## С чего начинать
 
-- [`ROADMAP.md`](ROADMAP.md) — выполненные и следующие этапы; автономный Ace Live engine является текущим главным playback-приоритетом.
+- [`PROJECT_STATUS_AND_ROADMAP.md`](PROJECT_STATUS_AND_ROADMAP.md) — **канонический текущий статус проекта, активный blocker, merge gates и порядок следующих решений**. Если старый датированный roadmap называет другой «текущий increment», приоритет имеет этот файл.
+- [`ROADMAP.md`](ROADMAP.md) — длинная история выполненных и следующих этапов проекта.
 - [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md) — подтверждённый статус IPTV/Torrent TV, известные проблемы и критерии готовности.
-- [`ACE_LIVE_ADAPTIVE_STREAMING_CORE.md`](ACE_LIVE_ADAPTIVE_STREAMING_CORE.md) — текущая архитектурная цель: media-producing peers, adaptive prebuffer/scheduler, player boundary и метрики качества.
-- [`ACE_LIVE_IMPLEMENTATION_PLAN.md`](ACE_LIVE_IMPLEMENTATION_PLAN.md) — подробная история clean-room Ace Live protocol/runtime инкрементов и оставшиеся автономные задачи.
+
+## Ace Live / P2P
+
+- [`ACE_LIVE_IMPLEMENTATION_PLAN.md`](ACE_LIVE_IMPLEMENTATION_PLAN.md) — подробная история clean-room Ace Live protocol/runtime инкрементов и архитектурные ограничения.
+- [`ACE_LIVE_ADAPTIVE_STREAMING_CORE.md`](ACE_LIVE_ADAPTIVE_STREAMING_CORE.md) — архитектурная цель: media-producing peers, adaptive prebuffer/scheduler, player boundary и метрики качества.
 - [`P2P_RUNTIME_NOTES.md`](P2P_RUNTIME_NOTES.md) — runtime invariants, timeout ownership, buffering и acceptance rules.
-- [`P2P_CONTENT_TRANSPORT.md`](P2P_CONTENT_TRANSPORT.md) — границы content-id, BitTorrent transport и Ace Live.
+- [`P2P_CONTENT_TRANSPORT.md`](P2P_CONTENT_TRANSPORT.md) — границы `content_id`, BitTorrent transport и Ace Live.
+- [`ACE_LIVE_STARTUP_TIMELINE.md`](ACE_LIVE_STARTUP_TIMELINE.md) — канонические startup milestones и диагностические границы.
+- [`ACE_LIVE_PEER_LIFECYCLE_TELEMETRY_2026-08-16.md`](ACE_LIVE_PEER_LIFECYCLE_TELEMETRY_2026-08-16.md) — lifecycle reason telemetry для `connected / handshake / disconnect` evidence.
+- [`ROADMAP_V4D_FIELD_2026-08-16.md`](ROADMAP_V4D_FIELD_2026-08-16.md) — исторический R2/R3 V4d field execution record до/включая PR #134; его раздел «текущий increment» после 2026-08-17 считается superseded каноническим статусом выше.
+- `ACE_LIVE_FIELD_VALIDATION_*.md` и [`ACE_LIVE_FIELD_VALIDATION_R3_GUIDE_2026-08-16.md`](ACE_LIVE_FIELD_VALIDATION_R3_GUIDE_2026-08-16.md) — датированные field-evidence и процедура повторяемой проверки; хранить как evidence, а не как текущий roadmap.
+- [`ACE_LIVE_EXTERNAL_STREAMING_REFERENCES_2026-08-16.md`](ACE_LIVE_EXTERNAL_STREAMING_REFERENCES_2026-08-16.md) — clean-room/reference findings; внешние реализации не являются runtime dependency проекта.
+
+## Остальная документация
+
 - [`architecture.md`](architecture.md) — структура модулей и границы ответственности.
 - [`features/player.md`](features/player.md) — стартовый сценарий и плеер.
 - [`features/scanner-import-editor.md`](features/scanner-import-editor.md) — сканер, импорт и редактор.
