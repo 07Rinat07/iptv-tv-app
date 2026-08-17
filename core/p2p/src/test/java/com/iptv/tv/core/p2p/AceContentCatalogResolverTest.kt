@@ -40,7 +40,7 @@ class AceContentCatalogResolverTest {
 
     @Test
     fun boundedCatalogReadRejectsUnknownLengthResponseAboveLimit() {
-        val source = Buffer().write(ByteArray(1024 * 1024 + 1) { 0x2a })
+        val source = Buffer().write(ByteArray(1024 * 1024 + 1) { 0x2a.toByte() })
 
         val failure = runCatching {
             resolver.readBoundedResponse(source, declaredLength = -1L)
