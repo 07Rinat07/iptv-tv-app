@@ -1,5 +1,6 @@
 name: Torrent TV Sweep
 
+# Diagnostic-only field gate. Current rerun validates PR #136 BEP-9 total_size fallback.
 on:
   pull_request:
     paths:
