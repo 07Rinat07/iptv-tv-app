@@ -17,6 +17,8 @@ import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okio.Buffer
+import okio.BufferedSource
 import okio.ByteString.Companion.decodeBase64
 
 /** Resolves a 40-hex Ace content ID through the signed public transport catalog. */
@@ -117,14 +119,7 @@ class AceContentCatalogResolver(
                                 throw IOException("Ace catalog HTTP ${current.code}")
                             }
                             val body = current.body ?: throw IOException("Ace catalog response is empty")
-                            val declaredLength = body.contentLength()
-                            if (declaredLength > MAX_RESPONSE_BYTES) {
-                                throw IOException("Ace catalog response exceeds the size limit")
-                            }
-                            val bytes = body.source().readByteArray(MAX_RESPONSE_BYTES.toLong() + 1L)
-                            if (bytes.size > MAX_RESPONSE_BYTES) {
-                                throw IOException("Ace catalog response exceeds the size limit")
-                            }
+                            val bytes = readBoundedResponse(body.source(), body.contentLength())
                             parseResponse(bytes.toString(Charsets.UTF_8))
                         }
                         if (continuation.isActive) continuation.resume(transport)
@@ -134,6 +129,23 @@ class AceContentCatalogResolver(
                 }
             })
         }
+    }
+
+    internal fun readBoundedResponse(source: BufferedSource, declaredLength: Long): ByteArray {
+        if (declaredLength > MAX_RESPONSE_BYTES) {
+            throw IOException("Ace catalog response exceeds the size limit")
+        }
+
+        val buffer = Buffer()
+        val readLimit = MAX_RESPONSE_BYTES.toLong() + 1L
+        while (buffer.size < readLimit) {
+            val read = source.read(buffer, readLimit - buffer.size)
+            if (read == -1L) break
+        }
+        if (buffer.size > MAX_RESPONSE_BYTES) {
+            throw IOException("Ace catalog response exceeds the size limit")
+        }
+        return buffer.readByteArray()
     }
 
     internal fun parseResponse(xml: String): ByteArray {
