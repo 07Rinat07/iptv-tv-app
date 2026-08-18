@@ -136,6 +136,110 @@ class AceLivePeerDiagnosticsReporterTest {
     }
 
     @Test
+    fun usefulUnchokedPeerWithoutProducerEmitsExplicitProducerGap() {
+        val events = mutableListOf<Pair<String, String>>()
+        val reporter = AceLivePeerDiagnosticsReporter(
+            observer = { status, message -> events += status to message },
+            periodicIntervalMillis = 5_000L
+        )
+
+        reporter.maybeReport(
+            snapshot(
+                discovered = 2,
+                connected = 1,
+                handshaked = 1,
+                windowUseful = 1,
+                unchoked = 1,
+                producing = 0
+            ),
+            nowMillis = 1_000L
+        )
+
+        val gap = events.single { it.first == "embedded_ace_live_producer_gap" }.second
+        assertTrue(gap.contains("state=active"))
+        assertTrue(gap.contains("handshaked=1"))
+        assertTrue(gap.contains("windowUseful=1"))
+        assertTrue(gap.contains("unchoked=1"))
+        assertTrue(gap.contains("producing=0"))
+    }
+
+    @Test
+    fun producerGapRequiresUsefulAndUnchokedPeer() {
+        val events = mutableListOf<Pair<String, String>>()
+        val reporter = AceLivePeerDiagnosticsReporter(
+            observer = { status, message -> events += status to message }
+        )
+
+        reporter.maybeReport(
+            snapshot(connected = 1, handshaked = 1, windowUseful = 0, unchoked = 1, producing = 0),
+            nowMillis = 1_000L
+        )
+        reporter.maybeReport(
+            snapshot(connected = 1, handshaked = 1, windowUseful = 1, unchoked = 0, producing = 0),
+            nowMillis = 1_200L
+        )
+
+        assertTrue(events.none { it.first == "embedded_ace_live_producer_gap" })
+    }
+
+    @Test
+    fun persistentProducerGapIsRateLimitedAndThenRefreshed() {
+        val events = mutableListOf<Pair<String, String>>()
+        val reporter = AceLivePeerDiagnosticsReporter(
+            observer = { status, message -> events += status to message },
+            periodicIntervalMillis = 5_000L
+        )
+        val gapSnapshot = snapshot(
+            connected = 1,
+            handshaked = 1,
+            windowUseful = 1,
+            unchoked = 1,
+            producing = 0
+        )
+
+        reporter.maybeReport(gapSnapshot, nowMillis = 1_000L)
+        reporter.maybeReport(gapSnapshot, nowMillis = 1_200L)
+        reporter.maybeReport(gapSnapshot, nowMillis = 5_999L)
+        reporter.maybeReport(gapSnapshot, nowMillis = 6_000L)
+
+        val gapEvents = events.filter { it.first == "embedded_ace_live_producer_gap" }
+        assertEquals(2, gapEvents.size)
+        assertTrue(gapEvents.all { it.second.contains("state=active") })
+    }
+
+    @Test
+    fun producerGapEmitsResolutionWhenMediaProducerAppears() {
+        val events = mutableListOf<Pair<String, String>>()
+        val reporter = AceLivePeerDiagnosticsReporter(
+            observer = { status, message -> events += status to message },
+            periodicIntervalMillis = 5_000L
+        )
+
+        reporter.maybeReport(
+            snapshot(connected = 1, handshaked = 1, windowUseful = 1, unchoked = 1, producing = 0),
+            nowMillis = 1_000L
+        )
+        reporter.maybeReport(
+            snapshot(
+                connected = 1,
+                handshaked = 1,
+                windowUseful = 1,
+                unchoked = 1,
+                producing = 1,
+                aggregateBytesPerSecond = 200_000L,
+                freshestMediaAgeMillis = 0L
+            ),
+            nowMillis = 1_300L
+        )
+
+        val gapEvents = events.filter { it.first == "embedded_ace_live_producer_gap" }
+        assertEquals(2, gapEvents.size)
+        assertTrue(gapEvents.first().second.contains("state=active"))
+        assertTrue(gapEvents.last().second.contains("state=resolved"))
+        assertTrue(gapEvents.last().second.contains("producing=1"))
+    }
+
+    @Test
     fun missingFreshMediaUsesExplicitNoneValue() {
         val reporter = AceLivePeerDiagnosticsReporter(observer = { _, _ -> })
 
