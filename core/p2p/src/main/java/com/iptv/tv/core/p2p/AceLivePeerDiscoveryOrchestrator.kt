@@ -96,8 +96,9 @@ internal enum class AceLiveStartupDhtRefillPlan {
  * Tracker count is discovery evidence, not qualification evidence. A tracker-only result can contain
  * several endpoints that all fail TCP/Ace qualification, as the R3 TV Box run demonstrated. The
  * tracker fast path must therefore remain non-blocking for the first TCP attempts while scheduling
- * bounded DHT diversity work in the background until startup reaches media-ready. Short probes still
- * return after the first DHT endpoint and the existing full expansion remains bounded/cancellable.
+ * bounded DHT diversity work in the background until startup reaches media-ready. A short probe
+ * returns after the first DHT endpoint, then the existing full expansion supplies the independent
+ * wider routing-table path without spending a second 7-second probe window before tracker recovery.
  *
  * A weak DHT fast path (one to three endpoints) uses the same bounded probe/expansion sequence. A
  * normal DHT batch does not schedule another duplicate startup expansion.
@@ -147,7 +148,7 @@ internal fun aceLiveStartupDhtProbeShouldContinue(
 internal const val ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS = 1
 internal const val ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS = 1
 internal const val ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS = 7_000L
-internal const val ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS = 2
+internal const val ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS = 1
 
 internal const val ACE_LIVE_DHT_MIN_HEAP_HEADROOM_BYTES: Long = 32L * 1024L * 1024L
 

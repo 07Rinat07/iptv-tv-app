@@ -60,4 +60,24 @@ class AceLiveStartupConnectivityPolicyTest {
             )
         )
     }
+
+    @Test
+    fun `startup DHT probe stays independent from tracker candidates`() {
+        assertFalse(
+            aceLiveStartupDiscoveryShouldUseTracker(
+                useStartupDhtProbeRefill = true,
+                useStartupDhtFullExpansion = false
+            )
+        )
+    }
+
+    @Test
+    fun `startup full expansion restores tracker alongside DHT`() {
+        assertTrue(
+            aceLiveStartupDiscoveryShouldUseTracker(
+                useStartupDhtProbeRefill = false,
+                useStartupDhtFullExpansion = true
+            )
+        )
+    }
 }
