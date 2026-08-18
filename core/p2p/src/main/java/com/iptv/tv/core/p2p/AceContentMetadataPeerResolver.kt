@@ -59,13 +59,10 @@ class AceContentMetadataPeerResolver(
             currentCoroutineContext().ensureActive()
             transport = transportFactory.connect(endpoint, METADATA_CONNECTION_POLICY)
             val socket = requireNotNull(transport)
-            val handshakeCodec = AceLivePeerHandshakeCodec()
+            val handshakeCodec = AceContentMetadataPeerHandshakeCodec()
             socket.write(handshakeCodec.encode(contentId.toByteArray(), peerId))
-            val peerHandshake = readExactly(socket, AceLivePeerHandshakeCodec.HANDSHAKE_BYTES)
-            require(
-                handshakeCodec.decode(peerHandshake, contentId.toByteArray())
-                    is AceLivePeerHandshakeDecodeResult.Decoded
-            ) { "Ace metadata peer rejected the outer handshake" }
+            val peerHandshake = readExactly(socket, AceContentMetadataPeerHandshakeCodec.HANDSHAKE_BYTES)
+            handshakeCodec.decode(peerHandshake, contentId.toByteArray())
 
             socket.write(
                 identity.signedMetadataExtendedHandshake(System.currentTimeMillis() / 1000L)
@@ -111,12 +108,15 @@ class AceContentMetadataPeerResolver(
                 ?.toInt()
                 ?: error("Ace metadata peer did not advertise ut_metadata")
             require(extensionId in 1..255) { "Ace metadata peer advertised an invalid extension id" }
-            val size = (dictionary.values["metadata_size"] as? AceBencodeValue.Integer)?.value
-                ?: error("Ace metadata peer did not advertise metadata_size")
-            require(size in 1..MAX_METADATA_BYTES.toLong()) {
-                "Ace metadata peer advertised an invalid metadata size"
-            }
-            return MetadataParameters(extensionId, size.toInt())
+            val size = (dictionary.values["metadata_size"] as? AceBencodeValue.Integer)
+                ?.value
+                ?.also { advertisedSize ->
+                    require(advertisedSize in 1..MAX_METADATA_BYTES.toLong()) {
+                        "Ace metadata peer advertised an invalid metadata size"
+                    }
+                }
+                ?.toInt()
+            return MetadataParameters(extensionId, size)
         }
         error("Ace metadata peer did not send an extended handshake")
     }
@@ -125,19 +125,40 @@ class AceContentMetadataPeerResolver(
         frames: PeerFrameReader,
         transport: AceLiveTcpTransport,
         peerMetadataExtensionId: Int,
-        metadataSize: Int
+        metadataSize: Int?
     ): ByteArray {
-        val pieceCount = (metadataSize + METADATA_BLOCK_BYTES - 1) / METADATA_BLOCK_BYTES
-        repeat(pieceCount) { piece ->
-            transport.write(encodeMetadataRequest(peerMetadataExtensionId, piece))
+        var resolvedSize = metadataSize
+        var pieceCount = resolvedSize?.let { size ->
+            (size + METADATA_BLOCK_BYTES - 1) / METADATA_BLOCK_BYTES
+        }
+        var output = resolvedSize?.let(::ByteArray)
+        var received = pieceCount?.let(::BooleanArray)
+        var remaining = pieceCount ?: -1
+
+        if (pieceCount == null) {
+            // Some deployed BEP-9 peers advertise ut_metadata but omit metadata_size from their
+            // extension handshake. Probe piece 0 only; a data response carries mandatory
+            // total_size, which lets us keep the same bounded allocation and piece validation.
+            transport.write(encodeMetadataRequest(peerMetadataExtensionId, 0))
+        } else {
+            repeat(requireNotNull(pieceCount)) { piece ->
+                transport.write(encodeMetadataRequest(peerMetadataExtensionId, piece))
+            }
         }
 
-        val output = ByteArray(metadataSize)
-        val received = BooleanArray(pieceCount)
-        var remaining = pieceCount
         var framesRead = 0
-        while (remaining > 0 && framesRead < pieceCount * MAX_FRAMES_PER_METADATA_PIECE + 32) {
+        while (true) {
+            if (remaining == 0) return requireNotNull(output)
+            val currentFrameBudget = (pieceCount ?: 1) * MAX_FRAMES_PER_METADATA_PIECE + 32
+            require(framesRead < currentFrameBudget) {
+                if (resolvedSize == null) {
+                    "Ace metadata peer did not report metadata total_size"
+                } else {
+                    "Ace metadata peer did not return every metadata piece"
+                }
+            }
             framesRead += 1
+
             val message = frames.next()
             if (message !is AceLivePeerWireMessage.Unknown || message.id != EXTENDED_MESSAGE_ID) {
                 continue
@@ -156,23 +177,48 @@ class AceContentMetadataPeerResolver(
             val piece = (header.values["piece"] as? AceBencodeValue.Integer)?.value?.toInt()
                 ?: continue
             if (messageType == METADATA_REJECT) error("Ace metadata peer rejected a metadata piece")
-            if (messageType != METADATA_DATA || piece !in 0 until pieceCount || received[piece]) {
-                continue
-            }
-            (header.values["total_size"] as? AceBencodeValue.Integer)?.value?.let { total ->
-                require(total == metadataSize.toLong()) { "Ace metadata peer changed metadata_size" }
+            if (messageType != METADATA_DATA) continue
+
+            val learnedSizeThisFrame = resolvedSize == null
+            if (learnedSizeThisFrame && piece != 0) continue
+            val totalSize = (header.values["total_size"] as? AceBencodeValue.Integer)?.value
+            if (learnedSizeThisFrame) {
+                val learnedSize = totalSize
+                    ?: error("Ace metadata peer omitted total_size from the first metadata piece")
+                require(learnedSize in 1..MAX_METADATA_BYTES.toLong()) {
+                    "Ace metadata peer reported an invalid metadata total_size"
+                }
+                resolvedSize = learnedSize.toInt()
+                pieceCount = (resolvedSize + METADATA_BLOCK_BYTES - 1) / METADATA_BLOCK_BYTES
+                output = ByteArray(resolvedSize)
+                received = BooleanArray(requireNotNull(pieceCount))
+                remaining = requireNotNull(pieceCount)
+            } else if (totalSize != null) {
+                require(totalSize == requireNotNull(resolvedSize).toLong()) {
+                    "Ace metadata peer changed metadata_size"
+                }
             }
 
+            val currentSize = requireNotNull(resolvedSize)
+            val currentPieceCount = requireNotNull(pieceCount)
+            val currentOutput = requireNotNull(output)
+            val currentReceived = requireNotNull(received)
+            if (piece !in 0 until currentPieceCount || currentReceived[piece]) continue
+
             val offset = piece * METADATA_BLOCK_BYTES
-            val expected = minOf(METADATA_BLOCK_BYTES, metadataSize - offset)
+            val expected = minOf(METADATA_BLOCK_BYTES, currentSize - offset)
             val data = encodedAndData.copyOfRange(consumedBytes, encodedAndData.size)
             require(data.size == expected) { "Ace metadata peer returned a partial metadata piece" }
-            data.copyInto(output, offset)
-            received[piece] = true
+            data.copyInto(currentOutput, offset)
+            currentReceived[piece] = true
             remaining -= 1
+
+            if (learnedSizeThisFrame && currentPieceCount > 1) {
+                for (nextPiece in 1 until currentPieceCount) {
+                    transport.write(encodeMetadataRequest(peerMetadataExtensionId, nextPiece))
+                }
+            }
         }
-        require(remaining == 0) { "Ace metadata peer did not return every metadata piece" }
-        return output
     }
 
     private fun encodeMetadataRequest(extensionId: Int, piece: Int): ByteArray {
@@ -232,7 +278,7 @@ class AceContentMetadataPeerResolver(
         }
     }
 
-    private data class MetadataParameters(val extensionId: Int, val sizeBytes: Int)
+    private data class MetadataParameters(val extensionId: Int, val sizeBytes: Int?)
 
     private companion object {
         val METADATA_CONNECTION_POLICY = AceLiveTcpConnectionPolicy(
@@ -265,9 +311,11 @@ private suspend fun discoverDefaultMetadataPeers(
     peerId: ByteArray,
     announcePort: Int
 ): List<AceLiveTcpPeerEndpoint> = withContext(Dispatchers.IO) {
-    // Content metadata races direct live startup for the same public content id. Returning the first
-    // DHT candidate lets metadata probing begin without owning the process-wide DHT gate for the
-    // complete 15-second walk; the direct runtime performs its own non-blocking full expansion.
+    // Field sweep #15 showed metadata tracker batches of 5-8 endpoints could trigger the generic
+    // tracker-count fast path even when every tracker endpoint then failed TCP connection. Metadata
+    // acquisition therefore must not treat tracker count as qualification evidence. Keep the existing
+    // one-peer bounded DHT return condition, but race that independent source with the tracker so a
+    // healthy-sized stale tracker batch cannot suppress DHT alternatives.
     val startupDhtDiscovery = AceLiveDhtDiscovery(
         policy = AceLiveDhtPolicy(
             returnAfterPeers = ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS
@@ -275,7 +323,10 @@ private suspend fun discoverDefaultMetadataPeers(
         reuseRecentResults = true
     )
     val result = AceLivePeerDiscoveryOrchestrator(
-        dhtDiscover = startupDhtDiscovery::discover
+        dhtDiscover = startupDhtDiscovery::discover,
+        policy = AceLivePeerDiscoveryOrchestrationPolicy(
+            preferTrackerFastPath = false
+        )
     ).discover(
         AceLivePeerDiscoveryOrchestrationRequest(
             dhtRequest = AceLiveDhtDiscoveryRequest(

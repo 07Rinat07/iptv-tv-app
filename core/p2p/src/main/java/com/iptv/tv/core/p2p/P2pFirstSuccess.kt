@@ -9,6 +9,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withTimeout
 
 /**
  * Runs P2P attempts with a bounded worker pool and returns as soon as one attempt succeeds.
@@ -77,7 +78,11 @@ internal suspend fun <I, O> firstSuccessfulP2p(
  * - if metadata resolves only after the soft window, it can replace a still-pending direct attempt
  *   immediately;
  * - failed metadata never aborts direct startup at the soft deadline. Direct startup keeps its own
- *   absolute bounded timeout, so this optimization does not weaken the existing safety bounds.
+ *   absolute bounded timeout, so this optimization does not weaken the existing safety bounds;
+ * - when a successfully resolved descriptor starts but its derived live swarm cannot produce a
+ *   stream, retry the speculative direct identity once for at most the same soft window. This keeps
+ *   a volatile/dead derived swarm from turning metadata-resolution success into a playback
+ *   regression, while preserving all existing absolute startup/no-peer/DHT bounds.
  */
 internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
     directSoftTimeoutMillis: Long,
@@ -124,8 +129,6 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
         when (val event = events.receive()) {
             is StartupRaceEvent.Direct -> when (val result = event.result) {
                 is P2pResult.Success -> {
-                    // Direct media became usable while it was still allowed to keep the active
-                    // runtime. Metadata resolution and the soft timer are no longer needed.
                     metadataJob.cancel()
                     softDeadlineJob.cancel()
                     metadataJob.join()
@@ -136,17 +139,11 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
             }
 
             is StartupRaceEvent.Metadata -> when (val result = event.result) {
-                is P2pResult.Success -> {
-                    // Keep only the descriptor here. Starting metadata playback now would close the
-                    // direct runtime; the coordinator below decides when that replacement is safe.
-                    resolvedMetadata = result
-                }
+                is P2pResult.Success -> resolvedMetadata = result
                 is P2pResult.Error -> metadataFailure = result
             }
 
-            StartupRaceEvent.DirectSoftDeadline -> {
-                directSoftDeadlineReached = true
-            }
+            StartupRaceEvent.DirectSoftDeadline -> directSoftDeadlineReached = true
         }
 
         val metadataReady = resolvedMetadata
@@ -155,8 +152,6 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
             metadataReady != null &&
             (directFailure != null || directSoftDeadlineReached)
         ) {
-            // Metadata is now the chosen path. Cancel and fully clean the speculative direct runtime
-            // before creating the resolved runtime because both attempts share the embedded engine.
             directJob.cancel()
             directJob.join()
             softDeadlineJob.cancel()
@@ -164,7 +159,28 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
             completed = if (!isCurrent()) {
                 superseded()
             } else {
-                metadataAttempt(metadataReady.data)
+                when (val metadataStartup = metadataAttempt(metadataReady.data)) {
+                    is P2pResult.Success -> metadataStartup
+                    is P2pResult.Error -> {
+                        if (!isCurrent()) {
+                            superseded()
+                        } else {
+                            when (
+                                val directRetry = runP2pAttempt("Direct Ace Live fallback retry failed") {
+                                    withTimeout(directSoftTimeoutMillis) {
+                                        directAttempt()
+                                    }
+                                }
+                            ) {
+                                is P2pResult.Success -> directRetry
+                                is P2pResult.Error -> P2pResult.Error(
+                                    message = combinedFailureMessage(directRetry, metadataStartup),
+                                    cause = metadataStartup.cause ?: directRetry.cause
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -189,8 +205,6 @@ private suspend fun <T> runP2pAttempt(
 ): P2pResult<T> = try {
     block()
 } catch (cancelled: CancellationException) {
-    // A local timeout may use CancellationException while the parent remains active. Convert that
-    // case into an ordinary attempt failure, but never swallow cancellation of the caller.
     currentCoroutineContext().ensureActive()
     P2pResult.Error(cancelled.message ?: fallbackMessage, cancelled)
 } catch (error: Throwable) {
