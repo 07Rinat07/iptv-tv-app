@@ -21,3 +21,19 @@ internal fun aceLiveStartupHasNoConnectedPeerTooLong(
         !anyTransportConnected &&
         elapsed.coerceAtLeast(0L) >= timeoutMillis
 }
+
+/**
+ * Keeps the cheap startup DHT probe independent from tracker results, then restores the tracker
+ * during the final bounded expansion so stale/failed tracker candidates can be reacquired alongside
+ * a fresh DHT walk. This changes source orchestration only; it does not widen peer or time budgets.
+ */
+internal fun aceLiveStartupDiscoveryShouldUseTracker(
+    useStartupDhtProbeRefill: Boolean,
+    useStartupDhtFullExpansion: Boolean
+): Boolean {
+    return when {
+        useStartupDhtProbeRefill -> false
+        useStartupDhtFullExpansion -> true
+        else -> true
+    }
+}
