@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           readonly EXPECTED_MAIN='42bdac813c160bd48a191ee173a17d0610abf544'
-          readonly EXPECTED_PRODUCTION_HEAD='0d2bbf1f8c9d029bcd4c34ea762f15152260ec8e'
+          readonly EXPECTED_PRODUCTION_HEAD='bc0f48c7850a6191568336d7f6a92296ab2c7fa3'
           echo "Diagnostic head: $(git rev-parse HEAD)"
           echo "PR base: ${{ github.event.pull_request.base.sha }}"
           test "${{ github.event.pull_request.base.sha }}" = "$EXPECTED_MAIN"
