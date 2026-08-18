@@ -595,8 +595,11 @@ class AceLiveEmbeddedEngine(
             ).discover(
                 AceLivePeerDiscoveryOrchestrationRequest(
                     dhtRequest = dhtRequest,
-                    trackerRequest = trackerRequest.takeUnless {
-                        useStartupDhtProbeRefill || useStartupDhtFullExpansion
+                    trackerRequest = trackerRequest.takeIf {
+                        aceLiveStartupDiscoveryShouldUseTracker(
+                            useStartupDhtProbeRefill = useStartupDhtProbeRefill,
+                            useStartupDhtFullExpansion = useStartupDhtFullExpansion
+                        )
                     }
                 )
             )
