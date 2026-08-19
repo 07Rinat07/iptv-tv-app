@@ -14,7 +14,7 @@ import android.util.Log
  * and emitted at most once per [periodicIntervalMillis], preventing healthy live traffic from
  * flooding logcat while still preserving progress evidence during a persistent producer gap.
  */
-internal class AceLiveProducerBoundaryDiagnosticsReporter(
+class AceLiveProducerBoundaryDiagnosticsReporter(
     private val observer: (status: String, message: String) -> Unit = { status, message ->
         Log.i(LOG_TAG, "$status $message")
     },
@@ -81,7 +81,7 @@ internal class AceLiveProducerBoundaryDiagnosticsReporter(
         append(piece?.toString() ?: "none")
         append(" disposition=")
         append(disposition ?: "none")
-        AceLiveProducerBoundaryStage.entries.forEach { knownStage ->
+        AceLiveProducerBoundaryStage.values().forEach { knownStage ->
             append(' ')
             append(knownStage.counterName)
             append('=')
@@ -96,7 +96,7 @@ internal class AceLiveProducerBoundaryDiagnosticsReporter(
     }
 }
 
-internal enum class AceLiveProducerBoundaryStage(
+enum class AceLiveProducerBoundaryStage(
     val wireName: String,
     val counterName: String
 ) {
