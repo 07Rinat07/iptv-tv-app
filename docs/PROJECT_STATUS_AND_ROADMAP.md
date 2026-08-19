@@ -20,64 +20,50 @@ The Content-ID metadata-resolution gate that blocked V4d live-peer work is close
 
 Diagnostic PR #143 and the related old diagnostic branches are evidence-only and must not be merged into production.
 
-## Latest V4d field evidence — 2026-08-18 post-#144 device run
+## Latest V4d field evidence — 2026-08-19 post-#146 device run
 
-A fresh real-device run from current production lineage showed that rapid channel selections are accepted and new P2P preparations are started, but most later Torrent TV selections fail before a playable localhost stream reaches the player.
+A fresh real-device run from the merged PR #146 production baseline exercised the new producer-gap diagnostics and now distinguishes two materially different producer-boundary outcomes.
 
-The strongest representative failure is no longer discovery, TCP connect or handshake:
+A healthy/control path crossed the boundary quickly:
 
-- first live candidate at about 185 ms;
-- TCP connected at about 1,534 ms;
-- Ace handshake accepted at about 1,728 ms;
-- useful live window at about 1,796 ms;
-- the peer subsequently reached `windowUseful=1`, `unchoked=1`, but remained `producing=0` with `aggregate_bps=0`.
+- handshake accepted at about 1,548 ms;
+- useful live window at about 1,584 ms;
+- `embedded_ace_live_producer_gap state=active` appeared with `handshaked=1`, `windowUseful=1`, `unchoked=1`, `producing=0`, `aggregate_bps=0`;
+- `first_media` appeared at about 2,301 ms;
+- the producer gap then emitted `state=resolved` with `producing=1` about 617 ms after gap entry.
 
-This proves that at least one important V4d failure crosses discovery, connect, handshake and requestability successfully, then stalls before authenticated media production.
+A failing path independently crossed discovery, TCP connect, handshake and useful-window qualification, then stalled at the producer boundary:
 
-The same run also contains weaker acquisition/qualification failures on other channel selections: `CONNECT_FAILED` and `REMOTE_CLOSED` occur before handshake. Those remain real secondary failure modes, but they do not justify another broad discovery or timeout change because the representative useful-peer/no-producer path is now independently observed.
+- first candidate at about 180 ms;
+- TCP connected at about 3,041 ms;
+- handshake accepted at about 3,242 ms;
+- useful live window at about 3,390 ms;
+- `embedded_ace_live_producer_gap state=active` appeared with `handshaked=1`, `windowUseful=1`, `unchoked=1`, `producing=0`, `aggregate_bps=0`;
+- no corresponding producer-gap resolution or `first_media` was observed for that failing startup before the session fell back into peer loss/reacquisition and ultimately resolved with no available peer.
 
-PR #144's intended discovery behavior is visible in this run: the final bounded startup expansion can return both tracker and DHT results, so the next increment must not simply repeat the same tracker/DHT change.
+The same device run also includes secondary acquisition failures where tracker discovery returns one candidate but TCP connection fails, and later DHT probes return zero peers. Those remain real, but they do not erase the independently observed producer-boundary stall and therefore do not justify another broad discovery, timeout or peer-count change.
 
-## Current V4d blocker: post-#146 producer-boundary field evidence
+## Current V4d blocker: localize the producer boundary
 
-Bounded producer-gap observability is now landed in production via PR #146. The current gate is **real-device evidence from the post-#146 `main`**, not another behavior change.
+The post-#146 field gate is now closed. The remaining ambiguity is inside the producer boundary itself: existing diagnostics prove that a peer can be connected, handshaked, useful and unchoked while no authenticated media producer emerges, but they do not yet show which transition first disappears.
 
-Run one short focused real-device test on a channel that previously reached a useful/unchoked peer without media production. Capture both `embedded_ace_live_peer_quality` and the new `embedded_ace_live_producer_gap` events. The decisive persistent state is:
-
-- `handshaked=1` or greater;
-- `windowUseful=1` or greater;
-- `unchoked=1` or greater;
-- `producing=0`;
-- `aggregate_bps=0`;
-- `embedded_ace_live_producer_gap state=active` persists rather than quickly resolving.
-
-Do **not** change scheduler policy, request depth/concurrency, discovery, tracker/DHT, TCP/reconnect, timeouts, peer limits, cache/buffer bounds, HTTP/Media3 behavior or add an external Ace Stream fallback before this field gate is classified.
-
-If the explicit producer gap persists, the next narrow increment is observational instrumentation across the producer boundary so the first missing transition can be localized before a behavior fix:
+The next narrow increment is therefore **bounded observational instrumentation only** across this chain:
 
 `scheduler scheduled -> request selected -> request sent -> chunk ingress -> chunk accepted/rejected -> piece completed -> authenticated media output`.
 
-Only after that chain identifies the first failing boundary should the next behavior PR be selected.
+The instrumentation must be rate-limited/bounded, tied to the existing startup/session identity, and observational only. It must not change scheduler policy, request depth/concurrency, discovery, tracker/DHT, TCP/reconnect, timeouts, peer limits, cache/buffer bounds, HTTP/Media3 behavior, authentication rules or external Ace Stream behavior.
+
+Only after field evidence identifies the first missing transition should a stage-specific behavior fix be selected.
 
 ## Decision order from here
 
-1. **Producer-gap observability landed.** PR #146 passed exact-head Android CI and is merged into `main`; no runtime policy changes were included.
-2. **Run the post-#146 focused field validation.** Prefer a channel that reaches `handshaked=1`, `windowUseful=1`, `unchoked=1`, `producing=0`, plus one known-good control when practical.
-3. **Classify the first persistent blocker by stage:**
-   - no candidates / weak diversity after bounded tracker+DHT expansion → discovery/acquisition;
-   - candidates but repeated `CONNECT_FAILED` → dial/acquisition;
-   - TCP connected but `HANDSHAKE_TIMEOUT` / rejection / `REMOTE_CLOSED` before qualification → qualification/diversity;
-   - handshake accepted but no useful window → availability/usefulness;
-   - useful + unchoked peer but no producer → producer boundary; inspect scheduler dispatch / request routing / chunk ingress before behavior changes;
-   - chunks arrive but are rejected → wire/reassembly defect;
-   - pieces complete but no accepted media reaches output → auth/resync/output boundary;
-   - producer exists but media/buffer readiness is slow → scheduler/forward reserve;
-   - proven localhost Range/reopen mismatch only → HTTP logical-offset semantics.
-4. **If producer-boundary evidence is still ambiguous, add one bounded observational increment.** Instrument scheduler dispatch/request routing/chunk ingress/piece completion/authenticated output without changing runtime policy.
-5. **Make exactly one bounded, stage-specific behavior increment.** Do not widen peer counts, global startup timeout, handshake timeout, DHT budgets, cache sizes, request depth, concurrency or Media3/HTTP policy merely to hide a startup failure.
-6. **Require exact-head validation before merge.** Android CI, applicable core P2P/unit tests, lint/build/instrumentation checks, signed ARM TV APK/source packaging and real playback smoke must pass for behavior changes.
-7. **Repeat field evidence after each behavior increment.** A green synthetic/CI run does not by itself prove startup/zap parity.
-8. **Broad acceptance remains last.** Fixed same-device A/B, 20 rapid switches, weak-network/peer-loss tests and 2h/8h ARM TV Box soak follow only after V4d functional blockers are closed.
+1. **Producer-gap observability landed and field-gated.** PR #146 passed exact-head Android CI and the post-#146 TV Box run captured both a quickly resolved producer gap and a persistent useful/unchoked-no-producer failure.
+2. **Add one bounded producer-boundary observational increment.** Instrument scheduler dispatch/request selection/request send/chunk ingress/chunk acceptance or rejection/piece completion/authenticated output without changing runtime policy.
+3. **Run focused real-device validation and classify the first missing transition.** Preserve one known-good/control path so successful `active -> resolved` behavior remains visible beside the failing path.
+4. **Make exactly one bounded, stage-specific behavior increment.** Do not widen peer counts, global startup timeout, handshake timeout, DHT budgets, cache sizes, request depth, concurrency or Media3/HTTP policy merely to hide a startup failure.
+5. **Require exact-head validation before merge.** Android CI, applicable core P2P/unit tests, lint/build/instrumentation checks, signed ARM TV APK/source packaging and real playback smoke must pass for behavior changes.
+6. **Repeat field evidence after each behavior increment.** A green synthetic/CI run does not by itself prove startup/zap parity.
+7. **Broad acceptance remains last.** Fixed same-device A/B, 20 rapid switches, weak-network/peer-loss tests and 2h/8h ARM TV Box soak follow only after V4d functional blockers are closed.
 
 ## V4d performance target
 
