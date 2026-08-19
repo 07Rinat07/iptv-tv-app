@@ -350,7 +350,8 @@ class AceLivePeerConnectionStateMachine(
      * adapter routes its returned frames through the matching peer state machine.
      */
     fun selectOutboundRequestFrames(
-        scheduled: List<AceLiveOutboundPeerFrame>
+        scheduled: List<AceLiveOutboundPeerFrame>,
+        nowMillis: Long = System.currentTimeMillis()
     ): List<ByteArray> {
         if (!isReadyForRequests()) return emptyList()
         val window = latestWindow ?: return emptyList()
@@ -361,6 +362,14 @@ class AceLivePeerConnectionStateMachine(
                 request.peerId == peerId &&
                     request.piece in window.minPiece..window.maxPiece &&
                     session.ownerOf(request.piece) == peerId
+            }
+            .onEach { outbound ->
+                val request = outbound.request
+                session.reportRequestSelected(
+                    peerId = request.peerId,
+                    piece = request.piece,
+                    nowMillis = nowMillis
+                )
             }
             .map { it.bytes }
             .toList()
