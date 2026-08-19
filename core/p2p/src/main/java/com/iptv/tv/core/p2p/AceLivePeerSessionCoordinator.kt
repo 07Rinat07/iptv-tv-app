@@ -1,5 +1,6 @@
 package com.iptv.tv.core.p2p
 
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.min
 
 private const val MAX_ACE_LIVE_SESSION_PIECE = 0xffff_ffffL
@@ -72,12 +73,15 @@ class AceLivePeerSessionCoordinator(
     recoveryPolicy: AceLiveRecoveryPolicy = AceLiveRecoveryPolicy(),
     requestedMaxAheadPieces: Long = AceLiveActivePeerCoordinator.DEFAULT_MAX_REASSEMBLER_AHEAD_PIECES,
     maxBufferedBytes: Long = AceLivePieceReassembler.DEFAULT_MAX_BUFFERED_BYTES,
-    val wireCodec: AceLivePeerWireCodec = AceLivePeerWireCodec()
+    val wireCodec: AceLivePeerWireCodec = AceLivePeerWireCodec(),
+    private val producerBoundaryDiagnostics: AceLiveProducerBoundaryDiagnosticsReporter =
+        AceLiveProducerBoundaryDiagnosticsReporter()
 ) {
     val effectiveMaxAheadPieces: Long
 
     private val activePeers: AceLiveActivePeerCoordinator
     private val reassembler: AceLivePieceReassembler
+    private val producerBoundarySessionId = nextProducerBoundarySessionId.getAndIncrement()
     private var initializedFromLiveWindow: Boolean = false
     private var emittedAnyPiece: Boolean = false
 
@@ -150,17 +154,41 @@ class AceLivePeerSessionCoordinator(
         maxInFlightPerPeer: Int = Int.MAX_VALUE
     ): List<AceLiveOutboundPeerFrame> {
         val nextNeeded = reassembler.nextNeededPiece() ?: return emptyList()
-        return activePeers.schedule(
+        val scheduled = activePeers.schedule(
             nextNeeded = nextNeeded,
             head = head,
             nowMillis = nowMillis,
             maxInFlightPerPeer = maxInFlightPerPeer
-        ).map { request ->
+        )
+        scheduled.forEach { request ->
+            producerBoundaryDiagnostics.record(
+                sessionId = producerBoundarySessionId,
+                stage = AceLiveProducerBoundaryStage.SCHEDULED,
+                peerId = request.peerId,
+                piece = request.piece,
+                nowMillis = nowMillis
+            )
+        }
+        return scheduled.map { request ->
             AceLiveOutboundPeerFrame(
                 request = request,
                 bytes = wireCodec.encodeChunkRequestFrame(request)
             )
         }
+    }
+
+    internal fun reportRequestSelected(
+        peerId: Long,
+        piece: Long,
+        nowMillis: Long
+    ) {
+        producerBoundaryDiagnostics.record(
+            sessionId = producerBoundarySessionId,
+            stage = AceLiveProducerBoundaryStage.SELECTED,
+            peerId = peerId,
+            piece = piece,
+            nowMillis = nowMillis
+        )
     }
 
     fun evaluateRecovery(nowMillis: Long): AceLiveRecoveryPlan {
@@ -189,6 +217,9 @@ class AceLivePeerSessionCoordinator(
         activePeers.applyCursorAdvance(advance, nowMillis)
         val emitted = reassembler.skipTo(advance.toPiece)
         synchronizeContiguousCursor(nowMillis, expectedAtLeast = advance.toPiece)
+        emitted.forEach { piece ->
+            reportPieceCompleted(piece, nowMillis)
+        }
         return AceLiveRecoveryApplicationResult(
             emittedPieces = emitted,
             nextNeededPiece = reassembler.nextNeededPiece(),
@@ -252,6 +283,14 @@ class AceLivePeerSessionCoordinator(
         message: AceLivePeerWireMessage.LiveChunk,
         nowMillis: Long
     ): AceLivePeerMessageResult {
+        producerBoundaryDiagnostics.record(
+            sessionId = producerBoundarySessionId,
+            stage = AceLiveProducerBoundaryStage.CHUNK_INGRESS,
+            peerId = peerId,
+            piece = message.piece,
+            nowMillis = nowMillis
+        )
+
         val chunk = AceLiveIncomingChunk(
             peerId = peerId,
             streamIndex = message.streamIndex,
@@ -263,6 +302,7 @@ class AceLivePeerSessionCoordinator(
 
         val preflight = reassembler.preflightAcceptedChunk(chunk)
         if (preflight != null && preflight != AceLiveReassemblyDisposition.DUPLICATE) {
+            reportChunkRejected(peerId, chunk.piece, preflight.name, nowMillis)
             return AceLivePeerMessageResult(
                 handled = true,
                 reassemblyDisposition = preflight
@@ -275,6 +315,12 @@ class AceLivePeerSessionCoordinator(
         if (preflight == AceLiveReassemblyDisposition.DUPLICATE) {
             val owner = activePeers.ownerOf(chunk.piece)
             if (owner == null) {
+                reportChunkRejected(
+                    peerId,
+                    chunk.piece,
+                    AceLiveReassemblyDisposition.DUPLICATE.name,
+                    nowMillis
+                )
                 return AceLivePeerMessageResult(
                     handled = true,
                     reassemblyDisposition = AceLiveReassemblyDisposition.DUPLICATE
@@ -283,12 +329,23 @@ class AceLivePeerSessionCoordinator(
 
             val activeDuplicate = activePeers.onChunk(chunk = chunk, nextNeeded = nextNeeded)
             return if (activeDuplicate.disposition == AceLiveChunkDisposition.DUPLICATE) {
+                reportChunkRejected(
+                    peerId,
+                    chunk.piece,
+                    activeDuplicate.disposition.name,
+                    nowMillis
+                )
                 AceLivePeerMessageResult(
                     handled = true,
                     activeChunkDisposition = activeDuplicate.disposition,
                     reassemblyDisposition = AceLiveReassemblyDisposition.DUPLICATE
                 )
             } else {
+                if (activeDuplicate.accepted) {
+                    reportChunkAccepted(peerId, chunk.piece, activeDuplicate.disposition.name, nowMillis)
+                } else {
+                    reportChunkRejected(peerId, chunk.piece, activeDuplicate.disposition.name, nowMillis)
+                }
                 AceLivePeerMessageResult(
                     handled = true,
                     activeChunkDisposition = activeDuplicate.disposition
@@ -301,6 +358,7 @@ class AceLivePeerSessionCoordinator(
             nextNeeded = nextNeeded
         )
         if (!activeResult.accepted) {
+            reportChunkRejected(peerId, chunk.piece, activeResult.disposition.name, nowMillis)
             return AceLivePeerMessageResult(
                 handled = true,
                 activeChunkDisposition = activeResult.disposition
@@ -311,8 +369,12 @@ class AceLivePeerSessionCoordinator(
         check(reassembly.accepted) {
             "Reassembly changed after successful preflight: ${reassembly.disposition}"
         }
+        reportChunkAccepted(peerId, chunk.piece, reassembly.disposition.name, nowMillis)
         if (reassembly.emittedPieces.isNotEmpty()) {
             emittedAnyPiece = true
+            reassembly.emittedPieces.forEach { piece ->
+                reportPieceCompleted(piece, nowMillis)
+            }
             synchronizeContiguousCursor(nowMillis)
         }
 
@@ -321,6 +383,51 @@ class AceLivePeerSessionCoordinator(
             activeChunkDisposition = activeResult.disposition,
             reassemblyDisposition = reassembly.disposition,
             emittedPieces = reassembly.emittedPieces
+        )
+    }
+
+    private fun reportChunkAccepted(
+        peerId: Long,
+        piece: Long,
+        disposition: String,
+        nowMillis: Long
+    ) {
+        producerBoundaryDiagnostics.record(
+            sessionId = producerBoundarySessionId,
+            stage = AceLiveProducerBoundaryStage.CHUNK_ACCEPTED,
+            peerId = peerId,
+            piece = piece,
+            disposition = disposition,
+            nowMillis = nowMillis
+        )
+    }
+
+    private fun reportChunkRejected(
+        peerId: Long,
+        piece: Long,
+        disposition: String,
+        nowMillis: Long
+    ) {
+        producerBoundaryDiagnostics.record(
+            sessionId = producerBoundarySessionId,
+            stage = AceLiveProducerBoundaryStage.CHUNK_REJECTED,
+            peerId = peerId,
+            piece = piece,
+            disposition = disposition,
+            nowMillis = nowMillis
+        )
+    }
+
+    private fun reportPieceCompleted(
+        piece: AceLiveReassembledPiece,
+        nowMillis: Long
+    ) {
+        producerBoundaryDiagnostics.record(
+            sessionId = producerBoundarySessionId,
+            stage = AceLiveProducerBoundaryStage.PIECE_COMPLETED,
+            peerId = piece.sourcePeerId,
+            piece = piece.piece,
+            nowMillis = nowMillis
         )
     }
 
@@ -337,4 +444,8 @@ class AceLivePeerSessionCoordinator(
 
     private fun Long.saturatingSubtract(delta: Long): Long =
         if (delta >= this) 0L else this - delta
+
+    private companion object {
+        val nextProducerBoundarySessionId = AtomicLong(1L)
+    }
 }
