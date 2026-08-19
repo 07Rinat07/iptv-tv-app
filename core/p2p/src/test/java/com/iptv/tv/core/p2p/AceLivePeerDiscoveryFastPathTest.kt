@@ -127,10 +127,10 @@ class AceLivePeerDiscoveryFastPathTest {
     }
 
     @Test
-    fun `startup dht probe releases an alternative peer before full expansion`() {
+    fun `startup dht probe collects alternative batch before full expansion`() {
         assertFalse(aceLiveStartupDhtProbeShouldContinue(completedRounds = 0))
         assertFalse(aceLiveStartupDhtProbeShouldContinue(completedRounds = 1))
-        assertEquals(1, ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS)
+        assertEquals(4, ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS)
         assertEquals(1, ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS)
         assertEquals(7_000L, ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS)
     }
