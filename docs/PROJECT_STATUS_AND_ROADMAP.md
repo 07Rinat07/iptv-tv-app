@@ -6,7 +6,7 @@ This document is the canonical **current-state and next-action view** for the pr
 
 ## Current production baseline
 
-- `main`: `eea88052e2bf81c6377fc8a5b7055a8ec6a7ebdd` (merge of PR #150).
+- `main`: `0d0af63245e8ff9b2e42d90baa50f7eae3d35cb1` (merge of PR #152).
 - PR #136 (`fix(p2p): complete BEP-9 content metadata negotiation`) passed its exact-head Android CI and real field gate: the known-infohash control remained playable and a genuine Content-ID metadata/catalog resolution succeeded. It is merged into `main`.
 - PR #144 (`fix(p2p): restore tracker during startup full expansion`) passed exact-head Android CI and is merged into `main`. Short startup probe rounds remain DHT-only, while the final bounded startup full-expansion can reacquire candidates from tracker + DHT.
 - PR #145 synchronized this canonical roadmap after the Content-ID and discovery gates closed.
@@ -14,6 +14,8 @@ This document is the canonical **current-state and next-action view** for the pr
 - PR #147 synchronized the roadmap after the post-#146 TV Box evidence reproduced a persistent useful/unchoked/no-producer stall.
 - PR #149 (`feat(p2p): expose V4d producer-boundary stages`) passed exact-head Android CI on head `d9910420b7a71e42132cefaea457f7b44737076f` and is merged into `main`. It adds bounded `embedded_ace_live_producer_boundary` observational stage counters for scheduler output, chunk ingress, chunk disposition and contiguous piece completion; runtime scheduling/transport policy is unchanged.
 - PR #150 (`fix(p2p): isolate StreamHave by stream index`) passed exact-head Android CI #638 on head `efb20272484b7321eace470edce9de1f33137196` and is merged into `main`. It fixes a deterministic peer-wire correctness bug so a `StreamHave` for a foreign stream index cannot advance the primary stream-0 live window; the adversarial regression test remains in production coverage.
+- PR #151 synchronized this canonical roadmap after PRs #149 and #150.
+- PR #152 (`fix(p2p): wire selected producer-boundary telemetry`) passed exact-head Android CI #643 on head `ef6db9dbdd08e5f6336e21df0e7ab6a95a25d21e` and is merged into `main`. It wires the already-existing `selected` producer-boundary observation only after the normal readiness/window/ownership filters accept an outbound request; request selection behavior itself is unchanged.
 - Existing safety bounds remain unchanged: no increase to the 60-second preparation deadline, no-connected-peer guard, handshake/request timeouts, DHT budgets, peer target/max, scheduler/recovery bounds, output buffer, HTTP/Media3 policy, generic IPTV or normal BitTorrent behavior.
 - Embedded Torrent TV/Ace Live remains self-contained; an installed external Ace Stream Engine is not a production runtime dependency or fallback.
 
@@ -48,26 +50,27 @@ The same device run also includes secondary acquisition failures where tracker d
 
 ## Current V4d blocker: field-localize the first missing producer transition
 
-The bounded producer-boundary observational increment is now in production via PR #149. The current blocker is no longer missing instrumentation code; it is missing **fresh real-device evidence from the current production baseline** that identifies where the failing startup first diverges from a known-good/control startup.
+The bounded producer-boundary observational telemetry from PR #149 and the selected-stage wiring from PR #152 are now both in production. The current blocker is **fresh real-device evidence from current `main`** that identifies where a failing startup first diverges from a known-good/control startup.
 
 The classification chain is:
 
 `scheduler scheduled -> request selected -> request sent -> chunk ingress -> chunk accepted/rejected -> piece completed -> authenticated media output`.
 
-The existing PR #149 telemetry directly covers the bounded stages already implemented in production and must be correlated with `embedded_ace_live_producer_gap` on a focused TV Box run. If the evidence still terminates between two currently observable stages, the next increment may add only the smallest additional observational boundary needed to distinguish them. No behavior change is permitted until the first missing transition is supported by field evidence.
+Current production telemetry directly covers `scheduled`, `selected`, `chunk ingress`, `accepted/rejected`, and contiguous `piece completed`, and it must be correlated with `embedded_ace_live_producer_gap` on a focused TV Box run. If a failing run has `scheduled>0` and `selected>0` but still has `chunk_ingress=0`, the remaining ambiguity is at the actual send/write boundary; only then may the next increment add the smallest bounded `sent` observation needed to distinguish selection from successful socket write. No scheduler/request/transport behavior change is permitted until the first missing transition is supported by field evidence.
 
-PR #150 is an independent peer-wire correctness fix and does not close or bypass this V4d evidence gate.
+PR #150 remains an independent peer-wire correctness fix and does not close or bypass this V4d evidence gate.
 
 ## Decision order from here
 
 1. **Producer-gap observability landed and field-gated.** PR #146 passed exact-head Android CI and the post-#146 TV Box run captured both a quickly resolved producer gap and a persistent useful/unchoked-no-producer failure.
-2. **Producer-boundary observational instrumentation landed.** PR #149 passed exact-head Android CI and is merged into production with bounded stage telemetry; no runtime policy was changed.
-3. **Run focused real-device validation on current `main`.** Preserve one known-good/control path and one failing path, capture `embedded_ace_live_producer_gap` plus `embedded_ace_live_producer_boundary`, and classify the first missing transition.
-4. **If the current telemetry cannot distinguish two adjacent stages, add only one bounded observational refinement.** Do not change scheduler/request/transport behavior merely because a stage remains ambiguous.
-5. **Only after field evidence identifies the first missing transition, make exactly one bounded, stage-specific behavior increment.** Do not widen peer counts, global startup timeout, handshake timeout, DHT budgets, cache sizes, request depth, concurrency or Media3/HTTP policy merely to hide a startup failure.
-6. **Require exact-head validation before merge.** Android CI, applicable core P2P/unit tests, lint/build/instrumentation checks, signed ARM TV APK/source packaging and real playback smoke must pass for behavior changes.
-7. **Repeat field evidence after each behavior increment.** A green synthetic/CI run does not by itself prove startup/zap parity.
-8. **Broad acceptance remains last.** Fixed same-device A/B, 20 rapid switches, weak-network/peer-loss tests and 2h/8h ARM TV Box soak follow only after V4d functional blockers are closed.
+2. **Producer-boundary observational instrumentation landed.** PR #149 passed exact-head Android CI and is merged into production with bounded scheduler-output, ingress, disposition and piece-completion telemetry; no runtime policy was changed.
+3. **Selected-stage observational wiring landed.** PR #152 passed exact-head Android CI #643 and is merged into production; actual outbound selections can now be distinguished from scheduler output without changing which requests are selected.
+4. **Run focused real-device validation on current `main`.** Preserve one known-good/control path and one failing path, capture `embedded_ace_live_producer_gap` plus `embedded_ace_live_producer_boundary`, and classify the first missing transition.
+5. **If the current telemetry terminates after `selected` but before `chunk ingress`, add only one bounded `sent`/socket-write observation.** Do not change scheduler/request/transport behavior merely because the write boundary is still ambiguous.
+6. **Only after field evidence identifies the first missing transition, make exactly one bounded, stage-specific behavior increment.** Do not widen peer counts, global startup timeout, handshake timeout, DHT budgets, cache sizes, request depth, concurrency or Media3/HTTP policy merely to hide a startup failure.
+7. **Require exact-head validation before merge.** Android CI, applicable core P2P/unit tests, lint/build/instrumentation checks, signed ARM TV APK/source packaging and real playback smoke must pass for behavior changes.
+8. **Repeat field evidence after each behavior increment.** A green synthetic/CI run does not by itself prove startup/zap parity.
+9. **Broad acceptance remains last.** Fixed same-device A/B, 20 rapid switches, weak-network/peer-loss tests and 2h/8h ARM TV Box soak follow only after V4d functional blockers are closed.
 
 ## V4d performance target
 
