@@ -10,6 +10,11 @@ import java.util.Locale
  * hundred milliseconds, so those volatile stages are retained in the payload but refreshed only
  * periodically. This prevents steady-state live churn from evicting startup/zap evidence from the
  * bounded structured-diagnostics history.
+ *
+ * A separate producer-gap event makes the important V4d boundary explicit: at least one peer is
+ * handshaked, advertises a useful live window and is unchoked, but no peer has yet delivered media
+ * across the authenticated live-output boundary. The gap is emitted on entry, periodically while it
+ * persists, and once on resolution. It is observational only and cannot change scheduling/refill.
  */
 internal class AceLivePeerDiagnosticsReporter(
     private val observer: (status: String, message: String) -> Unit,
@@ -17,6 +22,8 @@ internal class AceLivePeerDiagnosticsReporter(
 ) {
     private var lastLifecycleSignature: LifecycleSignature? = null
     private var lastReportedAtMillis: Long? = null
+    private var producerGapActive: Boolean = false
+    private var lastProducerGapReportedAtMillis: Long? = null
 
     init {
         require(periodicIntervalMillis > 0L) { "periodicIntervalMillis must be positive" }
@@ -29,13 +36,16 @@ internal class AceLivePeerDiagnosticsReporter(
         val previousReportAt = lastReportedAtMillis
         val materialLifecycleChange = previousSignature == null || previousSignature != lifecycleSignature
         val periodicRefresh = previousReportAt == null || now - previousReportAt >= periodicIntervalMillis
-        if (!materialLifecycleChange && !periodicRefresh) return
 
-        lastLifecycleSignature = lifecycleSignature
-        lastReportedAtMillis = now
-        runCatching {
-            observer(STATUS, formatMessage(snapshot))
+        if (materialLifecycleChange || periodicRefresh) {
+            lastLifecycleSignature = lifecycleSignature
+            lastReportedAtMillis = now
+            runCatching {
+                observer(QUALITY_STATUS, formatMessage(snapshot))
+            }
         }
+
+        maybeReportProducerGap(snapshot, now)
     }
 
     internal fun formatMessage(snapshot: AceLivePeerProductionSnapshot): String {
@@ -67,6 +77,57 @@ internal class AceLivePeerDiagnosticsReporter(
         }
     }
 
+    private fun maybeReportProducerGap(snapshot: AceLivePeerProductionSnapshot, nowMillis: Long) {
+        val gapNow = snapshot.handshakedPeers > 0 &&
+            snapshot.windowUsefulPeers > 0 &&
+            snapshot.unchokedPeers > 0 &&
+            snapshot.producingPeers == 0
+
+        if (gapNow) {
+            val previousGapReportAt = lastProducerGapReportedAtMillis
+            val enteringGap = !producerGapActive
+            val periodicRefresh = previousGapReportAt == null ||
+                nowMillis - previousGapReportAt >= periodicIntervalMillis
+            producerGapActive = true
+            if (!enteringGap && !periodicRefresh) return
+
+            lastProducerGapReportedAtMillis = nowMillis
+            runCatching {
+                observer(PRODUCER_GAP_STATUS, formatProducerGapMessage("active", snapshot))
+            }
+            return
+        }
+
+        if (!producerGapActive) return
+        producerGapActive = false
+        lastProducerGapReportedAtMillis = null
+        runCatching {
+            observer(PRODUCER_GAP_STATUS, formatProducerGapMessage("resolved", snapshot))
+        }
+    }
+
+    private fun formatProducerGapMessage(
+        state: String,
+        snapshot: AceLivePeerProductionSnapshot
+    ): String = buildString {
+        append("state=")
+        append(state)
+        append(" discovered=")
+        append(snapshot.discoveredCandidates)
+        append(" connected=")
+        append(snapshot.connectedPeers)
+        append(" handshaked=")
+        append(snapshot.handshakedPeers)
+        append(" windowUseful=")
+        append(snapshot.windowUsefulPeers)
+        append(" unchoked=")
+        append(snapshot.unchokedPeers)
+        append(" producing=")
+        append(snapshot.producingPeers)
+        append(" aggregate_bps=")
+        append(snapshot.aggregateBytesPerSecond.coerceAtLeast(0L))
+    }
+
     private data class LifecycleSignature(
         val discovered: Int,
         val connected: Int,
@@ -82,7 +143,8 @@ internal class AceLivePeerDiagnosticsReporter(
     }
 
     private companion object {
-        const val STATUS = "embedded_ace_live_peer_quality"
+        const val QUALITY_STATUS = "embedded_ace_live_peer_quality"
+        const val PRODUCER_GAP_STATUS = "embedded_ace_live_producer_gap"
         const val DEFAULT_PERIODIC_INTERVAL_MILLIS = 5_000L
         const val BITS_PER_BYTE = 8.0
         const val BITS_PER_MEGABIT = 1_000_000.0
