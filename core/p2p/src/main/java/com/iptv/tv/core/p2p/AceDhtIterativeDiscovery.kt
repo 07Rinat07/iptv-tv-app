@@ -55,6 +55,10 @@ internal data class AceDhtDiscoveryOutcome(
  * Shared bounded, concurrent BEP-5 iterative walker used by both verified Ace Live swarm keys and
  * Ace Content ID lookup targets. The target bytes are supplied explicitly by the caller, so this
  * layer never reclassifies a Content ID as a BitTorrent infohash or as an Ace Live swarm key.
+ *
+ * Responsive routing contacts are retained only after a valid KRPC response. The small TTL/LRU
+ * cache is used as a warm seed set for later lookups while normal bootstrap nodes remain available
+ * as fallback. This reuses verified routing knowledge without widening query budgets or fan-out.
  */
 internal class AceDhtIterativeDiscovery(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -62,6 +66,9 @@ internal class AceDhtIterativeDiscovery(
     private val randomInt: () -> Int = DEFAULT_RANDOM_INT,
     private val addressResolver: (String) -> List<Inet4Address> = DEFAULT_ADDRESS_RESOLVER
 ) {
+    private val warmRoutingLock = Any()
+    private val warmRoutingNodes = LinkedHashMap<String, WarmRoutingNode>()
+
     suspend fun discover(request: AceDhtLookupRequest): AceDhtDiscoveryOutcome =
         withContext(ioDispatcher) {
             val deadlineNanos = System.nanoTime() + policy.discoveryBudgetMillis * NANOS_PER_MILLI
@@ -73,6 +80,14 @@ internal class AceDhtIterativeDiscovery(
             var rejected = 0
             var failed = 0
             var queries = 0
+
+            for (warm in warmRoutingSeeds(System.nanoTime())) {
+                val key = endpointKey(warm.endpoint)
+                if (!queuedEndpoints.containsKey(key)) {
+                    queuedEndpoints[key] = warm.nodeId
+                    frontier.add(warm)
+                }
+            }
 
             for (bootstrap in request.bootstrapNodes.distinct().take(policy.maxBootstrapNodes)) {
                 currentCoroutineContext().ensureActive()
@@ -166,6 +181,12 @@ internal class AceDhtIterativeDiscovery(
                                     continue
                                 }
 
+                                rememberResponsiveNode(
+                                    endpoint = candidate.endpoint,
+                                    nodeId = response.remoteNodeId,
+                                    nowNanos = System.nanoTime()
+                                )
+
                                 for (peer in response.peers) {
                                     if (!isAllowedPeerEndpoint(peer)) {
                                         rejected += 1
@@ -207,6 +228,46 @@ internal class AceDhtIterativeDiscovery(
                 rejectedEndpoints = rejected
             )
         }
+
+    private fun warmRoutingSeeds(nowNanos: Long): List<QueryCandidate> =
+        synchronized(warmRoutingLock) {
+            pruneWarmRoutingNodes(nowNanos)
+            warmRoutingNodes.values
+                .asSequence()
+                .sortedByDescending { it.lastSeenNanos }
+                .take(MAX_WARM_ROUTING_SEEDS)
+                .map { cached -> QueryCandidate(cached.endpoint, cached.nodeId) }
+                .toList()
+        }
+
+    private fun rememberResponsiveNode(
+        endpoint: AceLiveTcpPeerEndpoint,
+        nodeId: AceLiveDhtNodeId,
+        nowNanos: Long
+    ) = synchronized(warmRoutingLock) {
+        pruneWarmRoutingNodes(nowNanos)
+        val key = endpointKey(endpoint)
+        warmRoutingNodes.remove(key)
+        while (warmRoutingNodes.size >= MAX_WARM_ROUTING_NODES) {
+            val eldestKey = warmRoutingNodes.keys.firstOrNull() ?: break
+            warmRoutingNodes.remove(eldestKey)
+        }
+        warmRoutingNodes[key] = WarmRoutingNode(
+            endpoint = endpoint,
+            nodeId = nodeId,
+            lastSeenNanos = nowNanos
+        )
+    }
+
+    private fun pruneWarmRoutingNodes(nowNanos: Long) {
+        val iterator = warmRoutingNodes.entries.iterator()
+        while (iterator.hasNext()) {
+            val cached = iterator.next().value
+            if (nowNanos - cached.lastSeenNanos >= WARM_ROUTING_TTL_NANOS) {
+                iterator.remove()
+            }
+        }
+    }
 
     private suspend fun resolveBootstrap(
         host: String,
@@ -356,6 +417,12 @@ internal class AceDhtIterativeDiscovery(
         val nodeId: AceLiveDhtNodeId?
     )
 
+    private data class WarmRoutingNode(
+        val endpoint: AceLiveTcpPeerEndpoint,
+        val nodeId: AceLiveDhtNodeId,
+        val lastSeenNanos: Long
+    )
+
     private sealed interface QueryCompletion {
         data class Success(
             val candidate: QueryCandidate,
@@ -372,6 +439,9 @@ internal class AceDhtIterativeDiscovery(
 
     companion object {
         private const val NANOS_PER_MILLI: Long = 1_000_000
+        private const val WARM_ROUTING_TTL_NANOS: Long = 5 * 60 * 1_000 * NANOS_PER_MILLI
+        private const val MAX_WARM_ROUTING_NODES = 32
+        private const val MAX_WARM_ROUTING_SEEDS = 4
         private const val IPV4_MASK: Long = 0xffff_ffffL
         private val random = SecureRandom()
         internal val DEFAULT_RANDOM_INT: () -> Int = { random.nextInt() }
