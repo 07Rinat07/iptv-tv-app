@@ -1,5 +1,7 @@
 package com.iptv.tv.core.p2p
 
+private const val ACE_LIVE_PRIMARY_STREAM_INDEX = 0L
+
 /** Socket-neutral lifecycle for one Ace Live peer connection. */
 enum class AceLivePeerConnectionPhase {
     DISCONNECTED,
@@ -231,8 +233,10 @@ class AceLivePeerConnectionStateMachine(
                         }
 
                         is AceLivePeerWireMessage.StreamHave -> {
-                            advanceAdvertisedWindow(message.piece)?.let { window ->
-                                applyAdvertisedWindow(window, metadataUpdates, requeuedPieces)
+                            if (message.streamIndex == ACE_LIVE_PRIMARY_STREAM_INDEX) {
+                                advanceAdvertisedWindow(message.piece)?.let { window ->
+                                    applyAdvertisedWindow(window, metadataUpdates, requeuedPieces)
+                                }
                             }
                         }
 
