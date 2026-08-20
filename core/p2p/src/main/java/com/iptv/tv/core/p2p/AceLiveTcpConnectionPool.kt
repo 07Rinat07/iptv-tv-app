@@ -1,6 +1,7 @@
 package com.iptv.tv.core.p2p
 
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -101,6 +102,7 @@ class AceLiveTcpConnectionPool(
     private val nodeIdentity = AceLiveNodeIdentity.generate()
     private val peers = LinkedHashMap<Long, PeerRuntime>()
     private val productionTracker = AceLivePeerProductionTracker()
+    private val closed = AtomicBoolean(false)
 
     suspend fun startPeer(
         peerId: Long,
@@ -108,6 +110,7 @@ class AceLiveTcpConnectionPool(
         swarmKey: ByteArray,
         localPeerId: ByteArray
     ) {
+        check(!closed.get()) { "Ace Live TCP peer pool is closed" }
         require(peerId >= 0) { "peerId must be non-negative" }
         require(swarmKey.size == AceLivePeerHandshakeCodec.SWARM_KEY_BYTES) {
             "swarmKey must be ${AceLivePeerHandshakeCodec.SWARM_KEY_BYTES} bytes"
@@ -130,6 +133,7 @@ class AceLiveTcpConnectionPool(
 
         try {
             poolMutex.withLock {
+                check(!closed.get()) { "Ace Live TCP peer pool is closed" }
                 require(peerId !in peers) { "peerId $peerId is already active" }
                 require(peers.size < policy.maxConcurrentPeers) {
                     "Ace Live TCP peer pool is full"
@@ -165,6 +169,7 @@ class AceLiveTcpConnectionPool(
     }
 
     suspend fun close() {
+        if (!closed.compareAndSet(false, true)) return
         val runtimes = poolMutex.withLock { peers.values.toList() }
         runtimes.forEach { runtime ->
             runtime.transport?.close()
