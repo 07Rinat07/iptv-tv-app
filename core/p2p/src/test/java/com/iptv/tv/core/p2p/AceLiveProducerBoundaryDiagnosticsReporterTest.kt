@@ -90,6 +90,37 @@ class AceLiveProducerBoundaryDiagnosticsReporterTest {
     }
 
     @Test
+    fun persistentRuntimeContextAndOutputBytesAreIncluded() {
+        val messages = mutableListOf<String>()
+        val reporter = AceLiveProducerBoundaryDiagnosticsReporter(
+            observer = { _, message -> messages += message },
+            context = AceLiveRuntimeDiagnosticsContext(
+                startupId = 100,
+                runtimeId = 4,
+                generation = 9,
+                path = "direct_retry"
+            )
+        )
+
+        reporter.record(
+            sessionId = 2,
+            stage = AceLiveProducerBoundaryStage.MEDIA_APPENDED,
+            peerId = 7,
+            piece = 55,
+            bytes = 18_800,
+            nowMillis = 2_000L
+        )
+
+        val message = messages.single()
+        assertTrue(message.contains("stage=media_appended"))
+        assertTrue(message.contains("bytes=18800"))
+        assertTrue(message.contains("startup_id=100"))
+        assertTrue(message.contains("runtime_id=4"))
+        assertTrue(message.contains("generation=9"))
+        assertTrue(message.contains("path=direct_retry"))
+    }
+
+    @Test
     fun observerFailureCannotChangeRuntimeBehavior() {
         val reporter = AceLiveProducerBoundaryDiagnosticsReporter(
             observer = { _, _ -> error("diagnostics sink unavailable") }

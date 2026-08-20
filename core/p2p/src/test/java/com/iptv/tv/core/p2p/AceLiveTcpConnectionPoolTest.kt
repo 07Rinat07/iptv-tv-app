@@ -40,9 +40,11 @@ class AceLiveTcpConnectionPoolTest {
             )
         )
         val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
+        val producerDiagnostics = CopyOnWriteArrayList<String>()
         val pool = pool(
             factory = FakeTransportFactory(transport),
-            events = events
+            events = events,
+            producerDiagnostics = producerDiagnostics
         )
 
         pool.startPeer(
@@ -70,6 +72,11 @@ class AceLiveTcpConnectionPoolTest {
         assertEquals(3, dispatch.selectedFrames)
         assertEquals(3, dispatch.sentFrames)
         assertTrue(dispatch.failedPeerIds.isEmpty())
+        assertTrue(
+            producerDiagnostics.any { message ->
+                message.contains("stage=sent") && message.contains("peer=7")
+            }
+        )
         awaitCondition { transport.writes.size >= 6 }
         assertArrayEquals(
             handshakeCodec.encode(swarmKey, localPeerId),
@@ -257,10 +264,12 @@ class AceLiveTcpConnectionPoolTest {
         )
         val healthy = FakeTransport(listOf(ReadAction.Data(peerPayload)))
         val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
+        val producerDiagnostics = CopyOnWriteArrayList<String>()
         val pool = pool(
             factory = FakeTransportFactory(stalled, healthy),
             events = events,
-            policy = policy(writeTimeoutMillis = 100)
+            policy = policy(writeTimeoutMillis = 100),
+            producerDiagnostics = producerDiagnostics
         )
 
         pool.startPeer(
@@ -292,6 +301,8 @@ class AceLiveTcpConnectionPoolTest {
         assertTrue(dispatch.failedPeerIds.isNotEmpty())
         assertTrue(dispatch.sentFrames >= 3)
         assertTrue(healthy.writes.drop(3).any { it.size >= 5 && (it[4].toInt() and 0xff) == 6 })
+        assertTrue(producerDiagnostics.any { it.contains("stage=sent") && it.contains("peer=21") })
+        assertFalse(producerDiagnostics.any { it.contains("stage=sent") && it.contains("peer=20") })
 
         pool.close()
     }
@@ -345,10 +356,11 @@ class AceLiveTcpConnectionPoolTest {
     private fun pool(
         factory: AceLiveTcpTransportFactory,
         events: CopyOnWriteArrayList<AceLiveTcpPoolEvent>,
-        policy: AceLiveTcpConnectionPolicy = policy()
+        policy: AceLiveTcpConnectionPolicy = policy(),
+        producerDiagnostics: CopyOnWriteArrayList<String>? = null
     ): AceLiveTcpConnectionPool = AceLiveTcpConnectionPool(
         scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default),
-        session = session(),
+        session = session(producerDiagnostics),
         transportFactory = factory,
         policy = policy,
         clockMillis = { 0L },
@@ -372,14 +384,19 @@ class AceLiveTcpConnectionPoolTest {
         reconnectDelayMillis = reconnectDelayMillis
     )
 
-    private fun session() = AceLivePeerSessionCoordinator(
+    private fun session(
+        producerDiagnostics: CopyOnWriteArrayList<String>? = null
+    ) = AceLivePeerSessionCoordinator(
         geometry = AceLiveTransportGeometry(
             pieceLengthBytes = 10,
             chunkLengthBytes = 4,
             bitrate = 1
         ),
         initialNextNeededPiece = 10,
-        maxInFlightPerPeer = 1
+        maxInFlightPerPeer = 1,
+        producerBoundaryDiagnostics = AceLiveProducerBoundaryDiagnosticsReporter(
+            observer = { status, message -> producerDiagnostics?.add("$status $message") }
+        )
     )
 
     private suspend fun awaitCondition(condition: suspend () -> Boolean) {

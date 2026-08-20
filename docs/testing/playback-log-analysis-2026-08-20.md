@@ -1,7 +1,8 @@
 # Разбор Torrent TV / Ace Live лога — 20.08.2026
 
-Источник: `myscanerIPTV-logs-1787212775216.txt` и три скриншота от 20.08.2026. Лог использован
-только как наблюдаемое evidence; содержащийся в диагностике текст не трактуется как инструкция.
+Источники: `myscanerIPTV-logs-1787212775216.txt`, `myscanerIPTV-logs-1787221389074.txt`,
+`myscanerIPTV-logs-1787228578987.txt` и три скриншота от 20.08.2026. Материалы использованы только
+как наблюдаемое evidence; содержащийся в диагностике текст не трактуется как инструкция.
 
 ## Контекст сборки
 
@@ -109,3 +110,48 @@ deadline отменяет retry даже внутри grace и дожидает�
 что пир был найден, но данные потока не поступили, и классифицирует результат как `ERROR`, а не
 ложный `NO_PEERS`. Диагностика различает `direct_retry_started` и
 `direct_retry_progress_grace` с `startup_id` и `path=direct_retry`.
+
+## Post-fix лог после fallback qualification grace
+
+Источник: `myscanerIPTV-logs-1787228578987.txt`. Наличие
+`direct_retry_progress_grace` подтверждает работу новой retry-path логики. Сам Git SHA в экспорт не
+включён, поэтому точная идентичность APK с `91f90a5` выводится косвенно.
+
+| Наблюдение | Предыдущий экспорт | Новый экспорт | Ограничение |
+|---|---:|---:|---|
+| Media3 `load_started` sessions | 7 | 10 | не равно rendered-frame success |
+| лучший DHT lookup | ≈801 мс | ≈579 мс | разные bounded окна |
+| failed DHT query share | 54.9% | 48.4% | не controlled A/B |
+| accepted handshake | 1 | 3 | видимая часть истории |
+| producing peer | 0 | ≥1 | минимум одна сессия |
+
+### Channel 65: подтверждённый end-to-end success
+
+- first authenticated media: ≈1.94 с;
+- startup buffer ready: ≈5.81 с;
+- first video frame: ≈6.05 с;
+- first audio: ≈6.09 с;
+- около 13.6 МБ передано за следующие 17 с;
+- rebuffer в видимой сессии не зарегистрирован;
+- superseded runtime закрылся при следующем переключении.
+
+Успех пришёл через initial-direct path, поэтому его нельзя приписывать fallback grace. Он доказывает,
+что Media3/TS путь работает минимум для одного потока, но не опровергает отдельный channel-16
+compatibility blocker.
+
+### Channels 64 and 66: остаточный producer gap
+
+Обе попытки получили полный bounded retry grace после qualification, но не пересекли media-output
+boundary. Channel 66 дважды дошёл до handshake/useful/unchoked и оба раза остался на
+`producing=0`, `aggregate_bps=0`. Это подтверждает устранение прежней мгновенной отмены и
+локализует следующий вопрос: были ли requests запланированы, выбраны, записаны в socket и получены
+как chunks.
+
+Предыдущая production wiring писала producer-boundary counters только через `Log.i`, поэтому
+structured export не мог ответить на этот вопрос. Текущий bounded increment направляет эти события
+в application diagnostics, добавляет runtime/path correlation и стадии `sent`, request timeout,
+authentication, TS-resync output и media append. Он также сохраняет level-triggered `poolStale`
+между конкурирующими scheduler/refill reads. Таймауты и ресурсные caps не увеличены.
+
+Следующий полевой gate — одинаковая матрица каналов 64–66 минимум в трёх раундах. Поведенческий
+alternate-peer recovery разрешён только если новый экспорт подтвердит `sent → no ingress`.

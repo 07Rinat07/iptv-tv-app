@@ -18,7 +18,8 @@ class AceLiveProducerBoundaryDiagnosticsReporter(
     private val observer: (status: String, message: String) -> Unit = { status, message ->
         Log.i(LOG_TAG, "$status $message")
     },
-    private val periodicIntervalMillis: Long = DEFAULT_PERIODIC_INTERVAL_MILLIS
+    private val periodicIntervalMillis: Long = DEFAULT_PERIODIC_INTERVAL_MILLIS,
+    private val context: AceLiveRuntimeDiagnosticsContext? = null
 ) {
     private val counts = linkedMapOf<AceLiveProducerBoundaryStage, Long>()
     private val seenStages = linkedSetOf<AceLiveProducerBoundaryStage>()
@@ -35,11 +36,13 @@ class AceLiveProducerBoundaryDiagnosticsReporter(
         peerId: Long? = null,
         piece: Long? = null,
         disposition: String? = null,
+        bytes: Long? = null,
         nowMillis: Long = System.currentTimeMillis()
     ) {
         require(sessionId >= 0L) { "sessionId must be non-negative" }
         require(peerId == null || peerId >= 0L) { "peerId must be non-negative" }
         require(piece == null || piece >= 0L) { "piece must be non-negative" }
+        require(bytes == null || bytes >= 0L) { "bytes must be non-negative" }
 
         counts[stage] = (counts[stage] ?: 0L) + 1L
         val firstForStage = seenStages.add(stage)
@@ -57,7 +60,8 @@ class AceLiveProducerBoundaryDiagnosticsReporter(
                     stage = stage,
                     peerId = peerId,
                     piece = piece,
-                    disposition = disposition
+                    disposition = disposition,
+                    bytes = bytes
                 )
             )
         }
@@ -69,7 +73,8 @@ class AceLiveProducerBoundaryDiagnosticsReporter(
         stage: AceLiveProducerBoundaryStage,
         peerId: Long?,
         piece: Long?,
-        disposition: String?
+        disposition: String?,
+        bytes: Long? = null
     ): String = buildString {
         append("session=")
         append(sessionId)
@@ -81,6 +86,18 @@ class AceLiveProducerBoundaryDiagnosticsReporter(
         append(piece?.toString() ?: "none")
         append(" disposition=")
         append(disposition ?: "none")
+        append(" bytes=")
+        append(bytes?.toString() ?: "none")
+        context?.let { correlation ->
+            append(" startup_id=")
+            append(correlation.startupId)
+            append(" runtime_id=")
+            append(correlation.runtimeId)
+            append(" generation=")
+            append(correlation.generation)
+            append(" path=")
+            append(correlation.path)
+        }
         AceLiveProducerBoundaryStage.values().forEach { knownStage ->
             append(' ')
             append(knownStage.counterName)
@@ -102,8 +119,30 @@ enum class AceLiveProducerBoundaryStage(
 ) {
     SCHEDULED("scheduled", "scheduled"),
     SELECTED("selected", "selected"),
+    SENT("sent", "sent"),
+    REQUEST_TIMEOUT("request_timeout", "request_timeout"),
     CHUNK_INGRESS("chunk_ingress", "chunk_ingress"),
     CHUNK_ACCEPTED("chunk_accepted", "chunk_accepted"),
     CHUNK_REJECTED("chunk_rejected", "chunk_rejected"),
-    PIECE_COMPLETED("piece_completed", "piece_completed")
+    PIECE_COMPLETED("piece_completed", "piece_completed"),
+    AUTHENTICATED("authenticated", "authenticated"),
+    AUTHENTICATION_REJECTED("authentication_rejected", "authentication_rejected"),
+    TS_RESYNC_OUTPUT("ts_resync_output", "ts_resync_output"),
+    MEDIA_APPENDED("media_appended", "media_appended")
+}
+
+data class AceLiveRuntimeDiagnosticsContext(
+    val startupId: Long,
+    val runtimeId: Long,
+    val generation: Long,
+    val path: String
+) {
+    init {
+        require(startupId >= 0L) { "startupId must be non-negative" }
+        require(runtimeId >= 0L) { "runtimeId must be non-negative" }
+        require(generation >= 0L) { "generation must be non-negative" }
+        require(path.isNotBlank() && path.all { it == '_' || it in 'a'..'z' }) {
+            "path must contain only lowercase ASCII letters and underscores"
+        }
+    }
 }

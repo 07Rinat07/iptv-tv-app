@@ -94,6 +94,8 @@ class AceLiveTcpConnectionPool(
     private val handshakeCodec: AceLivePeerHandshakeCodec = AceLivePeerHandshakeCodec(),
     private val policy: AceLiveTcpConnectionPolicy = AceLiveTcpConnectionPolicy(),
     private val clockMillis: () -> Long = System::currentTimeMillis,
+    private val recoveryDiagnostics: AceLiveRecoveryDiagnosticsReporter =
+        AceLiveRecoveryDiagnosticsReporter(),
     private val onEvent: (AceLiveTcpPoolEvent) -> Unit = {}
 ) {
     private val poolMutex = Mutex()
@@ -235,7 +237,7 @@ class AceLiveTcpConnectionPool(
                 maxInFlightPerPeer = maxInFlightPerPeer
             )
             val routes = runtimes.mapNotNull { runtime ->
-                val selected = runtime.connection.selectOutboundRequestFrames(scheduled)
+                val selected = runtime.connection.selectOutboundRequests(scheduled)
                 if (selected.isEmpty()) null else runtime to selected
             }
             scheduled to routes
@@ -263,7 +265,9 @@ class AceLiveTcpConnectionPool(
     suspend fun evaluateRecovery(
         nowMillis: Long = clockMillis()
     ): AceLiveRecoveryPlan = sessionMutex.withLock {
-        session.evaluateRecovery(nowMillis)
+        session.evaluateRecovery(nowMillis).also { plan ->
+            recoveryDiagnostics.maybeReport(plan, nowMillis)
+        }
     }
 
     suspend fun applyRecoveryAdvance(
@@ -283,17 +287,22 @@ class AceLiveTcpConnectionPool(
 
     private suspend fun dispatchRoute(
         runtime: PeerRuntime,
-        frames: List<ByteArray>
+        frames: List<AceLiveOutboundPeerFrame>
     ): RouteDispatchResult {
         val transport = runtime.transport
             ?: return RouteDispatchResult(runtime.peerId, sentFrames = 0, failed = true)
 
         var sent = 0
         for (frame in frames) {
-            if (!writeFrameBounded(runtime, transport, frame)) {
+            if (!writeFrameBounded(runtime, transport, frame.bytes)) {
                 return RouteDispatchResult(runtime.peerId, sentFrames = sent, failed = true)
             }
             sent += 1
+            session.reportRequestSent(
+                peerId = runtime.peerId,
+                piece = frame.request.piece,
+                nowMillis = clockMillis()
+            )
         }
         return RouteDispatchResult(runtime.peerId, sentFrames = sent, failed = false)
     }

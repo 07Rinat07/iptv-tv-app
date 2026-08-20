@@ -211,6 +211,21 @@ class AceLiveRecoveryCoordinatorTest {
         assertEquals(listOf(5L, 6L), timedOut.timedOutRequests.map { it.piece })
     }
 
+    @Test
+    fun throttledSweepPreservesLevelTriggeredStalePoolSignal() {
+        val coordinator = coordinator(requestCheckIntervalMillis = 1_000)
+        coordinator.updatePeer(peer(id = 1, min = 5, max = 20, unchoked = true))
+        coordinator.assign(5, 20, nowMillis = 0)
+
+        val beforeDeadline = coordinator.evaluate(5, nowMillis = 11_500)
+        val throttledAfterDeadline = coordinator.evaluate(5, nowMillis = 12_100)
+
+        assertFalse(beforeDeadline.poolStale)
+        assertTrue(throttledAfterDeadline.poolStale)
+        assertTrue(throttledAfterDeadline.timedOutRequests.isEmpty())
+        assertNull(throttledAfterDeadline.cursorAdvance)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun policyRejectsStaleTimeoutNotGreaterThanRequestTimeout() {
         AceLiveRecoveryPolicy(

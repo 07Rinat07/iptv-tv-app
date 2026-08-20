@@ -7,7 +7,11 @@ evidence; when an older plan describes a different current increment, this page 
 
 ## Baseline and branch decisions
 
-- This increment starts from `main` commit `eeb33f5` (merged PR #155).
+- The integration baseline immediately before this increment is `main` commit `91f90a5`
+  (`fix(p2p): preserve qualified fallback startup`). Local `main`, `origin/main` and
+  `origin/HEAD` agreed on that commit before the current work branch was created.
+- `eeb33f5` remains the historical same-device comparison baseline. It is not the current
+  integration head.
 - The terminal TCP-pool guard from PR #158 commit `bd64e24` is incorporated here. It closes a
   deterministic late-peer-start race, but the 2026-08-20 field run proves that teardown correctness
   alone does not solve startup/playback.
@@ -28,6 +32,11 @@ pool guard. The full evidence record is in
 The follow-up export `myscanerIPTV-logs-1787221389074.txt` contains the bounded DHT/handoff
 increment. Warm routing nodes are being queried, but the export also exposed a separate fixed
 8-second timeout in the fallback-direct retry after metadata startup failure.
+
+The post-fix export `myscanerIPTV-logs-1787228578987.txt` contains the fallback qualification grace
+introduced by `91f90a5`. It shows a directional improvement and a remaining producer boundary;
+because the export retains only the latest 120 structured rows, it is not a controlled success-rate
+measurement.
 
 ### Startup handoff race is confirmed
 
@@ -77,7 +86,27 @@ about 0.4 s after useful qualification, despite roughly 13 s remaining in the ou
 budget. This was not the original initial-direct metadata handoff; it was an uncovered retry-only
 boundary in the same coordinator.
 
-## Current bounded implementation increment
+### Post-fix field run: improvement with a residual producer gap
+
+Within the bounded visible windows of `myscanerIPTV-logs-1787228578987.txt`:
+
+- ten Media3 `load_started` sessions are represented versus seven in the preceding export;
+- the best observed DHT lookup decreased from about 801 ms to about 579 ms;
+- the visible failed-DHT-query share decreased from 54.9% to 48.4%;
+- accepted handshakes increased from one to three and a producing peer appeared;
+- channel 65 completed one end-to-end path: authenticated media at about 1.94 s, buffer-ready at
+  about 5.81 s, first video frame at about 6.05 s and first audio at about 6.09 s. About 13.6 MB
+  were delivered over the following 17 s with no recorded rebuffer.
+
+These are directional improvements, not a claim that playback success increased by 42.9%:
+`load_started` is not a rendered frame, the compared channel mix is not proven identical and only
+one retained session contains the complete READY/frame/audio chain.
+
+Channels 64 and 66 consumed the bounded retry grace after connect/handshake/useful/unchoked
+qualification but still produced no media. The remaining question is now the first missing stage
+between outbound request scheduling and authenticated media append, not primarily DHT discovery.
+
+## Completed bounded implementation increment — through `91f90a5`
 
 1. **Terminal peer-pool ownership.** A closed pool rejects a late `startPeer` before and under its
    ownership mutex, and the regression verifies that no transport is opened after close.
@@ -102,6 +131,27 @@ boundary in the same coordinator.
 
 This increment intentionally does not claim to solve the separate Media3/TS problem.
 
+## Current bounded increment — producer-boundary evidence and stale refill
+
+1. **Persistent correlated producer evidence.** The existing bounded producer reporter is now
+   connected to the application diagnostics observer. Every record includes `startup_id`, a unique
+   runtime ID, generation and path (`direct`, `metadata`, `direct_retry` or transport-file).
+2. **Actual request-write boundary.** `scheduled` and `selected` remain distinct, and `sent` is
+   emitted only after the local bounded socket write completes. Request timeout/requeue is recorded
+   separately, so `sent → no ingress` can be distinguished from routing/write failure.
+3. **Media-output boundary.** The same reporter records chunk ingress/accept/reject, piece completion,
+   authentication, authentication rejection, TS resynchronizer output and media-buffer append with
+   bounded counters and byte evidence.
+4. **Level-triggered stale recovery.** The 200 ms scheduler tick and 10 s refill loop share one
+   recovery coordinator. A throttled recovery read previously returned synthetic
+   `poolStale=false`, allowing the tick to hide a real stale pool from refill. Throttled reads now
+   preserve only the level-triggered stale flag; timeout and cursor actions remain non-repeating.
+   Active stale evidence is persisted at a bounded interval and the existing refill caps remain
+   unchanged.
+
+This increment does not increase the 8 s soft boundary, 2 s qualification grace, 60 s preparation
+deadline, request timeout, DHT budgets, peer caps, request depth or output buffers.
+
 ## Validation gates
 
 Automated gates required on the exact integration head:
@@ -114,6 +164,10 @@ Automated gates required on the exact integration head:
 6. `lintDebug`, `:app:assembleDebug` and `:app:assembleDebugAndroidTest`
 7. Python tooling tests and the real `TorrentTvPlaybackSmokeTest`
 
+The current producer-boundary/stale-refill tree passed gates 1–6 and all eight Python tooling tests
+on 2026-08-20. The connected-device `TorrentTvPlaybackSmokeTest`, repeated channel matrix and soak
+acceptance remain open; assembling the instrumentation APK is not counted as running that smoke.
+
 Real-device gate on the same TV Box:
 
 - compare the fixed channel matrix against baseline `eeb33f5`;
@@ -125,14 +179,16 @@ Real-device gate on the same TV Box:
 
 ## Decision order
 
-1. Finish exact-head unit/build gates for the bounded DHT/handoff/fallback/teardown/UI increment.
-2. Run the same-device field matrix. Merge performance claims only if repeated switches improve
-   without resource leaks or a lower success rate.
+1. Publish and install the tested integration head, then repeat a fixed channel matrix including
+   channels 64–66 for at least three rounds and capture the last producer stage for every runtime.
+2. If the field path is `sent → no ingress`, add a startup-only bounded alternate-peer probe and
+   timeout reassignment that prefers a different covering peer. Only then consider a request-timeout
+   tier of non-renewable grace; connected-only grace remains two seconds and the total remains 60 s.
 3. Add deterministic A→B→C integration ownership coverage across DHT/refill/handoff.
-4. Instrument the confirmed TS/demux/player boundary and add a continuous live MPEG-TS fixture that
+4. Add a player-session terminal summary so success is counted by READY/frame/audio rather than
+   inferred from `load_started`.
+5. Instrument the confirmed TS/demux/player boundary and add a continuous live MPEG-TS fixture that
    must reach READY before EOF.
-5. Change startup TS qualification only after PAT/PMT/random-access evidence identifies the first
-   invalid transition.
 6. Finish weak-network, peer-loss, 2 h and 8 h ARM TV Box acceptance after both blockers close.
 
 ## Binding invariants
@@ -141,6 +197,7 @@ Real-device gate on the same TV Box:
 - Warm routing memory stores only responsive/self-consistent DHT node contacts; it never treats old
   swarm peers as current availability. Strict BEP-42 validation remains a telemetry-first follow-up.
 - Diagnostics are observational and must not be used as stale control-plane state.
+- Producer `sent` proves a completed local socket write, not receipt or acceptance by the peer.
 - A 40-character Ace `content_id` is a transport identity, not automatically a BitTorrent infohash.
 - Do not increase the 60 s content-preparation bound, 30 s no-connected-peer guard, DHT budgets,
   peer caps, request depth or output buffers to conceal a failure.

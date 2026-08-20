@@ -500,6 +500,55 @@ class AceLivePeerRefillCoordinatorTest {
         }
 
     @Test
+    fun `refill still discovers after scheduler consumed stale recovery sweep`() = runBlocking {
+        val recovery = AceLiveRecoveryCoordinator(
+            maxInFlightPerPeer = 1,
+            policy = AceLiveRecoveryPolicy(
+                requestTimeoutMillis = 4_000L,
+                staleUpstreamTimeoutMillis = 12_000L,
+                requestCheckIntervalMillis = 1_000L
+            )
+        )
+        recovery.updatePeer(
+            AceLivePeerWindow(
+                peerId = 1L,
+                minPiece = 10L,
+                maxPiece = 20L,
+                unchoked = true
+            )
+        )
+        recovery.assign(nextNeeded = 10L, head = 20L, nowMillis = 0L)
+        assertTrue(recovery.evaluate(nextNeeded = 10L, nowMillis = 12_000L).poolStale)
+
+        var discoveryCalls = 0
+        var nextId = 100L
+        val loop = AceLivePeerRefillLoop(
+            coordinator = coordinator(target = 2, max = 4, staleProbe = 2, maxStarts = 2),
+            discover = {
+                discoveryCalls += 1
+                discovery(
+                    endpoint("192.0.2.90", 8990) to
+                        setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)
+                )
+            },
+            activePeerIds = { setOf(1L, 2L) },
+            evaluateRecovery = {
+                recovery.evaluate(nextNeeded = 10L, nowMillis = 12_100L)
+            },
+            nextNeededPiece = { 10L },
+            allocatePeerId = { nextId++ },
+            startPeer = { _, _ -> Unit }
+        )
+
+        val result = loop.runOneCycle(nowMillis = 12_100L)
+
+        assertTrue(result.poolStale)
+        assertTrue(result.discoveryAttempted)
+        assertEquals(1, discoveryCalls)
+        assertEquals(1, result.startedPeers)
+    }
+
+    @Test
     fun `bounded replacement stops one peer then refills from existing adaptive demand`() = runBlocking {
         val coordinator = coordinator(target = 6, max = 8, maxStarts = 2)
         val active = linkedSetOf(1L, 2L, 3L, 4L, 5L, 6L, 7L)

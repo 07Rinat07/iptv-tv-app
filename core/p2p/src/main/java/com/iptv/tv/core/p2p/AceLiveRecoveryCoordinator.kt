@@ -178,7 +178,11 @@ class AceLiveRecoveryCoordinator(
             lastCheck != null &&
             elapsedSince(lastCheck, nowMillis) < policy.requestCheckIntervalMillis
         ) {
-            return AceLiveRecoveryPlan()
+            // Timeout requeue and cursor-advance decisions are edge-triggered and must not repeat
+            // inside the throttle window. Pool staleness is level-triggered, however: the scheduler
+            // tick and background refill are independent consumers of this coordinator, so returning
+            // a synthetic false here can hide a real stale pool from the refill cycle.
+            return AceLiveRecoveryPlan(poolStale = isPoolStale(nowMillis))
         }
         lastCheckAtMillis = nowMillis
 
@@ -216,8 +220,7 @@ class AceLiveRecoveryCoordinator(
             }
         }
 
-        val poolStale = stalledFor >= policy.staleUpstreamTimeoutMillis &&
-            scheduler.highestAdvertisedHead() != null
+        val poolStale = isPoolStale(nowMillis)
 
         return AceLiveRecoveryPlan(
             timedOutRequests = timedOut,
@@ -234,6 +237,11 @@ class AceLiveRecoveryCoordinator(
     fun lowestAvailablePiece(): Long? = scheduler.lowestAvailablePiece()
 
     fun highestAdvertisedHead(): Long? = scheduler.highestAdvertisedHead()
+
+    private fun isPoolStale(nowMillis: Long): Boolean =
+        elapsedSince(lastProgressAtMillis ?: nowMillis, nowMillis) >=
+            policy.staleUpstreamTimeoutMillis &&
+            scheduler.highestAdvertisedHead() != null
 
     private fun observeCursor(nextNeeded: Long, nowMillis: Long) {
         validateClock(nowMillis)

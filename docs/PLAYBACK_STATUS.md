@@ -48,6 +48,16 @@ Follow-up лог `myscanerIPTV-logs-1787221389074.txt` подтвердил ис
 connect/handshake/useful/unchoked и был отменён примерно через 0.4 секунды. Этот retry теперь также
 получает только при текущем qualification один bounded двухсекундный grace внутри общего 60 с.
 
+Следующий лог `myscanerIPTV-logs-1787228578987.txt` подтвердил заметное полевое улучшение. В
+ограниченном окне стало больше переходов к Media3, снизилась видимая доля failed DHT query, выросло
+число handshake и появился producing peer. Канал 65 прошёл полный путь до первого видеокадра
+примерно за 6.05 с и звука примерно за 6.09 с без зарегистрированного rebuffer.
+
+Это пока не общий процент успешного воспроизведения: экспорт ограничен 120 structured-строками,
+набор каналов не зафиксирован как идентичный, а `load_started` не означает показанный кадр. Каналы
+64 и 66 подтвердили работу двухсекундного grace, но остались на границе
+`useful/unchoked peer → media output`.
+
 ## Текущий bounded fix
 
 - Engine-owned TTL/LRU routing memory переиспользуется новыми live и metadata DHT wrappers.
@@ -62,10 +72,22 @@ connect/handshake/useful/unchoked и был отменён примерно че
 - При выборе нового канала старый незавершённый `SEARCHING` сбрасывается в `UNCHECKED`.
 - Если квалифицированный fallback так и не отдаёт media, UI честно показывает найденный пир без
   данных потока и состояние `ERROR`, а не «нет пиров».
+- Producer-boundary события теперь сохраняются в structured diagnostics и связываются с
+  startup/runtime/generation/path. Отдельные стадии показывают `scheduled`, `selected`, фактически
+  записанный в socket `sent`, timeout/requeue, chunk ingress, piece completion, authentication,
+  TS-resync output и media append.
+- Throttled recovery больше не скрывает активный `poolStale` от фонового refill; при этом timeout и
+  cursor-advance действия не повторяются, а существующие лимиты пиров не увеличены.
 
 ## Что ещё не решено
 
-- Нужен реальный TV Box A/B gate текущего exact head; unit-тесты не доказывают полевую скорость DHT.
+- Главный следующий P2P blocker — определить первую потерянную стадию между outbound request и
+  authenticated media append на фиксированной матрице каналов 64–66.
+- Если лог подтвердит `sent → no ingress`, следующим bounded fix будет alternate-peer probe и
+  предпочтение другого покрывающего peer после request timeout. Общий grace заранее не увеличивается.
+- Нужен terminal summary каждой P2P/player сессии; текущие 120 строк не дают надёжного знаменателя
+  success rate.
+- Нужен реальный TV Box gate текущего exact head; unit-тесты не доказывают полевую скорость DHT.
 - Нужен deterministic A→B→C integration test с отменой во время DHT/refill/handoff.
 - Media3/TS startup требует PAT/PMT/PID/continuity/random-access telemetry и fixture, достигающий READY
   до EOF; поведенческий TS fix пока намеренно не смешивается с DHT.

@@ -352,7 +352,13 @@ class AceLivePeerConnectionStateMachine(
     fun selectOutboundRequestFrames(
         scheduled: List<AceLiveOutboundPeerFrame>,
         nowMillis: Long = System.currentTimeMillis()
-    ): List<ByteArray> {
+    ): List<ByteArray> = selectOutboundRequests(scheduled, nowMillis).map { it.bytes }
+
+    /** Metadata-preserving selection used by the TCP pool to report successful socket writes. */
+    internal fun selectOutboundRequests(
+        scheduled: List<AceLiveOutboundPeerFrame>,
+        nowMillis: Long = System.currentTimeMillis()
+    ): List<AceLiveOutboundPeerFrame> {
         if (!isReadyForRequests()) return emptyList()
         val window = latestWindow ?: return emptyList()
         return scheduled
@@ -371,7 +377,6 @@ class AceLivePeerConnectionStateMachine(
                     nowMillis = nowMillis
                 )
             }
-            .map { it.bytes }
             .toList()
     }
 

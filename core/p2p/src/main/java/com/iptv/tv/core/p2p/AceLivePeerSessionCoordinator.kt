@@ -191,10 +191,81 @@ class AceLivePeerSessionCoordinator(
         )
     }
 
+    internal fun reportRequestSent(
+        peerId: Long,
+        piece: Long,
+        nowMillis: Long
+    ) = reportBoundary(
+        stage = AceLiveProducerBoundaryStage.SENT,
+        peerId = peerId,
+        piece = piece,
+        nowMillis = nowMillis
+    )
+
+    internal fun reportPieceAuthenticated(
+        peerId: Long,
+        piece: Long,
+        bytes: Long,
+        nowMillis: Long
+    ) = reportBoundary(
+        stage = AceLiveProducerBoundaryStage.AUTHENTICATED,
+        peerId = peerId,
+        piece = piece,
+        bytes = bytes,
+        nowMillis = nowMillis
+    )
+
+    internal fun reportAuthenticationRejected(
+        peerId: Long,
+        piece: Long,
+        disposition: String,
+        nowMillis: Long
+    ) = reportBoundary(
+        stage = AceLiveProducerBoundaryStage.AUTHENTICATION_REJECTED,
+        peerId = peerId,
+        piece = piece,
+        disposition = disposition,
+        nowMillis = nowMillis
+    )
+
+    internal fun reportTsResyncOutput(
+        peerId: Long,
+        piece: Long,
+        bytes: Long,
+        nowMillis: Long
+    ) = reportBoundary(
+        stage = AceLiveProducerBoundaryStage.TS_RESYNC_OUTPUT,
+        peerId = peerId,
+        piece = piece,
+        bytes = bytes,
+        nowMillis = nowMillis
+    )
+
+    internal fun reportMediaAppended(
+        peerId: Long,
+        piece: Long,
+        bytes: Long,
+        nowMillis: Long
+    ) = reportBoundary(
+        stage = AceLiveProducerBoundaryStage.MEDIA_APPENDED,
+        peerId = peerId,
+        piece = piece,
+        bytes = bytes,
+        nowMillis = nowMillis
+    )
+
     fun evaluateRecovery(nowMillis: Long): AceLiveRecoveryPlan {
         val nextNeeded = reassembler.nextNeededPiece() ?: return AceLiveRecoveryPlan()
         val plan = activePeers.evaluateRecovery(nextNeeded, nowMillis)
         reassembler.discardPieces(plan.timedOutRequests.map { it.piece })
+        plan.timedOutRequests.forEach { timedOut ->
+            reportBoundary(
+                stage = AceLiveProducerBoundaryStage.REQUEST_TIMEOUT,
+                peerId = timedOut.previousPeerId,
+                piece = timedOut.piece,
+                nowMillis = nowMillis
+            )
+        }
         return plan
     }
 
@@ -427,6 +498,25 @@ class AceLivePeerSessionCoordinator(
             stage = AceLiveProducerBoundaryStage.PIECE_COMPLETED,
             peerId = piece.sourcePeerId,
             piece = piece.piece,
+            nowMillis = nowMillis
+        )
+    }
+
+    private fun reportBoundary(
+        stage: AceLiveProducerBoundaryStage,
+        peerId: Long?,
+        piece: Long?,
+        disposition: String? = null,
+        bytes: Long? = null,
+        nowMillis: Long
+    ) {
+        producerBoundaryDiagnostics.record(
+            sessionId = producerBoundarySessionId,
+            stage = stage,
+            peerId = peerId,
+            piece = piece,
+            disposition = disposition,
+            bytes = bytes,
             nowMillis = nowMillis
         )
     }

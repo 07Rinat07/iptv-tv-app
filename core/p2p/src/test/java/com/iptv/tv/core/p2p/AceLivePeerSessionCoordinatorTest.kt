@@ -139,7 +139,13 @@ class AceLivePeerSessionCoordinatorTest {
 
     @Test
     fun timeoutRequeueAlsoDiscardsPartialBytes() {
-        val session = session(maxInFlightPerPeer = 1)
+        val diagnostics = mutableListOf<String>()
+        val session = session(
+            maxInFlightPerPeer = 1,
+            producerBoundaryDiagnostics = AceLiveProducerBoundaryDiagnosticsReporter(
+                observer = { _, message -> diagnostics += message }
+            )
+        )
         session.onPeerWindow(peerWindow(id = 1, min = 10, max = 20, unchoked = true))
         session.schedule(head = 10, nowMillis = 0)
         session.onPeerMessage(
@@ -153,6 +159,44 @@ class AceLivePeerSessionCoordinatorTest {
         assertEquals(listOf(10L), plan.timedOutRequests.map { it.piece })
         assertEquals(0L, session.bufferedPayloadBytes())
         assertNull(session.ownerOf(10))
+        assertTrue(
+            diagnostics.any { message ->
+                message.contains("stage=request_timeout") &&
+                    message.contains("peer=1") &&
+                    message.contains("piece=10")
+            }
+        )
+    }
+
+    @Test
+    fun outputBoundaryStagesAreForwardedWithPeerPieceAndBytes() {
+        val diagnostics = mutableListOf<String>()
+        val session = session(
+            maxInFlightPerPeer = 1,
+            producerBoundaryDiagnostics = AceLiveProducerBoundaryDiagnosticsReporter(
+                observer = { _, message -> diagnostics += message }
+            )
+        )
+
+        session.reportPieceAuthenticated(peerId = 1, piece = 10, bytes = 10, nowMillis = 1)
+        session.reportTsResyncOutput(peerId = 1, piece = 10, bytes = 188, nowMillis = 2)
+        session.reportMediaAppended(peerId = 1, piece = 10, bytes = 188, nowMillis = 3)
+        session.reportAuthenticationRejected(
+            peerId = 2,
+            piece = 11,
+            disposition = "signature_mismatch",
+            nowMillis = 4
+        )
+
+        assertTrue(diagnostics.any { it.contains("stage=authenticated") && it.contains("bytes=10") })
+        assertTrue(diagnostics.any { it.contains("stage=ts_resync_output") && it.contains("bytes=188") })
+        assertTrue(diagnostics.any { it.contains("stage=media_appended") && it.contains("bytes=188") })
+        assertTrue(
+            diagnostics.any {
+                it.contains("stage=authentication_rejected") &&
+                    it.contains("disposition=signature_mismatch")
+            }
+        )
     }
 
     @Test
@@ -225,7 +269,9 @@ class AceLivePeerSessionCoordinatorTest {
 
     private fun session(
         maxInFlightPerPeer: Int,
-        maxBufferedBytes: Long = AceLivePieceReassembler.DEFAULT_MAX_BUFFERED_BYTES
+        maxBufferedBytes: Long = AceLivePieceReassembler.DEFAULT_MAX_BUFFERED_BYTES,
+        producerBoundaryDiagnostics: AceLiveProducerBoundaryDiagnosticsReporter =
+            AceLiveProducerBoundaryDiagnosticsReporter()
     ) = AceLivePeerSessionCoordinator(
         geometry = AceLiveTransportGeometry(
             pieceLengthBytes = 10,
@@ -234,7 +280,8 @@ class AceLivePeerSessionCoordinatorTest {
         ),
         initialNextNeededPiece = 10,
         maxInFlightPerPeer = maxInFlightPerPeer,
-        maxBufferedBytes = maxBufferedBytes
+        maxBufferedBytes = maxBufferedBytes,
+        producerBoundaryDiagnostics = producerBoundaryDiagnostics
     )
 
     private fun recoverySession(
