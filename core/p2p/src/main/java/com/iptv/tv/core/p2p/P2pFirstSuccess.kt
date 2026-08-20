@@ -2,6 +2,8 @@ package com.iptv.tv.core.p2p
 
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -9,7 +11,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Runs P2P attempts with a bounded worker pool and returns as soon as one attempt succeeds.
@@ -83,21 +85,26 @@ internal suspend fun <I, O> firstSuccessfulP2p(
  * - failed metadata never aborts direct startup at the soft deadline. Direct startup keeps its own
  *   absolute bounded timeout, so this optimization does not weaken the existing safety bounds;
  * - when a successfully resolved descriptor starts but its derived live swarm cannot produce a
- *   stream, retry the speculative direct identity once for at most the same soft window. This keeps
- *   a volatile/dead derived swarm from turning metadata-resolution success into a playback
- *   regression, while preserving all existing absolute startup/no-peer/DHT bounds.
+ *   stream, retry the speculative direct identity once. The retry uses the same soft window and may
+ *   receive the same fixed qualification grace only while its current runtime has peer progress.
+ *   This keeps a volatile/dead derived swarm from turning metadata-resolution success into a
+ *   playback regression, while preserving the caller's absolute preparation bound.
  */
 internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
     directSoftTimeoutMillis: Long,
     directProgressGraceMillis: Long = 0L,
     directHasQualificationProgress: () -> Boolean = { false },
     onDirectProgressGraceStarted: () -> Unit = {},
+    onDirectRetryStarted: () -> Unit = {},
+    onDirectRetryProgressGraceStarted: () -> Unit = {},
     directAttempt: suspend () -> P2pResult<T>,
     metadataResolve: suspend () -> P2pResult<M>,
     metadataAttempt: suspend (M) -> P2pResult<T>,
     isCurrent: () -> Boolean,
     superseded: () -> P2pResult.Error,
-    combinedFailureMessage: (P2pResult.Error, P2pResult.Error) -> String
+    combinedFailureMessage: (P2pResult.Error, P2pResult.Error) -> String,
+    fallbackCombinedFailureMessage: (P2pResult.Error, P2pResult.Error) -> String =
+        combinedFailureMessage
 ): P2pResult<T> = supervisorScope {
     require(directSoftTimeoutMillis > 0L) { "directSoftTimeoutMillis must be positive" }
     require(directProgressGraceMillis >= 0L) {
@@ -199,18 +206,33 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
                         if (!isCurrent()) {
                             superseded()
                         } else {
+                            runCatching(onDirectRetryStarted)
                             when (
-                                val directRetry = runP2pAttempt("Direct Ace Live fallback retry failed") {
-                                    withTimeout(directSoftTimeoutMillis) {
-                                        directAttempt()
-                                    }
-                                }
-                            ) {
-                                is P2pResult.Success -> directRetry
-                                is P2pResult.Error -> P2pResult.Error(
-                                    message = combinedFailureMessage(directRetry, metadataStartup),
-                                    cause = metadataStartup.cause ?: directRetry.cause
+                                val directRetry = runDirectRetryWithQualificationGrace(
+                                    directSoftTimeoutMillis = directSoftTimeoutMillis,
+                                    directProgressGraceMillis = directProgressGraceMillis,
+                                    directHasQualificationProgress = directHasQualificationProgress,
+                                    onDirectRetryProgressGraceStarted =
+                                        onDirectRetryProgressGraceStarted,
+                                    directAttempt = directAttempt,
+                                    isCurrent = isCurrent,
+                                    superseded = superseded
                                 )
+                            ) {
+                                is P2pResult.Success ->
+                                    if (isCurrent()) directRetry else superseded()
+                                is P2pResult.Error ->
+                                    if (!isCurrent()) {
+                                        superseded()
+                                    } else {
+                                        P2pResult.Error(
+                                            message = fallbackCombinedFailureMessage(
+                                                directRetry,
+                                                metadataStartup
+                                            ),
+                                            cause = metadataStartup.cause ?: directRetry.cause
+                                        )
+                                    }
                             }
                         }
                     }
@@ -235,6 +257,63 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
     completed
 }
 
+/**
+ * Applies the handoff soft window to a fallback retry without cancelling its runtime at the exact
+ * boundary. The child is always joined or cancelled before this function returns, so a failed or
+ * superseded retry cannot retain loopback/TCP resources.
+ */
+private suspend fun <T> runDirectRetryWithQualificationGrace(
+    directSoftTimeoutMillis: Long,
+    directProgressGraceMillis: Long,
+    directHasQualificationProgress: () -> Boolean,
+    onDirectRetryProgressGraceStarted: () -> Unit,
+    directAttempt: suspend () -> P2pResult<T>,
+    isCurrent: () -> Boolean,
+    superseded: () -> P2pResult.Error
+): P2pResult<T> = supervisorScope {
+    val directRetryJob = async {
+        runP2pAttempt("Direct Ace Live fallback retry failed") {
+            directAttempt()
+        }
+    }
+
+    val softResult = withTimeoutOrNull(directSoftTimeoutMillis) {
+        directRetryJob.await()
+    }
+    if (softResult != null || directRetryJob.isCompleted) {
+        return@supervisorScope softResult ?: directRetryJob.await()
+    }
+
+    if (!isCurrent()) {
+        directRetryJob.cancelAndJoin()
+        return@supervisorScope superseded()
+    }
+    if (
+        directProgressGraceMillis == 0L ||
+        !directHasQualificationProgress()
+    ) {
+        directRetryJob.cancelAndJoin()
+        return@supervisorScope P2pResult.Error(
+            "Timed out waiting for $directSoftTimeoutMillis ms"
+        )
+    }
+
+    runCatching(onDirectRetryProgressGraceStarted)
+    val graceResult = withTimeoutOrNull(directProgressGraceMillis) {
+        directRetryJob.await()
+    }
+    if (graceResult != null || directRetryJob.isCompleted) {
+        return@supervisorScope graceResult ?: directRetryJob.await()
+    }
+
+    directRetryJob.cancelAndJoin()
+    if (!isCurrent()) {
+        superseded()
+    } else {
+        P2pResult.Error(DIRECT_RETRY_PROGRESS_TIMEOUT_MESSAGE)
+    }
+}
+
 private suspend fun <T> runP2pAttempt(
     fallbackMessage: String,
     block: suspend () -> P2pResult<T>
@@ -253,3 +332,8 @@ private sealed interface StartupRaceEvent<out T, out M> {
     data object DirectSoftDeadline : StartupRaceEvent<Nothing, Nothing>
     data object DirectProgressDeadline : StartupRaceEvent<Nothing, Nothing>
 }
+
+private const val DIRECT_RETRY_PROGRESS_TIMEOUT_MESSAGE =
+    "failure=qualified_peer_no_media; " +
+        "Direct Ace Live fallback made peer connection progress but did not produce media " +
+        "before the bounded qualification grace expired"

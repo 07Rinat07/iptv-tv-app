@@ -84,4 +84,23 @@ class P2pChannelAvailabilityTest {
             p2pAvailabilityFromResolveError("P2P-поток не подготовлен: transport metadata unavailable")
         )
     }
+
+    @Test
+    fun connectedPeerWithoutMedia_isClassifiedAsErrorInsteadOfNoPeers() {
+        assertEquals(
+            P2pChannelAvailabilityState.ERROR,
+            p2pAvailabilityFromResolveError(
+                "Torrent TV: пир был найден, но данные потока не поступили " +
+                    "за отведённое время. Попробуйте повторить запуск позже."
+            )
+        )
+    }
+
+    @Test
+    fun genericPeerFailure_isNotMisclassifiedAsNoPeers() {
+        assertEquals(
+            P2pChannelAvailabilityState.ERROR,
+            p2pAvailabilityFromResolveError("peer handshake failed")
+        )
+    }
 }

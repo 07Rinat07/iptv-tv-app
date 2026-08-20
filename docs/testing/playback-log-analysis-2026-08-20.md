@@ -74,3 +74,38 @@ admission/eviction, немедленный warm query и bounded/diverse bootstr
    useful/producing, first media, buffer ready, HTTP read, Media3 READY/frame и teardown.
 4. Проверить, что старые loopback/pool закрыты и stale READY/URL не побеждает.
 5. Отдельно воспроизвести channel 16 и подтвердить READY до EOF либо собрать TS/player telemetry.
+
+## Follow-up лог после bounded DHT/handoff increment
+
+Источник: `myscanerIPTV-logs-1787221389074.txt`. Экспорт содержит только последние 120 structured
+rows, поэтому отсутствие terminal event у самой ранней попытки не считается доказательством утечки.
+
+Новый код DHT виден в поле: все девять фактических lookup использовали два-три warm routing node;
+`dhtCacheHit=false` ожидаем для разных swarm и не означает, что routing memory не сработала. Лучший
+probe вернул четыре candidate примерно за 0.8 с. Однако суммарно наблюдались 348 DHT query с 191
+failure, шесть успешных TCP connect, двенадцать connect failure, один accepted handshake/useful
+window и ни одного producing peer/first media. Текущий blocker в этих попытках находится после
+discovery, но до loopback/Media3.
+
+### Channel 49: остаточная гонка fallback direct
+
+После неудачного metadata startup повторная direct-попытка дошла до:
+
+| От общего старта | Событие |
+|---:|---|
+| ≈46.040 с | TCP connected |
+| ≈46.238 с | handshake accepted |
+| ≈46.396 с | useful window |
+| ≈46.598 с | unchoked, `producer_gap`, 0 B/s |
+| ≈46.797 с | fallback отменён своим fixed 8 s timeout |
+
+До общего 60-секундного preparation bound оставалось около 13 секунд, но fallback helper применял
+progress grace только к initial direct path. Исправление запускает retry как structured child:
+8 секунд остаются soft boundary, а текущий qualified runtime получает один non-renewable grace до
+2 секунд. No-progress, stale/disconnected и superseded retry grace не получают; внешний 60-секундный
+deadline отменяет retry даже внутри grace и дожидается cleanup.
+
+Ошибке grace-expiry присвоен стабильный marker `failure=qualified_peer_no_media`. UI теперь сообщает,
+что пир был найден, но данные потока не поступили, и классифицирует результат как `ERROR`, а не
+ложный `NO_PEERS`. Диагностика различает `direct_retry_started` и
+`direct_retry_progress_grace` с `startup_id` и `path=direct_retry`.

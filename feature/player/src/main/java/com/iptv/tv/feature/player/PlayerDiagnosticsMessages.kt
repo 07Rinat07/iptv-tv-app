@@ -61,6 +61,9 @@ private fun extractDiagnosticHostOrIp(message: String): String? {
 internal fun conciseP2pResolveError(rawMessage: String): String {
     val lowered = rawMessage.lowercase()
     return when {
+        lowered.contains("failure=qualified_peer_no_media") ->
+            "Torrent TV: пир был найден, но данные потока не поступили " +
+                "за отведённое время. Попробуйте повторить запуск позже."
         lowered.contains("did not connect to any peer") ->
             "Torrent TV: доступный пир не найден за отведённое время. " +
                 "Возможно, канал сейчас не раздаётся."

@@ -157,7 +157,27 @@ class AceLiveEmbeddedEngine(
                     runCatching {
                         diagnosticsObserver(
                             "embedded_ace_live_metadata_handoff",
-                            "phase=direct_progress_grace, grace_ms=$DIRECT_QUALIFICATION_GRACE_MILLIS"
+                            "phase=direct_progress_grace, startup_id=$totalStartedAt, " +
+                                "path=direct, grace_ms=$DIRECT_QUALIFICATION_GRACE_MILLIS"
+                        )
+                    }
+                },
+                onDirectRetryStarted = {
+                    runCatching {
+                        diagnosticsObserver(
+                            "embedded_ace_live_metadata_handoff",
+                            "phase=direct_retry_started, startup_id=$totalStartedAt, " +
+                                "path=direct_retry"
+                        )
+                    }
+                },
+                onDirectRetryProgressGraceStarted = {
+                    runCatching {
+                        diagnosticsObserver(
+                            "embedded_ace_live_metadata_handoff",
+                            "phase=direct_retry_progress_grace, startup_id=$totalStartedAt, " +
+                                "path=direct_retry, reason=qualified_no_media, " +
+                                "grace_ms=$DIRECT_QUALIFICATION_GRACE_MILLIS"
                         )
                     }
                 },
@@ -215,6 +235,11 @@ class AceLiveEmbeddedEngine(
                 combinedFailureMessage = { direct, metadata ->
                     "The direct Ace Live swarm failed and transport metadata was unavailable: " +
                         "direct=${direct.message}; metadata=${metadata.message}"
+                },
+                fallbackCombinedFailureMessage = { directRetry, metadataStartup ->
+                    "The resolved Ace Live transport and direct fallback both failed: " +
+                        "direct_retry=${directRetry.message}; " +
+                        "metadata_startup=${metadataStartup.message}"
                 }
             )
         }

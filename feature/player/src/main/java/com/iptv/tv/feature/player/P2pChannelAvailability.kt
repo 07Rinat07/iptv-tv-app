@@ -97,9 +97,15 @@ internal fun p2pChannelAvailabilityLabel(status: P2pChannelAvailability?): Strin
 
 internal fun p2pAvailabilityFromResolveError(message: String): P2pChannelAvailabilityState {
     val normalized = message.lowercase()
+    if (
+        normalized.contains("пир был найден") &&
+        normalized.contains("данные потока не поступили")
+    ) {
+        return P2pChannelAvailabilityState.ERROR
+    }
     return if (
-        normalized.contains("peer") ||
-        normalized.contains("пир") ||
+        normalized.contains("did not connect to any peer") ||
+        normalized.contains("доступный пир не найден") ||
         normalized.contains("не разда") ||
         normalized.contains("no peer")
     ) {

@@ -63,4 +63,21 @@ class PlayerDiagnosticsMessageTest {
         )
         assertFalse(message.contains("30000"))
     }
+
+    @Test
+    fun `qualified peer without media has an honest concise message`() {
+        val message = conciseP2pResolveError(
+            "direct_retry=failure=qualified_peer_no_media; " +
+                "Direct Ace Live fallback made peer connection progress but did not " +
+                "produce media before the bounded qualification grace expired; " +
+                "metadata_startup=Ace Live did not connect to any peer within 30000 ms"
+        )
+
+        assertEquals(
+            "Torrent TV: пир был найден, но данные потока не поступили " +
+                "за отведённое время. Попробуйте повторить запуск позже.",
+            message
+        )
+        assertFalse(message.contains("30000"))
+    }
 }

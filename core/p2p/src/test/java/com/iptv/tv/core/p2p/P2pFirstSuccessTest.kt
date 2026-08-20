@@ -6,6 +6,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -417,5 +418,256 @@ class P2pFirstSuccessTest {
         assertEquals(8_000L, testScheduler.currentTime)
         assertEquals(0, graceStarted.get())
         assertEquals(0, metadataAttempts.get())
+    }
+
+    @Test
+    fun `qualified fallback direct can finish inside fixed progress grace`() = runTest {
+        val directAttempts = AtomicInteger(0)
+        val retryStarted = AtomicInteger(0)
+        val retryGraceStarted = AtomicInteger(0)
+        val retryProgress = AtomicBoolean(false)
+
+        val result = raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = 8_000,
+            directProgressGraceMillis = 2_000,
+            directHasQualificationProgress = retryProgress::get,
+            onDirectRetryStarted = { retryStarted.incrementAndGet() },
+            onDirectRetryProgressGraceStarted = { retryGraceStarted.incrementAndGet() },
+            directAttempt = {
+                if (directAttempts.incrementAndGet() == 1) {
+                    awaitCancellation()
+                } else {
+                    delay(7_800)
+                    retryProgress.set(true)
+                    delay(700)
+                    P2pResult.Success("fallback-direct")
+                }
+            },
+            metadataResolve = {
+                delay(100)
+                P2pResult.Success("descriptor")
+            },
+            metadataAttempt = { P2pResult.Error("metadata startup failed") },
+            isCurrent = { true },
+            superseded = { P2pResult.Error("superseded") },
+            combinedFailureMessage = { direct, metadata ->
+                "${direct.message}; ${metadata.message}"
+            }
+        )
+
+        assertTrue(result is P2pResult.Success)
+        assertEquals("fallback-direct", (result as P2pResult.Success).data)
+        assertEquals(2, directAttempts.get())
+        assertEquals(1, retryStarted.get())
+        assertEquals(1, retryGraceStarted.get())
+        assertEquals(16_500L, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `fallback direct without current progress stops at soft timeout`() = runTest {
+        val directAttempts = AtomicInteger(0)
+        val retryGraceStarted = AtomicInteger(0)
+        val retryCancelled = AtomicBoolean(false)
+
+        val result = raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = 8_000,
+            directProgressGraceMillis = 2_000,
+            directHasQualificationProgress = { false },
+            onDirectRetryProgressGraceStarted = { retryGraceStarted.incrementAndGet() },
+            directAttempt = {
+                if (directAttempts.incrementAndGet() == 1) {
+                    awaitCancellation()
+                } else {
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        retryCancelled.set(true)
+                    }
+                }
+            },
+            metadataResolve = { P2pResult.Success("descriptor") },
+            metadataAttempt = { P2pResult.Error("metadata startup failed") },
+            isCurrent = { true },
+            superseded = { P2pResult.Error("superseded") },
+            combinedFailureMessage = { direct, metadata ->
+                "${direct.message}; ${metadata.message}"
+            }
+        )
+
+        assertTrue(result is P2pResult.Error)
+        assertTrue((result as P2pResult.Error).message.contains("Timed out waiting for 8000 ms"))
+        assertTrue(retryCancelled.get())
+        assertEquals(0, retryGraceStarted.get())
+        assertEquals(16_000L, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `qualified fallback direct grace remains bounded and reports media timeout`() = runTest {
+        val directAttempts = AtomicInteger(0)
+        val retryProgress = AtomicBoolean(false)
+        val retryCancelled = AtomicBoolean(false)
+        val retryGraceStarted = AtomicInteger(0)
+
+        val result = raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = 8_000,
+            directProgressGraceMillis = 2_000,
+            directHasQualificationProgress = retryProgress::get,
+            onDirectRetryProgressGraceStarted = { retryGraceStarted.incrementAndGet() },
+            directAttempt = {
+                if (directAttempts.incrementAndGet() == 1) {
+                    awaitCancellation()
+                } else {
+                    try {
+                        delay(7_800)
+                        retryProgress.set(true)
+                        awaitCancellation()
+                    } finally {
+                        retryCancelled.set(true)
+                    }
+                }
+            },
+            metadataResolve = { P2pResult.Success("descriptor") },
+            metadataAttempt = { P2pResult.Error("metadata startup failed") },
+            isCurrent = { true },
+            superseded = { P2pResult.Error("superseded") },
+            combinedFailureMessage = { direct, metadata ->
+                "${direct.message}; ${metadata.message}"
+            }
+        )
+
+        assertTrue(result is P2pResult.Error)
+        assertTrue(
+            (result as P2pResult.Error).message.contains(
+                "failure=qualified_peer_no_media"
+            )
+        )
+        assertTrue(retryCancelled.get())
+        assertEquals(1, retryGraceStarted.get())
+        assertEquals(18_000L, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `superseded fallback direct does not receive progress grace`() = runTest {
+        val directAttempts = AtomicInteger(0)
+        val current = AtomicBoolean(true)
+        val retryProgress = AtomicBoolean(false)
+        val retryCancelled = AtomicBoolean(false)
+        val retryGraceStarted = AtomicInteger(0)
+
+        val result = raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = 8_000,
+            directProgressGraceMillis = 2_000,
+            directHasQualificationProgress = retryProgress::get,
+            onDirectRetryProgressGraceStarted = { retryGraceStarted.incrementAndGet() },
+            directAttempt = {
+                if (directAttempts.incrementAndGet() == 1) {
+                    awaitCancellation()
+                } else {
+                    try {
+                        retryProgress.set(true)
+                        delay(7_900)
+                        current.set(false)
+                        awaitCancellation()
+                    } finally {
+                        retryCancelled.set(true)
+                    }
+                }
+            },
+            metadataResolve = { P2pResult.Success("descriptor") },
+            metadataAttempt = { P2pResult.Error("metadata startup failed") },
+            isCurrent = current::get,
+            superseded = { P2pResult.Error("superseded") },
+            combinedFailureMessage = { direct, metadata ->
+                "${direct.message}; ${metadata.message}"
+            }
+        )
+
+        assertTrue(result is P2pResult.Error)
+        assertEquals("superseded", (result as P2pResult.Error).message)
+        assertEquals(0, retryGraceStarted.get())
+        assertTrue(retryCancelled.get())
+        assertEquals(16_000L, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `stale fallback progress does not open grace after disconnect`() = runTest {
+        val directAttempts = AtomicInteger(0)
+        val retryProgress = AtomicBoolean(false)
+        val retryGraceStarted = AtomicInteger(0)
+
+        val result = raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = 8_000,
+            directProgressGraceMillis = 2_000,
+            directHasQualificationProgress = retryProgress::get,
+            onDirectRetryProgressGraceStarted = { retryGraceStarted.incrementAndGet() },
+            directAttempt = {
+                if (directAttempts.incrementAndGet() == 1) {
+                    awaitCancellation()
+                } else {
+                    retryProgress.set(true)
+                    delay(7_900)
+                    retryProgress.set(false)
+                    awaitCancellation()
+                }
+            },
+            metadataResolve = { P2pResult.Success("descriptor") },
+            metadataAttempt = { P2pResult.Error("metadata startup failed") },
+            isCurrent = { true },
+            superseded = { P2pResult.Error("superseded") },
+            combinedFailureMessage = { direct, metadata ->
+                "${direct.message}; ${metadata.message}"
+            }
+        )
+
+        assertTrue(result is P2pResult.Error)
+        assertEquals(0, retryGraceStarted.get())
+        assertEquals(16_000L, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `outer preparation timeout still cancels fallback progress grace`() = runTest {
+        val directAttempts = AtomicInteger(0)
+        val retryProgress = AtomicBoolean(false)
+        val retryCancelled = AtomicBoolean(false)
+        var retryGraceStartedAt = -1L
+
+        val result = withTimeoutOrNull(60_000) {
+            raceP2pDirectAgainstMetadata(
+                directSoftTimeoutMillis = 8_000,
+                directProgressGraceMillis = 2_000,
+                directHasQualificationProgress = retryProgress::get,
+                onDirectRetryProgressGraceStarted = {
+                    retryGraceStartedAt = testScheduler.currentTime
+                },
+                directAttempt = {
+                    if (directAttempts.incrementAndGet() == 1) {
+                        awaitCancellation()
+                    } else {
+                        try {
+                            delay(7_800)
+                            retryProgress.set(true)
+                            awaitCancellation()
+                        } finally {
+                            retryCancelled.set(true)
+                        }
+                    }
+                },
+                metadataResolve = { P2pResult.Success("descriptor") },
+                metadataAttempt = {
+                    delay(43_000)
+                    P2pResult.Error("metadata startup failed")
+                },
+                isCurrent = { true },
+                superseded = { P2pResult.Error("superseded") },
+                combinedFailureMessage = { direct, metadata ->
+                    "${direct.message}; ${metadata.message}"
+                }
+            )
+        }
+
+        assertEquals(null, result)
+        assertEquals(59_000L, retryGraceStartedAt)
+        assertTrue(retryCancelled.get())
+        assertEquals(60_000L, testScheduler.currentTime)
     }
 }

@@ -43,6 +43,11 @@ Stream Engine используется только как A/B benchmark и не
 error, но READY появился только после EOF при переключении. Это нельзя исправлять увеличением peer
 timeout или считать доказательством отсутствия пиров.
 
+Follow-up лог `myscanerIPTV-logs-1787221389074.txt` подтвердил использование warm DHT contacts, но
+нашёл второй fixed-timeout edge: fallback direct после metadata failure успел пройти
+connect/handshake/useful/unchoked и был отменён примерно через 0.4 секунды. Этот retry теперь также
+получает только при текущем qualification один bounded двухсекундный grace внутри общего 60 с.
+
 ## Текущий bounded fix
 
 - Engine-owned TTL/LRU routing memory переиспользуется новыми live и metadata DHT wrappers.
@@ -51,9 +56,12 @@ timeout или считать доказательством отсутстви�
 - Warm KRPC идёт параллельно с глобально bounded bootstrap DNS pipeline. Bootstrap сохраняет lane и
   query token, а первый wave распределяется по hostname до дополнительных IP одного оператора.
 - Direct-runtime получает только один двухсекундный grace, если его **текущее** runtime-состояние
-  показывает свежий connect либо requestable/producing peer. Общий content preparation остаётся 60 с.
+  показывает свежий connect либо requestable/producing peer. Та же политика применяется к одной
+  fallback-direct попытке после неудачного metadata startup. Общий content preparation остаётся 60 с.
 - Закрытый TCP pool терминально запрещает поздний запуск transport.
 - При выборе нового канала старый незавершённый `SEARCHING` сбрасывается в `UNCHECKED`.
+- Если квалифицированный fallback так и не отдаёт media, UI честно показывает найденный пир без
+  данных потока и состояние `ERROR`, а не «нет пиров».
 
 ## Что ещё не решено
 

@@ -25,6 +25,10 @@ Source: `myscanerIPTV-logs-1787212775216.txt`, captured from the TV build contai
 pool guard. The full evidence record is in
 [`testing/playback-log-analysis-2026-08-20.md`](testing/playback-log-analysis-2026-08-20.md).
 
+The follow-up export `myscanerIPTV-logs-1787221389074.txt` contains the bounded DHT/handoff
+increment. Warm routing nodes are being queried, but the export also exposed a separate fixed
+8-second timeout in the fallback-direct retry after metadata startup failure.
+
 ### Startup handoff race is confirmed
 
 For `channelId=13`, the speculative direct runtime made useful network progress just before the
@@ -65,6 +69,14 @@ by selection of B, A could remain `SEARCHING` forever even though only one gener
 active. This explains the simultaneous “поиск пиров…” labels in the screenshots; it did not prove
 that several P2P engines were still running.
 
+### Follow-up: fallback direct was still cancelled after qualification
+
+For `channelId=49`, the fallback direct runtime connected, accepted a handshake, observed a useful
+unchoked window and entered producer-gap state. Its local eight-second timeout then cancelled it
+about 0.4 s after useful qualification, despite roughly 13 s remaining in the outer preparation
+budget. This was not the original initial-direct metadata handoff; it was an uncovered retry-only
+boundary in the same coordinator.
+
 ## Current bounded implementation increment
 
 1. **Terminal peer-pool ownership.** A closed pool rejects a late `startPeer` before and under its
@@ -78,13 +90,15 @@ that several P2P engines were still running.
    reserves a bootstrap lane and query token until one bootstrap request launches, distributes the
    first wave across hostnames and keeps the original DHT packet, peer, time and cancellation bounds.
    Diagnostics distinguish cache hits from actual warm-contact queries, total queries and failures.
-4. **Progress-aware direct handoff.** At the 8 s soft boundary, only the current direct runtime can
-   request a fixed two-second qualification grace. Historical timeline milestones do not control
-   behavior. A stale/disconnected runtime gets no grace, the deadline never renews, and direct,
-   metadata startup and fallback remain under one 60 s content-preparation bound. Expiry closes
-   the active runtime only while that preparation still owns the current generation.
+4. **Progress-aware direct handoff and fallback.** At each 8 s soft boundary, only the current
+   direct runtime can request a fixed two-second qualification grace. This applies to both the
+   initial metadata handoff and the one fallback-direct retry. Historical timeline milestones do
+   not control behavior. A stale/disconnected runtime gets no grace, the deadline never renews, and
+   direct, metadata startup and fallback remain under one 60 s content-preparation bound. Expiry
+   closes the active runtime only while that preparation still owns the current generation.
 5. **Honest availability state.** Selecting a new channel changes only superseded `SEARCHING`
-   entries back to `UNCHECKED`; completed READY/PLAYING/ERROR evidence is retained.
+   entries back to `UNCHECKED`; completed READY/PLAYING/ERROR evidence is retained. A qualified
+   fallback that never produces media reports `qualified_peer_no_media`/`ERROR`, not `NO_PEERS`.
 
 This increment intentionally does not claim to solve the separate Media3/TS problem.
 
@@ -111,7 +125,7 @@ Real-device gate on the same TV Box:
 
 ## Decision order
 
-1. Finish exact-head unit/build gates for the bounded DHT/handoff/teardown/UI increment.
+1. Finish exact-head unit/build gates for the bounded DHT/handoff/fallback/teardown/UI increment.
 2. Run the same-device field matrix. Merge performance claims only if repeated switches improve
    without resource leaks or a lower success rate.
 3. Add deterministic A→B→C integration ownership coverage across DHT/refill/handoff.
