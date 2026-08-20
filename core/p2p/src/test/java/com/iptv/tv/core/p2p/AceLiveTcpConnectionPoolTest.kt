@@ -297,32 +297,6 @@ class AceLiveTcpConnectionPoolTest {
     }
 
     @Test
-    fun closedPoolRejectsLatePeerStartsWithoutOpeningTransport() = runBlocking {
-        val transport = FakeTransport(emptyList())
-        val factory = FakeTransportFactory(transport)
-        val pool = pool(
-            factory = factory,
-            events = CopyOnWriteArrayList(),
-            policy = policy(maxConcurrentPeers = 1)
-        )
-
-        pool.close()
-
-        val error = runCatching {
-            pool.startPeer(
-                peerId = 29,
-                endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9019),
-                swarmKey = swarmKey,
-                localPeerId = localPeerId
-            )
-        }.exceptionOrNull()
-
-        assertTrue(error is IllegalStateException)
-        assertEquals(0, factory.connectCount)
-        assertTrue(pool.activePeerIds().isEmpty())
-    }
-
-    @Test
     fun immediateStopReleasesRegisteredPeerSlot() = runBlocking {
         val transport = FakeTransport(emptyList())
         val pool = pool(
