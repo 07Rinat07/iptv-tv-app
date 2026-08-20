@@ -85,6 +85,77 @@ class AceLiveDhtWarmRoutingRegressionTest {
         }
     }
 
+    @Test
+    fun `warm routing keeps a bootstrap slot in the concurrent startup wave`() = runBlocking {
+        val warmSockets = List(4) { DatagramSocket(InetSocketAddress("127.0.0.1", 0)) }
+        val liveBootstrap = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val warmThreads = warmSockets.mapIndexed { index, socket ->
+            dhtServerThread(socket, responses = 1) { _, _ ->
+                response(transactionId, ByteArray(20) { (0x10 + index).toByte() })
+            }
+        }
+        val liveBootstrapThread = dhtServerThread(liveBootstrap, responses = 1) { _, _ ->
+            response(
+                transactionId,
+                ByteArray(20) { 0x70 },
+                values = listOf(compactEndpoint(127, 0, 0, 1, 8630))
+            )
+        }
+
+        try {
+            val discovery = AceLiveDhtDiscovery(
+                policy = AceLiveDhtPolicy(
+                    requestTimeoutMillis = 500,
+                    discoveryBudgetMillis = 500,
+                    searchBranching = 4,
+                    returnAfterPeers = 1,
+                    allowNonGlobalNodeAddresses = true,
+                    allowNonGlobalPeerAddresses = true
+                ),
+                randomInt = { 0x1234 },
+                addressResolver = { listOf(ipv4("127.0.0.1")) }
+            )
+
+            val first = discovery.discover(
+                AceLiveDhtDiscoveryRequest(
+                    swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 0x55 }),
+                    bootstrapNodes = warmSockets.mapIndexed { index, socket ->
+                        AceLiveDhtBootstrapNode("warm-bootstrap-$index.test", socket.localPort)
+                    },
+                    localNodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 0x44 })
+                )
+            )
+            assertEquals(emptyList<AceLiveTcpPeerEndpoint>(), first.peers)
+            assertEquals(4, first.queriesSent)
+            warmThreads.forEach { it.join(2_000) }
+
+            val second = discovery.discover(
+                request(
+                    swarmByte = 0x66,
+                    bootstrapHost = "live-second-bootstrap.test",
+                    bootstrapPort = liveBootstrap.localPort
+                )
+            )
+
+            assertEquals(
+                "warm routing must not consume every concurrent startup slot ahead of a live bootstrap",
+                listOf(AceLiveTcpPeerEndpoint("127.0.0.1", 8630)),
+                second.peers
+            )
+            assertEquals(
+                "three warm probes plus one live bootstrap should fill the first production-sized wave",
+                4,
+                second.queriesSent
+            )
+        } finally {
+            warmSockets.forEach { it.close() }
+            liveBootstrap.close()
+            warmThreads.forEach { it.join(2_000) }
+            liveBootstrapThread.join(2_000)
+        }
+    }
+
     private fun request(
         swarmByte: Int,
         bootstrapHost: String,
