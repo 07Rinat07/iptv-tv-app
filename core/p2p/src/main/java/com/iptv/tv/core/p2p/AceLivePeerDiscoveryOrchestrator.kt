@@ -79,8 +79,18 @@ data class AceLivePeerDiscoveryOrchestrationPolicy(
 data class AceLivePeerDiscoveryOrchestrationResult(
     val peers: List<AceLiveDiscoveredPeer>,
     val dht: AceLivePeerDiscoverySourceSummary,
-    val tracker: AceLivePeerDiscoverySourceSummary
+    val tracker: AceLivePeerDiscoverySourceSummary,
+    val dhtQueriesSent: Int = 0,
+    val dhtFailedQueries: Int = 0,
+    val dhtWarmRoutingSeedsUsed: Int = 0,
+    val dhtCacheHit: Boolean = false
 ) {
+    init {
+        require(dhtQueriesSent >= 0) { "DHT query count must be non-negative" }
+        require(dhtFailedQueries >= 0) { "DHT failed query count must be non-negative" }
+        require(dhtWarmRoutingSeedsUsed >= 0) { "DHT warm seed count must be non-negative" }
+    }
+
     fun tcpEndpoints(): List<AceLiveTcpPeerEndpoint> = peers.map(AceLiveDiscoveredPeer::endpoint)
 }
 
@@ -291,6 +301,11 @@ class AceLivePeerDiscoveryOrchestrator(
                 source = AceLivePeerDiscoverySource.UDP_TRACKER
             )
         }
+        val dhtResult = when (dhtExecution) {
+            is SourceExecution.Success -> dhtExecution.value
+            SourceExecution.Failed,
+            SourceExecution.NotRequested -> null
+        }
 
         return AceLivePeerDiscoveryOrchestrationResult(
             peers = discovered.values.map { value ->
@@ -300,7 +315,11 @@ class AceLivePeerDiscoveryOrchestrator(
                 )
             },
             dht = summarize(dhtExecution) { result -> result.peers.size },
-            tracker = summarize(trackerExecution) { result -> result.peers.size }
+            tracker = summarize(trackerExecution) { result -> result.peers.size },
+            dhtQueriesSent = dhtResult?.queriesSent ?: 0,
+            dhtFailedQueries = dhtResult?.failedQueries ?: 0,
+            dhtWarmRoutingSeedsUsed = dhtResult?.warmRoutingSeedsUsed ?: 0,
+            dhtCacheHit = dhtResult?.cacheHit ?: false
         )
     }
 

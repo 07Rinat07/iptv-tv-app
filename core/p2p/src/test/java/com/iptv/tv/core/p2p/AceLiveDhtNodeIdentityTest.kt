@@ -15,6 +15,48 @@ import org.junit.Test
 
 class AceLiveDhtNodeIdentityTest {
     @Test
+    fun `duplicate advertised node ids consume only one query`() = runBlocking {
+        val bootstrap = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        val selected = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        val duplicate = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val duplicateNodeId = ByteArray(20) { 0x22 }
+        val contacts = duplicateNodeId + compactEndpoint(127, 0, 0, 1, selected.localPort) +
+            duplicateNodeId + compactEndpoint(127, 0, 0, 1, duplicate.localPort)
+        val bootstrapThread = server(bootstrap) {
+            response(transactionId, ByteArray(20) { 1 }, nodes = contacts)
+        }
+        val selectedThread = server(selected) {
+            response(
+                transactionId,
+                duplicateNodeId,
+                values = listOf(compactEndpoint(127, 0, 0, 1, 8621))
+            )
+        }
+
+        try {
+            val result = discovery().discover(
+                AceLiveDhtDiscoveryRequest(
+                    swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 0x56 }),
+                    bootstrapNodes = listOf(
+                        AceLiveDhtBootstrapNode("bootstrap.duplicate-id.test", bootstrap.localPort)
+                    ),
+                    localNodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 0x44 })
+                )
+            )
+
+            assertEquals(listOf(AceLiveTcpPeerEndpoint("127.0.0.1", 8621)), result.peers)
+            assertEquals(2, result.queriesSent)
+        } finally {
+            bootstrap.close()
+            selected.close()
+            duplicate.close()
+            bootstrapThread.join(2_000)
+            selectedThread.join(2_000)
+        }
+    }
+
+    @Test
     fun `discovered contact is rejected when endpoint responds with another node id`() = runBlocking {
         val bootstrap = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
         val second = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
@@ -33,16 +75,7 @@ class AceLiveDhtNodeIdentityTest {
         }
 
         try {
-            val discovery = AceLiveDhtDiscovery(
-                policy = AceLiveDhtPolicy(
-                    requestTimeoutMillis = 1_000,
-                    discoveryBudgetMillis = 5_000,
-                    allowNonGlobalNodeAddresses = true,
-                    allowNonGlobalPeerAddresses = true
-                ),
-                randomInt = { 0x1234 },
-                addressResolver = { listOf(ipv4("127.0.0.1")) }
-            )
+            val discovery = discovery()
             val result = discovery.discover(
                 AceLiveDhtDiscoveryRequest(
                     swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 0x55 }),
@@ -61,6 +94,17 @@ class AceLiveDhtNodeIdentityTest {
             secondThread.join(2_000)
         }
     }
+
+    private fun discovery() = AceLiveDhtDiscovery(
+        policy = AceLiveDhtPolicy(
+            requestTimeoutMillis = 1_000,
+            discoveryBudgetMillis = 5_000,
+            allowNonGlobalNodeAddresses = true,
+            allowNonGlobalPeerAddresses = true
+        ),
+        randomInt = { 0x1234 },
+        addressResolver = { listOf(ipv4("127.0.0.1")) }
+    )
 
     private fun server(socket: DatagramSocket, responseFactory: () -> ByteArray): Thread =
         thread(start = true, isDaemon = true) {

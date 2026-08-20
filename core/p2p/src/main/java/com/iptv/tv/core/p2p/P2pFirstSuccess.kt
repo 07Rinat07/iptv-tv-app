@@ -75,6 +75,9 @@ internal suspend fun <I, O> firstSuccessfulP2p(
  * - direct playback wins immediately if it produces media before the soft window expires;
  * - metadata may resolve at any time, but playback from it starts only when direct startup fails or
  *   [directSoftTimeoutMillis] expires;
+ * - a direct runtime that is currently connected/qualified may receive a caller-defined bounded
+ *   grace window instead of being torn down exactly at the soft boundary; the predicate must read
+ *   the active direct runtime, never a historical/shared diagnostic timeline;
  * - if metadata resolves only after the soft window, it can replace a still-pending direct attempt
  *   immediately;
  * - failed metadata never aborts direct startup at the soft deadline. Direct startup keeps its own
@@ -86,6 +89,9 @@ internal suspend fun <I, O> firstSuccessfulP2p(
  */
 internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
     directSoftTimeoutMillis: Long,
+    directProgressGraceMillis: Long = 0L,
+    directHasQualificationProgress: () -> Boolean = { false },
+    onDirectProgressGraceStarted: () -> Unit = {},
     directAttempt: suspend () -> P2pResult<T>,
     metadataResolve: suspend () -> P2pResult<M>,
     metadataAttempt: suspend (M) -> P2pResult<T>,
@@ -94,11 +100,18 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
     combinedFailureMessage: (P2pResult.Error, P2pResult.Error) -> String
 ): P2pResult<T> = supervisorScope {
     require(directSoftTimeoutMillis > 0L) { "directSoftTimeoutMillis must be positive" }
+    require(directProgressGraceMillis >= 0L) {
+        "directProgressGraceMillis must be non-negative"
+    }
+    require(directProgressGraceMillis <= Long.MAX_VALUE - directSoftTimeoutMillis) {
+        "direct progress deadline overflows"
+    }
+    val directProgressDeadlineMillis = directSoftTimeoutMillis + directProgressGraceMillis
 
-    // Three independent producers can report into the race: direct startup, metadata resolution and
-    // the soft deadline. A small bounded channel avoids producer suspension while the coordinator is
-    // cleaning up the losing runtime.
-    val events = Channel<StartupRaceEvent<T, M>>(capacity = 3)
+    // Four independent producers can report into the race: direct startup, metadata resolution,
+    // the soft deadline and the optional progress-grace deadline. A small bounded channel avoids
+    // producer suspension while the coordinator is cleaning up the losing runtime.
+    val events = Channel<StartupRaceEvent<T, M>>(capacity = 4)
     val directJob = launch {
         // Do not wrap directAttempt in a coroutine timeout. The soft window controls only when a
         // usable metadata alternative is allowed to replace it; when metadata is unavailable the
@@ -118,11 +131,17 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
         delay(directSoftTimeoutMillis)
         events.send(StartupRaceEvent.DirectSoftDeadline)
     }
+    val progressDeadlineJob = launch {
+        delay(directProgressDeadlineMillis)
+        events.send(StartupRaceEvent.DirectProgressDeadline)
+    }
 
     var directFailure: P2pResult.Error? = null
     var metadataFailure: P2pResult.Error? = null
     var resolvedMetadata: P2pResult.Success<M>? = null
     var directSoftDeadlineReached = false
+    var directProgressDeadlineReached = false
+    var progressGraceReported = false
     var completed: P2pResult<T>? = null
 
     while (completed == null) {
@@ -131,8 +150,10 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
                 is P2pResult.Success -> {
                     metadataJob.cancel()
                     softDeadlineJob.cancel()
+                    progressDeadlineJob.cancel()
                     metadataJob.join()
                     softDeadlineJob.join()
+                    progressDeadlineJob.join()
                     completed = result
                 }
                 is P2pResult.Error -> directFailure = result
@@ -144,18 +165,31 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
             }
 
             StartupRaceEvent.DirectSoftDeadline -> directSoftDeadlineReached = true
+            StartupRaceEvent.DirectProgressDeadline -> directProgressDeadlineReached = true
         }
 
         val metadataReady = resolvedMetadata
+        val deferForQualifiedDirect =
+            directFailure == null &&
+                directSoftDeadlineReached &&
+                !directProgressDeadlineReached &&
+                isCurrent() &&
+                directHasQualificationProgress()
+        if (deferForQualifiedDirect && !progressGraceReported) {
+            progressGraceReported = true
+            runCatching(onDirectProgressGraceStarted)
+        }
         if (
             completed == null &&
             metadataReady != null &&
-            (directFailure != null || directSoftDeadlineReached)
+            (directFailure != null || (directSoftDeadlineReached && !deferForQualifiedDirect))
         ) {
             directJob.cancel()
             directJob.join()
             softDeadlineJob.cancel()
+            progressDeadlineJob.cancel()
             softDeadlineJob.join()
+            progressDeadlineJob.join()
             completed = if (!isCurrent()) {
                 superseded()
             } else {
@@ -188,7 +222,9 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
         val metadataError = metadataFailure
         if (completed == null && directError != null && metadataError != null) {
             softDeadlineJob.cancel()
+            progressDeadlineJob.cancel()
             softDeadlineJob.join()
+            progressDeadlineJob.join()
             completed = P2pResult.Error(
                 message = combinedFailureMessage(directError, metadataError),
                 cause = directError.cause ?: metadataError.cause
@@ -196,7 +232,7 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
         }
     }
 
-    completed ?: error("Ace Live startup race ended without a result")
+    completed
 }
 
 private suspend fun <T> runP2pAttempt(
@@ -215,4 +251,5 @@ private sealed interface StartupRaceEvent<out T, out M> {
     data class Direct<T>(val result: P2pResult<T>) : StartupRaceEvent<T, Nothing>
     data class Metadata<M>(val result: P2pResult<M>) : StartupRaceEvent<Nothing, M>
     data object DirectSoftDeadline : StartupRaceEvent<Nothing, Nothing>
+    data object DirectProgressDeadline : StartupRaceEvent<Nothing, Nothing>
 }

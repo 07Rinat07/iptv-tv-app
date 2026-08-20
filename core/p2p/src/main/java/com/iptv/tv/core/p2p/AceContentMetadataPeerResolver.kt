@@ -11,8 +11,16 @@ import kotlinx.coroutines.withContext
 /** Resolves an Ace content ID through its public metadata swarm and BEP-9 `ut_metadata`. */
 class AceContentMetadataPeerResolver(
     private val transportFactory: AceLiveTcpTransportFactory = JvmAceLiveTcpTransportFactory(),
+    routingMemory: AceDhtRoutingMemory? = null,
     private val discoverPeers: suspend (AceLiveSwarmKey, ByteArray, Int) -> List<AceLiveTcpPeerEndpoint> =
-        ::discoverDefaultMetadataPeers
+        { swarmKey, peerId, announcePort ->
+            discoverDefaultMetadataPeers(
+                swarmKey = swarmKey,
+                peerId = peerId,
+                announcePort = announcePort,
+                routingMemory = routingMemory
+            )
+        }
 ) {
     suspend fun resolve(contentId: String): P2pResult<AceResolvedLiveTransport> {
         val swarmKey = AceLiveSwarmKey.parseHex(contentId)
@@ -309,7 +317,8 @@ class AceContentMetadataPeerResolver(
 private suspend fun discoverDefaultMetadataPeers(
     swarmKey: AceLiveSwarmKey,
     peerId: ByteArray,
-    announcePort: Int
+    announcePort: Int,
+    routingMemory: AceDhtRoutingMemory?
 ): List<AceLiveTcpPeerEndpoint> = withContext(Dispatchers.IO) {
     // Field sweep #15 showed metadata tracker batches of 5-8 endpoints could trigger the generic
     // tracker-count fast path even when every tracker endpoint then failed TCP connection. Metadata
@@ -320,7 +329,8 @@ private suspend fun discoverDefaultMetadataPeers(
         policy = AceLiveDhtPolicy(
             returnAfterPeers = ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS
         ),
-        reuseRecentResults = true
+        reuseRecentResults = true,
+        routingMemory = routingMemory
     )
     val result = AceLivePeerDiscoveryOrchestrator(
         dhtDiscover = startupDhtDiscovery::discover,

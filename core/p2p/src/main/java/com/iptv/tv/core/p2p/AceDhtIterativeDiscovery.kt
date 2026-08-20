@@ -6,11 +6,14 @@ import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.security.SecureRandom
+import java.util.ArrayDeque
 import java.util.PriorityQueue
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
@@ -48,8 +51,23 @@ internal data class AceDhtDiscoveryOutcome(
     val peers: List<AceLiveTcpPeerEndpoint>,
     val queriesSent: Int,
     val failedQueries: Int,
-    val rejectedEndpoints: Int
+    val rejectedEndpoints: Int,
+    val warmRoutingSeedsUsed: Int
 )
+
+internal fun aceDhtWarmRoutingSeedLimit(
+    searchBranching: Int,
+    maxWarmSeeds: Int = ACE_DHT_MAX_WARM_ROUTING_SEEDS
+): Int {
+    require(searchBranching > 0) { "DHT search branching must be positive" }
+    require(maxWarmSeeds >= 0) { "DHT warm seed cap must be non-negative" }
+    if (maxWarmSeeds == 0) return 0
+    return if (searchBranching == 1) 1 else min(maxWarmSeeds, searchBranching - 1)
+}
+
+internal const val ACE_DHT_MAX_WARM_ROUTING_SEEDS = 4
+internal const val ACE_DHT_MAX_CONCURRENT_BOOTSTRAP_RESOLUTIONS = 4
+internal const val ACE_DHT_GLOBAL_RESOLVER_WORKERS = 4
 
 /**
  * Shared bounded, concurrent BEP-5 iterative walker used by both verified Ace Live swarm keys and
@@ -60,13 +78,15 @@ internal class AceDhtIterativeDiscovery(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val policy: AceLiveDhtPolicy = AceLiveDhtPolicy(),
     private val randomInt: () -> Int = DEFAULT_RANDOM_INT,
-    private val addressResolver: (String) -> List<Inet4Address> = DEFAULT_ADDRESS_RESOLVER
+    private val addressResolver: (String) -> List<Inet4Address> = DEFAULT_ADDRESS_RESOLVER,
+    private val routingMemory: AceDhtRoutingMemory? = null
 ) {
     suspend fun discover(request: AceDhtLookupRequest): AceDhtDiscoveryOutcome =
         withContext(ioDispatcher) {
             val deadlineNanos = System.nanoTime() + policy.discoveryBudgetMillis * NANOS_PER_MILLI
             val frontier = PriorityQueue(queryCandidateComparator(request.targetBytes))
             val queuedEndpoints = HashMap<String, AceLiveDhtNodeId?>()
+            val queuedNodeIds = HashSet<AceLiveDhtNodeId>()
             val queriedEndpoints = HashSet<String>()
             val peers = LinkedHashMap<String, AceLiveTcpPeerEndpoint>()
             val completionPeerCount = policy.returnAfterPeers ?: policy.maxTotalPeers
@@ -74,56 +94,149 @@ internal class AceDhtIterativeDiscovery(
             var failed = 0
             var queries = 0
 
-            for (bootstrap in request.bootstrapNodes.distinct().take(policy.maxBootstrapNodes)) {
-                currentCoroutineContext().ensureActive()
-                if (remainingBudgetMillis(deadlineNanos) <= 0) break
-                val addresses = try {
-                    resolveBootstrap(bootstrap.host, deadlineNanos)
-                        .asSequence()
-                        .distinctBy { it.hostAddress }
-                        .take(policy.maxResolvedAddressesPerBootstrap)
-                        .toList()
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: DiscoveryBudgetExhaustedException) {
-                    break
-                } catch (_: Exception) {
-                    emptyList()
-                }
-                for (address in addresses) {
-                    if (!isAllowedNodeAddress(address)) {
-                        rejected += 1
-                        continue
-                    }
-                    val endpoint = AceLiveTcpPeerEndpoint(address.hostAddress ?: continue, bootstrap.port)
-                    val key = endpointKey(endpoint)
-                    if (!queuedEndpoints.containsKey(key)) {
-                        queuedEndpoints[key] = null
-                        frontier.add(QueryCandidate(endpoint = endpoint, nodeId = null))
-                    }
+            // Known-ID contacts sort ahead of unresolved bootstraps. Bound the warm set below the
+            // concurrent branch count so normal bootstrap always retains a first-wave lane in
+            // production. Serial test/custom policies still try one verified contact before
+            // falling back to bootstrap after the existing request timeout.
+            val warmContacts = routingMemory?.recentContacts(
+                aceDhtWarmRoutingSeedLimit(policy.searchBranching)
+            ).orEmpty()
+            var warmRoutingSeedsUsed = 0
+            for (contact in warmContacts) {
+                val key = endpointKey(contact.endpoint)
+                if (!queuedEndpoints.containsKey(key) && queuedNodeIds.add(contact.nodeId)) {
+                    queuedEndpoints[key] = contact.nodeId
+                    frontier.add(
+                        QueryCandidate(
+                            endpoint = contact.endpoint,
+                            nodeId = contact.nodeId,
+                            fromRoutingMemory = true,
+                            fromBootstrap = false
+                        )
+                    )
                 }
             }
 
             coroutineScope {
                 val inFlight = LinkedHashSet<Deferred<QueryCompletion>>()
+                val bootstrapPrimaryFrontier = ArrayDeque<QueryCandidate>()
+                val bootstrapExtraFrontier = ArrayDeque<QueryCandidate>()
+                var bootstrapQueryLaunched = false
+                // Bootstrap DNS runs beside the query loop. This lets verified warm contacts start
+                // immediately. Resolution is pipelined under its own small cap so a caller's larger
+                // bootstrap policy cannot create an unbounded burst of resolver work.
+                val pendingBootstraps = ArrayDeque(
+                    request.bootstrapNodes
+                        .distinct()
+                        .take(policy.maxBootstrapNodes)
+                )
+                val bootstrapInFlight = LinkedHashSet<Deferred<BootstrapResolution>>()
+
+                fun startBootstrapResolution(
+                    bootstrap: AceLiveDhtBootstrapNode
+                ): Deferred<BootstrapResolution> = async {
+                    try {
+                        BootstrapResolution.Success(
+                            bootstrap = bootstrap,
+                            addresses = resolveBootstrap(bootstrap.host, deadlineNanos)
+                                .asSequence()
+                                .distinctBy { it.hostAddress }
+                                .take(policy.maxResolvedAddressesPerBootstrap)
+                                .toList()
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: DiscoveryBudgetExhaustedException) {
+                        BootstrapResolution.BudgetExhausted
+                    } catch (_: Exception) {
+                        BootstrapResolution.Failed
+                    }
+                }
+
+                fun fillBootstrapResolutionPipeline() {
+                    if (queries >= policy.maxQueries) return
+                    val concurrency = min(
+                        ACE_DHT_MAX_CONCURRENT_BOOTSTRAP_RESOLUTIONS,
+                        policy.maxBootstrapNodes
+                    )
+                    while (
+                        bootstrapInFlight.size < concurrency &&
+                        pendingBootstraps.isNotEmpty()
+                    ) {
+                        bootstrapInFlight += startBootstrapResolution(
+                            pendingBootstraps.removeFirst()
+                        )
+                    }
+                }
+
+                fillBootstrapResolutionPipeline()
                 try {
                     while (
                         peers.size < completionPeerCount &&
-                        (inFlight.isNotEmpty() || (frontier.isNotEmpty() && queries < policy.maxQueries))
+                        (
+                            inFlight.isNotEmpty() ||
+                                (
+                                    queries < policy.maxQueries &&
+                                        (
+                                            frontier.isNotEmpty() ||
+                                                bootstrapPrimaryFrontier.isNotEmpty() ||
+                                                bootstrapExtraFrontier.isNotEmpty() ||
+                                                bootstrapInFlight.isNotEmpty() ||
+                                                pendingBootstraps.isNotEmpty()
+                                            )
+                                    )
+                            )
                     ) {
                         currentCoroutineContext().ensureActive()
                         if (remainingBudgetMillis(deadlineNanos) <= 0) break
 
-                        while (
-                            inFlight.size < policy.searchBranching &&
-                            queries < policy.maxQueries &&
-                            frontier.isNotEmpty()
-                        ) {
-                            val candidate = frontier.remove()
+                        while (inFlight.size < policy.searchBranching && queries < policy.maxQueries) {
+                            val bootstrapStillPending =
+                                !bootstrapQueryLaunched &&
+                                    (
+                                        bootstrapPrimaryFrontier.isNotEmpty() ||
+                                            bootstrapInFlight.isNotEmpty() ||
+                                            pendingBootstraps.isNotEmpty()
+                                        )
+                            val nonBootstrapCapacity = if (
+                                bootstrapStillPending && policy.searchBranching > 1
+                            ) {
+                                policy.searchBranching - 1
+                            } else {
+                                policy.searchBranching
+                            }
+                            val nonBootstrapQueryLimit = if (bootstrapStillPending) {
+                                (policy.maxQueries - 1).coerceAtLeast(0)
+                            } else {
+                                policy.maxQueries
+                            }
+                            val bootstrapResolutionPending =
+                                bootstrapInFlight.isNotEmpty() || pendingBootstraps.isNotEmpty()
+                            val bootstrapExtraCapacity = if (
+                                bootstrapResolutionPending && policy.searchBranching > 1
+                            ) {
+                                policy.searchBranching - 1
+                            } else {
+                                policy.searchBranching
+                            }
+                            val candidate = when {
+                                bootstrapPrimaryFrontier.isNotEmpty() ->
+                                    bootstrapPrimaryFrontier.removeFirst()
+                                inFlight.size < nonBootstrapCapacity &&
+                                    queries < nonBootstrapQueryLimit &&
+                                    frontier.isNotEmpty() ->
+                                    frontier.remove()
+                                inFlight.size < bootstrapExtraCapacity &&
+                                    bootstrapExtraFrontier.isNotEmpty() ->
+                                    bootstrapExtraFrontier.removeFirst()
+                                else -> break
+                            }
                             val candidateKey = endpointKey(candidate.endpoint)
                             if (!queriedEndpoints.add(candidateKey)) continue
 
                             queries += 1
+                            if (candidate.fromBootstrap) bootstrapQueryLaunched = true
+                            if (candidate.fromRoutingMemory) warmRoutingSeedsUsed += 1
                             inFlight += async {
                                 try {
                                     QueryCompletion.Success(
@@ -139,57 +252,148 @@ internal class AceDhtIterativeDiscovery(
                                 } catch (_: DiscoveryBudgetExhaustedException) {
                                     QueryCompletion.BudgetExhausted
                                 } catch (_: Exception) {
-                                    QueryCompletion.Failed
+                                    QueryCompletion.Failed(candidate)
                                 }
                             }
                         }
 
-                        if (inFlight.isEmpty()) break
-                        val (completed, completion) = select<Pair<Deferred<QueryCompletion>, QueryCompletion>> {
+                        if (
+                            inFlight.isEmpty() &&
+                            bootstrapInFlight.isEmpty() &&
+                            frontier.isEmpty() &&
+                            bootstrapPrimaryFrontier.isEmpty() &&
+                            bootstrapExtraFrontier.isEmpty()
+                        ) break
+                        val selected = select<DiscoverySelection> {
+                            // Kotlin select is biased. Register DNS first so an already-resolved
+                            // bootstrap cannot be starved by a stream of fast warm-node responses.
+                            if (queries < policy.maxQueries) {
+                                bootstrapInFlight.forEach { pending ->
+                                    pending.onAwait { outcome ->
+                                        DiscoverySelection.Bootstrap(pending, outcome)
+                                    }
+                                }
+                            }
                             inFlight.forEach { pending ->
-                                pending.onAwait { outcome -> pending to outcome }
+                                pending.onAwait { outcome ->
+                                    DiscoverySelection.Query(pending, outcome)
+                                }
                             }
                         }
-                        inFlight.remove(completed)
 
-                        when (completion) {
-                            QueryCompletion.BudgetExhausted -> break
-                            QueryCompletion.Failed -> {
-                                failed += 1
-                                continue
+                        when (selected) {
+                            is DiscoverySelection.Bootstrap -> {
+                                bootstrapInFlight.remove(selected.pending)
+                                fillBootstrapResolutionPipeline()
+                                when (val resolution = selected.resolution) {
+                                    BootstrapResolution.BudgetExhausted -> break
+                                    BootstrapResolution.Failed -> Unit
+                                    is BootstrapResolution.Success -> {
+                                        var queuedForBootstrap = 0
+                                        for (address in resolution.addresses) {
+                                            if (!isAllowedNodeAddress(address)) {
+                                                rejected += 1
+                                                continue
+                                            }
+                                            val endpoint = AceLiveTcpPeerEndpoint(
+                                                host = address.hostAddress ?: continue,
+                                                port = resolution.bootstrap.port
+                                            )
+                                            val key = endpointKey(endpoint)
+                                            if (!queuedEndpoints.containsKey(key)) {
+                                                queuedEndpoints[key] = null
+                                                val candidate = QueryCandidate(
+                                                    endpoint = endpoint,
+                                                    nodeId = null,
+                                                    fromRoutingMemory = false,
+                                                    fromBootstrap = true
+                                                )
+                                                if (queuedForBootstrap == 0) {
+                                                    bootstrapPrimaryFrontier.addLast(candidate)
+                                                } else {
+                                                    bootstrapExtraFrontier.addLast(candidate)
+                                                }
+                                                queuedForBootstrap += 1
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            is QueryCompletion.Success -> {
-                                val candidate = completion.candidate
-                                val response = completion.response
-                                if (candidate.nodeId != null && candidate.nodeId != response.remoteNodeId) {
-                                    failed += 1
-                                    continue
-                                }
 
-                                for (peer in response.peers) {
-                                    if (!isAllowedPeerEndpoint(peer)) {
-                                        rejected += 1
-                                        continue
+                            is DiscoverySelection.Query -> {
+                                inFlight.remove(selected.pending)
+                                when (val completion = selected.completion) {
+                                    QueryCompletion.BudgetExhausted -> break
+                                    is QueryCompletion.Failed -> {
+                                        failed += 1
+                                        completion.candidate.routingContactOrNull()
+                                            ?.let { contact -> routingMemory?.forget(contact) }
                                     }
-                                    peers.putIfAbsent(endpointKey(peer), peer)
-                                    if (peers.size >= completionPeerCount) break
-                                }
-                                if (peers.size >= completionPeerCount) break
 
-                                for (contact in response.nodes) {
-                                    if (!isAllowedNodeEndpoint(contact.endpoint)) {
-                                        rejected += 1
-                                        continue
-                                    }
-                                    val key = endpointKey(contact.endpoint)
-                                    if (key in queriedEndpoints) continue
-                                    val previousNodeId = queuedEndpoints[key]
-                                    if (!queuedEndpoints.containsKey(key)) {
-                                        queuedEndpoints[key] = contact.nodeId
-                                        frontier.add(QueryCandidate(contact.endpoint, contact.nodeId))
-                                    } else if (previousNodeId == null) {
-                                        queuedEndpoints[key] = contact.nodeId
-                                        frontier.add(QueryCandidate(contact.endpoint, contact.nodeId))
+                                    is QueryCompletion.Success -> {
+                                        val candidate = completion.candidate
+                                        val response = completion.response
+                                        if (
+                                            candidate.nodeId != null &&
+                                            candidate.nodeId != response.remoteNodeId
+                                        ) {
+                                            failed += 1
+                                            candidate.routingContactOrNull()
+                                                ?.let { contact -> routingMemory?.forget(contact) }
+                                            continue
+                                        }
+
+                                        routingMemory?.remember(
+                                            AceLiveDhtNodeContact(
+                                                nodeId = response.remoteNodeId,
+                                                endpoint = candidate.endpoint
+                                            )
+                                        )
+                                        queuedNodeIds.add(response.remoteNodeId)
+
+                                        for (peer in response.peers) {
+                                            if (!isAllowedPeerEndpoint(peer)) {
+                                                rejected += 1
+                                                continue
+                                            }
+                                            peers.putIfAbsent(endpointKey(peer), peer)
+                                            if (peers.size >= completionPeerCount) break
+                                        }
+                                        if (peers.size >= completionPeerCount) break
+
+                                        for (contact in response.nodes) {
+                                            if (!isAllowedNodeEndpoint(contact.endpoint)) {
+                                                rejected += 1
+                                                continue
+                                            }
+                                            if (contact.nodeId in queuedNodeIds) continue
+                                            val key = endpointKey(contact.endpoint)
+                                            if (key in queriedEndpoints) continue
+                                            val previousNodeId = queuedEndpoints[key]
+                                            if (!queuedEndpoints.containsKey(key)) {
+                                                queuedEndpoints[key] = contact.nodeId
+                                                queuedNodeIds.add(contact.nodeId)
+                                                frontier.add(
+                                                    QueryCandidate(
+                                                        endpoint = contact.endpoint,
+                                                        nodeId = contact.nodeId,
+                                                        fromRoutingMemory = false,
+                                                        fromBootstrap = false
+                                                    )
+                                                )
+                                            } else if (previousNodeId == null) {
+                                                queuedEndpoints[key] = contact.nodeId
+                                                queuedNodeIds.add(contact.nodeId)
+                                                frontier.add(
+                                                    QueryCandidate(
+                                                        endpoint = contact.endpoint,
+                                                        nodeId = contact.nodeId,
+                                                        fromRoutingMemory = false,
+                                                        fromBootstrap = false
+                                                    )
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -197,6 +401,7 @@ internal class AceDhtIterativeDiscovery(
                     }
                 } finally {
                     inFlight.forEach { pending -> pending.cancel() }
+                    bootstrapInFlight.forEach { pending -> pending.cancel() }
                 }
             }
 
@@ -204,7 +409,8 @@ internal class AceDhtIterativeDiscovery(
                 peers = peers.values.toList(),
                 queriesSent = queries,
                 failedQueries = failed,
-                rejectedEndpoints = rejected
+                rejectedEndpoints = rejected,
+                warmRoutingSeedsUsed = warmRoutingSeedsUsed
             )
         }
 
@@ -214,7 +420,11 @@ internal class AceDhtIterativeDiscovery(
     ): List<Inet4Address> {
         val remaining = remainingBudgetMillis(deadlineNanos)
         if (remaining <= 0) throw DiscoveryBudgetExhaustedException()
-        val future = RESOLVER_EXECUTOR.submit<List<Inet4Address>> { addressResolver(host) }
+        val future = try {
+            RESOLVER_EXECUTOR.submit<List<Inet4Address>> { addressResolver(host) }
+        } catch (_: RejectedExecutionException) {
+            return emptyList()
+        }
         return try {
             runInterruptible {
                 future.get(remaining, TimeUnit.MILLISECONDS)
@@ -225,6 +435,8 @@ internal class AceDhtIterativeDiscovery(
             emptyList()
         } finally {
             if (!future.isDone) future.cancel(true)
+            (future as? Runnable)?.let(RESOLVER_EXECUTOR::remove)
+            RESOLVER_EXECUTOR.purge()
         }
     }
 
@@ -353,8 +565,18 @@ internal class AceDhtIterativeDiscovery(
 
     private data class QueryCandidate(
         val endpoint: AceLiveTcpPeerEndpoint,
-        val nodeId: AceLiveDhtNodeId?
-    )
+        val nodeId: AceLiveDhtNodeId?,
+        val fromRoutingMemory: Boolean,
+        val fromBootstrap: Boolean
+    ) {
+        fun routingContactOrNull(): AceLiveDhtNodeContact? =
+            nodeId?.let { rememberedNodeId ->
+                AceLiveDhtNodeContact(
+                    nodeId = rememberedNodeId,
+                    endpoint = endpoint
+                )
+            }
+    }
 
     private sealed interface QueryCompletion {
         data class Success(
@@ -362,8 +584,30 @@ internal class AceDhtIterativeDiscovery(
             val response: AceLiveDhtGetPeersResponse
         ) : QueryCompletion
 
-        data object Failed : QueryCompletion
+        data class Failed(val candidate: QueryCandidate) : QueryCompletion
         data object BudgetExhausted : QueryCompletion
+    }
+
+    private sealed interface BootstrapResolution {
+        data class Success(
+            val bootstrap: AceLiveDhtBootstrapNode,
+            val addresses: List<Inet4Address>
+        ) : BootstrapResolution
+
+        data object Failed : BootstrapResolution
+        data object BudgetExhausted : BootstrapResolution
+    }
+
+    private sealed interface DiscoverySelection {
+        data class Query(
+            val pending: Deferred<QueryCompletion>,
+            val completion: QueryCompletion
+        ) : DiscoverySelection
+
+        data class Bootstrap(
+            val pending: Deferred<BootstrapResolution>,
+            val resolution: BootstrapResolution
+        ) : DiscoverySelection
     }
 
     private data class Ipv4Cidr(val network: Long, val prefixBits: Int)
@@ -378,9 +622,16 @@ internal class AceDhtIterativeDiscovery(
         internal val DEFAULT_ADDRESS_RESOLVER: (String) -> List<Inet4Address> = { host ->
             InetAddress.getAllByName(host).filterIsInstance<Inet4Address>()
         }
-        private val RESOLVER_EXECUTOR = Executors.newCachedThreadPool { runnable ->
-            Thread(runnable, "ace-dht-dns").apply { isDaemon = true }
-        }
+        private const val MAX_QUEUED_RESOLVER_TASKS = 16
+        private val RESOLVER_EXECUTOR = ThreadPoolExecutor(
+            ACE_DHT_GLOBAL_RESOLVER_WORKERS,
+            ACE_DHT_GLOBAL_RESOLVER_WORKERS,
+            0L,
+            TimeUnit.MILLISECONDS,
+            ArrayBlockingQueue(MAX_QUEUED_RESOLVER_TASKS),
+            { runnable -> Thread(runnable, "ace-dht-dns").apply { isDaemon = true } },
+            ThreadPoolExecutor.AbortPolicy()
+        )
 
         private val SPECIAL_USE_IPV4_RANGES = listOf(
             cidr(0, 0, 0, 0, 8),

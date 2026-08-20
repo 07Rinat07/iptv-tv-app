@@ -20,7 +20,8 @@ data class AceContentIdDhtDiscoveryResult(
     val peers: List<AceLiveTcpPeerEndpoint>,
     val queriesSent: Int,
     val failedQueries: Int,
-    val rejectedEndpoints: Int
+    val rejectedEndpoints: Int,
+    val warmRoutingSeedsUsed: Int = 0
 )
 
 /**
@@ -34,13 +35,15 @@ class AceContentIdDhtDiscovery(
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     policy: AceLiveDhtPolicy = AceLiveDhtPolicy(),
     randomInt: () -> Int = AceDhtIterativeDiscovery.DEFAULT_RANDOM_INT,
-    addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER
+    addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER,
+    routingMemory: AceDhtRoutingMemory? = null
 ) {
     private val delegate = AceDhtIterativeDiscovery(
         ioDispatcher = ioDispatcher,
         policy = policy,
         randomInt = randomInt,
-        addressResolver = addressResolver
+        addressResolver = addressResolver,
+        routingMemory = routingMemory
     )
 
     suspend fun discover(request: AceContentIdDhtDiscoveryRequest): AceContentIdDhtDiscoveryResult {
@@ -62,7 +65,8 @@ class AceContentIdDhtDiscovery(
             peers = outcome.peers,
             queriesSent = outcome.queriesSent,
             failedQueries = outcome.failedQueries,
-            rejectedEndpoints = outcome.rejectedEndpoints
+            rejectedEndpoints = outcome.rejectedEndpoints,
+            warmRoutingSeedsUsed = outcome.warmRoutingSeedsUsed
         )
     }
 }
