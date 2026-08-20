@@ -2,12 +2,15 @@ package com.iptv.tv.core.p2p
 
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class P2pFirstSuccessTest {
     @Test
     fun `bounded first success never exceeds configured concurrency`() = runTest {
@@ -260,6 +263,159 @@ class P2pFirstSuccessTest {
 
         assertTrue(result is P2pResult.Error)
         assertEquals("superseded", (result as P2pResult.Error).message)
+        assertEquals(0, metadataAttempts.get())
+    }
+
+    @Test
+    fun `qualified direct startup is not torn down at the soft deadline`() = runTest {
+        val directProgress = AtomicBoolean(false)
+        val graceStarted = AtomicInteger(0)
+        val metadataAttempts = AtomicInteger(0)
+
+        val result = raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = 8_000,
+            directProgressGraceMillis = 4_000,
+            directHasQualificationProgress = directProgress::get,
+            onDirectProgressGraceStarted = { graceStarted.incrementAndGet() },
+            directAttempt = {
+                delay(7_800)
+                directProgress.set(true)
+                delay(700)
+                P2pResult.Success("direct-qualified")
+            },
+            metadataResolve = {
+                delay(100)
+                P2pResult.Success("descriptor")
+            },
+            metadataAttempt = { descriptor ->
+                metadataAttempts.incrementAndGet()
+                P2pResult.Success("metadata:$descriptor")
+            },
+            isCurrent = { true },
+            superseded = { P2pResult.Error("superseded") },
+            combinedFailureMessage = { direct, metadata ->
+                "${direct.message}; ${metadata.message}"
+            }
+        )
+
+        assertTrue(result is P2pResult.Success)
+        assertEquals("direct-qualified", (result as P2pResult.Success).data)
+        assertEquals(1, graceStarted.get())
+        assertEquals(0, metadataAttempts.get())
+    }
+
+    @Test
+    fun `qualified direct grace remains bounded before metadata handoff`() = runTest {
+        val directProgress = AtomicBoolean(false)
+        val directCancelled = AtomicBoolean(false)
+        var metadataStartedAt = -1L
+
+        val result = raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = 8_000,
+            directProgressGraceMillis = 4_000,
+            directHasQualificationProgress = directProgress::get,
+            directAttempt = {
+                try {
+                    delay(7_800)
+                    directProgress.set(true)
+                    awaitCancellation()
+                } finally {
+                    directCancelled.set(true)
+                }
+            },
+            metadataResolve = {
+                delay(100)
+                P2pResult.Success("descriptor")
+            },
+            metadataAttempt = { descriptor ->
+                metadataStartedAt = testScheduler.currentTime
+                P2pResult.Success("metadata:$descriptor")
+            },
+            isCurrent = { true },
+            superseded = { P2pResult.Error("superseded") },
+            combinedFailureMessage = { direct, metadata ->
+                "${direct.message}; ${metadata.message}"
+            }
+        )
+
+        assertTrue(result is P2pResult.Success)
+        assertEquals("metadata:descriptor", (result as P2pResult.Success).data)
+        assertTrue(directCancelled.get())
+        assertEquals(12_000L, metadataStartedAt)
+    }
+
+    @Test
+    fun `stale direct progress does not open grace after disconnect`() = runTest {
+        val directProgress = AtomicBoolean(false)
+        val graceStarted = AtomicInteger(0)
+        var metadataStartedAt = -1L
+
+        val result = raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = 8_000,
+            directProgressGraceMillis = 2_000,
+            directHasQualificationProgress = directProgress::get,
+            onDirectProgressGraceStarted = { graceStarted.incrementAndGet() },
+            directAttempt = {
+                directProgress.set(true)
+                delay(7_900)
+                directProgress.set(false)
+                awaitCancellation()
+            },
+            metadataResolve = {
+                delay(100)
+                P2pResult.Success("descriptor")
+            },
+            metadataAttempt = { descriptor ->
+                metadataStartedAt = testScheduler.currentTime
+                P2pResult.Success("metadata:$descriptor")
+            },
+            isCurrent = { true },
+            superseded = { P2pResult.Error("superseded") },
+            combinedFailureMessage = { direct, metadata ->
+                "${direct.message}; ${metadata.message}"
+            }
+        )
+
+        assertTrue(result is P2pResult.Success)
+        assertEquals(8_000L, metadataStartedAt)
+        assertEquals(0, graceStarted.get())
+    }
+
+    @Test
+    fun `superseded qualified direct does not receive progress grace`() = runTest {
+        val current = AtomicBoolean(true)
+        val graceStarted = AtomicInteger(0)
+        val metadataAttempts = AtomicInteger(0)
+
+        val result = raceP2pDirectAgainstMetadata(
+            directSoftTimeoutMillis = 8_000,
+            directProgressGraceMillis = 2_000,
+            directHasQualificationProgress = { true },
+            onDirectProgressGraceStarted = { graceStarted.incrementAndGet() },
+            directAttempt = {
+                delay(7_900)
+                current.set(false)
+                awaitCancellation()
+            },
+            metadataResolve = {
+                delay(100)
+                P2pResult.Success("descriptor")
+            },
+            metadataAttempt = { descriptor ->
+                metadataAttempts.incrementAndGet()
+                P2pResult.Success("metadata:$descriptor")
+            },
+            isCurrent = current::get,
+            superseded = { P2pResult.Error("superseded") },
+            combinedFailureMessage = { direct, metadata ->
+                "${direct.message}; ${metadata.message}"
+            }
+        )
+
+        assertTrue(result is P2pResult.Error)
+        assertEquals("superseded", (result as P2pResult.Error).message)
+        assertEquals(8_000L, testScheduler.currentTime)
+        assertEquals(0, graceStarted.get())
         assertEquals(0, metadataAttempts.get())
     }
 }

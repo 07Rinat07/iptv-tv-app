@@ -31,6 +31,7 @@
 - [`testing/device-acceptance.md`](testing/device-acceptance.md) — проверка на TV Box.
 - [`testing/playback-log-analysis-2026-08-12.md`](testing/playback-log-analysis-2026-08-12.md) — разбор EPG OOM на обычном IPTV и критерии memory-safety hotfix.
 - [`testing/playback-log-analysis-2026-08-11.md`](testing/playback-log-analysis-2026-08-11.md) — исторический разбор долгих переключений, timeout, состояния UI, EPG и отсутствующих buffer-метрик.
+- [`testing/playback-log-analysis-2026-08-20.md`](testing/playback-log-analysis-2026-08-20.md) — свежий разбор fixed handoff race, production-lifetime DHT, stale `SEARCHING` и отдельного Media3/TS blocker.
 - [`release/release-process.md`](release/release-process.md) — подготовка релиза.
 
 ## Служебное

@@ -33,6 +33,27 @@ enum class P2pChannelAvailabilityState {
 internal object P2pChannelAvailabilityUiCache {
     val statuses = mutableStateMapOf<Long, P2pChannelAvailability>()
 
+    /** A superseded playback request must not leave another channel visibly searching forever. */
+    fun resetSupersededSearches(activeChannelId: Long?) {
+        statuses.entries
+            .filter { (channelId, status) ->
+                channelId != activeChannelId &&
+                    status.state == P2pChannelAvailabilityState.SEARCHING
+            }
+            .map { it.key }
+            .forEach { channelId -> statuses[channelId] = P2pChannelAvailability() }
+    }
+
+    fun beginSearch(channelId: Long) {
+        resetSupersededSearches(activeChannelId = channelId)
+        mark(
+            channelId = channelId,
+            state = P2pChannelAvailabilityState.SEARCHING,
+            peers = 0,
+            speedKbps = 0
+        )
+    }
+
     fun mark(
         channelId: Long,
         state: P2pChannelAvailabilityState,

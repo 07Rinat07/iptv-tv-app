@@ -71,7 +71,9 @@ data class AceLiveDhtDiscoveryResult(
     val peers: List<AceLiveTcpPeerEndpoint>,
     val queriesSent: Int,
     val failedQueries: Int,
-    val rejectedEndpoints: Int
+    val rejectedEndpoints: Int,
+    val warmRoutingSeedsUsed: Int = 0,
+    val cacheHit: Boolean = false
 )
 
 /**
@@ -94,19 +96,29 @@ class AceLiveDhtDiscovery(
     randomInt: () -> Int = AceDhtIterativeDiscovery.DEFAULT_RANDOM_INT,
     addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER,
     private val reuseRecentResults: Boolean = false,
-    private val clockMillis: () -> Long = System::currentTimeMillis
+    private val clockMillis: () -> Long = System::currentTimeMillis,
+    routingMemory: AceDhtRoutingMemory? = null
 ) {
     private val delegate = AceDhtIterativeDiscovery(
         ioDispatcher = ioDispatcher,
         policy = policy,
         randomInt = randomInt,
-        addressResolver = addressResolver
+        addressResolver = addressResolver,
+        routingMemory = routingMemory
     )
 
     suspend fun discover(request: AceLiveDhtDiscoveryRequest): AceLiveDhtDiscoveryResult {
         val cacheKey = request.cacheKey()
         if (reuseRecentResults) {
-            recentDhtResult(cacheKey, clockMillis())?.let { cached -> return cached }
+            recentDhtResult(cacheKey, clockMillis())?.let { cached ->
+                return cached.copy(
+                    queriesSent = 0,
+                    failedQueries = 0,
+                    rejectedEndpoints = 0,
+                    warmRoutingSeedsUsed = 0,
+                    cacheHit = true
+                )
+            }
         }
 
         val outcome = delegate.discover(
@@ -127,7 +139,9 @@ class AceLiveDhtDiscovery(
             peers = outcome.peers,
             queriesSent = outcome.queriesSent,
             failedQueries = outcome.failedQueries,
-            rejectedEndpoints = outcome.rejectedEndpoints
+            rejectedEndpoints = outcome.rejectedEndpoints,
+            warmRoutingSeedsUsed = outcome.warmRoutingSeedsUsed,
+            cacheHit = false
         )
         if (reuseRecentResults && result.peers.isNotEmpty()) {
             rememberDhtResult(cacheKey, result, clockMillis())
@@ -171,7 +185,7 @@ class AceLiveDhtDiscovery(
             }
             recentResults[key] = CachedDhtResult(
                 storedAtMillis = nowMillis,
-                result = result.copy(peers = result.peers.toList())
+                result = result.copy(peers = result.peers.toList(), cacheHit = false)
             )
         }
 

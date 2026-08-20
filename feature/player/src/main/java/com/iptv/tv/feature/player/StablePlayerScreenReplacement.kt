@@ -197,6 +197,7 @@ fun StablePlayerScreen(
         state.resolvedStreamUrl,
         state.lastError
     ) {
+        P2pChannelAvailabilityUiCache.resetSupersededSearches(state.selectedChannelId)
         val channel = state.channels.firstOrNull { it.id == state.selectedChannelId }
             ?: return@LaunchedEffect
         if (PlayerP2pDescriptor.detect(channel.streamUrl) == null) return@LaunchedEffect
@@ -227,12 +228,16 @@ fun StablePlayerScreen(
         } else {
             0
         }
-        P2pChannelAvailabilityUiCache.mark(
-            channelId = channel.id,
-            state = availability,
-            peers = peers,
-            speedKbps = speed
-        )
+        if (availability == P2pChannelAvailabilityState.SEARCHING) {
+            P2pChannelAvailabilityUiCache.beginSearch(channel.id)
+        } else {
+            P2pChannelAvailabilityUiCache.mark(
+                channelId = channel.id,
+                state = availability,
+                peers = peers,
+                speedKbps = speed
+            )
+        }
     }
 
     val filteredChannels = remember(

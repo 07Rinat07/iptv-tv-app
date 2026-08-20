@@ -1,9 +1,40 @@
 package com.iptv.tv.feature.player
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class P2pChannelAvailabilityTest {
+
+    @After
+    fun clearUiCache() {
+        P2pChannelAvailabilityUiCache.statuses.clear()
+    }
+
+    @Test
+    fun startingAnotherChannelClearsOnlySupersededSearch() {
+        P2pChannelAvailabilityUiCache.beginSearch(channelId = 11L)
+        P2pChannelAvailabilityUiCache.mark(
+            channelId = 12L,
+            state = P2pChannelAvailabilityState.READY,
+            peers = 2
+        )
+
+        P2pChannelAvailabilityUiCache.beginSearch(channelId = 13L)
+
+        assertEquals(
+            P2pChannelAvailabilityState.UNCHECKED,
+            P2pChannelAvailabilityUiCache.statuses.getValue(11L).state
+        )
+        assertEquals(
+            P2pChannelAvailabilityState.READY,
+            P2pChannelAvailabilityUiCache.statuses.getValue(12L).state
+        )
+        assertEquals(
+            P2pChannelAvailabilityState.SEARCHING,
+            P2pChannelAvailabilityUiCache.statuses.getValue(13L).state
+        )
+    }
 
     @Test
     fun uncheckedChannel_isShownAsNotChecked() {

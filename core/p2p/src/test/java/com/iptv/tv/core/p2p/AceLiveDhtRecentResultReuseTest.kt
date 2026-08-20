@@ -10,6 +10,8 @@ import java.nio.charset.StandardCharsets
 import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AceLiveDhtRecentResultReuseTest {
@@ -54,7 +56,13 @@ class AceLiveDhtRecentResultReuseTest {
 
             val expectedPeer = AceLiveTcpPeerEndpoint("127.0.0.1", 8621)
             assertEquals(listOf(expectedPeer), firstResult.peers)
-            assertEquals(firstResult, reusedResult)
+            assertFalse(firstResult.cacheHit)
+            assertEquals(1, firstResult.queriesSent)
+            assertEquals(firstResult.peers, reusedResult.peers)
+            assertTrue(reusedResult.cacheHit)
+            assertEquals(0, reusedResult.queriesSent)
+            assertEquals(0, reusedResult.failedQueries)
+            assertEquals(0, reusedResult.warmRoutingSeedsUsed)
         } finally {
             bootstrap.close()
             serverThread.join(2_000)

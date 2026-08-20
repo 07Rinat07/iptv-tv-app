@@ -26,6 +26,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 
 data class AceLivePreparedStream(
@@ -43,6 +44,21 @@ internal fun aceLiveMediaIsStalled(
     return startupComplete &&
         lastMediaAtMillis > 0L &&
         nowMillis - lastMediaAtMillis >= timeoutMillis
+}
+
+internal fun aceLiveDirectStartupHasQualificationProgress(
+    peers: List<AceLivePeerQualitySnapshot>,
+    recentConnectionMillis: Long
+): Boolean {
+    require(recentConnectionMillis >= 0L) { "recentConnectionMillis must be non-negative" }
+    return peers.any { peer ->
+        peer.connected &&
+            (
+                peer.connectedAgeMillis <= recentConnectionMillis ||
+                    (peer.handshaked && peer.windowUseful && peer.unchoked) ||
+                    peer.producing
+                )
+    }
 }
 
 /** Keeps live scheduling active while a slow peer-discovery refill continues in the background. */
@@ -84,17 +100,35 @@ internal suspend fun runAceLiveStartupRefillUntilReady(
     }
 }
 
+/** Closes only the runtime still owned by the preparation whose absolute deadline expired. */
+internal suspend fun cleanupTimedOutAceLivePreparation(
+    expectedGeneration: Long,
+    currentGeneration: () -> Long,
+    operationMutex: Mutex,
+    closeActive: () -> Unit
+) = withContext(NonCancellable) {
+    if (currentGeneration() != expectedGeneration) return@withContext
+    operationMutex.withLock {
+        // A newer player action may have acquired ownership while this cleanup waited for the lock.
+        if (currentGeneration() == expectedGeneration) closeActive()
+    }
+}
+
 /** End-to-end autonomous playback for public Ace Live content IDs. */
 class AceLiveEmbeddedEngine(
     okHttpClient: OkHttpClient,
     private val catalogResolver: AceContentCatalogResolver = AceContentCatalogResolver(okHttpClient),
-    private val metadataPeerResolver: AceContentMetadataPeerResolver = AceContentMetadataPeerResolver(),
+    metadataPeerResolver: AceContentMetadataPeerResolver? = null,
     private val bufferSettings: AceLiveBufferSettings = AceLiveBufferSettings(),
     private val eventObserver: (AceLiveTcpPoolEvent) -> Unit = {},
     private val diagnosticsObserver: (status: String, message: String) -> Unit = { _, _ -> }
 ) {
     private val operationMutex = Mutex()
     private val generation = AtomicLong(0L)
+    private val dhtRoutingMemory = AceDhtRoutingMemory()
+    private val metadataPeerResolver = metadataPeerResolver ?: AceContentMetadataPeerResolver(
+        routingMemory = dhtRoutingMemory
+    )
     private var activeRuntime: Runtime? = null
 
     suspend fun prepareStream(contentId: String): P2pResult<AceLivePreparedStream> {
@@ -107,59 +141,93 @@ class AceLiveEmbeddedEngine(
             diagnosticsObserver = diagnosticsObserver
         )
         startupTimeline.onTransportSelection(totalStartedAt)
+        val directRuntime = AtomicReference<Runtime?>(null)
 
         // Public live content IDs are sometimes directly usable as peer-wire swarm keys, but a dead
         // direct swarm must not serialize a 60-second wait in front of transport metadata. Resolve
         // metadata concurrently and use whichever path becomes actionable first.
-        return raceP2pDirectAgainstMetadata(
-            directSoftTimeoutMillis = DIRECT_STARTUP_SOFT_TIMEOUT_MILLIS,
-            directAttempt = {
-                startupTimeline.onDirectAttempt()
-                val startedAt = System.currentTimeMillis()
-                prepareResolvedTransport(
-                    token = token,
-                    transport = directLiveTransport(swarmKey),
-                    startupTimeline = startupTimeline
-                ).also { result ->
-                    Log.i(
-                        LOG_TAG,
-                        "event=content_direct_result elapsed_ms=${System.currentTimeMillis() - startedAt} " +
-                            "success=${result is P2pResult.Success}"
-                    )
+        val raced = withTimeoutOrNull(CONTENT_PREPARATION_TIMEOUT_MILLIS) {
+            raceP2pDirectAgainstMetadata(
+                directSoftTimeoutMillis = DIRECT_STARTUP_SOFT_TIMEOUT_MILLIS,
+                directProgressGraceMillis = DIRECT_QUALIFICATION_GRACE_MILLIS,
+                directHasQualificationProgress = {
+                    directRuntime.get()?.hasCurrentQualificationProgress() == true
+                },
+                onDirectProgressGraceStarted = {
+                    runCatching {
+                        diagnosticsObserver(
+                            "embedded_ace_live_metadata_handoff",
+                            "phase=direct_progress_grace, grace_ms=$DIRECT_QUALIFICATION_GRACE_MILLIS"
+                        )
+                    }
+                },
+                directAttempt = {
+                    startupTimeline.onDirectAttempt()
+                    val startedAt = System.currentTimeMillis()
+                    try {
+                        prepareResolvedTransport(
+                            token = token,
+                            transport = directLiveTransport(swarmKey),
+                            startupTimeline = startupTimeline,
+                            onRuntimeCreated = directRuntime::set
+                        ).also { result ->
+                            Log.i(
+                                LOG_TAG,
+                                "event=content_direct_result " +
+                                    "elapsed_ms=${System.currentTimeMillis() - startedAt} " +
+                                    "success=${result is P2pResult.Success}"
+                            )
+                        }
+                    } finally {
+                        directRuntime.set(null)
+                    }
+                },
+                metadataResolve = {
+                    startupTimeline.onMetadataAttempt()
+                    val startedAt = System.currentTimeMillis()
+                    resolveContentTransport(swarmKey.toHex()).also { result ->
+                        Log.i(
+                            LOG_TAG,
+                            "event=content_metadata_result " +
+                                "elapsed_ms=${System.currentTimeMillis() - startedAt} " +
+                                "success=${result is P2pResult.Success}"
+                        )
+                    }
+                },
+                metadataAttempt = { transport ->
+                    val startedAt = System.currentTimeMillis()
+                    prepareResolvedTransport(
+                        token = token,
+                        transport = transport,
+                        startupTimeline = startupTimeline
+                    ).also { result ->
+                        Log.i(
+                            LOG_TAG,
+                            "event=content_metadata_startup_result " +
+                                "elapsed_ms=${System.currentTimeMillis() - startedAt} " +
+                                "total_ms=${System.currentTimeMillis() - totalStartedAt} " +
+                                "success=${result is P2pResult.Success}"
+                        )
+                    }
+                },
+                isCurrent = { generation.get() == token },
+                superseded = ::superseded,
+                combinedFailureMessage = { direct, metadata ->
+                    "The direct Ace Live swarm failed and transport metadata was unavailable: " +
+                        "direct=${direct.message}; metadata=${metadata.message}"
                 }
-            },
-            metadataResolve = {
-                startupTimeline.onMetadataAttempt()
-                val startedAt = System.currentTimeMillis()
-                resolveContentTransport(swarmKey.toHex()).also { result ->
-                    Log.i(
-                        LOG_TAG,
-                        "event=content_metadata_result elapsed_ms=${System.currentTimeMillis() - startedAt} " +
-                            "success=${result is P2pResult.Success}"
-                    )
-                }
-            },
-            metadataAttempt = { transport ->
-                val startedAt = System.currentTimeMillis()
-                prepareResolvedTransport(
-                    token = token,
-                    transport = transport,
-                    startupTimeline = startupTimeline
-                ).also { result ->
-                    Log.i(
-                        LOG_TAG,
-                        "event=content_metadata_startup_result elapsed_ms=${System.currentTimeMillis() - startedAt} " +
-                            "total_ms=${System.currentTimeMillis() - totalStartedAt} " +
-                            "success=${result is P2pResult.Success}"
-                    )
-                }
-            },
-            isCurrent = { generation.get() == token },
-            superseded = ::superseded,
-            combinedFailureMessage = { direct, metadata ->
-                "The direct Ace Live swarm failed and transport metadata was unavailable: " +
-                    "direct=${direct.message}; metadata=${metadata.message}"
-            }
+            )
+        }
+        if (raced != null) return raced
+
+        cleanupTimedOutAceLivePreparation(
+            expectedGeneration = token,
+            currentGeneration = generation::get,
+            operationMutex = operationMutex,
+            closeActive = ::closeActiveLocked
+        )
+        return P2pResult.Error(
+            "Ace Live preparation exceeded the existing $CONTENT_PREPARATION_TIMEOUT_MILLIS ms bound"
         )
     }
 
@@ -219,7 +287,8 @@ class AceLiveEmbeddedEngine(
     private suspend fun prepareResolvedTransport(
         token: Long,
         transport: AceResolvedLiveTransport,
-        startupTimeline: AceLiveStartupTimelineDiagnostics
+        startupTimeline: AceLiveStartupTimelineDiagnostics,
+        onRuntimeCreated: (Runtime) -> Unit = {}
     ): P2pResult<AceLivePreparedStream> {
         if (generation.get() != token) return superseded()
 
@@ -232,8 +301,12 @@ class AceLiveEmbeddedEngine(
                     bufferSettings = bufferSettings,
                     eventObserver = eventObserver,
                     diagnosticsObserver = diagnosticsObserver,
-                    startupTimelineDiagnostics = startupTimeline
-                ).also { created -> activeRuntime = created }
+                    startupTimelineDiagnostics = startupTimeline,
+                    dhtRoutingMemory = dhtRoutingMemory
+                ).also { created ->
+                    activeRuntime = created
+                    onRuntimeCreated(created)
+                }
             }
         } ?: return superseded()
         val runtime = runtimeCreation.getOrElse { error ->
@@ -319,7 +392,8 @@ class AceLiveEmbeddedEngine(
         bufferSettings: AceLiveBufferSettings,
         private val eventObserver: (AceLiveTcpPoolEvent) -> Unit,
         private val diagnosticsObserver: (status: String, message: String) -> Unit,
-        private val startupTimelineDiagnostics: AceLiveStartupTimelineDiagnostics
+        private val startupTimelineDiagnostics: AceLiveStartupTimelineDiagnostics,
+        private val dhtRoutingMemory: AceDhtRoutingMemory
     ) : Closeable {
         private val startupBufferPolicy = AceLiveStartupBufferPolicy(bufferSettings)
         private val authoritativeConsumerPressureTracker =
@@ -449,6 +523,17 @@ class AceLiveEmbeddedEngine(
         )
         private var runner: Job? = null
 
+        fun hasCurrentQualificationProgress(
+            nowMillis: Long = System.currentTimeMillis()
+        ): Boolean {
+            if (closed.get()) return false
+            val qualified = aceLiveDirectStartupHasQualificationProgress(
+                peers = pool.peerQualitySnapshots(nowMillis),
+                recentConnectionMillis = DIRECT_PROGRESS_FRESHNESS_MILLIS
+            )
+            return qualified && !closed.get()
+        }
+
         fun start() {
             check(runner == null) { "Ace Live runtime is already started" }
             startupStartedAtMillis.set(System.currentTimeMillis())
@@ -571,7 +656,8 @@ class AceLiveEmbeddedEngine(
                     policy = AceLiveDhtPolicy(
                         returnAfterPeers = ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS
                     ),
-                    reuseRecentResults = true
+                    reuseRecentResults = true,
+                    routingMemory = dhtRoutingMemory
                 )
                 useStartupDhtProbeRefill -> AceLiveDhtDiscovery(
                     policy = AceLiveDhtPolicy(
@@ -580,14 +666,19 @@ class AceLiveEmbeddedEngine(
                     ),
                     // A cached one-peer fast-path result must not satisfy a four-peer probe batch.
                     // An uncached round also explores a fresh randomized routing-table path.
-                    reuseRecentResults = false
+                    reuseRecentResults = false,
+                    routingMemory = dhtRoutingMemory
                 )
                 useStartupDhtFullExpansion -> AceLiveDhtDiscovery(
                     // The initial result was intentionally short. A full startup expansion must not
                     // reuse it from the positive-result cache.
-                    reuseRecentResults = false
+                    reuseRecentResults = false,
+                    routingMemory = dhtRoutingMemory
                 )
-                else -> AceLiveDhtDiscovery(reuseRecentResults = true)
+                else -> AceLiveDhtDiscovery(
+                    reuseRecentResults = true,
+                    routingMemory = dhtRoutingMemory
+                )
             }
             val result = AceLivePeerDiscoveryOrchestrator(
                 dhtDiscover = dhtDiscovery::discover,
@@ -637,7 +728,11 @@ class AceLiveEmbeddedEngine(
                             "elapsedMs=${System.currentTimeMillis() - discoveryStartedAtMillis}, " +
                             "peers=${result.peers.size}, " +
                             "tracker=${result.tracker.status}/${result.tracker.returnedPeerCount}, " +
-                            "dht=${result.dht.status}/${result.dht.returnedPeerCount}"
+                            "dht=${result.dht.status}/${result.dht.returnedPeerCount}, " +
+                            "dhtQueries=${result.dhtQueriesSent}, " +
+                            "dhtFailed=${result.dhtFailedQueries}, " +
+                            "dhtWarmSeeds=${result.dhtWarmRoutingSeedsUsed}, " +
+                            "dhtCacheHit=${result.dhtCacheHit}"
                     )
                 }
             }
@@ -954,7 +1049,10 @@ class AceLiveEmbeddedEngine(
         const val DEFAULT_ACE_TRACKER = AceLiveNetworkDefaults.publicTracker
         const val DEFAULT_DIRECT_PIECE_BYTES = 512 * 1024
         const val DEFAULT_DIRECT_CHUNK_BYTES = 16 * 1024
+        const val CONTENT_PREPARATION_TIMEOUT_MILLIS = 60_000L
         const val DIRECT_STARTUP_SOFT_TIMEOUT_MILLIS = 8_000L
+        const val DIRECT_QUALIFICATION_GRACE_MILLIS = 2_000L
+        const val DIRECT_PROGRESS_FRESHNESS_MILLIS = 2_000L
         const val NO_CONNECTED_PEER_TIMEOUT_MILLIS = 30_000L
         const val TARGET_ACTIVE_PEERS = 6
         const val MAX_ACTIVE_PEERS = 10
