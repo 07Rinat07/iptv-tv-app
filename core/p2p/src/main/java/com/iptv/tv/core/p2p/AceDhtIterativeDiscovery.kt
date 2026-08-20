@@ -81,7 +81,15 @@ internal class AceDhtIterativeDiscovery(
             var failed = 0
             var queries = 0
 
-            for (warm in warmRoutingSeeds(System.nanoTime())) {
+            // A known-ID warm candidate outranks an unresolved bootstrap in the distance queue.
+            // Keep one production-sized startup branch free for normal bootstrap so a stale warm
+            // cache cannot monopolize the whole first wave. Serial callers still get one warm seed.
+            val warmSeedLimit = if (policy.searchBranching == 1) {
+                1
+            } else {
+                min(MAX_WARM_ROUTING_SEEDS, policy.searchBranching - 1)
+            }
+            for (warm in warmRoutingSeeds(System.nanoTime(), warmSeedLimit)) {
                 val key = endpointKey(warm.endpoint)
                 if (!queuedEndpoints.containsKey(key)) {
                     queuedEndpoints[key] = warm.nodeId
@@ -229,13 +237,13 @@ internal class AceDhtIterativeDiscovery(
             )
         }
 
-    private fun warmRoutingSeeds(nowNanos: Long): List<QueryCandidate> =
+    private fun warmRoutingSeeds(nowNanos: Long, limit: Int): List<QueryCandidate> =
         synchronized(warmRoutingLock) {
             pruneWarmRoutingNodes(nowNanos)
             warmRoutingNodes.values
                 .asSequence()
                 .sortedByDescending { it.lastSeenNanos }
-                .take(MAX_WARM_ROUTING_SEEDS)
+                .take(limit)
                 .map { cached -> QueryCandidate(cached.endpoint, cached.nodeId) }
                 .toList()
         }
