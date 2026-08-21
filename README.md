@@ -17,6 +17,7 @@
 - **Канонический каталог плейлистов**: путь `Источник → Плейлист → Группа/Подгруппа → Канал`, breadcrumb-контекст, Back ровно на один уровень и открытие точного выбранного канала в Player.
 - **Стабильное восстановление focus каталога**: после возврата из Player приложение возвращает пользователя к прежнему уровню/строке по стабильному canonical id; после обновления дерева используется самый глубокий оставшийся корректный путь.
 - **Автономное unified Избранное**: любимый канал хранится как durable logical snapshot с вариантами источника и не удаляется вместе с исходным плейлистом. В `Мои плейлисты` доступен системный виртуальный список `Избранное`, который открывается тем же canonical catalog/Player маршрутом без создания физического плейлиста.
+- **Безопасный экспорт Favorites**: TXT/M3U8 не раскрывают credential-bearing provider URL по умолчанию, а `.riptv` сохраняет versioned logical identity/provenance/source variants с той же credential policy.
 - **История и EPG**: быстрый доступ к истории просмотра и программе передач, когда она доступна у исходного источника.
 - **Media3 / ExoPlayer как основной плеер** с изолированным **LibVLC fallback** для подтверждённых container/demux/codec несовместимостей.
 - **Встроенный BitTorrent/P2P backend** для `magnet:`, infohash, локальных `.torrent` и HTTP(S)-ссылок на `.torrent`; поток для плеера отдаётся через локальный HTTP Range.
@@ -65,7 +66,9 @@ Unified Favorites persistence и Player consumer закрыты PR #170–#172. 
 - каталог и Player используют существующий контракт, а для orphan favorite выбирается сохранённый рабочий variant;
 - физические операции `обновить / удалить плейлист / редактор` для виртуального списка недоступны.
 
-Текущий следующий этап #45 — переносимый versioned backup/import, который должен сохранять logical identity, provenance и source variants. Обычный M3U/M3U8 остаётся универсальным interoperability-экспортом и не заменяет полный backup приложения.
+Portable backend закрыт PR #174: `.riptv` использует versioned JSON contract и сохраняет logical identity, provenance и source variants без переноса локальных Room IDs как portable identity. Текущий safe-export слой переводит TXT/M3U8 на ту же data-layer credential policy и открывает `.riptv` export в Favorites UI. Если preferred source содержит credentials, M3U8 выбирает безопасный alternate variant при наличии; favorite без безопасного URL в M3U8 не записывается, а TXT оставляет metadata с `[REDACTED]`.
+
+Следующий этап #45 — пользовательский `.riptv` import через системный file picker, затем source-variant picker. Обычный M3U/M3U8 остаётся универсальным interoperability-экспортом и не заменяет полный backup приложения.
 
 ## Статус P2P / Torrent TV
 
