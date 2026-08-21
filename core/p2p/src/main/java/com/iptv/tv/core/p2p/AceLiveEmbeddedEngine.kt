@@ -460,6 +460,10 @@ class AceLiveEmbeddedEngine(
             observer = diagnosticsObserver,
             context = runtimeDiagnosticsContext
         )
+        private val tsSignalDiagnostics = AceLiveTsSignalDiagnosticsReporter(
+            observer = diagnosticsObserver,
+            context = runtimeDiagnosticsContext
+        )
         private val startupBufferPolicy = AceLiveStartupBufferPolicy(bufferSettings)
         private val authoritativeConsumerPressureTracker =
             AceLiveAuthoritativeConsumerPressureTracker()
@@ -1082,6 +1086,7 @@ class AceLiveEmbeddedEngine(
                                 bytes = resynchronized.size.toLong(),
                                 nowMillis = now
                             )
+                            runCatching { tsSignalDiagnostics.onBytes(resynchronized, now) }
                         }
                         val media = discontinuityGate.consume(resynchronized)
                         if (media.isNotEmpty()) {
