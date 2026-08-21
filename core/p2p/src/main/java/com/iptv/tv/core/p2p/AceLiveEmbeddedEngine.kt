@@ -527,7 +527,10 @@ class AceLiveEmbeddedEngine(
             ),
             onEvent = ::onPoolEvent
         )
-        private val peerDiagnosticsReporter = AceLivePeerDiagnosticsReporter(diagnosticsObserver)
+        private val peerDiagnosticsReporter = AceLivePeerDiagnosticsReporter(
+            observer = diagnosticsObserver,
+            context = runtimeDiagnosticsContext
+        )
         private val refillCoordinator = AceLivePeerRefillCoordinator(
             AceLivePeerRefillPolicy(
                 targetActivePeers = TARGET_ACTIVE_PEERS,
