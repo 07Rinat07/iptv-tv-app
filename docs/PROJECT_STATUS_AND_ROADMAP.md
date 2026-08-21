@@ -2,250 +2,127 @@
 
 _Last updated: 2026-08-21_
 
-This is the canonical current-state and next-action document. Dated field reports remain immutable
-evidence; when an older plan describes a different current increment, this page wins.
+This is the canonical current-state and next-action document. Dated field reports remain immutable evidence; when an older plan describes a different current increment, this page wins.
 
-## Baseline and branch decisions
+## Current integration head
 
-- The current integration head for this documentation increment is `main` commit `d9a95168`
-  (squash merge of PR #168, canonical catalog navigation in the real Playlists UI). This catalog/UI
-  merge does not constitute new Ace Live field evidence; the P2P field baseline described below
-  remains the evidence basis for the bounded P2P decisions on this page.
-- The P2P integration baseline immediately before the current producer-boundary field work was
-  `91f90a5` (`fix(p2p): preserve qualified fallback startup`).
-- `eeb33f5` remains the historical same-device comparison baseline. It is not the current
-  integration head.
-- The terminal TCP-pool guard from PR #158 commit `bd64e24` is incorporated here. It closes a
-  deterministic late-peer-start race, but the 2026-08-20 field run proves that teardown correctness
-  alone does not solve startup/playback.
-- PR #156 is closed and must not be merged as written. Its warm-routing state lived inside one
-  `AceDhtIterativeDiscovery`, while production creates new discovery wrappers for initial, probe,
-  expansion, refill and channel changes. Its same-instance test therefore did not prove production
-  reuse, and its field interpretation is not reliable enough to ship.
-- The post-#155 docs branch is evidence input only. Its old PR #156 conclusions are superseded by
-  this page rather than merged literally.
+- Current `main`: `c7058e2937a21024eb44fbafcc4f5b2dabaa8af8` — squash merge of PR #172, virtual Favorites catalog/Player consumer.
+- PR #172 exact head `9939e139883caad043f2b14969b1c8bac05ac7f1` passed Database Unit CI #8 and full Android CI #704 before merge.
+- Catalog/Favorites work does not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
 - Historical diagnostic and already-pruned branches are not production merge candidates.
 
-## Parallel catalog status — Issue #45
+## Issue #45 — canonical catalog + autonomous unified Favorites
 
-The catalog/data track is developed in small branches without changing Scanner discovery or P2P
-runtime policy.
+The catalog/data track is developed as small fresh-main increments. Scanner discovery/query semantics and P2P transport policy are protected from these changes.
 
-1. **PR #167 — complete.** Canonical tree navigation contract: stable hierarchy path/checkpoint,
-   breadcrumb context, predictable one-level Back and focus reconciliation after tree rebuild.
-2. **PR #168 — complete.** `feature:playlists` now binds the existing `observeChannels` flow to
-   `LegacyPlaylistCatalogAdapter + CanonicalCatalogNavigator`, renders the real hierarchy, opens the
-   exact `player/{playlistId}/{channelId}` route for a channel, routes top-bar Back through the same
-   Android dispatcher as hardware/remote Back, and restores off-screen focus by stable
-   `CatalogNodeId`. Exact-head Android CI #693 was fully green before squash merge.
-3. **Permanent regression gate — complete.** Android CI now runs
-   `:feature:playlists:testDebugUnitTest` explicitly.
-4. **Current increment — docs/help sync.** README, long-form ROADMAP, architecture, `USER_GUIDE` and
-   built-in catalog Help are being synchronized with the already-merged behavior.
-5. **Next production increment — Unified Favorites persistence.** Move Favorites from concrete-row
-   storage semantics toward the shared `ChannelStableIdentity` while preserving original
-   playlist/group/channel provenance and discoverable source variants. Do not mix this migration
-   with Scanner or P2P changes.
-6. **After Favorites.** Dedup/re-import policy, virtual aggregate views and large-catalog
-   lazy/cache/non-blocking rebuild validation.
+### Complete
 
-## Latest field evidence — 2026-08-20
+1. **PR #167 — canonical navigation contract.** Stable hierarchy path/checkpoint, breadcrumb context, predictable one-level Back and focus reconciliation after tree rebuild.
+2. **PR #168 — real Playlists UI integration.** `observeChannels → LegacyPlaylistCatalogAdapter → CanonicalCatalogNavigator → UI`, exact channel route to Player, shared Android Back dispatcher and off-screen focus restore by stable `CatalogNodeId`. Exact-head Android CI #693 passed before merge.
+3. **Permanent catalog regression gate.** Android CI explicitly runs `:feature:playlists:testDebugUnitTest`.
+4. **PR #170 — autonomous Favorites persistence.** Database v10 stores durable logical favorite snapshots and source variants independent of source playlist/channel lifetime. Legacy favorites are safely migrated through seed snapshots and consolidated by the shared Kotlin `ChannelStableIdentity` algorithm.
+5. **PR #171 — favorite playback resolver.** A single `FavoritePlaybackContext` selects a live matching variant when possible and a persisted variant/snapshot when the original source rows no longer exist. No second Player runtime was introduced.
+6. **PR #172 — virtual Favorites aggregate.** A stable system-owned virtual playlist exposes durable Favorites to the existing canonical catalog and Player without creating a physical Room playlist. The representative favorite ID remains stable while playback source fields come from the best live or persisted variant. Physical refresh/delete/editor actions are disabled for this virtual list.
+7. **Durability acceptance now covered.** Deleting the original playlist/channel does not delete the logical favorite; re-import can reconnect a matching logical channel; multiple source variants remain discoverable.
 
-Source: `myscanerIPTV-logs-1787212775216.txt`, captured from the TV build containing the terminal
-pool guard. The full evidence record is in
-[`testing/playback-log-analysis-2026-08-20.md`](testing/playback-log-analysis-2026-08-20.md).
+### Current documentation increment
 
-The follow-up export `myscanerIPTV-logs-1787221389074.txt` contains the bounded DHT/handoff
-increment. Warm routing nodes are being queried, but the export also exposed a separate fixed
-8-second timeout in the fallback-direct retry after metadata startup failure.
+Synchronize README, `USER_GUIDE`, architecture/index and built-in About Help with the already-merged #170–#172 behavior. This is documentation/help only; it must not change persistence, Player, Scanner or P2P runtime behavior.
 
-The post-fix export `myscanerIPTV-logs-1787228578987.txt` contains the fallback qualification grace
-introduced by `91f90a5`. It shows a directional improvement and a remaining producer boundary;
-because the export retains only the latest 120 structured rows, it is not a controlled success-rate
-measurement.
+### Next production increments
 
-### Startup handoff race is confirmed
+1. **Versioned portable Favorites backup/import.** Preserve logical identity, durable snapshot metadata, provenance and all source variants in an application-owned versioned format. This is separate from ordinary M3U/M3U8 interoperability export.
+2. **Export/import safety contract.** Ordinary portable playlist export must not blindly disclose provider passwords, API keys, MAC credentials, tokens or other secrets. A full private backup may later support explicitly protected credential handling, but it must not silently turn provider secrets into plain-text transfer material.
+3. **Source-variant picker / preferred source UX.** Show source variants for one logical favorite and allow deterministic preferred-source selection without duplicating the favorite.
+4. **Remaining virtual aggregate views.** Add All Channels, Recent/History and later EPG/Now-Next/archive/P2P filters as separate bounded increments.
+5. **Performance hardening.** Validate lazy rendering, cached prepared structures and non-blocking rebuild on large catalogs/favorite sets.
 
-For `channelId=13`, the speculative direct runtime made useful network progress just before the
-fixed metadata handoff boundary:
+## Portable Favorites contract
 
-- startup DHT returned three peers at about 7.527 s;
-- TCP connected at about 7.810 s;
-- handshake was accepted at about 8.007 s;
-- the fixed 8 s direct/metadata coordinator then cancelled that runtime;
-- a second metadata-derived runtime started from an independent cold route, obtained tracker=1 and
-  DHT=0, and never produced media.
+`Избранные каналы` is a user-owned library, not a view over current source rows.
 
-Two `phase=initial` records within one player request are two different runtimes. The failure is not
-fixed by a larger unconditional timeout: the coordinator must preserve only current, qualified
-direct progress for a short, non-renewable grace while retaining one absolute request deadline.
+The full backup direction is:
 
-### DHT reuse was missing from the production lifetime
+```text
+Favorite backup
+  ├── formatVersion
+  ├── logical favorites[]
+  │    ├── logicalKey
+  │    ├── display snapshot
+  │    ├── preferred source marker
+  │    └── sourceVariants[]
+  │         ├── stream/source identity
+  │         ├── original playlist/group provenance
+  │         └── non-secret metadata
+  └── backup metadata
+```
 
-Production created a new DHT wrapper/walker for every discovery cycle, so instance-local warm nodes
-could not survive even initial-to-probe, much less a channel switch. Bootstrap hostnames were also
-resolved before the query loop, which delayed a known responsive node behind DNS.
+M3U/M3U8 remains the universal IPTV interoperability path for representative channels. It does not preserve the complete logical/provenance/variant model and therefore is not the full Rinat IPTV backup format.
 
-### Player boundary is a separate release blocker
+A future shareable HTTP/LAN URL is a separate feature after portable backup/import. An Internet-reachable share URL requires an explicit hosting/sync backend and is not implied by local export.
 
-For `channelId=16`, P2P reached first media at about 4.199 s, buffer-ready at about 4.335 s and the
-loopback reader at about 4.39 s. The local source delivered 20,967,640 bytes over about 32.4 s without
-a Media3 load error, but READY appeared only after EOF during the next switch and was ignored as
-stale. This is evidence of a TS/demux/player-qualification blocker, not peer starvation.
+## P2P / Ace Live evidence gate — Issue #159
 
-Do not enable the existing discontinuity gate blindly at initial startup: its PSI assumptions are
-not yet broad enough for all live streams. Add PAT/PMT/PID/continuity/random-access and Media3 track
-telemetry first, then make a separate fixture-backed behavior change.
+The current P2P transport policy remains evidence-driven. The latest canonical field evidence is the 2026-08-20 TV Box track summarized in [`testing/playback-log-analysis-2026-08-20.md`](testing/playback-log-analysis-2026-08-20.md).
 
-### The channel drawer had a stale transient-state bug
+Already-completed hardening includes terminal peer-pool ownership, production-lifetime DHT routing memory, warm-query scheduling, progress-aware direct handoff/fallback, deterministic A→B→C ownership, player-session terminal summaries and bounded MPEG-TS/continuous-fixture diagnostics.
 
-Only the selected channel was updated in the process-local availability cache. When A was cancelled
-by selection of B, A could remain `SEARCHING` forever even though only one generation/runtime was
-active. This explains the simultaneous “поиск пиров…” labels in the screenshots; it did not prove
-that several P2P engines were still running.
+The remaining field gate is real-device evidence for producer-stage / rapid-switch behavior and the separate player/TS boundary. Do **not** infer new peer/request/buffer policy from catalog/Favorites CI.
 
-### Follow-up: fallback direct was still cancelled after qualification
-
-For `channelId=49`, the fallback direct runtime connected, accepted a handshake, observed a useful
-unchoked window and entered producer-gap state. Its local eight-second timeout then cancelled it
-about 0.4 s after useful qualification, despite roughly 13 s remaining in the outer preparation
-budget. This was not the original initial-direct metadata handoff; it was an uncovered retry-only
-boundary in the same coordinator.
-
-### Post-fix field run: improvement with a residual producer gap
-
-Within the bounded visible windows of `myscanerIPTV-logs-1787228578987.txt`:
-
-- ten Media3 `load_started` sessions are represented versus seven in the preceding export;
-- the best observed DHT lookup decreased from about 801 ms to about 579 ms;
-- the visible failed-DHT-query share decreased from 54.9% to 48.4%;
-- accepted handshakes increased from one to three and a producing peer appeared;
-- channel 65 completed one end-to-end path: authenticated media at about 1.94 s, buffer-ready at
-  about 5.81 s, first video frame at about 6.05 s and first audio at about 6.09 s. About 13.6 MB
-  were delivered over the following 17 s with no recorded rebuffer.
-
-These are directional improvements, not a claim that playback success increased by 42.9%:
-`load_started` is not a rendered frame, the compared channel mix is not proven identical and only
-one retained session contains the complete READY/frame/audio chain.
-
-Channels 64 and 66 consumed the bounded retry grace after connect/handshake/useful/unchoked
-qualification but still produced no media. The remaining question is now the first missing stage
-between outbound request scheduling and authenticated media append, not primarily DHT discovery.
-
-## Completed bounded implementation increment — through `91f90a5`
-
-1. **Terminal peer-pool ownership.** A closed pool rejects a late `startPeer` before and under its
-   ownership mutex, and the regression verifies that no transport is opened after close.
-2. **Engine-owned DHT routing memory.** Live and metadata DHT wrappers share verified routing
-   contacts across newly created discovery instances and channel runtimes. The memory stores nodes,
-   not swarm peers; it is TTL-bounded to five minutes, LRU-bounded to 32 contacts, applies node-ID
-   and IPv4-network diversity, and evicts failed or node-ID-mismatched remembered contacts.
-3. **Warm query without serial DNS.** Verified contacts can be queried immediately while bootstrap
-   DNS is resolved through a globally bounded worker pool and per-lookup pipeline. The scheduler
-   reserves a bootstrap lane and query token until one bootstrap request launches, distributes the
-   first wave across hostnames and keeps the original DHT packet, peer, time and cancellation bounds.
-   Diagnostics distinguish cache hits from actual warm-contact queries, total queries and failures.
-4. **Progress-aware direct handoff and fallback.** At each 8 s soft boundary, only the current
-   direct runtime can request a fixed two-second qualification grace. This applies to both the
-   initial metadata handoff and the one fallback-direct retry. Historical timeline milestones do
-   not control behavior. A stale/disconnected runtime gets no grace, the deadline never renews, and
-   direct, metadata startup and fallback remain under one 60 s content-preparation bound. Expiry
-   closes the active runtime only while that preparation still owns the current generation.
-5. **Honest availability state.** Selecting a new channel changes only superseded `SEARCHING`
-   entries back to `UNCHECKED`; completed READY/PLAYING/ERROR evidence is retained. A qualified
-   fallback that never produces media reports `qualified_peer_no_media`/`ERROR`, not `NO_PEERS`.
-
-This increment intentionally does not claim to solve the separate Media3/TS problem.
-
-## Current bounded increment — producer-boundary evidence and stale refill
-
-1. **Persistent correlated producer evidence.** The existing bounded producer reporter is now
-   connected to the application diagnostics observer. Every record includes `startup_id`, a unique
-   runtime ID, generation and path (`direct`, `metadata`, `direct_retry` or transport-file).
-2. **Actual request-write boundary.** `scheduled` and `selected` remain distinct, and `sent` is
-   emitted only after the local bounded socket write completes. Request timeout/requeue is recorded
-   separately, so `sent → no ingress` can be distinguished from routing/write failure.
-3. **Media-output boundary.** The same reporter records chunk ingress/accept/reject, piece completion,
-   authentication, authentication rejection, TS resynchronizer output and media-buffer append with
-   bounded counters and byte evidence.
-4. **Level-triggered stale recovery.** The 200 ms scheduler tick and 10 s refill loop share one
-   recovery coordinator. A throttled recovery read previously returned synthetic
-   `poolStale=false`, allowing the tick to hide a real stale pool from refill. Throttled reads now
-   preserve only the level-triggered stale flag; timeout and cursor actions remain non-repeating.
-   Active stale evidence is persisted at a bounded interval and the existing refill caps remain
-   unchanged.
-
-This increment does not increase the 8 s soft boundary, 2 s qualification grace, 60 s preparation
-deadline, request timeout, DHT budgets, peer caps, request depth or output buffers.
-
-## Validation gates
-
-Automated gates required on the exact integration head:
-
-1. `:core:p2p:testDebugUnitTest`
-2. `:core:data:testDebugUnitTest`
-3. `:feature:player:testDebugUnitTest`
-4. `:core:player:testDebugUnitTest`
-5. `:core:player-vlc:testDebugUnitTest`
-6. `:feature:playlists:testDebugUnitTest` for the canonical catalog navigation regression contract
-7. `lintDebug`, `:app:assembleDebug` and `:app:assembleDebugAndroidTest`
-8. Python tooling tests and the real `TorrentTvPlaybackSmokeTest` when P2P/runtime changes require it
-
-The current producer-boundary/stale-refill tree passed the P2P gates and all eight Python tooling
-tests on 2026-08-20. The catalog navigation exact head for PR #168 passed full Android CI #693 on
-2026-08-21. The connected-device `TorrentTvPlaybackSmokeTest`, repeated channel matrix and soak
-acceptance remain open for the P2P track; assembling the instrumentation APK is not counted as
-running that smoke.
-
-Real-device gate on the same TV Box:
-
-- compare the fixed channel matrix against baseline `eeb33f5`;
-- repeat A↔B switches and 20 rapid switches without explicit stop between every resolution;
-- record discovery candidates, cache hits, warm queries, connect, handshake, current useful/producing
-  state, first media, buffer-ready, HTTP open/read, Media3 READY/first frame and teardown ownership;
-- verify old loopback servers and pools close and no stale URL/READY can win;
-- judge median/tail startup and success rate, not a single successful channel.
-
-## Decision order
-
-1. For the catalog track, merge the docs/help sync only after exact-head Android CI, then start the
-   Unified Favorites persistence migration from fresh `main`.
-2. For the P2P track, publish and install the tested integration head, then repeat a fixed channel
-   matrix including channels 64–66 for at least three rounds and capture the last producer stage for
-   every runtime.
-3. If the P2P field path is `sent → no ingress`, add a startup-only bounded alternate-peer probe and
-   timeout reassignment that prefers a different covering peer. Only then consider a request-timeout
-   tier of non-renewable grace; connected-only grace remains two seconds and the total remains 60 s.
-4. Add deterministic A→B→C integration ownership coverage across DHT/refill/handoff.
-5. Add a player-session terminal summary so success is counted by READY/frame/audio rather than
-   inferred from `load_started`.
-6. Instrument the confirmed TS/demux/player boundary and add a continuous live MPEG-TS fixture that
-   must reach READY before EOF.
-7. Finish weak-network, peer-loss, 2 h and 8 h ARM TV Box acceptance after both blockers close.
-
-## Binding invariants
+### Binding P2P constraints
 
 - Discovered endpoints are not connected, handshaked, requestable or producing peers.
-- Warm routing memory stores only responsive/self-consistent DHT node contacts; it never treats old
-  swarm peers as current availability. Strict BEP-42 validation remains a telemetry-first follow-up.
-- Diagnostics are observational and must not be used as stale control-plane state.
 - Producer `sent` proves a completed local socket write, not receipt or acceptance by the peer.
 - A 40-character Ace `content_id` is a transport identity, not automatically a BitTorrent infohash.
-- Do not increase the 60 s content-preparation bound, 30 s no-connected-peer guard, DHT budgets,
-  peer caps, request depth or output buffers to conceal a failure.
+- Do not increase the 60 s content-preparation bound, 30 s no-connected-peer guard, DHT budgets, peer caps, request depth or output buffers to conceal a failure.
 - Preserve generation/session ownership and complete non-cancellable cleanup on supersession.
 - Do not change generic IPTV or normal BitTorrent behavior to fix Ace Live.
 - Do not add an external Ace Stream Engine runtime dependency or fallback.
-- Catalog/Favorites work must not rewrite Scanner discovery/query semantics or P2P transport policy.
+- Do not implement alternate-peer/request-timeout assumptions without new device evidence showing the missing producer stage and justifying that policy.
+
+## Validation gates
+
+For normal Android integration work on the exact PR head:
+
+1. `lintDebug`
+2. relevant unit modules, including `:core:data:testDebugUnitTest` for Favorites/data work
+3. `:feature:playlists:testDebugUnitTest` for canonical catalog changes
+4. `:app:assembleDebug`
+5. `:app:assembleDebugAndroidTest`
+6. signed ARM TV APK build/artifacts in the full Android workflow
+
+Database/Favorites persistence work additionally uses the dedicated Database Unit CI (`:core:database:testDebugUnitTest` + `:core:data:testDebugUnitTest`).
+
+P2P/runtime changes additionally require their P2P/unit/tooling gates and real `TorrentTvPlaybackSmokeTest`/hardware evidence when the touched behavior requires it. Building an instrumentation APK is not counted as running the real-device smoke.
+
+## Decision order
+
+1. Merge the current Favorites docs/help sync only after exact-head Android CI is green.
+2. Start the versioned portable Favorites backup/import backend from the resulting fresh `main`; do not stack production code on the docs PR.
+3. Keep backup serialization/storage/security separate from Compose file-picking/UI where possible, then wire UI in a following bounded PR.
+4. Add source-variant picker/preferred-source UX after the portable data contract is stable.
+5. Continue remaining aggregate views/performance work under Issue #45.
+6. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
+7. Continue EPG/Now-Next/archive (#47) and Player UX (#46) on top of the stable catalog/Favorites identity contracts.
+8. Complete hardware/soak/release acceptance before closing master roadmap #44.
+
+## Cross-track invariants
+
+- Catalog/Favorites work must not rewrite Scanner discovery/query semantics.
+- Catalog/Favorites work must not modify Ace Live peer/DHT/request/buffer policies without P2P field evidence.
+- Logical favorite ownership must not depend on Room auto-generated channel/playlist row lifetime.
+- Source provenance and source variants must remain discoverable after logical deduplication.
+- A virtual aggregate must not masquerade as a destructively editable physical playlist.
+- Export/import must preserve user-owned data without silently exporting credentials or provider secrets.
+- Every production increment starts from fresh `main`, carries focused tests, and merges only after exact-head gates are green.
 
 ## Documentation map
 
 - `PROJECT_STATUS_AND_ROADMAP.md` — canonical current status and next gate.
-- `USER_GUIDE.md` — user-facing controls and canonical catalog navigation behavior.
-- `architecture.md` — module boundaries and canonical catalog/P2P contracts.
-- `PLAYBACK_STATUS.md` — concise user-visible playback state and acceptance criteria.
-- `testing/playback-log-analysis-2026-08-20.md` — latest P2P field evidence.
+- `USER_GUIDE.md` — user-facing controls, canonical catalog and autonomous Favorites behavior.
+- `architecture.md` — module boundaries and canonical catalog/Favorites/P2P contracts.
+- `PLAYBACK_STATUS.md` — concise user-visible playback state and P2P acceptance criteria.
+- `testing/playback-log-analysis-2026-08-20.md` — latest canonical P2P field evidence until a newer controlled device run supersedes it.
 - `ROADMAP.md` and `ACE_LIVE_IMPLEMENTATION_PLAN.md` — long-form history and architecture.
 - `ACE_LIVE_FIELD_VALIDATION_*.md` — immutable dated evidence.
-- `P2P_RUNTIME_NOTES.md`, `P2P_CONTENT_TRANSPORT.md` and `ACE_LIVE_STARTUP_TIMELINE.md` — runtime,
-  identity and diagnostics contracts.
+- `P2P_RUNTIME_NOTES.md`, `P2P_CONTENT_TRANSPORT.md` and `ACE_LIVE_STARTUP_TIMELINE.md` — runtime, identity and diagnostics contracts.
