@@ -6,10 +6,13 @@ import com.iptv.tv.core.database.IptvDatabase
 import com.iptv.tv.core.database.MIGRATION_6_7
 import com.iptv.tv.core.database.MIGRATION_7_8
 import com.iptv.tv.core.database.MIGRATION_8_9
+import com.iptv.tv.core.database.MIGRATION_9_10
 import com.iptv.tv.core.database.dao.ChannelDao
 import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.DownloadDao
+import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteDao
+import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.dao.HistoryDao
 import com.iptv.tv.core.database.dao.ParentalProfileDao
 import com.iptv.tv.core.database.dao.PlaylistDao
@@ -33,7 +36,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): IptvDatabase {
         return Room.databaseBuilder(context, IptvDatabase::class.java, "iptv.db")
-            .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+            .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
             .fallbackToDestructiveMigration()
             .build()
     }
@@ -46,6 +49,13 @@ object DatabaseModule {
 
     @Provides
     fun provideFavoriteDao(database: IptvDatabase): FavoriteDao = database.favoriteDao()
+
+    @Provides
+    fun provideFavoriteSnapshotDao(database: IptvDatabase): FavoriteSnapshotDao = database.favoriteSnapshotDao()
+
+    @Provides
+    fun provideFavoriteChannelLookupDao(database: IptvDatabase): FavoriteChannelLookupDao =
+        database.favoriteChannelLookupDao()
 
     @Provides
     fun provideHistoryDao(database: IptvDatabase): HistoryDao = database.historyDao()
