@@ -1,5 +1,6 @@
 package com.iptv.tv.feature.playlists
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,10 +51,30 @@ const val TAG_PLAYLISTS_LAST_ERROR = "playlists_last_error"
 @Composable
 fun PlaylistsScreen(
     onOpenEditor: ((Long) -> Unit)? = null,
-    onOpenPlayer: ((Long) -> Unit)? = null,
+    onOpenPlayer: ((Long, Long?) -> Unit)? = null,
     viewModel: PlaylistsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+
+    BackHandler(enabled = state.isCatalogOpen) {
+        viewModel.handleCatalogBack()
+    }
+
+    if (state.isCatalogOpen) {
+        state.catalog?.let { catalog ->
+            PlaylistCatalogContent(
+                snapshot = catalog,
+                onBack = { viewModel.handleCatalogBack() },
+                onEntryFocused = viewModel::focusCatalogNode,
+                onEnter = viewModel::enterCatalogNode,
+                onOpenChannel = { channelId ->
+                    onOpenPlayer?.invoke(catalog.playlistId, channelId)
+                }
+            )
+            return
+        }
+    }
+
     val totalChannels = state.playlists.sumOf { it.channelCount }
     var showDetails by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -160,13 +181,19 @@ fun PlaylistsScreen(
                 }
                 val selectedPlaylistId = state.selectedPlaylistId
                 if (selectedPlaylistId != null) {
+                    OutlinedButton(
+                        onClick = viewModel::openSelectedCatalog,
+                        enabled = !state.isLoadingCatalog
+                    ) {
+                        Text(if (state.isLoadingCatalog) "Каталог загружается..." else "Открыть каталог")
+                    }
                     onOpenEditor?.let { openEditor ->
                         OutlinedButton(onClick = { openEditor(selectedPlaylistId) }) {
                             Text("Открыть редактор")
                         }
                     }
                     onOpenPlayer?.let { openPlayer ->
-                        OutlinedButton(onClick = { openPlayer(selectedPlaylistId) }) {
+                        OutlinedButton(onClick = { openPlayer(selectedPlaylistId, null) }) {
                             Text("Открыть плеер")
                         }
                     }
@@ -292,7 +319,7 @@ fun PlaylistsScreen(
                                     }
                                 }
                                 onOpenPlayer?.let { openPlayer ->
-                                    OutlinedButton(onClick = { openPlayer(playlist.id) }) {
+                                    OutlinedButton(onClick = { openPlayer(playlist.id, null) }) {
                                         Text("Воспроизвести")
                                     }
                                 }

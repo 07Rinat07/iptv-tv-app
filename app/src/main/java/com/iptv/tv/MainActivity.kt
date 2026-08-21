@@ -221,7 +221,9 @@ private fun AppRoot(
                             }
                             NavControlButtons(
                                 onBack = {
-                                    if (!navController.navigateUp()) {
+                                    if (activity != null) {
+                                        activity.onBackPressedDispatcher.onBackPressed()
+                                    } else if (!navController.navigateUp()) {
                                         showExitConfirm = true
                                     }
                                 },
@@ -310,7 +312,13 @@ private fun AppRoot(
                         composable(Routes.PLAYLISTS) {
                             PlaylistsScreen(
                                 onOpenEditor = { playlistId -> navController.navigate(Routes.editorRoute(playlistId)) },
-                                onOpenPlayer = { playlistId -> navController.navigate(Routes.playerRoute(playlistId)) }
+                                onOpenPlayer = { playlistId, channelId ->
+                                    if (channelId != null) {
+                                        navController.navigate(Routes.playerRoute(playlistId, channelId))
+                                    } else {
+                                        navController.navigate(Routes.playerRoute(playlistId))
+                                    }
+                                }
                             )
                         }
                         composable(Routes.EDITOR) {

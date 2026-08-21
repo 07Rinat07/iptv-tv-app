@@ -4,9 +4,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.domain.repository.PlaylistRepository
+import com.iptv.tv.core.model.CatalogNodeId
 import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistContentSummary
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +25,9 @@ data class PlaylistsUiState(
     val isLoadingSummary: Boolean = false,
     val isRefreshing: Boolean = false,
     val isDeleting: Boolean = false,
+    val isCatalogOpen: Boolean = false,
+    val isLoadingCatalog: Boolean = false,
+    val catalog: PlaylistCatalogSnapshot? = null,
     val lastError: String? = null,
     val lastInfo: String? = null
 )
@@ -34,33 +39,92 @@ class PlaylistsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(PlaylistsUiState())
     val uiState: StateFlow<PlaylistsUiState> = _uiState.asStateFlow()
 
+    private var catalogJob: Job? = null
+    private var boundCatalogPlaylist: Playlist? = null
+    private var catalogNavigation: PlaylistCatalogNavigationSession? = null
+
     init {
         viewModelScope.launch {
             playlistRepository.observePlaylists().collect { playlists ->
+                var selectedPlaylist: Playlist? = null
                 _uiState.update { current ->
                     val selected = current.selectedPlaylistId?.takeIf { id -> playlists.any { it.id == id } }
                     val effectiveSelected = selected ?: playlists.firstOrNull()?.id
+                    val selectionChanged = current.selectedPlaylistId != effectiveSelected
+                    selectedPlaylist = playlists.firstOrNull { it.id == effectiveSelected }
                     current.copy(
                         playlists = playlists,
                         selectedPlaylistId = effectiveSelected,
-                        selectedSummary = current.selectedSummary?.takeIf { it.playlistId == effectiveSelected }
+                        selectedSummary = current.selectedSummary?.takeIf { it.playlistId == effectiveSelected },
+                        isCatalogOpen = if (selectionChanged) false else current.isCatalogOpen
                     )
                 }
+                bindCatalog(selectedPlaylist)
                 _uiState.value.selectedPlaylistId?.let { loadSummary(it) }
             }
         }
     }
 
     fun selectPlaylist(playlistId: Long) {
+        val selectedPlaylist = _uiState.value.playlists.firstOrNull { it.id == playlistId }
         _uiState.update {
             it.copy(
                 selectedPlaylistId = playlistId,
                 selectedSummary = null,
+                isCatalogOpen = false,
                 lastError = null,
                 lastInfo = null
             )
         }
+        bindCatalog(selectedPlaylist)
         loadSummary(playlistId)
+    }
+
+    fun openSelectedCatalog() {
+        val catalog = _uiState.value.catalog
+        if (catalog == null) {
+            _uiState.update {
+                it.copy(
+                    lastError = if (it.isLoadingCatalog) {
+                        "Каталог выбранного плейлиста ещё загружается"
+                    } else {
+                        "Каталог выбранного плейлиста недоступен"
+                    }
+                )
+            }
+            return
+        }
+        _uiState.update { it.copy(isCatalogOpen = true, lastError = null, lastInfo = null) }
+    }
+
+    fun closeCatalog() {
+        _uiState.update { it.copy(isCatalogOpen = false) }
+    }
+
+    /**
+     * Handles one Back action while the canonical catalog is open.
+     * Returns false only when this feature has no catalog Back action to consume.
+     */
+    fun handleCatalogBack(): Boolean {
+        if (!_uiState.value.isCatalogOpen) return false
+        val navigation = catalogNavigation
+        if (navigation != null && navigation.back()) {
+            publishCatalogSnapshot(navigation)
+        } else {
+            closeCatalog()
+        }
+        return true
+    }
+
+    fun enterCatalogNode(nodeId: CatalogNodeId) {
+        val navigation = catalogNavigation ?: return
+        if (navigation.enter(nodeId)) publishCatalogSnapshot(navigation)
+    }
+
+    fun focusCatalogNode(nodeId: CatalogNodeId) {
+        val navigation = catalogNavigation ?: return
+        runCatching { navigation.focus(nodeId) }
+            .onSuccess { publishCatalogSnapshot(navigation) }
     }
 
     fun refreshSelectedPlaylist() {
@@ -123,6 +187,66 @@ class PlaylistsViewModel @Inject constructor(
                     }
                 }
                 AppResult.Loading -> Unit
+            }
+        }
+    }
+
+    private fun bindCatalog(playlist: Playlist?) {
+        if (playlist == null) {
+            catalogJob?.cancel()
+            catalogJob = null
+            boundCatalogPlaylist = null
+            catalogNavigation = null
+            _uiState.update {
+                it.copy(
+                    isCatalogOpen = false,
+                    isLoadingCatalog = false,
+                    catalog = null
+                )
+            }
+            return
+        }
+
+        if (boundCatalogPlaylist == playlist && catalogJob?.isActive == true) return
+
+        val previousCheckpoint = catalogNavigation
+            ?.takeIf { navigation -> navigation.snapshot().playlistId == playlist.id }
+            ?.checkpoint()
+        catalogJob?.cancel()
+        boundCatalogPlaylist = playlist
+        _uiState.update { current ->
+            current.copy(
+                isLoadingCatalog = true,
+                catalog = current.catalog?.takeIf { it.playlistId == playlist.id }
+            )
+        }
+        catalogJob = viewModelScope.launch {
+            playlistRepository.observeChannels(playlist.id).collect { channels ->
+                val checkpoint = catalogNavigation
+                    ?.takeIf { navigation -> navigation.snapshot().playlistId == playlist.id }
+                    ?.checkpoint()
+                    ?: previousCheckpoint
+                val navigation = PlaylistCatalogNavigationSession.create(
+                    playlist = playlist,
+                    channels = channels,
+                    previousCheckpoint = checkpoint
+                )
+                catalogNavigation = navigation
+                publishCatalogSnapshot(navigation)
+            }
+        }
+    }
+
+    private fun publishCatalogSnapshot(navigation: PlaylistCatalogNavigationSession) {
+        val snapshot = navigation.snapshot()
+        _uiState.update { current ->
+            if (current.selectedPlaylistId != snapshot.playlistId) {
+                current
+            } else {
+                current.copy(
+                    catalog = snapshot,
+                    isLoadingCatalog = false
+                )
             }
         }
     }

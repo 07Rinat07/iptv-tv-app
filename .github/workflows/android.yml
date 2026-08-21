@@ -292,6 +292,9 @@ jobs:
       - name: Unit tests feature importer
         run: ./gradlew --no-daemon --stacktrace :feature:importer:testDebugUnitTest
 
+      - name: Unit tests feature playlists
+        run: ./gradlew --no-daemon --stacktrace :feature:playlists:testDebugUnitTest
+
       - name: Unit tests feature player
         run: ./gradlew --no-daemon --stacktrace :feature:player:testDebugUnitTest
 
