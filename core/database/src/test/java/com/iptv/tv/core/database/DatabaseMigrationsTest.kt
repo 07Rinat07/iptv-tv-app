@@ -1,6 +1,7 @@
 package com.iptv.tv.core.database
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DatabaseMigrationsTest {
@@ -38,6 +39,20 @@ class DatabaseMigrationsTest {
                 "UPDATE playlists SET catalogOrigin = 'LOCAL' WHERE sourceType = 'FILE'"
             ),
             MIGRATION_8_9_SQL
+        )
+    }
+
+    @Test
+    fun migration9To10_createsStandaloneFavoriteStorageAndSnapshotsLegacyRows() {
+        assertEquals(9, MIGRATION_9_10.startVersion)
+        assertEquals(10, MIGRATION_9_10.endVersion)
+        assertEquals(11, MIGRATION_9_10_SQL.size)
+        assertTrue(MIGRATION_9_10_SQL[0].contains("favorite_channels"))
+        assertTrue(MIGRATION_9_10_SQL[4].contains("favorite_channel_variants"))
+        assertTrue(MIGRATION_9_10_SQL[8].contains("favorite_legacy_seeds"))
+        assertEquals(
+            "INSERT OR REPLACE INTO favorite_legacy_seeds (legacyChannelId, playlistId, playlistName, sourceType, catalogOrigin, tvgId, name, groupName, logo, streamUrl, addedAt) SELECT f.channelId, c.playlistId, p.name, p.sourceType, p.catalogOrigin, c.tvgId, c.name, c.groupName, c.logo, c.streamUrl, f.addedAt FROM favorites f INNER JOIN channels c ON c.id = f.channelId LEFT JOIN playlists p ON p.id = c.playlistId",
+            MIGRATION_9_10_SQL.last()
         )
     }
 }
