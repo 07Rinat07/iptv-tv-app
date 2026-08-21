@@ -40,6 +40,7 @@ import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistContentSummary
+import com.iptv.tv.core.model.VIRTUAL_FAVORITES_PLAYLIST_ID
 import java.util.Locale
 
 const val TAG_PLAYLISTS_LIST = "playlists_list"
@@ -55,6 +56,7 @@ fun PlaylistsScreen(
     viewModel: PlaylistsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    val selectedIsVirtualFavorites = state.selectedPlaylistId == VIRTUAL_FAVORITES_PLAYLIST_ID
 
     BackHandler(enabled = state.isCatalogOpen) {
         viewModel.handleCatalogBack()
@@ -131,6 +133,12 @@ fun PlaylistsScreen(
                     )
                     current?.let {
                         Text("${sourceTypeLabel(it.sourceType.name)} · ${it.channelCount} каналов")
+                        if (it.id == VIRTUAL_FAVORITES_PLAYLIST_ID) {
+                            Text(
+                                "Виртуальный системный список: обновляется автоматически из Избранного",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                         if (showDetails) {
                             Text(
                                 "Источник: ${it.source}",
@@ -168,14 +176,14 @@ fun PlaylistsScreen(
             ) {
                 Button(
                     onClick = viewModel::refreshSelectedPlaylist,
-                    enabled = !state.isRefreshing && !state.isDeleting,
+                    enabled = !selectedIsVirtualFavorites && !state.isRefreshing && !state.isDeleting,
                     modifier = Modifier.testTag(TAG_PLAYLISTS_REFRESH)
                 ) {
                     Text(if (state.isRefreshing) "Обновление..." else "Обновить сейчас")
                 }
                 OutlinedButton(
                     onClick = viewModel::deleteSelectedPlaylist,
-                    enabled = !state.isRefreshing && !state.isDeleting
+                    enabled = !selectedIsVirtualFavorites && !state.isRefreshing && !state.isDeleting
                 ) {
                     Text(if (state.isDeleting) "Удаление..." else "Удалить выбранный плейлист")
                 }
@@ -187,9 +195,11 @@ fun PlaylistsScreen(
                     ) {
                         Text(if (state.isLoadingCatalog) "Каталог загружается..." else "Открыть каталог")
                     }
-                    onOpenEditor?.let { openEditor ->
-                        OutlinedButton(onClick = { openEditor(selectedPlaylistId) }) {
-                            Text("Открыть редактор")
+                    if (selectedPlaylistId != VIRTUAL_FAVORITES_PLAYLIST_ID) {
+                        onOpenEditor?.let { openEditor ->
+                            OutlinedButton(onClick = { openEditor(selectedPlaylistId) }) {
+                                Text("Открыть редактор")
+                            }
                         }
                     }
                     onOpenPlayer?.let { openPlayer ->
@@ -294,6 +304,12 @@ fun PlaylistsScreen(
                                 "${sourceTypeLabel(playlist.sourceType.name)} · ${playlist.channelCount} каналов",
                                 style = MaterialTheme.typography.bodySmall
                             )
+                            if (playlist.id == VIRTUAL_FAVORITES_PLAYLIST_ID) {
+                                Text(
+                                    "Виртуальный список · физический плейлист не создаётся",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                             if (showDetails) {
                                 Text(
                                     "Источник: ${playlist.source}",
@@ -313,9 +329,11 @@ fun PlaylistsScreen(
                                 Button(onClick = { viewModel.selectPlaylist(playlist.id) }) {
                                     Text(if (selected) "Выбрано" else "Выбрать")
                                 }
-                                onOpenEditor?.let { openEditor ->
-                                    OutlinedButton(onClick = { openEditor(playlist.id) }) {
-                                        Text("Редактировать")
+                                if (playlist.id != VIRTUAL_FAVORITES_PLAYLIST_ID) {
+                                    onOpenEditor?.let { openEditor ->
+                                        OutlinedButton(onClick = { openEditor(playlist.id) }) {
+                                            Text("Редактировать")
+                                        }
                                     }
                                 }
                                 onOpenPlayer?.let { openPlayer ->
