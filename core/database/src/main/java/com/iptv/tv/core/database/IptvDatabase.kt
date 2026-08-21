@@ -5,7 +5,9 @@ import androidx.room.RoomDatabase
 import com.iptv.tv.core.database.dao.ChannelDao
 import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.DownloadDao
+import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteDao
+import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.dao.HistoryDao
 import com.iptv.tv.core.database.dao.ParentalProfileDao
 import com.iptv.tv.core.database.dao.PlaylistDao
@@ -18,7 +20,10 @@ import com.iptv.tv.core.database.dao.TvHomeChannelDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.ChannelMetadataEntity
 import com.iptv.tv.core.database.entity.DownloadEntity
+import com.iptv.tv.core.database.entity.FavoriteChannelEntity
+import com.iptv.tv.core.database.entity.FavoriteChannelVariantEntity
 import com.iptv.tv.core.database.entity.FavoriteEntity
+import com.iptv.tv.core.database.entity.FavoriteLegacySeedEntity
 import com.iptv.tv.core.database.entity.HistoryEntity
 import com.iptv.tv.core.database.entity.ParentalProfileEntity
 import com.iptv.tv.core.database.entity.PlaylistEntity
@@ -34,6 +39,9 @@ import com.iptv.tv.core.database.entity.TvHomeChannelEntity
         PlaylistEntity::class,
         ChannelEntity::class,
         FavoriteEntity::class,
+        FavoriteChannelEntity::class,
+        FavoriteChannelVariantEntity::class,
+        FavoriteLegacySeedEntity::class,
         HistoryEntity::class,
         SyncLogEntity::class,
         DownloadEntity::class,
@@ -45,13 +53,15 @@ import com.iptv.tv.core.database.entity.TvHomeChannelEntity
         ChannelMetadataEntity::class,
         TvHomeChannelEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class IptvDatabase : RoomDatabase() {
     abstract fun playlistDao(): PlaylistDao
     abstract fun channelDao(): ChannelDao
     abstract fun favoriteDao(): FavoriteDao
+    abstract fun favoriteSnapshotDao(): FavoriteSnapshotDao
+    abstract fun favoriteChannelLookupDao(): FavoriteChannelLookupDao
     abstract fun historyDao(): HistoryDao
     abstract fun syncLogDao(): SyncLogDao
     abstract fun downloadDao(): DownloadDao
