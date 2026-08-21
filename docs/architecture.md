@@ -13,7 +13,7 @@
 - `feature/*` — независимые экраны и сценарии;
 - `sync` — фоновые обновления.
 
-Главный экран `feature/home` отвечает за быстрый выбор сохранённого или готового списка. Текущие feature-модули ещё используют существующие локальные `playlistId/channelId`; их постепенная миграция на каноническую иерархию выполняется отдельными PR в рамках Issue #45.
+Главный экран `feature/home` отвечает за быстрый выбор сохранённого или готового списка. Каталожная часть постепенно переводится с локальных `playlistId/channelId` на каноническую иерархию в рамках Issue #45; PR #167 и #168 уже закрыли модель дерева, navigator и реальную интеграцию в `feature:playlists`, при этом legacy lookup IDs остаются payload для существующих repository/Player API.
 
 ## Каноническая модель каталога
 
@@ -34,11 +34,43 @@
 
 `Playlist` и таблица `playlists` хранят `catalogOrigin`. Однозначные provider/file источники получают `PROVIDER`/`LOCAL`; новые импорты из Ready Catalog и Scanner явно записывают `READY_CATALOG`/`SCANNER_IMPORT`. Остальные старые записи остаются `USER_IMPORT`: существующие URL нельзя ретроспективно и надёжно разделить на ручной URL, Ready Catalog и Scanner import.
 
-`LegacyPlaylistCatalogAdapter` переводит текущие `Playlist + Channel` в первый рабочий canonical tree без изменения feature-экранов. Он строит `SOURCE -> PLAYLIST -> GROUP? -> CHANNEL`, использует `ChannelStableIdentity` для channel stable key, а legacy Room `channelId` оставляет только как payload lookup. Несколько concrete rows одного логического канала сохраняются в `channelVariantIdsByNodeId`, поэтому dedup не уничтожает варианты источника. Playlist rename не меняет canonical identity.
+`LegacyPlaylistCatalogAdapter` переводит текущие `Playlist + Channel` в первый рабочий canonical tree без изменения persistence schema. Он строит `SOURCE -> PLAYLIST -> GROUP? -> CHANNEL`, использует `ChannelStableIdentity` для channel stable key, а legacy Room `channelId` оставляет только как payload lookup. Несколько concrete rows одного логического канала сохраняются в `channelVariantIdsByNodeId`, поэтому dedup не уничтожает варианты источника. Playlist rename не меняет canonical identity.
 
 Для legacy source provenance адаптер создаёт только opaque SHA-256 key: URI user-info исключается, password/token/MAC-подобные query values редактируются до хеширования. Для `inline`-импорта, у которого исторически нет внешнего стабильного source id, playlist identity дополнительно получает детерминированный fingerprint набора `ChannelStableIdentity`. Это compatibility-путь для существующих данных, а не замена будущих source-specific IDs.
 
-Явные import adapters для Ready Catalog и Scanner передают origin через `PlaylistRepository`, а `LegacyPlaylistCatalogAdapter` включает его в provenance каждого узла. Provider account IDs, navigation skeleton и Unified Favorites storage выполняются следующими изолированными PR. Это позволяет мигрировать UI постепенно, не меняя уже зафиксированную identity-модель.
+Явные import adapters для Ready Catalog и Scanner передают origin через `PlaylistRepository`, а `LegacyPlaylistCatalogAdapter` включает его в provenance каждого узла. Provider account IDs и Unified Favorites storage выполняются следующими изолированными PR; navigation skeleton больше не является будущим пунктом — он подключён к реальному Playlists feature.
+
+### Canonical navigation runtime
+
+PR #167 добавил pure navigation contract поверх canonical tree. `CanonicalCatalogNavigator` хранит текущий путь, remembered focus для уровней и восстанавливает самый глубокий валидный checkpoint после rebuild дерева. Back никогда не прыгает через несколько уровней: он возвращает к непосредственному parent, а на source root завершает внутреннюю catalog navigation.
+
+PR #168 подключил этот контракт в `feature:playlists`:
+
+```text
+PlaylistRepository.observeChannels(playlistId)
+    ↓
+LegacyPlaylistCatalogAdapter
+    ↓
+CanonicalCatalogNavigator
+    ↓
+PlaylistCatalogNavigationSession / PlaylistCatalogSnapshot
+    ↓
+PlaylistCatalogContent
+    ↓
+exact player/{playlistId}/{channelId}
+```
+
+`PlaylistsViewModel` пересобирает canonical tree из существующего `observeChannels` flow и передаёт предыдущий checkpoint при refresh/re-import. Невалидный хвост пути удаляется, но валидный parent path сохраняется.
+
+`PlaylistCatalogContent` отображает только direct children текущего узла, breadcrumb-контекст и TV-friendly list. Focus хранится по `CatalogNodeId`, а не по позиции. Перед `requestFocus()` список прокручивается к сохранённой строке, поэтому восстановление работает и для элемента вне первоначального LazyColumn viewport.
+
+CHANNEL остаётся leaf. При активации UI сначала фиксирует canonical focus (это важно для mouse/touch, где focus callback может не прийти до click), затем передаёт concrete `channelId` в существующий Player route. После Player пользователь возвращается в прежний hierarchy checkpoint.
+
+Верхняя кнопка приложения «Назад» направляется через Android Back dispatcher. Поэтому hardware/remote Back, верхняя кнопка и внутренний catalog Back используют один child `BackHandler` и одинаковые one-level semantics.
+
+`:feature:playlists:testDebugUnitTest` теперь является постоянным Android CI gate. Regression coverage проверяет начальный `SOURCE -> PLAYLIST`, enter/back round-trip группы, сохранение channel focus после rebuild, fallback при удалённой группе, leaf semantics CHANNEL и завершение Back на source root.
+
+Пользовательское описание находится в [`USER_GUIDE.md`](USER_GUIDE.md), а краткая встроенная справка — в `AboutScreen`.
 
 ## P2P / Ace transport boundary
 
@@ -127,10 +159,10 @@ P2P recovery уже способен выдать typed output discontinuity п�
 
 1. завершить кодовую regression-baseline TV navigation (#40), а реальную BlueStacks/TV Box приёмку вести параллельно;
 2. довести автономный P2P/Ace Live runtime до устойчивого startup/sustained playback: V1 adaptive prebuffer завершён, V2 peer quality/diagnostics продолжается, затем scheduler feedback, player/TS boundary и hardware acceptance (#44);
-3. стабилизировать canonical catalog identity/provenance и unified Favorites (#45);
+3. canonical catalog identity/provenance и Playlists navigation уже стабилизированы PR #167/#168; следующий изолированный этап — Unified Favorites persistence и aggregate views (#45);
 4. построить EPG/Now-Next/real archive поверх стабильной channel identity (#47);
 5. переработать Player UX поверх готовых Catalog + P2P + EPG contracts (#46);
-6. завершить contextual Help и пользовательскую документацию после стабилизации экранов (#43);
+6. catalog user guide и встроенная catalog Help добавляются в текущем docs-sync инкременте; contextual Help остальных экранов продолжает отдельную задачу #43;
 7. выполнить hardware/soak/release gate и только после этого закрыть master-roadmap #44.
 
 Защищённые области при UI/плеерных изменениях:
