@@ -92,9 +92,15 @@ Back не должен перескакивать через несколько 
 
 ### Экспорт
 
-На экране Favorites уже доступны TXT и M3U8 export representative каналов. M3U8 предназначен для совместимости с обычными IPTV-приложениями и устройствами.
+На экране Favorites доступны три варианта экспорта:
 
-Полный переносимый backup с сохранением logical identity, provenance и всех source variants является следующим отдельным roadmap-инкрементом. Обычный M3U/M3U8 не должен считаться полной резервной копией внутренних Favorites metadata.
+- **«Сохранить TXT»** — читаемый список Favorites. Для favorite без безопасного URL метаданные сохраняются, а URL записывается как `[REDACTED]`;
+- **«Сохранить M3U8»** — совместимый IPTV-плейлист. Если preferred source содержит credentials, приложение пытается выбрать безопасный alternate variant; favorite без безопасного URL в M3U8 не записывается;
+- **«Сохранить RIPTV»** — полный versioned backup Rinat IPTV (`.riptv`) с logical identity, provenance и source variants.
+
+Во всех стандартных export-режимах действует единая безопасная политика: provider credentials, MAC/API keys/tokens и credential-bearing URLs не записываются в файл по умолчанию. Полный `.riptv` backup также редактирует такие stream URLs, сохраняя при этом безопасные metadata/identity для последующего merge/relink.
+
+Обычный TXT/M3U8 остаётся форматом обмена и не является полной резервной копией внутренних Favorites metadata. Импорт `.riptv` через системный file picker реализуется отдельным следующим инкрементом.
 
 ## Player
 
@@ -115,11 +121,13 @@ Back не должен перескакивать через несколько 
 
 ## Статус реализации
 
-На 21 августа 2026 года:
+На 22 августа 2026 года:
 
 - PR #167/#168 закрыли canonical tree/navigation, реальный Playlists UI, exact-channel Player route, one-level Back и focus restoration;
 - PR #170 ввёл durable Favorites persistence с logical identity и source variants;
 - PR #171 добавил единый favorite playback resolver для live и persisted variants;
-- PR #172 подключил Favorites как системный virtual aggregate к существующему canonical catalog и Player; exact-head Database CI #8 и Android CI #704 полностью прошли перед merge.
+- PR #172 подключил Favorites как системный virtual aggregate к существующему canonical catalog и Player;
+- PR #174 добавил versioned portable Favorites backup/import backend с безопасной credential policy;
+- текущий safe-export increment переводит TXT/M3U8 на тот же data-layer policy и открывает `.riptv` export в Favorites UI.
 
-Следующий этап #45 — versioned portable Favorites backup/import, затем source-variant picker и остальные aggregate views/performance hardening.
+Следующий этап #45 — `.riptv` import через системный file picker, затем source-variant picker и остальные aggregate views/performance hardening.
