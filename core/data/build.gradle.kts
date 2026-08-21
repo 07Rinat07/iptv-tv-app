@@ -37,6 +37,7 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.documentfile)
     implementation(libs.okhttp)
+    implementation(libs.org.json)
 
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)
@@ -45,7 +46,6 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
-    testImplementation(libs.org.json)
     testImplementation(libs.kxml2)
 }
 
