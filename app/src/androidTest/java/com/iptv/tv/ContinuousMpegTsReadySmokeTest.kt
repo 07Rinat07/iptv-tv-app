@@ -21,7 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -78,13 +78,20 @@ class ContinuousMpegTsReadySmokeTest {
 
             try {
                 val startedAt = SystemClock.elapsedRealtime()
-                val result = withTimeout(READY_TIMEOUT_MS) {
+                val result = withTimeoutOrNull(READY_TIMEOUT_MS) {
                     select<String> {
                         ready.onAwait { readyAt -> "ready:${readyAt - startedAt}" }
                         failure.onAwait { message -> "failure:$message" }
                     }
                 }
-                assertTrue("Continuous MPEG-TS did not reach READY: $result", result.startsWith("ready:"))
+                val playbackState = withContext(Dispatchers.Main) { player.playbackState }
+                assertTrue(
+                    "Continuous MPEG-TS did not reach READY: result=${result ?: "timeout"} " +
+                        "connected=${server.clientConnected} bytesSent=${server.bytesSent} " +
+                        "fixtureFullySent=${server.fixtureFullySent} responseEnded=${server.responseEnded} " +
+                        "serverFailure=${server.failure?.message} playerState=$playbackState",
+                    result?.startsWith("ready:") == true
+                )
                 assertTrue("Media3 never connected to the live HTTP fixture", server.clientConnected)
                 assertTrue("Media3 reached READY without receiving TS bytes", server.bytesSent > 0L)
                 assertFalse(
@@ -112,6 +119,7 @@ class ContinuousMpegTsReadySmokeTest {
         private val connected = AtomicBoolean(false)
         private val ended = AtomicBoolean(false)
         private val sent = AtomicLong(0L)
+        private val fullySent = AtomicBoolean(false)
         private val workerFailure = AtomicReference<Throwable?>(null)
         private val server = ServerSocket(0, 1, InetAddress.getByName(LOOPBACK_HOST))
         private val worker = thread(
@@ -140,16 +148,21 @@ class ContinuousMpegTsReadySmokeTest {
                     )
                     output.flush()
 
+                    var offset = 0
+                    while (offset < fixture.size && !closed.get()) {
+                        val count = minOf(STREAM_CHUNK_BYTES, fixture.size - offset)
+                        output.write(fixture, offset, count)
+                        output.flush()
+                        sent.addAndGet(count.toLong())
+                        offset += count
+                        Thread.sleep(STREAM_CHUNK_DELAY_MS)
+                    }
+                    fullySent.set(offset == fixture.size)
+
+                    // Keep the identity-framed HTTP response open without replaying the fixture.
+                    // Replaying it would jump PCR/PTS back to the beginning on every loop.
                     while (!closed.get()) {
-                        var offset = 0
-                        while (offset < fixture.size && !closed.get()) {
-                            val count = minOf(STREAM_CHUNK_BYTES, fixture.size - offset)
-                            output.write(fixture, offset, count)
-                            output.flush()
-                            sent.addAndGet(count.toLong())
-                            offset += count
-                            Thread.sleep(STREAM_CHUNK_DELAY_MS)
-                        }
+                        Thread.sleep(RESPONSE_HOLD_OPEN_POLL_MS)
                     }
                 }
             } catch (error: Throwable) {
@@ -163,6 +176,7 @@ class ContinuousMpegTsReadySmokeTest {
         val clientConnected: Boolean get() = connected.get()
         val responseEnded: Boolean get() = ended.get()
         val bytesSent: Long get() = sent.get()
+        val fixtureFullySent: Boolean get() = fullySent.get()
         val failure: Throwable? get() = workerFailure.get()
 
         override fun close() {
@@ -179,5 +193,6 @@ class ContinuousMpegTsReadySmokeTest {
         const val READY_TIMEOUT_MS = 10_000L
         const val STREAM_CHUNK_BYTES = 188 * 7
         const val STREAM_CHUNK_DELAY_MS = 20L
+        const val RESPONSE_HOLD_OPEN_POLL_MS = 50L
     }
 }
