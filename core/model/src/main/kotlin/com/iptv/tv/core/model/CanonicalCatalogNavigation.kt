@@ -180,10 +180,11 @@ class CanonicalCatalogNavigator(nodes: List<CanonicalCatalogNode>) {
             val visited = mutableSetOf<CatalogNodeId>()
             var current: CanonicalCatalogNode? = start
             while (current != null) {
-                require(visited.add(current.id)) {
-                    "Canonical catalog hierarchy contains a cycle at ${current.id}"
+                val currentNode = current
+                require(visited.add(currentNode.id)) {
+                    "Canonical catalog hierarchy contains a cycle at ${currentNode.id}"
                 }
-                current = current.parentId?.let(nodesById::get)
+                current = currentNode.parentId?.let(nodesById::get)
             }
         }
     }
