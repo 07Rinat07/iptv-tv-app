@@ -1,0 +1,129 @@
+package com.iptv.tv.feature.playlists
+
+import com.iptv.tv.core.model.CanonicalCatalogNavigator
+import com.iptv.tv.core.model.CatalogNavigationState
+import com.iptv.tv.core.model.CatalogNodeId
+import com.iptv.tv.core.model.CatalogNodeKind
+import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.LegacyPlaylistCatalogAdapter
+import com.iptv.tv.core.model.Playlist
+
+/** One canonical breadcrumb rendered by the playlists feature. */
+data class PlaylistCatalogBreadcrumb(
+    val nodeId: CatalogNodeId,
+    val kind: CatalogNodeKind,
+    val name: String
+)
+
+/** One direct child of the current canonical catalog container. */
+data class PlaylistCatalogEntry(
+    val nodeId: CatalogNodeId,
+    val kind: CatalogNodeKind,
+    val name: String,
+    /** Concrete legacy row used only when opening Player. Canonical identity remains [nodeId]. */
+    val channelId: Long? = null
+) {
+    val isChannel: Boolean
+        get() = kind == CatalogNodeKind.CHANNEL
+}
+
+/** UI-neutral snapshot consumed by [PlaylistsScreen]. */
+data class PlaylistCatalogSnapshot(
+    val playlistId: Long,
+    val currentNodeId: CatalogNodeId,
+    val currentTitle: String,
+    val breadcrumbs: List<PlaylistCatalogBreadcrumb>,
+    val entries: List<PlaylistCatalogEntry>,
+    val restoredFocusId: CatalogNodeId?,
+    val canGoBack: Boolean
+)
+
+/**
+ * Feature-layer bridge between legacy Playlist/Channel storage and the canonical catalog navigator.
+ *
+ * The mutable part is intentionally tiny: only the canonical navigation checkpoint changes. A
+ * rebuilt playlist tree can therefore restore the deepest still-valid path/focus by stable
+ * canonical ids instead of by transient Room row ids or list indexes.
+ */
+class PlaylistCatalogNavigationSession private constructor(
+    private val playlistId: Long,
+    private val navigator: CanonicalCatalogNavigator,
+    private val channelIdByNodeId: Map<CatalogNodeId, Long>,
+    private var navigationState: CatalogNavigationState
+) {
+    fun checkpoint(): CatalogNavigationState = navigationState
+
+    fun snapshot(): PlaylistCatalogSnapshot {
+        val context = navigator.context(navigationState)
+        return PlaylistCatalogSnapshot(
+            playlistId = playlistId,
+            currentNodeId = context.currentNode.id,
+            currentTitle = context.currentNode.name,
+            breadcrumbs = context.breadcrumbs.map { node ->
+                PlaylistCatalogBreadcrumb(
+                    nodeId = node.id,
+                    kind = node.kind,
+                    name = node.name
+                )
+            },
+            entries = context.children.map { node ->
+                PlaylistCatalogEntry(
+                    nodeId = node.id,
+                    kind = node.kind,
+                    name = node.name,
+                    channelId = channelIdByNodeId[node.id]
+                )
+            },
+            restoredFocusId = context.restoredFocusId,
+            canGoBack = navigationState.path.size > 1
+        )
+    }
+
+    /** Records focus before Player launch so returning to this destination restores the same row. */
+    fun focus(nodeId: CatalogNodeId) {
+        navigationState = navigator.focus(navigationState, nodeId)
+    }
+
+    /** Enters a direct child container. Channel leaves are deliberately opened by Player instead. */
+    fun enter(nodeId: CatalogNodeId): Boolean {
+        val entry = snapshot().entries.firstOrNull { it.nodeId == nodeId } ?: return false
+        if (entry.isChannel) return false
+        navigationState = navigator.enter(navigationState, nodeId)
+        return true
+    }
+
+    /** Moves exactly one canonical hierarchy level up; returns false only at the source root. */
+    fun back(): Boolean {
+        if (navigationState.path.size <= 1) return false
+        navigationState = navigator.back(navigationState)
+        return true
+    }
+
+    companion object {
+        fun create(
+            playlist: Playlist,
+            channels: List<Channel>,
+            previousCheckpoint: CatalogNavigationState? = null
+        ): PlaylistCatalogNavigationSession {
+            val tree = LegacyPlaylistCatalogAdapter.build(playlist = playlist, channels = channels)
+            val navigator = CanonicalCatalogNavigator(tree.nodes)
+            val initialState = previousCheckpoint
+                ?.let { checkpoint ->
+                    runCatching {
+                        navigator.restore(checkpoint, fallbackNodeId = tree.playlistNodeId)
+                    }.getOrNull()
+                }
+                ?: navigator.initial(tree.playlistNodeId)
+            val channelIdByNodeId = tree.channelVariantIdsByNodeId.mapValues { (_, variants) ->
+                variants.first()
+            }
+
+            return PlaylistCatalogNavigationSession(
+                playlistId = playlist.id,
+                navigator = navigator,
+                channelIdByNodeId = channelIdByNodeId,
+                navigationState = initialState
+            )
+        }
+    }
+}
