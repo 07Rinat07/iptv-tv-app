@@ -60,6 +60,54 @@ class AceLiveEmbeddedEngineTest {
     }
 
     @Test
+    fun rapidABCGenerationAllowsOnlyNewestTimeoutCleanupToCloseRuntime() = runBlocking {
+        val generation = AtomicLong(1L)
+        val mutex = Mutex(locked = true)
+        val closedBy = mutableListOf<String>()
+
+        val cleanupA = launch {
+            cleanupTimedOutAceLivePreparation(
+                expectedGeneration = 1L,
+                currentGeneration = generation::get,
+                operationMutex = mutex,
+                closeActive = { closedBy += "A" }
+            )
+        }
+        yield()
+
+        generation.set(2L)
+        val cleanupB = launch {
+            cleanupTimedOutAceLivePreparation(
+                expectedGeneration = 2L,
+                currentGeneration = generation::get,
+                operationMutex = mutex,
+                closeActive = { closedBy += "B" }
+            )
+        }
+        yield()
+
+        generation.set(3L)
+        val cleanupC = launch {
+            cleanupTimedOutAceLivePreparation(
+                expectedGeneration = 3L,
+                currentGeneration = generation::get,
+                operationMutex = mutex,
+                closeActive = { closedBy += "C" }
+            )
+        }
+        yield()
+
+        mutex.unlock()
+        withTimeout(1_000L) {
+            cleanupA.join()
+            cleanupB.join()
+            cleanupC.join()
+        }
+
+        assertEquals(listOf("C"), closedBy)
+    }
+
+    @Test
     fun directStartupGraceUsesCurrentRuntimeQualityInsteadOfHistoricalTimeline() {
         assertTrue(
             aceLiveDirectStartupHasQualificationProgress(
