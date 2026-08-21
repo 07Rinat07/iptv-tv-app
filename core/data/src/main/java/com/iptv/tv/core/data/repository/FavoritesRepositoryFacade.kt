@@ -9,6 +9,8 @@ import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.FavoritesPortableExport
 import com.iptv.tv.core.model.FavoritesPortableImportResult
+import com.iptv.tv.core.model.FavoritesShareableExport
+import com.iptv.tv.core.model.FavoritesShareableExportFormat
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -27,7 +29,8 @@ class FavoritesRepositoryFacade @Inject constructor(
     private val delegate: UnifiedFavoritesRepositoryImpl,
     private val favoriteSnapshotDao: FavoriteSnapshotDao,
     private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
-    private val portableBackupService: FavoritesPortableBackupService
+    private val portableBackupService: FavoritesPortableBackupService,
+    private val shareableExportService: FavoritesShareableExportService
 ) : FavoritesRepository by delegate {
     override fun observeFavorites(): Flow<List<Channel>> {
         return combine(
@@ -52,6 +55,10 @@ class FavoritesRepositoryFacade @Inject constructor(
             favoriteRepresentativeIds(liveIds, representatives)
         }
     }
+
+    override suspend fun exportShareableFavorites(
+        format: FavoritesShareableExportFormat
+    ): FavoritesShareableExport = shareableExportService.export(format)
 
     override suspend fun exportPortableBackup(): FavoritesPortableExport =
         portableBackupService.exportPortableBackup()
