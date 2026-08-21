@@ -92,11 +92,19 @@ V1 исправил дефект startup prebuffer: discovery/handshake latency 
 0. **Issue #40 — regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
 1. **Playback safety acceptance — EPG OOM.** Код PR #100 слит: streaming XMLTV, bounded memory/cache, negative-cache, serialized load и low-memory fail-safe. Ручные логи после фикса не показывают возврата прежнего OOM в просмотренном окне; hardware regression продолжает входить в release gate.
 2. **Master #44 — автономный P2P/Ace Live engine.** Это текущий главный приоритет. Ownership/rapid-zap базовые гонки закрыты PR #103/#105; adaptive streaming core прошёл V1–V3 и V4a/V4b. Текущий порядок внутри #44: `V4c TS/discontinuity hardening → V4d startup/zap latency parity → fixed A/B matrix → weak-network/peer-loss/soak acceptance`.
-3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** Продолжать после стабилизации критического playback path; PR #106 уже обеспечивает полный Torrent TV выбор без временного availability-filter.
+3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** Identity/provenance и пользовательская navigation часть закрыты PR #167/#168; текущий docs/help sync фиксирует поведение. Следующий кодовый этап — Unified Favorites persistence, затем dedup/source variants, virtual views и performance hardening.
 4. **Issue #47 — EPG / Now-Next / real archive.** Полноценный ingestion/cache/matching/catch-up redesign строить поверх стабильной channel identity из #45.
 5. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
-6. **Issue #43 — contextual Help + built-in Help + docs baseline.** Завершать после стабилизации основных экранов, чтобы не переписывать подсказки после Catalog/EPG/Player изменений.
+6. **Issue #43 — contextual Help + built-in Help + docs baseline.** Catalog navigation уже имеет встроенную краткую справку и `USER_GUIDE`; полное contextual покрытие остальных экранов продолжить после стабилизации Catalog/EPG/Player.
 7. **Master #44 release gate.** Hardware/playback hardening, автономная P2P acceptance, D-pad-only/mouse-only sessions, weak network, 2h/8h soak, signed release и финальная синхронизация docs. Только после этого закрывать #44 и объявлять stable.
+
+## Статус B5 / Issue #45 — 21 августа 2026
+
+- ✅ PR #167 — canonical tree navigation contract: path/checkpoint, breadcrumb context, one-level Back и stable focus semantics.
+- ✅ PR #168 — реальная интеграция в `feature:playlists`: `observeChannels → LegacyPlaylistCatalogAdapter → CanonicalCatalogNavigator → UI`, exact `playlistId + channelId` route в Player, off-screen focus restore и единый Android Back dispatcher. Exact-head Android CI #693 полностью зелёный; `:feature:playlists:testDebugUnitTest` стал постоянным gate.
+- 🚧 Текущий docs/help sync — README, ROADMAP, architecture, `USER_GUIDE` и встроенная catalog Help должны описывать только уже слитое поведение.
+- ⏳ Следующий кодовый инкремент — Unified Favorites persistence поверх `ChannelStableIdentity` с сохранением provenance/source variants.
+- ⏳ Затем — dedup/re-import policy, virtual aggregate views и performance/non-blocking rebuild проверки.
 
 ## Этап 1: canonical catalog hierarchy и provenance (#45)
 
@@ -107,13 +115,13 @@ V1 исправил дефект startup prebuffer: discovery/handshake latency 
 1. ✅ Введены в `core/model` стабильные `CatalogNodeId`, `CatalogNodeKind`, `CatalogProvenance` и parent/order contract без зависимости от Room auto-generated id.
 2. ✅ Общий `ChannelStableIdentity` синхронизирует логическую identity канала между canonical catalog и существующим global Favorites.
 3. ✅ Persist provenance: `catalogOrigin` сохраняется в Room/domain; provider/local источники, Ready Catalog и Scanner imports получают однозначный origin, который попадает в canonical tree.
-4. Построить navigation skeleton с predictable Back, breadcrumb-equivalent context и focus restore.
-5. Перевести Favorites на единый агрегированный слой, сохраняя исходный playlist/group/channel provenance.
+4. ✅ PR #167/#168: navigation skeleton подключён к реальному Playlists UI — predictable one-level Back, breadcrumb context, exact-channel Player route и focus restore после Player/rebuild.
+5. 🚧 Перевести Favorites на единый агрегированный persistence слой, сохраняя исходный playlist/group/channel provenance и варианты источника.
 6. Добавить dedup и source variants так, чтобы повторный импорт не плодил безымянные копии.
 7. Добавить virtual views: All channels, Favorites, Recent/History, позднее Now/Next/EPG/archive/P2P filters.
 8. Проверить lazy rendering, кэш подготовленной структуры и non-blocking rebuild больших наборов.
 
-Первый contract-инкремент не менял Room/UI/Player/EPG. Следующий provenance-инкремент добавляет безопасное хранение происхождения и консервативную классификацию однозначных provider/local источников; Scanner search/query semantics, Player и EPG при этом не меняются.
+Contract/identity/provenance и пользовательский navigation path уже слиты отдельными малыми PR. Следующий production-инкремент не должен переписывать Scanner discovery/query или Player policy: он меняет только Favorites persistence/aggregation поверх общей `ChannelStableIdentity`. Документация и встроенная catalog Help синхронизируются отдельным docs PR перед началом этой migration.
 
 ## Этап 2: встроенный P2P engine и Ace transport
 
@@ -201,9 +209,9 @@ V1 исправил дефект startup prebuffer: discovery/handshake latency 
 
 1. Добавить reusable helper components, читаемые с TV-distance и доступные D-pad/mouse.
 2. Покрыть Home, Scanner, Importer, catalogs, Editor, Favorites, History, EPG/Archive, Player, Downloads, Settings, Network Test, Diagnostics и About.
-3. Создать top-level `Помощь / Инструкция` с быстрым стартом, каталогами, Scanner, Favorites, Player, EPG/archive, remote/mouse, P2P status и troubleshooting.
-4. Создать/поддерживать `docs/USER_GUIDE.md`, `docs/TROUBLESHOOTING.md`, `docs/REMOTE_AND_MOUSE.md` и при необходимости `docs/CATALOG_AND_EPG.md`.
-5. Синхронизировать README, ROADMAP, architecture, testing/release docs и встроенный Help с фактическим поведением.
+3. 🚧 Catalog navigation имеет встроенную краткую Help-карточку в About; отдельный top-level `Помощь / Инструкция` для всех функций остаётся задачей #43.
+4. 🚧 `docs/USER_GUIDE.md` создан и покрывает catalog navigation; `docs/TROUBLESHOOTING.md`, `docs/REMOTE_AND_MOUSE.md` и дополнительное тематическое покрытие добавлять по мере стабилизации остальных экранов.
+5. 🚧 README, ROADMAP и architecture синхронизируются с фактическим canonical catalog поведением в текущем docs/help PR; testing/release docs обновлять при изменении соответствующих acceptance contracts.
 
 ## Issue #40: кодовая baseline завершена, ручная TV-приёмка продолжается
 
@@ -217,19 +225,20 @@ V1 исправил дефект startup prebuffer: discovery/handshake latency 
 ## Приёмка перед стабильным релизом
 
 1. Проверить D-pad, оптическую мышь и тачпад на BlueStacks 5, слабом и среднем TV Box.
-2. Проверить готовые списки и Media3 → LibVLC fallback на реальных потоках.
-3. Проверить rapid-zap обычного IPTV на 256-MiB/аналогичном heap: malformed/large EPG не должен вызывать OOM/crash.
-4. Проверить magnet/torrent и реальные Torrent TV источники через **только встроенный** P2P engine; отсутствие внешнего Ace Engine является нормальной тестовой конфигурацией.
-5. До broad acceptance закрыть V4d startup/zap blocker: фиксировать полный startup timeline, HTTP reader reopen reason и Media3 load/retry path; здоровые same-device A/B каналы должны стремиться к диапазону 2–4 s и не иметь систематически худшую успешность запуска относительно benchmark.
-6. Проверить, что Torrent TV live-буфер продолжает пополняться после старта, а producer/consumer rate, buffer seconds, rebuffer и stall измеряются; pre-READY parser burst не должен ошибочно считаться устойчивой playback consumption rate.
-7. Выполнить серию из 20 переключений без зависшей старой P2P-сессии; долгое ожидание должно завершаться ограниченной ошибкой.
-8. Проверить деградацию одного/нескольких producing peers: playback либо восстанавливается в bounded budget, либо выдаёт точную причину без бесконечного retry.
-9. Проверить EPG на нескольких независимых XMLTV/провайдерских источниках, включая malformed и oversized fixture.
-10. Выполнить минимум двухчасовой тест непрерывного просмотра.
-11. Выполнить восьмичасовой soak-тест перед стабильным релизом.
-12. Проверить слабую сеть: 2–5 Мбит/с, задержка 120–250 мс, потеря 1–3%.
-13. Подготовить production keystore, собрать подписанный APK и проверить подпись.
-14. Заполнить отчёт приёмки и создать GitHub Release.
+2. Проверить canonical catalog на реальном устройстве: breadcrumb, one-level Back, exact-channel launch и возврат focus после Player/refresh длинного списка.
+3. Проверить готовые списки и Media3 → LibVLC fallback на реальных потоках.
+4. Проверить rapid-zap обычного IPTV на 256-MiB/аналогичном heap: malformed/large EPG не должен вызывать OOM/crash.
+5. Проверить magnet/torrent и реальные Torrent TV источники через **только встроенный** P2P engine; отсутствие внешнего Ace Engine является нормальной тестовой конфигурацией.
+6. До broad acceptance закрыть V4d startup/zap blocker: фиксировать полный startup timeline, HTTP reader reopen reason и Media3 load/retry path; здоровые same-device A/B каналы должны стремиться к диапазону 2–4 s и не иметь систематически худшую успешность запуска относительно benchmark.
+7. Проверить, что Torrent TV live-буфер продолжает пополняться после старта, а producer/consumer rate, buffer seconds, rebuffer и stall измеряются; pre-READY parser burst не должен ошибочно считаться устойчивой playback consumption rate.
+8. Выполнить серию из 20 переключений без зависшей старой P2P-сессии; долгое ожидание должно завершаться ограниченной ошибкой.
+9. Проверить деградацию одного/нескольких producing peers: playback либо восстанавливается в bounded budget, либо выдаёт точную причину без бесконечного retry.
+10. Проверить EPG на нескольких независимых XMLTV/провайдерских источниках, включая malformed и oversized fixture.
+11. Выполнить минимум двухчасовой тест непрерывного просмотра.
+12. Выполнить восьмичасовой soak-тест перед стабильным релизом.
+13. Проверить слабую сеть: 2–5 Мбит/с, задержка 120–250 мс, потеря 1–3%.
+14. Подготовить production keystore, собрать подписанный APK и проверить подпись.
+15. Заполнить отчёт приёмки и создать GitHub Release.
 
 ## После релиза
 
