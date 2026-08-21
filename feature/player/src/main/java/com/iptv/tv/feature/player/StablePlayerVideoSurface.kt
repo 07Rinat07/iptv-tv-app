@@ -314,6 +314,22 @@ private fun StableMedia3VideoSurface(
     DisposableEffect(session.sessionId, player) {
         fun emitP2pBoundaryTelemetry(telemetry: P2pPlayerBoundaryTelemetry) {
             onP2pBoundaryTelemetry(telemetry)
+            if (telemetry.event == P2pPlayerBoundaryEventType.TERMINAL) {
+                FileLogger.write(
+                    context = context,
+                    level = "INFO",
+                    tag = "P2pBoundarySession",
+                    message = "event=terminal, sessionId=${telemetry.sessionId}, " +
+                        "requestId=${session.requestId}, elapsed_ms=${telemetry.elapsedSincePlaybackStartMillis}, " +
+                        "ready=${telemetry.readySeen}, first_audio=${telemetry.firstAudioSeen}, " +
+                        "first_video_frame=${telemetry.firstVideoFrameSeen}, " +
+                        "rebuffer_count=${telemetry.rebufferCount}, " +
+                        "rebuffer_ms=${telemetry.totalRebufferDurationMillis}, " +
+                        "load_attempts=${telemetry.loadAttemptCount}, " +
+                        "load_completed=${telemetry.loadCompletedCount}, " +
+                        "load_errors=${telemetry.loadErrorCount}, load_retries=${telemetry.loadRetryCount}"
+                )
+            }
             val evidence = telemetry.loadEvidence ?: return
             FileLogger.write(
                 context = context,
@@ -488,6 +504,9 @@ private fun StableMedia3VideoSurface(
         }.onFailure { onError(it.message ?: it.javaClass.simpleName) }
 
         onDispose {
+            p2pBoundaryTelemetryTracker
+                ?.onTerminal(System.currentTimeMillis())
+                ?.let(::emitP2pBoundaryTelemetry)
             player.removeAnalyticsListener(analyticsListener)
             player.removeListener(listener)
         }
