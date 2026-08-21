@@ -4,7 +4,6 @@ import com.iptv.tv.core.data.repository.ChannelMetadataRepositoryImpl
 import com.iptv.tv.core.data.repository.CoalescingEngineRepository
 import com.iptv.tv.core.data.repository.DiagnosticsRepositoryImpl
 import com.iptv.tv.core.data.repository.DownloadRepositoryImpl
-import com.iptv.tv.core.data.repository.FavoritesRepositoryImpl
 import com.iptv.tv.core.data.repository.HistoryRepositoryImpl
 import com.iptv.tv.core.data.repository.PlaylistEditorRepositoryImpl
 import com.iptv.tv.core.data.repository.PlaylistRepositoryImpl
@@ -13,6 +12,7 @@ import com.iptv.tv.core.data.repository.RecordingRepositoryImpl
 import com.iptv.tv.core.data.repository.ScannerRepositoryImpl
 import com.iptv.tv.core.data.repository.SettingsRepositoryImpl
 import com.iptv.tv.core.data.repository.TvHomeIntegrationRepositoryImpl
+import com.iptv.tv.core.data.repository.UnifiedFavoritesRepositoryImpl
 import com.iptv.tv.core.domain.repository.ChannelMetadataRepository
 import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.DownloadRepository
@@ -55,7 +55,7 @@ abstract class RepositoryBindings {
 
     @Binds
     @Singleton
-    abstract fun bindFavoritesRepository(impl: FavoritesRepositoryImpl): FavoritesRepository
+    abstract fun bindFavoritesRepository(impl: UnifiedFavoritesRepositoryImpl): FavoritesRepository
 
     @Binds
     @Singleton
