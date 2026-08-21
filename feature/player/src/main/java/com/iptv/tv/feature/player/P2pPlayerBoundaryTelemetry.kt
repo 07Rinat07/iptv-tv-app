@@ -8,7 +8,8 @@ internal enum class P2pPlayerBoundaryEventType(val wireName: String) {
     BUFFERING("buffering"),
     READY("ready"),
     FIRST_AUDIO("first_audio"),
-    FIRST_VIDEO_FRAME("first_video_frame")
+    FIRST_VIDEO_FRAME("first_video_frame"),
+    TERMINAL("terminal")
 }
 
 internal data class P2pLoadBoundaryEvidence(
@@ -32,7 +33,10 @@ internal data class P2pPlayerBoundaryTelemetry(
     val loadErrorCount: Int = 0,
     val loadRetryCount: Int = 0,
     val loadEventDurationMillis: Long = 0L,
-    val loadEvidence: P2pLoadBoundaryEvidence? = null
+    val loadEvidence: P2pLoadBoundaryEvidence? = null,
+    val readySeen: Boolean = false,
+    val firstAudioSeen: Boolean = false,
+    val firstVideoFrameSeen: Boolean = false
 )
 
 /**
@@ -47,6 +51,10 @@ internal data class P2pPlayerBoundaryTelemetry(
  * and first LOAD_COMPLETED are emitted by this tracker. LOAD_ERROR and explicit LOAD_RETRY remain
  * observable because they are sparse failure/recovery evidence. Counters still advance for every
  * observed load callback so later error/retry records retain the amount of preceding load activity.
+ *
+ * A terminal snapshot is emitted at most once when the Media3 session leaves composition. It keeps
+ * READY, first-audio and first-video evidence together with the cumulative load/rebuffer counters so
+ * field analysis can count rendered sessions directly instead of inferring success from load start.
  *
  * The tracker is observational only. It owns no retry, seek, timeout, LoadControl or P2P policy.
  */
@@ -63,6 +71,7 @@ internal class P2pPlayerBoundaryTelemetryTracker(
     private var firstAudioReported = false
     private var firstLoadStartedReported = false
     private var firstLoadCompletedReported = false
+    private var terminalReported = false
     private var loadAttemptCount = 0
     private var loadCompletedCount = 0
     private var loadErrorCount = 0
@@ -174,6 +183,24 @@ internal class P2pPlayerBoundaryTelemetryTracker(
         return snapshot(P2pPlayerBoundaryEventType.FIRST_VIDEO_FRAME, nowMillis)
     }
 
+    fun onTerminal(nowMillis: Long): P2pPlayerBoundaryTelemetry? {
+        validateClock(nowMillis)
+        if (terminalReported) return null
+        terminalReported = true
+
+        val bufferingStartedAt = bufferingSinceMillis
+        if (bufferingStartedAt != null && bufferingIsRebuffer) {
+            totalRebufferDurationMillis = saturatingAdd(
+                totalRebufferDurationMillis,
+                elapsedSince(bufferingStartedAt, nowMillis)
+            )
+        }
+        bufferingSinceMillis = null
+        bufferingIsRebuffer = false
+
+        return snapshot(P2pPlayerBoundaryEventType.TERMINAL, nowMillis)
+    }
+
     private fun snapshot(
         event: P2pPlayerBoundaryEventType,
         nowMillis: Long,
@@ -201,7 +228,10 @@ internal class P2pPlayerBoundaryTelemetryTracker(
             loadErrorCount = loadErrorCount,
             loadRetryCount = loadRetryCount,
             loadEventDurationMillis = loadEventDurationMillis,
-            loadEvidence = loadEvidence
+            loadEvidence = loadEvidence,
+            readySeen = readySeen,
+            firstAudioSeen = firstAudioReported,
+            firstVideoFrameSeen = firstFrameReported
         )
     }
 
