@@ -5,9 +5,15 @@
 ## С чего начинать
 
 - [`PROJECT_STATUS_AND_ROADMAP.md`](PROJECT_STATUS_AND_ROADMAP.md) — **канонический текущий статус проекта, активный blocker, merge gates и порядок следующих решений**. Если старый датированный roadmap называет другой «текущий increment», приоритет имеет этот файл.
-- [`USER_GUIDE.md`](USER_GUIDE.md) — пользовательское управление, «Мои плейлисты», canonical catalog, Back/focus restore, Player и базовая диагностика.
+- [`USER_GUIDE.md`](USER_GUIDE.md) — пользовательское управление, «Мои плейлисты», canonical catalog, durable unified Favorites, системный virtual Favorites list, Back/focus restore, Player и базовая диагностика.
 - [`ROADMAP.md`](ROADMAP.md) — длинная история выполненных и следующих этапов проекта.
 - [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md) — подтверждённый статус IPTV/Torrent TV, известные проблемы и критерии готовности.
+
+## Catalog / Favorites
+
+- [`architecture.md`](architecture.md) — canonical hierarchy, navigation runtime, logical channel identity и границы каталог/Favorites/P2P.
+- [`USER_GUIDE.md`](USER_GUIDE.md) — фактический пользовательский сценарий: ordinary playlists, системное `Избранное`, сохранение favorites после удаления источника и текущий export scope.
+- `PROJECT_STATUS_AND_ROADMAP.md` — текущая последовательность Issue #45: durable persistence и virtual Player consumer закрыты; следующий bounded production increment — versioned portable Favorites backup/import, затем source-variant picker и оставшиеся aggregate/performance этапы.
 
 ## Ace Live / P2P
 

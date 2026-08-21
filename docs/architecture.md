@@ -13,7 +13,7 @@
 - `feature/*` — независимые экраны и сценарии;
 - `sync` — фоновые обновления.
 
-Главный экран `feature/home` отвечает за быстрый выбор сохранённого или готового списка. Каталожная часть постепенно переводится с локальных `playlistId/channelId` на каноническую иерархию в рамках Issue #45; PR #167 и #168 уже закрыли модель дерева, navigator и реальную интеграцию в `feature:playlists`, при этом legacy lookup IDs остаются payload для существующих repository/Player API.
+Главный экран `feature/home` отвечает за быстрый выбор сохранённого или готового списка. Каталожная часть постепенно переводится с локальных `playlistId/channelId` на каноническую иерархию в рамках Issue #45. PR #167/#168 закрыли модель дерева, navigator и реальную интеграцию в `feature:playlists`; PR #170–#172 добавили autonomous unified Favorites persistence, единый playback resolver и системный virtual Favorites aggregate. Legacy lookup IDs остаются compatibility payload для существующих repository/Player API, но больше не определяют lifetime пользовательского favorite.
 
 ## Каноническая модель каталога
 
@@ -34,11 +34,11 @@
 
 `Playlist` и таблица `playlists` хранят `catalogOrigin`. Однозначные provider/file источники получают `PROVIDER`/`LOCAL`; новые импорты из Ready Catalog и Scanner явно записывают `READY_CATALOG`/`SCANNER_IMPORT`. Остальные старые записи остаются `USER_IMPORT`: существующие URL нельзя ретроспективно и надёжно разделить на ручной URL, Ready Catalog и Scanner import.
 
-`LegacyPlaylistCatalogAdapter` переводит текущие `Playlist + Channel` в первый рабочий canonical tree без изменения persistence schema. Он строит `SOURCE -> PLAYLIST -> GROUP? -> CHANNEL`, использует `ChannelStableIdentity` для channel stable key, а legacy Room `channelId` оставляет только как payload lookup. Несколько concrete rows одного логического канала сохраняются в `channelVariantIdsByNodeId`, поэтому dedup не уничтожает варианты источника. Playlist rename не меняет canonical identity.
+`LegacyPlaylistCatalogAdapter` переводит текущие `Playlist + Channel` в рабочий canonical tree. Он строит `SOURCE -> PLAYLIST -> GROUP? -> CHANNEL`, использует `ChannelStableIdentity` для channel stable key, а legacy Room `channelId` оставляет только как payload lookup. Несколько concrete rows одного логического канала сохраняются в `channelVariantIdsByNodeId`, поэтому dedup не уничтожает варианты источника. Playlist rename не меняет canonical identity.
 
-Для legacy source provenance адаптер создаёт только opaque SHA-256 key: URI user-info исключается, password/token/MAC-подобные query values редактируются до хеширования. Для `inline`-импорта, у которого исторически нет внешнего стабильного source id, playlist identity дополнительно получает детерминированный fingerprint набора `ChannelStableIdentity`. Это compatibility-путь для существующих данных, а не замена будущих source-specific IDs.
+Для legacy source provenance адаптер создаёт только opaque SHA-256 key: URI user-info исключается, password/token/MAC-подобные query values редактируются до хеширования. Для `inline`-импорта, у которого исторически нет внешнего стабильного source id, playlist identity дополнительно получает детерминированный fingerprint набора `ChannelStableIdentity`. Это compatibility-путь для существующих данных, а не замена source-specific IDs.
 
-Явные import adapters для Ready Catalog и Scanner передают origin через `PlaylistRepository`, а `LegacyPlaylistCatalogAdapter` включает его в provenance каждого узла. Provider account IDs и Unified Favorites storage выполняются следующими изолированными PR; navigation skeleton больше не является будущим пунктом — он подключён к реальному Playlists feature.
+Явные import adapters для Ready Catalog и Scanner передают origin через `PlaylistRepository`, а `LegacyPlaylistCatalogAdapter` включает его в provenance каждого узла. Navigation skeleton и Unified Favorites storage больше не являются будущими пунктами: пользовательская navigation часть слита PR #167/#168, а durable Favorites/virtual aggregate — PR #170–#172.
 
 ### Canonical navigation runtime
 
@@ -68,7 +68,50 @@ CHANNEL остаётся leaf. При активации UI сначала фи�
 
 Верхняя кнопка приложения «Назад» направляется через Android Back dispatcher. Поэтому hardware/remote Back, верхняя кнопка и внутренний catalog Back используют один child `BackHandler` и одинаковые one-level semantics.
 
-`:feature:playlists:testDebugUnitTest` теперь является постоянным Android CI gate. Regression coverage проверяет начальный `SOURCE -> PLAYLIST`, enter/back round-trip группы, сохранение channel focus после rebuild, fallback при удалённой группе, leaf semantics CHANNEL и завершение Back на source root.
+`:feature:playlists:testDebugUnitTest` является постоянным Android CI gate. Regression coverage проверяет начальный `SOURCE -> PLAYLIST`, enter/back round-trip группы, сохранение channel focus после rebuild, fallback при удалённой группе, leaf semantics CHANNEL и завершение Back на source root.
+
+### Unified Favorites persistence и virtual aggregate
+
+PR #170 перевёл Favorites с lifetime конкретной строки `channels` на user-owned logical storage database v10:
+
+```text
+favorite_channels
+  logicalKey (PK)
+  display/preferred snapshot
+  preferred legacy lookup hints
+
+favorite_channel_variants
+  logicalKey + variantKey (PK)
+  streamUrl
+  original playlist/source provenance snapshot
+
+favorite_legacy_seeds
+  temporary 9→10 migration safety snapshot
+```
+
+SQL migration намеренно не пытается воспроизвести `ChannelStableIdentity`. Миграция 9→10 сначала копирует legacy `favorites JOIN channels` в raw seed snapshot, затем `core:data` консолидирует seeds точным Kotlin-алгоритмом и очищает seed table. Поэтому favorite защищён даже в окне сразу после upgrade и не зависит от последующего существования source rows.
+
+`UnifiedFavoritesRepositoryImpl` является durable source of truth. Legacy `favorites(channelId)` остаётся compatibility mirror для ещё не переведённых consumers, но не владеет логическим favorite.
+
+При добавлении favorite все найденные live equivalents одного `ChannelStableIdentity` сохраняются как source variants. При удалении исходного плейлиста durable snapshot/variants не удаляются. Re-import совпадающего logical channel снова делает live row доступным без создания второго favorite.
+
+PR #171 добавил `FavoritePlaybackContext`. Resolver выбирает:
+
+1. запрошенный live equivalent;
+2. preferred live equivalent;
+3. другой live equivalent;
+4. persisted variant по requested/preferred id или stream;
+5. durable favorite snapshot как последний fallback.
+
+Это data-layer selection contract. Media3/LibVLC/P2P Player runtime не дублируется и не получает отдельную Favorites implementation.
+
+PR #172 добавил `VirtualFavoritesPlaylistRepository` и стабильный отрицательный `VIRTUAL_FAVORITES_PLAYLIST_ID`. В Room физическая playlist row не создаётся. Decorator публикует `Избранное` через существующий `PlaylistRepository` contract, поэтому тот же canonical catalog и `player/{playlistId}/{channelId}` flow работают для durable favorites, включая orphan favorite после удаления исходного списка.
+
+`FavoritesRepositoryFacade` сохраняет стабильный representative favorite ID для UI/★ compatibility, но подставляет playlist/source/stream fields выбранного live или persisted playback variant. Это важно: virtual aggregate не должен возвращать stale snapshot URL, если durable resolver уже выбрал лучший persisted variant.
+
+В `PlaylistsScreen` virtual Favorites разрешает каталог и Player, но физические `refresh/delete/editor` actions отключены. Repository-level guards повторяют этот запрет, чтобы UI не был единственной защитой destructive semantics.
+
+Следующий data contract #45 — versioned portable backup/import `logical favorite + provenance + variants`; обычный M3U/M3U8 остаётся interoperability-представлением representative каналов и не заменяет полный backup.
 
 Пользовательское описание находится в [`USER_GUIDE.md`](USER_GUIDE.md), а краткая встроенная справка — в `AboutScreen`.
 
@@ -115,11 +158,11 @@ Media3 / LibVLC decoder fallback
 
 Peer-wire слой поддерживает standard/observed Ace HAVE/status/window variants, bounded frame parsing и explicit ownership. Live scheduler не имеет права самостоятельно перескакивать через недостающий authoritative cursor: forward jump выполняется только через typed recovery discontinuity.
 
-`AceLivePeerProductionTracker` является observation/quality layer, а не scheduler policy. Базовый V2 из PR #108 уже отделяет discovery от connected/handshaked/fresh media production и строит aggregate delivery snapshot. V2b добавляет requestability: `windowUseful` вычисляется относительно authoritative `nextNeededPiece()`, `unchoked` отражает фактический peer-wire state, а producing требует fresh contiguous media при одновременно полезном window и unchoked peer.
+`AceLivePeerProductionTracker` является observation/quality layer, а не scheduler policy. Базовый V2 отделяет discovery от connected/handshaked/fresh media production и строит aggregate delivery snapshot. Requestability `windowUseful` вычисляется относительно authoritative `nextNeededPiece()`, `unchoked` отражает фактический peer-wire state, а producing требует fresh contiguous media при одновременно полезном window и unchoked peer.
 
 ### Adaptive streaming architecture
 
-Главный следующий слой строится поверх уже работающего protocol runtime:
+Главный adaptive слой строится поверх protocol runtime:
 
 ```text
 PeerPool
@@ -137,38 +180,37 @@ loopback/player telemetry
 
 `discovered → connected → handshaked → windowUseful → unchoked → media-producing`.
 
-Найденный tracker/DHT endpoint не считается playable peer. `windowUseful` также не означает «peer прислал любую metadata»: его advertised live-window должен содержать текущий authoritative cursor. При metadata/window update, contiguous cursor progress и recovery jump requestability пересчитывается для активных peers. Scheduler в конечном состоянии должен опираться на media freshness/rate, usefulness authoritative cursor, timeout history и текущий buffer pressure.
+Найденный tracker/DHT endpoint не считается playable peer. `windowUseful` также не означает «peer прислал любую metadata»: его advertised live-window должен содержать текущий authoritative cursor. Scheduler должен опираться на media freshness/rate, usefulness authoritative cursor, timeout history и текущий buffer pressure.
 
-`LiveBufferController` должен оперировать запасом в bytes и seconds, использовать `critical/low/target/high` watermarks и hysteresis. Throughput не выводится из возраста runtime или непроверенного raw descriptor bitrate. Adaptive startup v1 из PR #107 уже переносит throughput clock на первый media-byte и использует EWMA реального media growth. Базовый producing accounting из PR #108 уже в `main`; V2b подготавливает quality contract до включения scheduler feedback.
-
-Текущие default startup bounds остаются конечными failure guards; их увеличение не является способом улучшения производительности.
+`LiveBufferController` оперирует запасом в bytes/seconds, watermarks и hysteresis. Throughput не выводится из возраста runtime или непроверенного raw descriptor bitrate. Текущие startup/failure bounds остаются конечными guards; их увеличение не является способом улучшения производительности.
 
 ### Player boundary
 
-P2P buffer и Media3 LoadControl являются двумя разными feedback loops. Для localhost Ace Live нужен отдельный измеримый contract: `first_media_byte`, `buffer_ready`, `http_open/read`, producer/consumer rate, Media3 `BUFFERING/READY`, first frame и rebuffer duration. Только после этого P2P-specific LoadControl настраивается отдельно от generic IPTV.
+P2P buffer и Media3 LoadControl являются двумя разными feedback loops. Для localhost Ace Live измеряются `first_media_byte`, `buffer_ready`, `http_open/read`, producer/consumer rate, Media3 `BUFFERING/READY`, first frame и rebuffer duration.
 
 Media3 остаётся primary decoder. LibVLC используется при подтверждённой container/demux/codec несовместимости. Upstream no-peer/stall/insufficient-throughput не лечатся заменой decoder.
 
 ### Discontinuity/media format
 
-P2P recovery уже способен выдать typed output discontinuity при подтверждённом live-window jump. MPEG-TS слой должен отдельно выполнить resync/PAT/PMT/random-access recovery и при необходимости инициировать decoder recovery. Media-format правила не должны попадать внутрь peer scheduler.
+P2P recovery способен выдать typed output discontinuity при подтверждённом live-window jump. MPEG-TS слой отдельно выполняет resync/PAT/PMT/random-access recovery и при необходимости decoder recovery. Media-format правила не должны попадать внутрь peer scheduler.
 
-Подробный текущий план находится в [`ACE_LIVE_ADAPTIVE_STREAMING_CORE.md`](ACE_LIVE_ADAPTIVE_STREAMING_CORE.md), runtime invariants — в [`P2P_RUNTIME_NOTES.md`](P2P_RUNTIME_NOTES.md), фактические field results — в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md).
+Подробный текущий план находится в [`ACE_LIVE_ADAPTIVE_STREAMING_CORE.md`](ACE_LIVE_ADAPTIVE_STREAMING_CORE.md), runtime invariants — в [`P2P_RUNTIME_NOTES.md`](P2P_RUNTIME_NOTES.md), фактические field results — в [`PLAYBACK_STATUS.md`](PLAYBACK_STATUS.md) и canonical project status — в [`PROJECT_STATUS_AND_ROADMAP.md`](PROJECT_STATUS_AND_ROADMAP.md).
 
 ## Порядок зависимостей
 
-1. завершить кодовую regression-baseline TV navigation (#40), а реальную BlueStacks/TV Box приёмку вести параллельно;
-2. довести автономный P2P/Ace Live runtime до устойчивого startup/sustained playback: V1 adaptive prebuffer завершён, V2 peer quality/diagnostics продолжается, затем scheduler feedback, player/TS boundary и hardware acceptance (#44);
-3. canonical catalog identity/provenance и Playlists navigation уже стабилизированы PR #167/#168; следующий изолированный этап — Unified Favorites persistence и aggregate views (#45);
+1. кодовая regression-baseline TV navigation (#40) стабилизирована; реальную BlueStacks/TV Box приёмку вести параллельно;
+2. P2P/Ace Live transport policy меняется только по real-device evidence Issue #159; без новой producer-stage/rapid-switch evidence не менять DHT/peer/request-depth/timeout/buffer assumptions (#44);
+3. canonical catalog navigation и autonomous unified Favorites/virtual Player consumer стабилизированы PR #167/#168/#170–#172; следующий изолированный этап — versioned portable Favorites backup/import, затем source-variant picker и остальные aggregate/performance increments (#45);
 4. построить EPG/Now-Next/real archive поверх стабильной channel identity (#47);
-5. переработать Player UX поверх готовых Catalog + P2P + EPG contracts (#46);
-6. catalog user guide и встроенная catalog Help добавляются в текущем docs-sync инкременте; contextual Help остальных экранов продолжает отдельную задачу #43;
+5. переработать Player UX поверх готовых Catalog + Favorites + P2P + EPG contracts (#46);
+6. catalog/Favorites user guide и встроенная Help синхронизируются отдельным docs increment; contextual Help остальных экранов продолжает задачу #43;
 7. выполнить hardware/soak/release gate и только после этого закрыть master-roadmap #44.
 
-Защищённые области при UI/плеерных изменениях:
+Защищённые области при catalog/Favorites изменениях:
 
 - `feature/scanner/**`;
-- `core/network/**`;
+- `core/network/**` Scanner discovery/query behavior;
 - `ScannerRepository`;
 - `SearchPlaylistsUseCase`;
-- логика ранжирования и фильтрации результатов поиска.
+- логика ранжирования и фильтрации Scanner results;
+- P2P DHT/peer/request-depth/timeout/buffer policy без новой hardware evidence.
