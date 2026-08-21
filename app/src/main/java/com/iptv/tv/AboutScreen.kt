@@ -74,6 +74,22 @@ fun AboutScreen(
                     modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    Text("Справка: каталог и навигация", style = MaterialTheme.typography.titleMedium)
+                    Text("1. Откройте «Мои плейлисты», выберите нужный список и нажмите «Открыть каталог».")
+                    Text("2. Вверху каталога показан текущий путь: источник › плейлист › группа/подгруппа.")
+                    Text("3. D-pad/Enter, мышь и тачпад открывают следующий уровень; канал открывается сразу в плеере.")
+                    Text("4. «Назад на один уровень», аппаратная Back и верхняя кнопка «Назад» возвращают ровно на один уровень иерархии.")
+                    Text("5. После возврата из плеера приложение восстанавливает предыдущий канал/строку по стабильному идентификатору, если элемент ещё существует.")
+                    Text("6. Если плейлист обновился и старый путь исчез, каталог возвращается к самому глубокому оставшемуся корректному уровню.")
+                }
+            }
+        }
+        item {
+            Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Text("Система", style = MaterialTheme.typography.titleMedium)
                     Text("Версия приложения: $versionName")
                     Text("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
