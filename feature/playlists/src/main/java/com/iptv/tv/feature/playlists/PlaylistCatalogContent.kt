@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -23,10 +24,12 @@ import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.CatalogNodeId
 import com.iptv.tv.core.model.CatalogNodeKind
+import kotlinx.coroutines.yield
 
 const val TAG_PLAYLIST_CATALOG = "playlist_catalog"
 const val TAG_PLAYLIST_CATALOG_BACK = "playlist_catalog_back"
 private const val TAG_PLAYLIST_CATALOG_ENTRY_PREFIX = "playlist_catalog_entry_"
+private const val CATALOG_STATIC_ITEM_COUNT = 2
 
 fun playlistCatalogEntryTag(nodeId: CatalogNodeId): String =
     TAG_PLAYLIST_CATALOG_ENTRY_PREFIX + nodeId.value
@@ -35,7 +38,8 @@ fun playlistCatalogEntryTag(nodeId: CatalogNodeId): String =
  * TV/D-pad presentation of one canonical hierarchy level.
  *
  * Focus is keyed by stable [CatalogNodeId], not by list position. Returning from Player therefore
- * requests the same logical row even when the backing Room rows were reloaded or reordered.
+ * scrolls to and requests focus for the same logical row even when the backing Room rows were
+ * reloaded, reordered, or the row is outside the initial lazy-list viewport.
  */
 @Composable
 fun PlaylistCatalogContent(
@@ -46,10 +50,15 @@ fun PlaylistCatalogContent(
     onOpenChannel: (Long) -> Unit
 ) {
     val restoredFocusId = snapshot.restoredFocusId
+    val restoredEntryIndex = snapshot.entries.indexOfFirst { entry -> entry.nodeId == restoredFocusId }
     val restoredFocusRequester = remember(snapshot.currentNodeId, restoredFocusId) { FocusRequester() }
+    val listState = rememberLazyListState()
 
-    LaunchedEffect(snapshot.currentNodeId, restoredFocusId) {
-        if (restoredFocusId != null) {
+    LaunchedEffect(snapshot.currentNodeId, restoredFocusId, restoredEntryIndex) {
+        if (restoredFocusId != null && restoredEntryIndex >= 0) {
+            listState.scrollToItem(CATALOG_STATIC_ITEM_COUNT + restoredEntryIndex)
+            // Give LazyColumn one composition turn after scrolling so the requester is attached.
+            yield()
             runCatching { restoredFocusRequester.requestFocus() }
         }
     }
@@ -59,6 +68,7 @@ fun PlaylistCatalogContent(
             .fillMaxSize()
             .padding(24.dp)
             .testTag(TAG_PLAYLIST_CATALOG),
+        state = listState,
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
