@@ -7,6 +7,8 @@ on:
       - 'feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerVideoSurface.kt'
       - 'feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt'
       - 'feature/player/src/main/java/com/iptv/tv/feature/player/P2pPlayerBoundaryTelemetry.kt'
+      - 'app/src/androidTest/java/com/iptv/tv/ContinuousMpegTsReadySmokeTest.kt'
+      - 'app/src/androidTest/assets/continuous_h264_128x72.ts'
       - '.github/workflows/p2p-player-smoke.yml'
   push:
     branches:
@@ -16,6 +18,8 @@ on:
       - 'feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerVideoSurface.kt'
       - 'feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt'
       - 'feature/player/src/main/java/com/iptv/tv/feature/player/P2pPlayerBoundaryTelemetry.kt'
+      - 'app/src/androidTest/java/com/iptv/tv/ContinuousMpegTsReadySmokeTest.kt'
+      - 'app/src/androidTest/assets/continuous_h264_128x72.ts'
       - '.github/workflows/p2p-player-smoke.yml'
 
 permissions:
@@ -72,7 +76,7 @@ jobs:
       - name: Compile Android instrumentation tests
         run: ./gradlew --no-daemon --stacktrace :app:assembleDebugAndroidTest
 
-      - name: Run real Torrent TV playback smoke without Ace Engine
+      - name: Run continuous MPEG-TS and real Torrent TV smoke without Ace Engine
         timeout-minutes: 15
         shell: bash
         run: |
@@ -116,6 +120,9 @@ jobs:
           fi
 
           adb logcat -c || true
+          ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest \
+            -Pandroid.testInstrumentationRunnerArguments.class=com.iptv.tv.ContinuousMpegTsReadySmokeTest
+
           ./gradlew --no-daemon --stacktrace :app:connectedDebugAndroidTest \
             -Pandroid.testInstrumentationRunnerArguments.class=com.iptv.tv.TorrentTvPlaybackSmokeTest
 
