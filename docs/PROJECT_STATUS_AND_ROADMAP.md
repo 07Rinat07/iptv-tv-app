@@ -1,15 +1,18 @@
 # Project status and roadmap
 
-_Last updated: 2026-08-20_
+_Last updated: 2026-08-21_
 
 This is the canonical current-state and next-action document. Dated field reports remain immutable
 evidence; when an older plan describes a different current increment, this page wins.
 
 ## Baseline and branch decisions
 
-- The integration baseline immediately before this increment is `main` commit `91f90a5`
-  (`fix(p2p): preserve qualified fallback startup`). Local `main`, `origin/main` and
-  `origin/HEAD` agreed on that commit before the current work branch was created.
+- The current integration head for this documentation increment is `main` commit `d9a95168`
+  (squash merge of PR #168, canonical catalog navigation in the real Playlists UI). This catalog/UI
+  merge does not constitute new Ace Live field evidence; the P2P field baseline described below
+  remains the evidence basis for the bounded P2P decisions on this page.
+- The P2P integration baseline immediately before the current producer-boundary field work was
+  `91f90a5` (`fix(p2p): preserve qualified fallback startup`).
 - `eeb33f5` remains the historical same-device comparison baseline. It is not the current
   integration head.
 - The terminal TCP-pool guard from PR #158 commit `bd64e24` is incorporated here. It closes a
@@ -22,6 +25,29 @@ evidence; when an older plan describes a different current increment, this page 
 - The post-#155 docs branch is evidence input only. Its old PR #156 conclusions are superseded by
   this page rather than merged literally.
 - Historical diagnostic and already-pruned branches are not production merge candidates.
+
+## Parallel catalog status — Issue #45
+
+The catalog/data track is developed in small branches without changing Scanner discovery or P2P
+runtime policy.
+
+1. **PR #167 — complete.** Canonical tree navigation contract: stable hierarchy path/checkpoint,
+   breadcrumb context, predictable one-level Back and focus reconciliation after tree rebuild.
+2. **PR #168 — complete.** `feature:playlists` now binds the existing `observeChannels` flow to
+   `LegacyPlaylistCatalogAdapter + CanonicalCatalogNavigator`, renders the real hierarchy, opens the
+   exact `player/{playlistId}/{channelId}` route for a channel, routes top-bar Back through the same
+   Android dispatcher as hardware/remote Back, and restores off-screen focus by stable
+   `CatalogNodeId`. Exact-head Android CI #693 was fully green before squash merge.
+3. **Permanent regression gate — complete.** Android CI now runs
+   `:feature:playlists:testDebugUnitTest` explicitly.
+4. **Current increment — docs/help sync.** README, long-form ROADMAP, architecture, `USER_GUIDE` and
+   built-in catalog Help are being synchronized with the already-merged behavior.
+5. **Next production increment — Unified Favorites persistence.** Move Favorites from concrete-row
+   storage semantics toward the shared `ChannelStableIdentity` while preserving original
+   playlist/group/channel provenance and discoverable source variants. Do not mix this migration
+   with Scanner or P2P changes.
+6. **After Favorites.** Dedup/re-import policy, virtual aggregate views and large-catalog
+   lazy/cache/non-blocking rebuild validation.
 
 ## Latest field evidence — 2026-08-20
 
@@ -161,12 +187,15 @@ Automated gates required on the exact integration head:
 3. `:feature:player:testDebugUnitTest`
 4. `:core:player:testDebugUnitTest`
 5. `:core:player-vlc:testDebugUnitTest`
-6. `lintDebug`, `:app:assembleDebug` and `:app:assembleDebugAndroidTest`
-7. Python tooling tests and the real `TorrentTvPlaybackSmokeTest`
+6. `:feature:playlists:testDebugUnitTest` for the canonical catalog navigation regression contract
+7. `lintDebug`, `:app:assembleDebug` and `:app:assembleDebugAndroidTest`
+8. Python tooling tests and the real `TorrentTvPlaybackSmokeTest` when P2P/runtime changes require it
 
-The current producer-boundary/stale-refill tree passed gates 1–6 and all eight Python tooling tests
-on 2026-08-20. The connected-device `TorrentTvPlaybackSmokeTest`, repeated channel matrix and soak
-acceptance remain open; assembling the instrumentation APK is not counted as running that smoke.
+The current producer-boundary/stale-refill tree passed the P2P gates and all eight Python tooling
+tests on 2026-08-20. The catalog navigation exact head for PR #168 passed full Android CI #693 on
+2026-08-21. The connected-device `TorrentTvPlaybackSmokeTest`, repeated channel matrix and soak
+acceptance remain open for the P2P track; assembling the instrumentation APK is not counted as
+running that smoke.
 
 Real-device gate on the same TV Box:
 
@@ -179,17 +208,20 @@ Real-device gate on the same TV Box:
 
 ## Decision order
 
-1. Publish and install the tested integration head, then repeat a fixed channel matrix including
-   channels 64–66 for at least three rounds and capture the last producer stage for every runtime.
-2. If the field path is `sent → no ingress`, add a startup-only bounded alternate-peer probe and
+1. For the catalog track, merge the docs/help sync only after exact-head Android CI, then start the
+   Unified Favorites persistence migration from fresh `main`.
+2. For the P2P track, publish and install the tested integration head, then repeat a fixed channel
+   matrix including channels 64–66 for at least three rounds and capture the last producer stage for
+   every runtime.
+3. If the P2P field path is `sent → no ingress`, add a startup-only bounded alternate-peer probe and
    timeout reassignment that prefers a different covering peer. Only then consider a request-timeout
    tier of non-renewable grace; connected-only grace remains two seconds and the total remains 60 s.
-3. Add deterministic A→B→C integration ownership coverage across DHT/refill/handoff.
-4. Add a player-session terminal summary so success is counted by READY/frame/audio rather than
+4. Add deterministic A→B→C integration ownership coverage across DHT/refill/handoff.
+5. Add a player-session terminal summary so success is counted by READY/frame/audio rather than
    inferred from `load_started`.
-5. Instrument the confirmed TS/demux/player boundary and add a continuous live MPEG-TS fixture that
+6. Instrument the confirmed TS/demux/player boundary and add a continuous live MPEG-TS fixture that
    must reach READY before EOF.
-6. Finish weak-network, peer-loss, 2 h and 8 h ARM TV Box acceptance after both blockers close.
+7. Finish weak-network, peer-loss, 2 h and 8 h ARM TV Box acceptance after both blockers close.
 
 ## Binding invariants
 
@@ -204,12 +236,15 @@ Real-device gate on the same TV Box:
 - Preserve generation/session ownership and complete non-cancellable cleanup on supersession.
 - Do not change generic IPTV or normal BitTorrent behavior to fix Ace Live.
 - Do not add an external Ace Stream Engine runtime dependency or fallback.
+- Catalog/Favorites work must not rewrite Scanner discovery/query semantics or P2P transport policy.
 
 ## Documentation map
 
 - `PROJECT_STATUS_AND_ROADMAP.md` — canonical current status and next gate.
+- `USER_GUIDE.md` — user-facing controls and canonical catalog navigation behavior.
+- `architecture.md` — module boundaries and canonical catalog/P2P contracts.
 - `PLAYBACK_STATUS.md` — concise user-visible playback state and acceptance criteria.
-- `testing/playback-log-analysis-2026-08-20.md` — latest field evidence.
+- `testing/playback-log-analysis-2026-08-20.md` — latest P2P field evidence.
 - `ROADMAP.md` and `ACE_LIVE_IMPLEMENTATION_PLAN.md` — long-form history and architecture.
 - `ACE_LIVE_FIELD_VALIDATION_*.md` — immutable dated evidence.
 - `P2P_RUNTIME_NOTES.md`, `P2P_CONTENT_TRANSPORT.md` and `ACE_LIVE_STARTUP_TIMELINE.md` — runtime,
