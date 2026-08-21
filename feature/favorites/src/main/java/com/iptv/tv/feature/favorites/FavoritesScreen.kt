@@ -33,6 +33,7 @@ import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.EpgProgram
+import com.iptv.tv.core.model.VIRTUAL_FAVORITES_PLAYLIST_ID
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -105,11 +106,11 @@ fun FavoritesScreen(
             ) {
                 Button(
                     onClick = {
-                        val channel = state.channels.firstOrNull { it.id == state.selectedChannelId }
-                        val playlistId = channel?.playlistId
-                        val channelId = channel?.id
-                        if (playlistId != null && channelId != null) {
-                            onOpenPlayer?.invoke(playlistId, channelId)
+                        val channelId = state.channels
+                            .firstOrNull { it.id == state.selectedChannelId }
+                            ?.id
+                        if (channelId != null) {
+                            onOpenPlayer?.invoke(VIRTUAL_FAVORITES_PLAYLIST_ID, channelId)
                         }
                     },
                     enabled = state.selectedChannelId != null && onOpenPlayer != null
@@ -249,7 +250,12 @@ fun FavoritesScreen(
                                 }
                                 if (selected) {
                                     OutlinedButton(
-                                        onClick = { onOpenPlayer?.invoke(channel.playlistId, channel.id) },
+                                        onClick = {
+                                            onOpenPlayer?.invoke(
+                                                VIRTUAL_FAVORITES_PLAYLIST_ID,
+                                                channel.id
+                                            )
+                                        },
                                         enabled = onOpenPlayer != null
                                     ) {
                                         Text("Играть")
