@@ -98,6 +98,9 @@ fun PlaylistCatalogContent(
                 }
                 OutlinedButton(
                     onClick = {
+                        // Mouse/touch activation does not necessarily deliver a focus callback first.
+                        // Persist the canonical row explicitly before either entering it or launching Player.
+                        onEntryFocused(entry.nodeId)
                         if (entry.isChannel) {
                             entry.channelId?.let(onOpenChannel)
                         } else {
