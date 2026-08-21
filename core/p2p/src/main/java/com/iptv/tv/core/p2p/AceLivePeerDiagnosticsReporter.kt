@@ -18,7 +18,8 @@ import java.util.Locale
  */
 internal class AceLivePeerDiagnosticsReporter(
     private val observer: (status: String, message: String) -> Unit,
-    private val periodicIntervalMillis: Long = DEFAULT_PERIODIC_INTERVAL_MILLIS
+    private val periodicIntervalMillis: Long = DEFAULT_PERIODIC_INTERVAL_MILLIS,
+    private val context: AceLiveRuntimeDiagnosticsContext? = null
 ) {
     private var lastLifecycleSignature: LifecycleSignature? = null
     private var lastReportedAtMillis: Long? = null
@@ -74,6 +75,7 @@ internal class AceLivePeerDiagnosticsReporter(
             append(String.format(Locale.US, "%.3f", aggregateMegabitsPerSecond))
             append(" freshest_media_age_ms=")
             append(freshestMediaAge)
+            appendRuntimeContext()
         }
     }
 
@@ -126,6 +128,20 @@ internal class AceLivePeerDiagnosticsReporter(
         append(snapshot.producingPeers)
         append(" aggregate_bps=")
         append(snapshot.aggregateBytesPerSecond.coerceAtLeast(0L))
+        appendRuntimeContext()
+    }
+
+    private fun StringBuilder.appendRuntimeContext() {
+        context?.let { correlation ->
+            append(" startup_id=")
+            append(correlation.startupId)
+            append(" runtime_id=")
+            append(correlation.runtimeId)
+            append(" generation=")
+            append(correlation.generation)
+            append(" path=")
+            append(correlation.path)
+        }
     }
 
     private data class LifecycleSignature(
