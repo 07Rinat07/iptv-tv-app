@@ -83,6 +83,8 @@ fun AboutScreen(
                     Text("6. Избранный канал хранится независимо от исходного плейлиста: удаление списка не удаляет сохранённый favorite.")
                     Text("7. «Избранное» — виртуальный системный список: он обновляется автоматически, поэтому его нельзя удалить, вручную обновить или открыть в редакторе как обычный плейлист.")
                     Text("8. Если живой источник favorite исчез, приложение сохраняет playback snapshot/source variants для последующего воспроизведения или повторного связывания.")
+                    Text("9. TXT/M3U8 export не записывает credential-bearing provider URL по умолчанию; M3U8 использует безопасный alternate variant, если он доступен.")
+                    Text("10. «Сохранить RIPTV» создаёт полный versioned backup Favorites с logical identity/provenance/source variants; credential-bearing URLs в нём также редактируются.")
                 }
             }
         }
