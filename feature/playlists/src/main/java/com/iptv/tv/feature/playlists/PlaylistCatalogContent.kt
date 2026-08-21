@@ -49,13 +49,15 @@ fun PlaylistCatalogContent(
     onEnter: (CatalogNodeId) -> Unit,
     onOpenChannel: (Long) -> Unit
 ) {
-    val restoredFocusId = snapshot.restoredFocusId
-    val restoredEntryIndex = snapshot.entries.indexOfFirst { entry -> entry.nodeId == restoredFocusId }
-    val restoredFocusRequester = remember(snapshot.currentNodeId, restoredFocusId) { FocusRequester() }
+    // Freeze the restore target for this hierarchy level. Normal D-pad movement updates the
+    // checkpoint in ViewModel, but must not retrigger scroll/requestFocus on every row change.
+    val restoreTargetId = remember(snapshot.currentNodeId) { snapshot.restoredFocusId }
+    val restoredEntryIndex = snapshot.entries.indexOfFirst { entry -> entry.nodeId == restoreTargetId }
+    val restoredFocusRequester = remember(snapshot.currentNodeId, restoreTargetId) { FocusRequester() }
     val listState = rememberLazyListState()
 
-    LaunchedEffect(snapshot.currentNodeId, restoredFocusId, restoredEntryIndex) {
-        if (restoredFocusId != null && restoredEntryIndex >= 0) {
+    LaunchedEffect(snapshot.currentNodeId, restoreTargetId, restoredEntryIndex) {
+        if (restoreTargetId != null && restoredEntryIndex >= 0) {
             listState.scrollToItem(CATALOG_STATIC_ITEM_COUNT + restoredEntryIndex)
             // Give LazyColumn one composition turn after scrolling so the requester is attached.
             yield()
@@ -101,7 +103,7 @@ fun PlaylistCatalogContent(
             }
         } else {
             items(snapshot.entries, key = { entry -> entry.nodeId.value }) { entry ->
-                val restoreModifier = if (entry.nodeId == restoredFocusId) {
+                val restoreModifier = if (entry.nodeId == restoreTargetId) {
                     Modifier.focusRequester(restoredFocusRequester)
                 } else {
                     Modifier
