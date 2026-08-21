@@ -144,15 +144,15 @@ class CanonicalCatalogNavigator(nodes: List<CanonicalCatalogNode>) {
         val fallback = initial(fallbackNodeId)
         val restoredPath = mutableListOf<CatalogNodeId>()
 
-        state.path.forEachIndexed { index, nodeId ->
-            val current = nodesById[nodeId] ?: return@forEachIndexed
+        for ((index, nodeId) in state.path.withIndex()) {
+            val current = nodesById[nodeId] ?: break
             val expectedParentId = restoredPath.lastOrNull()
             val pathLinkIsValid = if (index == 0) {
                 current.parentId == null
             } else {
                 expectedParentId != null && current.parentId == expectedParentId
             }
-            if (!pathLinkIsValid) return@forEachIndexed
+            if (!pathLinkIsValid) break
             restoredPath += nodeId
         }
 
