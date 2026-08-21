@@ -1,7 +1,9 @@
 package com.iptv.tv.feature.player
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class P2pPlayerBoundaryTelemetryTest {
@@ -166,6 +168,55 @@ class P2pPlayerBoundaryTelemetryTest {
         assertEquals(P2pPlayerBoundaryEventType.FIRST_AUDIO, first?.event)
         assertEquals(650L, first?.elapsedSincePlaybackStartMillis)
         assertNull(tracker.onFirstAudio(nowMillis = 40_900L))
+    }
+
+    @Test
+    fun terminalSummaryCarriesRenderedMilestonesAndCumulativeCounters() {
+        val tracker = P2pPlayerBoundaryTelemetryTracker(
+            sessionId = 41L,
+            playbackStartedAtMillis = 50_000L
+        )
+        tracker.onLoadStarted(nowMillis = 50_100L)
+        tracker.onLoadCompleted(nowMillis = 50_300L, loadDurationMillis = 200L)
+        tracker.onReady(nowMillis = 50_500L)
+        tracker.onFirstVideoFrame(nowMillis = 50_650L)
+        tracker.onFirstAudio(nowMillis = 50_700L)
+        tracker.onBuffering(nowMillis = 51_000L)
+        tracker.onLoadError(nowMillis = 51_100L, loadDurationMillis = 100L)
+        tracker.onLoadRetry(nowMillis = 51_150L)
+
+        val terminal = tracker.onTerminal(nowMillis = 51_400L)
+
+        assertEquals(P2pPlayerBoundaryEventType.TERMINAL, terminal?.event)
+        assertEquals(1_400L, terminal?.elapsedSincePlaybackStartMillis)
+        assertTrue(terminal?.readySeen == true)
+        assertTrue(terminal?.firstAudioSeen == true)
+        assertTrue(terminal?.firstVideoFrameSeen == true)
+        assertEquals(1, terminal?.rebufferCount)
+        assertEquals(400L, terminal?.totalRebufferDurationMillis)
+        assertEquals(0L, terminal?.currentBufferingDurationMillis)
+        assertEquals(1, terminal?.loadAttemptCount)
+        assertEquals(1, terminal?.loadCompletedCount)
+        assertEquals(1, terminal?.loadErrorCount)
+        assertEquals(1, terminal?.loadRetryCount)
+        assertNull(tracker.onTerminal(nowMillis = 51_500L))
+    }
+
+    @Test
+    fun terminalSummaryDoesNotInventReadyOrRenderedMilestones() {
+        val tracker = P2pPlayerBoundaryTelemetryTracker(
+            sessionId = 43L,
+            playbackStartedAtMillis = 60_000L
+        )
+        tracker.onLoadStarted(nowMillis = 60_100L)
+
+        val terminal = tracker.onTerminal(nowMillis = 60_800L)
+
+        assertEquals(P2pPlayerBoundaryEventType.TERMINAL, terminal?.event)
+        assertFalse(terminal?.readySeen == true)
+        assertFalse(terminal?.firstAudioSeen == true)
+        assertFalse(terminal?.firstVideoFrameSeen == true)
+        assertEquals(1, terminal?.loadAttemptCount)
     }
 
     @Test(expected = IllegalArgumentException::class)
