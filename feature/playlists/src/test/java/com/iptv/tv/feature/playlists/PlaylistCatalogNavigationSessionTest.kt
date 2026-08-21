@@ -7,7 +7,7 @@ import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistSourceType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -86,10 +86,12 @@ class PlaylistCatalogNavigationSessionTest {
             previousCheckpoint = first.checkpoint()
         )
         val restored = rebuilt.snapshot()
+        val currentGroup = restored.entries.single()
 
         assertEquals(CatalogNodeKind.PLAYLIST, restored.breadcrumbs.last().kind)
-        assertNull(restored.restoredFocusId)
-        assertEquals("Current", restored.entries.single().name)
+        assertEquals("Current", currentGroup.name)
+        assertEquals(currentGroup.nodeId, restored.restoredFocusId)
+        assertNotEquals(oldGroup.nodeId, restored.restoredFocusId)
     }
 
     @Test
