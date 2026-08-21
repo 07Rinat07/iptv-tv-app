@@ -240,6 +240,43 @@ class AceLivePeerDiagnosticsReporterTest {
     }
 
     @Test
+    fun runtimeCorrelationIsIncludedInQualityAndProducerGap() {
+        val events = mutableListOf<Pair<String, String>>()
+        val reporter = AceLivePeerDiagnosticsReporter(
+            observer = { status, message -> events += status to message },
+            context = AceLiveRuntimeDiagnosticsContext(
+                startupId = 1_234L,
+                runtimeId = 7L,
+                generation = 9L,
+                path = "direct"
+            )
+        )
+
+        reporter.maybeReport(
+            snapshot(
+                connected = 1,
+                handshaked = 1,
+                windowUseful = 1,
+                unchoked = 1,
+                producing = 0
+            ),
+            nowMillis = 1_000L
+        )
+
+        val correlated = events.filter { event ->
+            event.first == "embedded_ace_live_peer_quality" ||
+                event.first == "embedded_ace_live_producer_gap"
+        }
+        assertEquals(2, correlated.size)
+        correlated.forEach { (_, message) ->
+            assertTrue(message.contains("startup_id=1234"))
+            assertTrue(message.contains("runtime_id=7"))
+            assertTrue(message.contains("generation=9"))
+            assertTrue(message.contains("path=direct"))
+        }
+    }
+
+    @Test
     fun missingFreshMediaUsesExplicitNoneValue() {
         val reporter = AceLivePeerDiagnosticsReporter(observer = { _, _ -> })
 
