@@ -1,5 +1,7 @@
 package com.iptv.tv.core.data.repository
 
+import com.iptv.tv.core.database.entity.FavoriteChannelEntity
+import com.iptv.tv.core.database.entity.FavoriteChannelVariantEntity
 import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
@@ -44,6 +46,48 @@ class VirtualFavoritesPlaylistRepositoryTest {
         assertEquals("Новости" to 2, summary.topGroups.first())
         assertEquals(1, summary.channelsWithLogo)
         assertEquals(1, summary.channelsWithTvgId)
+    }
+
+    @Test
+    fun persistedPlaybackVariantReplacesStaleSnapshotUrlButKeepsAggregateId() {
+        val favorite = FavoriteChannelEntity(
+            logicalKey = "tvg:news.one",
+            tvgId = "news.one",
+            name = "News One",
+            groupName = "Новости",
+            logo = null,
+            preferredStreamUrl = "https://stale.example/live",
+            preferredPlaylistId = 7,
+            preferredChannelId = 11,
+            addedAt = 1,
+            updatedAt = 2
+        )
+        val recoveredVariant = FavoriteChannelVariantEntity(
+            logicalKey = favorite.logicalKey,
+            variantKey = UnifiedFavoritePersistence.variantKey("https://recovered.example/live"),
+            legacyChannelId = 22,
+            playlistId = 8,
+            playlistName = "Recovered source",
+            sourceType = "URL",
+            catalogOrigin = "USER_IMPORT",
+            tvgId = favorite.tvgId,
+            name = favorite.name,
+            groupName = favorite.groupName,
+            logo = null,
+            streamUrl = "https://recovered.example/live",
+            addedAt = 1,
+            updatedAt = 100
+        )
+
+        val result = resolvedFavoriteRepresentatives(
+            favorites = listOf(favorite),
+            persistedVariants = listOf(recoveredVariant),
+            liveChannels = emptyList()
+        ).single()
+
+        assertEquals(11L, result.id)
+        assertEquals(8L, result.playlistId)
+        assertEquals("https://recovered.example/live", result.streamUrl)
     }
 
     @Test
