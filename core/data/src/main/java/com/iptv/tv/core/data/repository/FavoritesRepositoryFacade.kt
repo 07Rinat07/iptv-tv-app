@@ -1,6 +1,7 @@
 package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.domain.repository.FavoritesRepository
+import com.iptv.tv.core.model.Channel
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -22,10 +23,15 @@ class FavoritesRepositoryFacade @Inject constructor(
             delegate.observeFavoriteChannelIds(),
             delegate.observeFavorites()
         ) { liveIds, representatives ->
-            buildSet {
-                addAll(liveIds)
-                representatives.forEach { channel -> add(channel.id) }
-            }
+            favoriteRepresentativeIds(liveIds, representatives)
         }
     }
+}
+
+internal fun favoriteRepresentativeIds(
+    liveIds: Set<Long>,
+    representatives: List<Channel>
+): Set<Long> = buildSet {
+    addAll(liveIds)
+    representatives.forEach { channel -> add(channel.id) }
 }
