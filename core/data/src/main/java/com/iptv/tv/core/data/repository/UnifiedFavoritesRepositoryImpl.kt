@@ -14,6 +14,7 @@ import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.ChannelStableIdentity
+import com.iptv.tv.core.model.FavoritePlaybackContext
 import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -68,6 +69,27 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
         }.onStart {
             ensureLegacySeedsMigrated()
         }
+    }
+
+    override suspend fun resolvePlaybackContext(favoriteChannelId: Long): FavoritePlaybackContext? {
+        ensureLegacySeedsMigrated()
+
+        val requestedLive = favoriteChannelLookupDao.findChannelById(favoriteChannelId)
+        val favorite = requestedLive
+            ?.let { channel -> favoriteSnapshotDao.findFavorite(UnifiedFavoritePersistence.logicalKey(channel)) }
+            ?: favoriteSnapshotDao.findFavoriteByPreferredChannelId(favoriteChannelId)
+            ?: return null
+
+        val liveChannels = favoriteChannelLookupDao.getAllChannels()
+            .filter { channel -> UnifiedFavoritePersistence.logicalKey(channel) == favorite.logicalKey }
+        val persistedVariants = favoriteSnapshotDao.getVariants(favorite.logicalKey)
+
+        return UnifiedFavoritePersistence.resolvePlaybackContext(
+            requestedChannelId = favoriteChannelId,
+            favorite = favorite,
+            persistedVariants = persistedVariants,
+            liveChannels = liveChannels
+        )
     }
 
     override suspend fun toggleFavorite(channelId: Long) {
@@ -320,6 +342,75 @@ internal object UnifiedFavoritePersistence {
             .mapTo(linkedSetOf(), ChannelEntity::id)
     }
 
+    fun resolvePlaybackContext(
+        requestedChannelId: Long,
+        favorite: FavoriteChannelEntity,
+        persistedVariants: List<FavoriteChannelVariantEntity>,
+        liveChannels: List<ChannelEntity>
+    ): FavoritePlaybackContext {
+        val liveVariants = liveChannels
+            .filter { channel -> logicalKey(channel) == favorite.logicalKey }
+            .sortedWith(
+                compareBy<ChannelEntity> { it.playlistId }
+                    .thenBy { it.orderIndex }
+                    .thenBy { it.id }
+            )
+        val savedVariants = persistedVariants
+            .filter { variant -> variant.logicalKey == favorite.logicalKey }
+            .sortedWith(
+                compareByDescending<FavoriteChannelVariantEntity> { it.updatedAt }
+                    .thenBy { it.variantKey }
+            )
+
+        val selectedLive = liveVariants.firstOrNull { it.id == requestedChannelId }
+            ?: liveVariants.firstOrNull { it.id == favorite.preferredChannelId }
+            ?: liveVariants.firstOrNull()
+
+        val selectedSaved = if (selectedLive == null) {
+            savedVariants.firstOrNull { it.legacyChannelId == requestedChannelId }
+                ?: savedVariants.firstOrNull { it.legacyChannelId == favorite.preferredChannelId }
+                ?: savedVariants.firstOrNull { it.streamUrl.trim() == favorite.preferredStreamUrl.trim() }
+                ?: savedVariants.firstOrNull()
+        } else {
+            null
+        }
+
+        val selectedChannel = when {
+            selectedLive != null -> selectedLive.toModelSafe()
+            selectedSaved != null -> selectedSaved.toModelSafe()
+            else -> Channel(
+                id = favorite.preferredChannelId,
+                playlistId = favorite.preferredPlaylistId,
+                tvgId = favorite.tvgId,
+                name = favorite.name,
+                group = favorite.groupName,
+                logo = favorite.logo,
+                streamUrl = favorite.preferredStreamUrl,
+                health = ChannelHealth.UNKNOWN,
+                orderIndex = 0,
+                isHidden = false
+            )
+        }
+
+        val uniqueVariantKeys = buildSet {
+            liveVariants.forEach { channel -> add(variantKey(channel.streamUrl)) }
+            savedVariants.forEach { variant -> add(variant.variantKey) }
+            add(variantKey(favorite.preferredStreamUrl))
+        }
+
+        return FavoritePlaybackContext(
+            logicalKey = favorite.logicalKey,
+            channel = selectedChannel,
+            selectedVariantKey = when {
+                selectedLive != null -> variantKey(selectedLive.streamUrl)
+                selectedSaved != null -> selectedSaved.variantKey
+                else -> variantKey(favorite.preferredStreamUrl)
+            },
+            isLiveVariant = selectedLive != null,
+            availableVariantCount = uniqueVariantKeys.size.coerceAtLeast(1)
+        )
+    }
+
     fun variantKey(streamUrl: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(streamUrl.trim().toByteArray(Charsets.UTF_8))
@@ -337,5 +428,18 @@ internal object UnifiedFavoritePersistence {
         health = runCatching { ChannelHealth.valueOf(health) }.getOrDefault(ChannelHealth.UNKNOWN),
         orderIndex = orderIndex,
         isHidden = isHidden
+    )
+
+    private fun FavoriteChannelVariantEntity.toModelSafe(): Channel = Channel(
+        id = legacyChannelId,
+        playlistId = playlistId,
+        tvgId = tvgId,
+        name = name,
+        group = groupName,
+        logo = logo,
+        streamUrl = streamUrl,
+        health = ChannelHealth.UNKNOWN,
+        orderIndex = 0,
+        isHidden = false
     )
 }
