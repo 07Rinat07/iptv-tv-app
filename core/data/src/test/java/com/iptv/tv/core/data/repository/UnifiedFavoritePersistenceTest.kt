@@ -76,7 +76,7 @@ class UnifiedFavoritePersistenceTest {
     @Test
     fun favoriteLiveChannelIds_marksEveryCurrentVariantOfLogicalFavorite() {
         val favorite = FavoriteChannelEntity(
-            logicalKey = "name:match tv",
+            logicalKey = "name:матч тв",
             tvgId = null,
             name = "Матч ТВ",
             groupName = "Спорт",
