@@ -110,11 +110,10 @@ class ReadyCatalogPlaylistRepository @Inject constructor(
                             existing = channelDao.getChannels(playlistId),
                             incoming = incoming
                         )
-                        val refreshedEpgSource = parsed.epgUrls
-                            .firstOrNull()
-                            ?.trim()
-                            ?.ifBlank { null }
-                            ?: playlist.epgSourceUrl?.trim()?.ifBlank { null }
+                        // Ready-catalog EPG metadata is publisher-owned just like its channel list.
+                        // If a successful fresh M3U removes url-tvg/x-tvg-url, clear the retired
+                        // discovered endpoint instead of requesting it indefinitely.
+                        val refreshedEpgSource = refreshedReadyEpgSource(parsed.epgUrls)
                         val now = System.currentTimeMillis()
                         readyPlaylistRefreshDao.applyRefresh(
                             playlistId = playlistId,
@@ -220,22 +219,21 @@ class ReadyCatalogPlaylistRepository @Inject constructor(
     }
 }
 
+internal fun refreshedReadyEpgSource(epgUrls: List<String>): String? =
+    epgUrls.firstOrNull()?.trim()?.ifBlank { null }
+
+/**
+ * A stream URL is the concrete playback identity for Ready refresh deduplication.
+ *
+ * Multiple primary/backup/quality streams may legitimately share tvg-id and display name. Keep
+ * those variants and remove only byte-for-byte URL duplicates after trimming surrounding spaces.
+ * URL path/query casing is preserved because HTTP servers may treat it as significant.
+ */
 internal fun deduplicateReadyChannels(channels: List<Channel>): List<Channel> {
     val byUrl = linkedMapOf<String, Channel>()
     channels.forEach { channel ->
-        val key = channel.streamUrl.trim().lowercase()
+        val key = channel.streamUrl.trim()
         if (key !in byUrl) byUrl[key] = channel
     }
-
-    val byIdAndName = linkedMapOf<String, Channel>()
-    byUrl.values.forEach { channel ->
-        val normalizedTvgId = channel.tvgId.orEmpty().trim().lowercase()
-        val key = if (normalizedTvgId.isNotEmpty()) {
-            "$normalizedTvgId::${channel.name.trim().lowercase()}"
-        } else {
-            "__url__::${channel.streamUrl.trim().lowercase()}"
-        }
-        if (key !in byIdAndName) byIdAndName[key] = channel
-    }
-    return byIdAndName.values.toList()
+    return byUrl.values.toList()
 }
