@@ -43,9 +43,9 @@ class ReadyCatalogPlaylistRepository @Inject constructor(
     private val logoCatalogResolver: LogoCatalogResolver
 ) : PlaylistRepository by delegate {
     /**
-     * One lock per physical Ready playlist prevents manual-open refresh and scheduled sync from
-     * downloading/planning/writing the same snapshot concurrently. The built-in catalog is tiny,
-     * so retaining these locks for the singleton repository lifetime is bounded.
+     * One lock per physical Ready playlist prevents manual-open refresh, scheduled sync and delete
+     * from changing the same snapshot concurrently. The built-in catalog is tiny, so retaining
+     * these locks for the singleton repository lifetime is bounded and avoids lock-replacement races.
      */
     private val refreshLocks = ConcurrentHashMap<Long, Mutex>()
 
@@ -141,6 +141,28 @@ class ReadyCatalogPlaylistRepository @Inject constructor(
                 logRefreshFailureBestEffort(playlistId, "Ready playlist refresh failed: $summary")
                 AppResult.Error("Unable to refresh ready playlist: $summary", throwable)
             }
+        }
+    }
+
+    /**
+     * A Ready delete shares the same physical-playlist mutex as refresh. If refresh already owns the
+     * lock, delete waits for the atomic refresh write and then removes the completed snapshot. If
+     * delete owns it first, a pending refresh re-reads after the lock and exits once the row is gone.
+     * Non-Ready deletion remains exactly on the legacy delegate path.
+     */
+    override suspend fun deletePlaylist(playlistId: Long): AppResult<Int> = withContext(Dispatchers.IO) {
+        if (playlistId <= 0) return@withContext delegate.deletePlaylist(playlistId)
+        val playlist = playlistDao.findById(playlistId)
+        if (
+            playlist?.catalogOrigin != CatalogOriginKind.READY_CATALOG.name ||
+            playlist.sourceType != PlaylistSourceType.URL.name
+        ) {
+            return@withContext delegate.deletePlaylist(playlistId)
+        }
+
+        val refreshLock = refreshLocks.computeIfAbsent(playlistId) { Mutex() }
+        refreshLock.withLock {
+            delegate.deletePlaylist(playlistId)
         }
     }
 
