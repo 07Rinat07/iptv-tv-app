@@ -5,7 +5,9 @@ on:
     paths:
       - 'feature/player/**'
       - 'feature/scanner/**'
-      - 'core/scanner/**'
+      - 'core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource.kt'
+      - 'core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt'
+      - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase.kt'
       - 'docs/PROJECT_STATUS_AND_ROADMAP.md'
       - '.github/workflows/player-refactor-guard.yml'
 
@@ -31,7 +33,7 @@ jobs:
           set -euo pipefail
           changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
           printf '%s\n' "$changed"
-          if printf '%s\n' "$changed" | grep -Eq '^(feature/scanner|core/scanner)/'; then
+          if printf '%s\n' "$changed" | grep -Eq '^(feature/scanner/|core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource\.kt$|core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase\.kt$)'; then
             echo 'Player refactor must not modify Scanner production/query/discovery files.' >&2
             exit 1
           fi
@@ -51,4 +53,11 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Player and Scanner regression tests
-        run: ./gradlew :feature:player:testDebugUnitTest :feature:scanner:testDebugUnitTest --stacktrace
+        run: |
+          ./gradlew \
+            :feature:player:testDebugUnitTest \
+            :feature:scanner:testDebugUnitTest \
+            :core:network:testDebugUnitTest \
+            :core:data:testDebugUnitTest \
+            :core:domain:test \
+            --stacktrace
