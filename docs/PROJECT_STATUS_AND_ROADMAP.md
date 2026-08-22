@@ -6,8 +6,8 @@ This is the canonical current-state and next-action document. Dated field report
 
 ## Current integration head
 
-- Current `main`: `c8b136127d3aa0fd2043519dbc157d61bbfc9826` — PR #179, Favorites source-picker help/documentation sync.
-- PR #174–#179 are merged: versioned portable backup, safe exports, RIPTV picker import, source reconciliation/preference, TV source picker and its help sync.
+- Current `main`: `66a67a6` — All Channels virtual aggregate and catalog roadmap sync.
+- PR #174–#179 are merged: versioned portable backup, safe exports, RIPTV picker import, source reconciliation/preference, TV source picker and its help sync. All Channels is also complete in `main`.
 - Catalog/Favorites work does not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
 - Historical diagnostic and already-pruned branches are not production merge candidates.
 
@@ -30,17 +30,17 @@ The catalog/data track is developed as small fresh-main increments. Scanner disc
 11. **PR #177 — source reconciliation.** Selectable variants are reconciled against current live rows while durable provenance remains available.
 12. **PR #178 — preferred source picker.** Favorites exposes deterministic source selection on TV without duplicating the logical favorite.
 13. **PR #179 — source-picker help sync.** User Guide and built-in About Help describe the merged backup/import/export and preferred-source behavior.
+14. **All Channels virtual aggregate — main `66a67a6`.** A system-owned, non-destructive view preserves concrete channel/playlist IDs and the existing Player route without creating a physical playlist row.
 
 ### Current production increment
 
-**All Channels virtual aggregate — in progress.** `feat/virtual-all-channels` adds a system-owned, non-destructive view over concrete channels while preserving their source provenance and existing Player route. It must pass exact-head model/data/playlists tests, lint and Android assembly gates before merge.
+**Recent/History virtual aggregate — in progress.** The current fresh-main increment must preserve stable recency ordering, source provenance, parental filtering and the same non-destructive virtual-list semantics established by Favorites and All Channels.
 
 ### Next production increments
 
-1. **All Channels virtual aggregate.** Finish the current bounded increment and merge it only after exact-head gates are green.
-2. **Recent/History virtual aggregate.** Start from the resulting fresh `main` and preserve stable ordering, source provenance, parental filtering and non-destructive virtual-list semantics.
-3. **Performance hardening.** Validate lazy rendering, cached prepared structures and non-blocking rebuild on large catalogs/favorite sets.
-4. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P views only after their capability contracts are stable.
+1. **Recent/History virtual aggregate.** Finish the current bounded increment and merge it only after exact-head gates are green.
+2. **Performance hardening.** Validate lazy rendering, cached prepared structures and non-blocking rebuild on large catalogs/favorite sets after the aggregate contract is stable.
+3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P views only after their capability contracts are stable.
 
 ## Portable Favorites contract
 
@@ -102,12 +102,11 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 
 ## Decision order
 
-1. Merge All Channels only after exact-head model/data/playlists tests, lint and Android assembly gates are green.
-2. Start Recent/History from the resulting fresh `main`; do not stack it on an unverified aggregate branch.
-3. Validate lazy/cached/non-blocking catalog rebuild after the aggregate contracts are stable.
-4. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
-5. Continue EPG/Now-Next/archive (#47) and Player UX (#46) on top of the stable catalog/Favorites identity contracts.
-6. Complete hardware/soak/release acceptance before closing master roadmap #44.
+1. Finish Recent/History from fresh `main` and merge it only after exact-head model/data/playlists tests, lint and Android assembly gates are green.
+2. Start performance/lazy/non-blocking rebuild hardening after the aggregate contracts are stable.
+3. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
+4. Continue EPG/Now-Next/archive (#47) and Player UX (#46) on top of the stable catalog/Favorites identity contracts.
+5. Complete hardware/soak/release acceptance before closing master roadmap #44.
 
 ## Cross-track invariants
 

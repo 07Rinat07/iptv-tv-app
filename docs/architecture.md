@@ -111,7 +111,9 @@ PR #172 добавил `VirtualFavoritesPlaylistRepository` и стабильн�
 
 В `PlaylistsScreen` virtual Favorites разрешает каталог и Player, но физические `refresh/delete/editor` actions отключены. Repository-level guards повторяют этот запрет, чтобы UI не был единственной защитой destructive semantics.
 
-PR #174–#176 закрыли versioned portable backup/import и безопасный interoperability export, а PR #177–#178 — reconciliation/preferred-source contract и TV picker. Следующий catalog contract #45 — system-owned All Channels aggregate; обычный M3U/M3U8 не заменяет полный backup.
+Следующие outer decorators публикуют `Все каналы`, а затем `Недавние`. Recent объединяет bounded history flow с All Channels, durable Favorites и parental settings: exact legacy ID разрешается только в доступный concrete/persisted channel, после чего применяются hidden/parental filters и `ChannelStableIdentity` dedup в детерминированном MRU-порядке. Результат ограничен 100 каналами при lookback 250; Room schema, Scanner, Player и P2P policy не меняются. Общий `virtualPlaylistContentSummary` сохраняет прежние summary contracts трёх system aggregates без дублирования расчётов.
+
+PR #174–#176 закрыли versioned portable backup/import и безопасный interoperability export, а PR #177–#178 — reconciliation/preferred-source contract и TV picker. System-owned All Channels aggregate завершён в `main` `66a67a6`; текущий catalog contract #45 — Recent/History, затем aggregate performance hardening. Обычный M3U/M3U8 не заменяет полный backup.
 
 Пользовательское описание находится в [`USER_GUIDE.md`](USER_GUIDE.md), а краткая встроенная справка — в `AboutScreen`.
 
@@ -200,7 +202,7 @@ P2P recovery способен выдать typed output discontinuity при п�
 
 1. кодовая regression-baseline TV navigation (#40) стабилизирована; реальную BlueStacks/TV Box приёмку вести параллельно;
 2. P2P/Ace Live transport policy меняется только по real-device evidence Issue #159; без новой producer-stage/rapid-switch evidence не менять DHT/peer/request-depth/timeout/buffer assumptions (#44);
-3. canonical catalog navigation, autonomous Favorites, portable transfer и preferred-source picker стабилизированы PR #167–#179; текущий изолированный этап — All Channels, затем Recent/History и aggregate performance hardening (#45);
+3. canonical catalog navigation, autonomous Favorites, portable transfer и preferred-source picker стабилизированы PR #167–#179, All Channels завершён в `main` `66a67a6`; текущий изолированный этап — Recent/History, затем aggregate performance hardening (#45);
 4. построить EPG/Now-Next/real archive поверх стабильной channel identity (#47);
 5. переработать Player UX поверх готовых Catalog + Favorites + P2P + EPG contracts (#46);
 6. Favorites/source-picker user guide и встроенная Help синхронизированы PR #179; contextual Help остальных экранов продолжает задачу #43;
