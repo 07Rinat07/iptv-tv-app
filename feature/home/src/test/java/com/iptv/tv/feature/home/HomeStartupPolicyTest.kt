@@ -8,7 +8,7 @@ import org.junit.Test
 
 class HomeStartupPolicyTest {
     @Test
-    fun findsPreviouslyImportedReadyPlaylistByExactSource() {
+    fun findsPreviouslyImportedReadyPlaylistByExactSourceUrl() {
         val playlists = listOf(
             playlist(id = 7L, source = "https://example.org/one.m3u"),
             playlist(id = 9L, source = "https://example.org/two.m3u")
@@ -21,26 +21,24 @@ class HomeStartupPolicyTest {
     }
 
     @Test
-    fun returnsNullWhenReadyPlaylistWasNotImported() {
-        assertNull(
-            findImportedReadyPlaylist(
-                playlists = listOf(playlist(id = 1L, source = "https://example.org/one.m3u")),
-                sourceKey = "https://example.org/missing.m3u"
-            )
+    fun sourceUrlMatchingTrimsSurroundingWhitespace() {
+        val playlists = listOf(
+            playlist(id = 3L, source = "  https://example.org/live.m3u  ")
+        )
+
+        assertEquals(
+            3L,
+            findImportedReadyPlaylist(playlists, "https://example.org/live.m3u")?.id
         )
     }
 
     @Test
-    fun embeddedReadyPlaylistUsesDedicatedSourceKey() {
-        val externalUrl = "https://iptv.org.ua/iptv/provayder.m3u"
-        val playlists = listOf(
-            playlist(id = 1L, source = externalUrl),
-            playlist(id = 2L, source = ACE_STREAM_TORRENT_SOURCE_KEY)
-        )
-
-        assertEquals(
-            2L,
-            findImportedReadyPlaylist(playlists, ACE_STREAM_TORRENT_SOURCE_KEY)?.id
+    fun returnsNullWhenReadyPlaylistWasNotImported() {
+        assertNull(
+            findImportedReadyPlaylist(
+                playlists = listOf(playlist(id = 1L, source = "https://example.org/one.m3u")),
+                sourceUrl = "https://example.org/missing.m3u"
+            )
         )
     }
 
