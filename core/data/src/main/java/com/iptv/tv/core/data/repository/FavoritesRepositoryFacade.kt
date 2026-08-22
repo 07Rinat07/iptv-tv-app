@@ -59,19 +59,26 @@ class FavoritesRepositoryFacade @Inject constructor(
     }
 
     override suspend fun resolvePlaybackContext(favoriteChannelId: Long): FavoritePlaybackContext? {
-        // Preserve the delegate's lazy legacy-seed migration before using the specialized selector.
-        delegate.resolvePlaybackContext(favoriteChannelId)
+        sourceVariantService.resolvePlaybackContext(favoriteChannelId)?.let { return it }
+        // Normal v10 calls resolve above without duplicate database work. Only a first operation
+        // after v9->v10 may need the delegate to materialize legacy seeds before one retry.
+        delegate.resolvePlaybackContext(favoriteChannelId) ?: return null
         return sourceVariantService.resolvePlaybackContext(favoriteChannelId)
     }
 
     override suspend fun getSourceVariants(favoriteChannelId: Long): List<FavoriteSourceVariant> {
-        // Source APIs must work even when this is the first Favorites operation after a v9->v10 upgrade.
-        delegate.resolvePlaybackContext(favoriteChannelId)
+        val variants = sourceVariantService.getSourceVariants(favoriteChannelId)
+        if (variants.isNotEmpty()) return variants
+        // Preserve lazy migration for the edge case where source APIs are the first Favorites call.
+        delegate.resolvePlaybackContext(favoriteChannelId) ?: return emptyList()
         return sourceVariantService.getSourceVariants(favoriteChannelId)
     }
 
     override suspend fun selectPreferredSource(favoriteChannelId: Long, variantKey: String): Boolean {
-        delegate.resolvePlaybackContext(favoriteChannelId)
+        if (sourceVariantService.selectPreferredSource(favoriteChannelId, variantKey)) return true
+        // False can mean the durable snapshot has not yet been materialized from legacy seeds.
+        // Retrying after the migration barrier is harmless for a genuinely unknown variant.
+        delegate.resolvePlaybackContext(favoriteChannelId) ?: return false
         return sourceVariantService.selectPreferredSource(favoriteChannelId, variantKey)
     }
 
