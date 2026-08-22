@@ -13,6 +13,7 @@ import com.iptv.tv.core.database.dao.ParentalProfileDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.dao.PlaylistProviderDao
 import com.iptv.tv.core.database.dao.ProviderSyncHistoryDao
+import com.iptv.tv.core.database.dao.ReadyPlaylistRefreshDao
 import com.iptv.tv.core.database.dao.RecordingDao
 import com.iptv.tv.core.database.dao.RecordingScheduleDao
 import com.iptv.tv.core.database.dao.SyncLogDao
@@ -72,4 +73,5 @@ abstract class IptvDatabase : RoomDatabase() {
     abstract fun parentalProfileDao(): ParentalProfileDao
     abstract fun channelMetadataDao(): ChannelMetadataDao
     abstract fun tvHomeChannelDao(): TvHomeChannelDao
+    abstract fun readyPlaylistRefreshDao(): ReadyPlaylistRefreshDao
 }
