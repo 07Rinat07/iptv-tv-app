@@ -458,6 +458,6 @@ internal object FavoriteSourceVariantSelection {
     }.size.coerceAtLeast(1)
 
     private fun String?.toChannelHealthSafe(): ChannelHealth =
-        this?.let { value -> runCatching { ChannelHealth.valueOf(value).getOrNull() } }
+        this?.let { value -> runCatching { ChannelHealth.valueOf(value) }.getOrNull() }
             ?: ChannelHealth.UNKNOWN
 }
