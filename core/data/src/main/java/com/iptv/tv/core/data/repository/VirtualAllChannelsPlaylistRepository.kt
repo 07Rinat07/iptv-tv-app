@@ -22,6 +22,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
@@ -35,21 +36,34 @@ import kotlinx.coroutines.flow.map
 class VirtualAllChannelsPlaylistRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val delegate: VirtualFavoritesPlaylistRepository,
-    private val favoriteChannelLookupDao: FavoriteChannelLookupDao
+    private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
+    private val aggregateScope: VirtualPlaylistAggregateScope
 ) : PlaylistRepository by delegate {
+    private val allChannels = favoriteChannelLookupDao.observeAllChannels()
+        .combine(observeParentalChannelGate()) { rows, parentalGate ->
+            allChannelsForVirtualView(rows, parentalGate)
+        }
+        .shareVirtualAggregate(aggregateScope)
+    private val allChannelCount = allChannels
+        .map { channels -> channels.size }
+        .distinctUntilChanged()
+    private val allChannelsSummary = allChannels
+        .map(::virtualAllChannelsSummary)
+        .shareVirtualAggregate(aggregateScope)
+
     override fun observePlaylists(): Flow<List<Playlist>> {
         return combine(
             delegate.observePlaylists(),
-            observeAllChannels()
-        ) { playlists, channels ->
+            allChannelCount
+        ) { playlists, channelCount ->
             playlists.filterNot { it.id == VIRTUAL_ALL_CHANNELS_PLAYLIST_ID } +
-                virtualAllChannelsPlaylist(channelCount = channels.size)
+                virtualAllChannelsPlaylist(channelCount = channelCount)
         }
     }
 
     override fun observeChannels(playlistId: Long): Flow<List<Channel>> {
         return if (playlistId == VIRTUAL_ALL_CHANNELS_PLAYLIST_ID) {
-            observeAllChannels()
+            allChannels
         } else {
             delegate.observeChannels(playlistId)
         }
@@ -96,7 +110,7 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
         if (playlistId != VIRTUAL_ALL_CHANNELS_PLAYLIST_ID) {
             return delegate.getPlaylistContentSummary(playlistId)
         }
-        return AppResult.Success(virtualAllChannelsSummary(observeAllChannels().first()))
+        return AppResult.Success(allChannelsSummary.first())
     }
 
     override suspend fun getPlaylistEpgWindow(
@@ -114,13 +128,6 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
         }
     }
 
-    private fun observeAllChannels(): Flow<List<Channel>> {
-        return favoriteChannelLookupDao.observeAllChannels()
-            .combine(observeParentalChannelGate()) { rows, parentalGate ->
-                allChannelsForVirtualView(rows, parentalGate)
-            }
-    }
-
     private fun observeParentalChannelGate(): Flow<ParentalChannelGate> {
         return context.settingsDataStore.data.map { prefs ->
             ParentalChannelGate(
@@ -130,7 +137,7 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
                     prefs[SettingsKeys.parentalBlockedKeywords]
                 )
             )
-        }
+        }.distinctUntilChanged()
     }
 }
 

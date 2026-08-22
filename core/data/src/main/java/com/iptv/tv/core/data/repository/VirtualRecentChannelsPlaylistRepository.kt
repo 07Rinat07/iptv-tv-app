@@ -22,7 +22,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 
 /**
  * Adds a bounded, newest-first Recent aggregate over the existing All Channels/Favorites chain.
@@ -36,21 +38,49 @@ import kotlinx.coroutines.flow.first
 class VirtualRecentChannelsPlaylistRepository @Inject constructor(
     private val delegate: VirtualAllChannelsPlaylistRepository,
     private val historyRepository: HistoryRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val aggregateScope: VirtualPlaylistAggregateScope
 ) : PlaylistRepository by delegate {
+    private val recentChannels by lazy {
+        combine(
+            historyRepository.observeHistory(limit = RECENT_HISTORY_LOOKBACK_LIMIT),
+            delegate.observeChannels(VIRTUAL_ALL_CHANNELS_PLAYLIST_ID),
+            delegate.observeChannels(VIRTUAL_FAVORITES_PLAYLIST_ID),
+            settingsRepository.observeParentalControlSettings().distinctUntilChanged()
+        ) { history, allChannels, favoriteChannels, parentalSettings ->
+            recentChannelsForVirtualView(
+                history = history,
+                allChannels = allChannels,
+                favoriteChannels = favoriteChannels,
+                parentalGate = parentalSettings.toParentalChannelGate(),
+                limit = MAX_RECENT_CHANNELS
+            )
+        }.shareVirtualAggregate(aggregateScope)
+    }
+    private val recentChannelCount by lazy {
+        recentChannels
+            .map { channels -> channels.size }
+            .distinctUntilChanged()
+    }
+    private val recentChannelsSummary by lazy {
+        recentChannels
+            .map(::virtualRecentChannelsSummary)
+            .shareVirtualAggregate(aggregateScope)
+    }
+
     override fun observePlaylists(): Flow<List<Playlist>> {
         return combine(
             delegate.observePlaylists(),
-            observeRecentChannels()
-        ) { playlists, channels ->
+            recentChannelCount
+        ) { playlists, channelCount ->
             playlists.filterNot { it.id == VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID } +
-                virtualRecentChannelsPlaylist(channelCount = channels.size)
+                virtualRecentChannelsPlaylist(channelCount = channelCount)
         }
     }
 
     override fun observeChannels(playlistId: Long): Flow<List<Channel>> {
         return if (playlistId == VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID) {
-            observeRecentChannels()
+            recentChannels
         } else {
             delegate.observeChannels(playlistId)
         }
@@ -97,7 +127,7 @@ class VirtualRecentChannelsPlaylistRepository @Inject constructor(
         if (playlistId != VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID) {
             return delegate.getPlaylistContentSummary(playlistId)
         }
-        return AppResult.Success(virtualRecentChannelsSummary(observeRecentChannels().first()))
+        return AppResult.Success(recentChannelsSummary.first())
     }
 
     override suspend fun getPlaylistEpgWindow(
@@ -110,23 +140,6 @@ class VirtualRecentChannelsPlaylistRepository @Inject constructor(
             AppResult.Success(emptyMap())
         } else {
             delegate.getPlaylistEpgWindow(playlistId, startEpochMs, endEpochMs, query)
-        }
-    }
-
-    private fun observeRecentChannels(): Flow<List<Channel>> {
-        return combine(
-            historyRepository.observeHistory(limit = RECENT_HISTORY_LOOKBACK_LIMIT),
-            delegate.observeChannels(VIRTUAL_ALL_CHANNELS_PLAYLIST_ID),
-            delegate.observeChannels(VIRTUAL_FAVORITES_PLAYLIST_ID),
-            settingsRepository.observeParentalControlSettings()
-        ) { history, allChannels, favoriteChannels, parentalSettings ->
-            recentChannelsForVirtualView(
-                history = history,
-                allChannels = allChannels,
-                favoriteChannels = favoriteChannels,
-                parentalGate = parentalSettings.toParentalChannelGate(),
-                limit = MAX_RECENT_CHANNELS
-            )
         }
     }
 }

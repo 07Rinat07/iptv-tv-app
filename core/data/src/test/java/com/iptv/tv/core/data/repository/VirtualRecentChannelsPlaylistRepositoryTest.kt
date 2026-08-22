@@ -18,6 +18,7 @@ import com.iptv.tv.core.model.VIRTUAL_RECENT_CHANNELS_SOURCE
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -70,10 +71,18 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         every { historyRepository.observeHistory(any()) } returns history
         every { settingsRepository.observeParentalControlSettings() } returns parentalSettings
 
+        // The production aggregate runs on an application scope. In coroutine tests, keep the
+        // background-scope Job lifecycle but replace its dispatcher so MutableStateFlow updates
+        // resume the shared upstream deterministically instead of being deferred behind the
+        // background scheduler that advanceUntilIdle intentionally does not drain.
+        val aggregateTestScope = CoroutineScope(
+            backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler)
+        )
         val repository = VirtualRecentChannelsPlaylistRepository(
             delegate = delegate,
             historyRepository = historyRepository,
-            settingsRepository = settingsRepository
+            settingsRepository = settingsRepository,
+            aggregateScope = VirtualPlaylistAggregateScope.forTest(aggregateTestScope)
         )
 
         val playlists = repository.observePlaylists().first()
@@ -261,7 +270,8 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         val repository = VirtualRecentChannelsPlaylistRepository(
             delegate = delegate,
             historyRepository = mockk<HistoryRepository>(),
-            settingsRepository = mockk<SettingsRepository>()
+            settingsRepository = mockk<SettingsRepository>(),
+            aggregateScope = VirtualPlaylistAggregateScope.forTest(backgroundScope)
         )
 
         assertTrue(repository.refreshPlaylist(VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID) is AppResult.Success)
