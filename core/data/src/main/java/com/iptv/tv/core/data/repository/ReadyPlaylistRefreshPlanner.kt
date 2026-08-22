@@ -14,9 +14,10 @@ internal data class ReadyPlaylistRefreshPlan(
 /**
  * Reconciles a freshly downloaded Ready-catalog M3U with its existing Room rows.
  *
- * Exact stream matches win first because a shared tvg-id/name can legitimately describe several
- * source variants. Stable logical identity is then used to retain row IDs across publisher URL
- * changes, while an exact-stream fallback naturally covers metadata upgrades such as adding tvg-id.
+ * Exact stream matches are reserved for the whole incoming snapshot before any stable-identity
+ * fallback is assigned. This prevents a new same-identity variant that appears earlier in the M3U
+ * from stealing the persisted row of an unchanged stream that appears later. Stable identity is
+ * then used only from rows that are not reserved for any exact stream match.
  */
 internal object ReadyPlaylistRefreshPlanner {
     fun plan(
@@ -37,13 +38,28 @@ internal object ReadyPlaylistRefreshPlanner {
             }
             .toMap()
 
+        // Reserve every unambiguous exact endpoint before stable fallback matching begins. Incoming
+        // Ready channels are already exact-URL deduplicated, so one persisted row can have at most
+        // one exact incoming owner here.
+        val exactMatches = incoming.map { channel ->
+            existingByStream[channel.streamUrl.trim()]
+        }
+        val reservedExactIds = exactMatches
+            .mapNotNullTo(hashSetOf(), ChannelEntity::id)
+
         val reusedIds = mutableSetOf<Long>()
         val upserts = incoming.mapIndexed { index, channel ->
             val incomingStream = channel.streamUrl.trim()
-            val streamMatch = existingByStream[incomingStream]
+            val streamMatch = exactMatches[index]
                 ?.takeIf { candidate -> candidate.id !in reusedIds }
-            val stableMatch = existingByStableKey[stableKey(channel)]
-                ?.firstOrNull { candidate -> candidate.id !in reusedIds }
+            val stableMatch = if (streamMatch == null) {
+                existingByStableKey[stableKey(channel)]
+                    ?.firstOrNull { candidate ->
+                        candidate.id !in reusedIds && candidate.id !in reservedExactIds
+                    }
+            } else {
+                null
+            }
             val matched = streamMatch ?: stableMatch
             if (matched != null) reusedIds += matched.id
             val unchangedStream = matched?.streamUrl?.trim() == incomingStream
