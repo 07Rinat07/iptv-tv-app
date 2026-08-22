@@ -283,18 +283,32 @@ internal fun epgWindowForPreset(
     }
 
     val dayOffset = if (preset == EpgWindowPreset.TOMORROW) 1 else 0
-    val startCalendar = Calendar.getInstance(timeZone).apply {
+    val startMs = localCivilDayBoundary(
+        nowMs = nowMs,
+        dayOffset = dayOffset,
+        timeZone = timeZone
+    )
+    val endMs = localCivilDayBoundary(
+        nowMs = nowMs,
+        dayOffset = dayOffset + 1,
+        timeZone = timeZone
+    )
+    return startMs to endMs
+}
+
+private fun localCivilDayBoundary(
+    nowMs: Long,
+    dayOffset: Int,
+    timeZone: TimeZone
+): Long {
+    return Calendar.getInstance(timeZone).apply {
         timeInMillis = nowMs
         if (dayOffset != 0) add(Calendar.DAY_OF_YEAR, dayOffset)
         set(Calendar.HOUR_OF_DAY, 0)
         set(Calendar.MINUTE, 0)
         set(Calendar.SECOND, 0)
         set(Calendar.MILLISECOND, 0)
-    }
-    val endCalendar = (startCalendar.clone() as Calendar).apply {
-        add(Calendar.DAY_OF_YEAR, 1)
-    }
-    return startCalendar.timeInMillis to endCalendar.timeInMillis
+    }.timeInMillis
 }
 
 internal fun nextEpgVisibleRowLimit(
