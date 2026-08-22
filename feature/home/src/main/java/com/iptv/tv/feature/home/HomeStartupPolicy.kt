@@ -4,7 +4,7 @@ import com.iptv.tv.core.model.Playlist
 
 internal fun findImportedReadyPlaylist(
     playlists: List<Playlist>,
-    sourceKey: String
+    sourceUrl: String
 ): Playlist? = playlists.firstOrNull { playlist ->
-    playlist.source.trim() == sourceKey.trim()
+    playlist.source.trim() == sourceUrl.trim()
 }
