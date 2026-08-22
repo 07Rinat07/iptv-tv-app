@@ -6,9 +6,9 @@ This is the canonical current-state and next-action document. Dated field report
 
 ## Current integration head
 
-- Current production baseline prepared for `main`: `2d22aea` — off-Main latest-wins catalog rebuild with stale-result guards and fresh-checkpoint reconciliation. This documentation sync is the only commit on top.
-- PR #174–#179 are merged: versioned portable backup, safe exports, RIPTV picker import, source reconciliation/preference, TV source picker and its help sync. All Channels is also complete in `main`.
-- Catalog/Favorites work does not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
+- Current production `main`: `68ddecb` — PR #180 aggregate collector/summary hardening, merged only after exact-head Database Unit CI #34 and Android CI #735 completed successfully.
+- PR #174–#180 are merged: portable Favorites backup/import/export and source preference, virtual All Channels/Recent views, catalog focus/non-blocking rebuild hardening, and shared/coalesced virtual aggregate summaries.
+- Catalog/Favorites and EPG UI work do not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
 - Historical diagnostic and already-pruned branches are not production merge candidates.
 
 ## Issue #45 — canonical catalog + autonomous unified Favorites
@@ -33,16 +33,19 @@ The catalog/data track is developed as small fresh-main increments. Scanner disc
 14. **All Channels virtual aggregate — main `66a67a6`.** A system-owned, non-destructive view preserves concrete channel/playlist IDs and the existing Player route without creating a physical playlist row.
 15. **Recent/History virtual aggregate — main `03f8e8e`.** A bounded MRU view resolves current live/durable Favorite channels, preserves playback context, removes logical duplicates and reacts to hidden/parental/history changes without a Room playlist row.
 16. **Catalog focus performance — main `90a285c`.** Focus-only D-pad transitions retain the prepared entries/breadcrumbs instead of rebuilding O(N) UI lists; a 10k-channel harness protects checkpoint restore and exact ordering.
-17. **Non-blocking catalog rebuild — production `2d22aea`.** Canonical session creation, restore and snapshot preparation run on the injected Default dispatcher; conflated emissions carry immutable publication tokens, cancelled/stale playlist candidates cannot publish, and focus changes during restore are reconciled until stable.
+17. **Non-blocking catalog rebuild — main `2d22aea`.** Canonical session creation, restore and snapshot preparation run on the injected Default dispatcher; conflated emissions carry immutable publication tokens, cancelled/stale playlist candidates cannot publish, and focus changes during restore are reconciled until stable.
+18. **PR #180 — aggregate collector/summary hardening — main `68ddecb`.** Favorites, All Channels and Recent share lazy aggregate flows across count/catalog/summary consumers, unchanged publications are coalesced, and preview preparation is bounded while preserving stable ordering. Exact-head Database Unit CI #34 and Android CI #735 passed before squash merge.
 
 ### Current development state
 
-**Paused after a completed increment at the user's request.** Production `2d22aea` and its deterministic regressions are complete. No aggregate collector/summary work has been started in this pause state.
+Issue #45's planned aggregate collector/summary hardening is complete in `main`. The active production track has moved to Issue #47 (EPG/Now-Next/archive), starting with calendar-correct guide date windows on a fresh-main branch.
 
 ### Next production increments
 
-1. **Aggregate collector/summary hardening (when development resumes).** Remove redundant cold-flow subscriptions, coalesce unchanged summary work and bound top-50 preparation.
-2. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P views only after their capability contracts are stable.
+1. **EPG date-window correctness — Issue #47.** Treat TODAY/TOMORROW as local civil-day boundaries rather than fixed 24-hour durations, with DST regressions.
+2. **EPG matching safety — Issue #47.** Preserve `tvg-id` and exact-name priority and stop silently choosing an arbitrary partial match when multiple XMLTV channels are plausible.
+3. **EPG diagnostics/cache/archive capability — Issue #47.** Continue matched/unmatched diagnostics, resilient refresh/cache behavior and real catch-up capability contracts in small independent increments.
+4. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
 
 ## Portable Favorites contract
 
@@ -74,7 +77,7 @@ The current P2P transport policy remains evidence-driven. The latest canonical f
 
 Already-completed hardening includes terminal peer-pool ownership, production-lifetime DHT routing memory, warm-query scheduling, progress-aware direct handoff/fallback, deterministic A→B→C ownership, player-session terminal summaries and bounded MPEG-TS/continuous-fixture diagnostics.
 
-The remaining field gate is real-device evidence for producer-stage / rapid-switch behavior and the separate player/TS boundary. Do **not** infer new peer/request/buffer policy from catalog/Favorites CI.
+The remaining field gate is real-device evidence for producer-stage / rapid-switch behavior and the separate player/TS boundary. Do **not** infer new peer/request/buffer policy from catalog/Favorites/EPG CI.
 
 ### Binding P2P constraints
 
@@ -92,7 +95,7 @@ The remaining field gate is real-device evidence for producer-stage / rapid-swit
 For normal Android integration work on the exact PR head:
 
 1. `lintDebug`
-2. relevant unit modules, including `:core:data:testDebugUnitTest` for Favorites/data work
+2. relevant unit modules, including `:core:data:testDebugUnitTest` for Favorites/data work and `:feature:epg:testDebugUnitTest` for EPG UI/date-navigation work
 3. `:feature:playlists:testDebugUnitTest` for canonical catalog changes
 4. `:app:assembleDebug`
 5. `:app:assembleDebugAndroidTest`
@@ -104,20 +107,21 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 
 ## Decision order
 
-1. Keep the completed off-Main latest-wins baseline unchanged during the requested development pause.
-2. When development resumes, continue aggregate collector/summary hardening as a separate measured increment from fresh `main`.
+1. Keep PR #180's merged aggregate collector/summary baseline stable; do not reopen catalog performance work without a measured regression or a new planned capability.
+2. Continue Issue #47 as fresh-main EPG increments: calendar-correct day navigation, then unambiguous matching/diagnostics and real catch-up/archive capability.
 3. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
-4. Continue EPG/Now-Next/archive (#47) and Player UX (#46) on top of the stable catalog/Favorites identity contracts.
+4. Continue Player UX #46 on top of stable catalog/EPG contracts without introducing a second playback runtime.
 5. Complete hardware/soak/release acceptance before closing master roadmap #44.
 
 ## Cross-track invariants
 
-- Catalog/Favorites work must not rewrite Scanner discovery/query semantics.
-- Catalog/Favorites work must not modify Ace Live peer/DHT/request/buffer policies without P2P field evidence.
+- Catalog/Favorites/EPG work must not rewrite Scanner discovery/query semantics.
+- Catalog/Favorites/EPG work must not modify Ace Live peer/DHT/request/buffer policies without P2P field evidence.
 - Logical favorite ownership must not depend on Room auto-generated channel/playlist row lifetime.
 - Source provenance and source variants must remain discoverable after logical deduplication.
 - A virtual aggregate must not masquerade as a destructively editable physical playlist.
 - Export/import must preserve user-owned data without silently exporting credentials or provider secrets.
+- EPG fallback matching must prefer certainty over silently assigning an ambiguous guide channel.
 - Every production increment starts from fresh `main`, carries focused tests, and merges only after exact-head gates are green.
 
 ## Documentation map
