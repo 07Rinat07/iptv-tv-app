@@ -148,10 +148,12 @@ fun FavoritesScreen(
                     Text("Удалить")
                 }
                 OutlinedButton(
-                    onClick = if (sourcePickerOpen) {
-                        viewModel::closeSourcePicker
-                    } else {
-                        viewModel::openSourcePicker
+                    onClick = {
+                        if (sourcePickerOpen) {
+                            viewModel.closeSourcePicker()
+                        } else {
+                            viewModel.openSourcePicker()
+                        }
                     },
                     enabled = state.selectedChannelId != null && !isTransferBusy
                 ) {
