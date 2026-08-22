@@ -58,14 +58,22 @@ class FavoritesRepositoryFacade @Inject constructor(
         }
     }
 
-    override suspend fun resolvePlaybackContext(favoriteChannelId: Long): FavoritePlaybackContext? =
-        sourceVariantService.resolvePlaybackContext(favoriteChannelId)
+    override suspend fun resolvePlaybackContext(favoriteChannelId: Long): FavoritePlaybackContext? {
+        // Preserve the delegate's lazy legacy-seed migration before using the specialized selector.
+        delegate.resolvePlaybackContext(favoriteChannelId)
+        return sourceVariantService.resolvePlaybackContext(favoriteChannelId)
+    }
 
-    override suspend fun getSourceVariants(favoriteChannelId: Long): List<FavoriteSourceVariant> =
-        sourceVariantService.getSourceVariants(favoriteChannelId)
+    override suspend fun getSourceVariants(favoriteChannelId: Long): List<FavoriteSourceVariant> {
+        // Source APIs must work even when this is the first Favorites operation after a v9->v10 upgrade.
+        delegate.resolvePlaybackContext(favoriteChannelId)
+        return sourceVariantService.getSourceVariants(favoriteChannelId)
+    }
 
-    override suspend fun selectPreferredSource(favoriteChannelId: Long, variantKey: String): Boolean =
-        sourceVariantService.selectPreferredSource(favoriteChannelId, variantKey)
+    override suspend fun selectPreferredSource(favoriteChannelId: Long, variantKey: String): Boolean {
+        delegate.resolvePlaybackContext(favoriteChannelId)
+        return sourceVariantService.selectPreferredSource(favoriteChannelId, variantKey)
+    }
 
     override suspend fun exportShareableFavorites(
         format: FavoritesShareableExportFormat
