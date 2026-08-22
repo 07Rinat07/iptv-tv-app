@@ -85,6 +85,8 @@ fun AboutScreen(
                     Text("8. Если живой источник favorite исчез, приложение сохраняет playback snapshot/source variants для последующего воспроизведения или повторного связывания.")
                     Text("9. TXT/M3U8 export не записывает credential-bearing provider URL по умолчанию; M3U8 использует безопасный alternate variant, если он доступен.")
                     Text("10. «Сохранить RIPTV» создаёт полный versioned backup Favorites с logical identity/provenance/source variants; credential-bearing URLs в нём также редактируются.")
+                    Text("11. «Импорт RIPTV» открывает системный выбор документа и сначала проверяет формат/версию backup; затем данные объединяются с текущим Избранным без полной замены библиотеки.")
+                    Text("12. После импорта приложение показывает, сколько favorites/variants добавлено или объединено и сколько redacted/невосстановимых записей пропущено.")
                 }
             }
         }

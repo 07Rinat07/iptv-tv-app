@@ -100,7 +100,22 @@ Back не должен перескакивать через несколько 
 
 Во всех стандартных export-режимах действует единая безопасная политика: provider credentials, MAC/API keys/tokens и credential-bearing URLs не записываются в файл по умолчанию. Полный `.riptv` backup также редактирует такие stream URLs, сохраняя при этом безопасные metadata/identity для последующего merge/relink.
 
-Обычный TXT/M3U8 остаётся форматом обмена и не является полной резервной копией внутренних Favorites metadata. Импорт `.riptv` через системный file picker реализуется отдельным следующим инкрементом.
+Обычный TXT/M3U8 остаётся форматом обмена и не является полной резервной копией внутренних Favorites metadata.
+
+### Импорт RIPTV
+
+Кнопка **«Импорт RIPTV»** открывает системный выбор документа Android. Приложение не доверяет расширению файла: содержимое сначала проверяется versioned backup decoder, и только после полной валидации разрешается запись в Favorites storage.
+
+Импорт работает как merge, а не как полная замена текущей библиотеки:
+
+- существующий favorite с той же logical identity объединяется, а не дублируется;
+- новые безопасные source variants добавляются к уже известным;
+- текущий preferred source существующего favorite сохраняется, если он уже есть;
+- импортированные variants повторно связываются с текущими live Room rows, когда эквивалент уже присутствует;
+- credential-bearing/redacted URL из backup не восстанавливаются как открытые секреты;
+- favorite, в котором после redaction нет ни одного восстанавливаемого source, может быть пропущен; это отражается в итоговом сообщении.
+
+После завершения экран показывает количество добавленных favorites, объединённых favorites, восстановленных variants, пропущенных redacted variants и невосстановимых записей. Неверный формат и неподдерживаемая версия отображаются как отдельные ошибки. Чтение выбранного документа ограничено размером backup-контракта до передачи JSON в decoder.
 
 ## Player
 
@@ -128,6 +143,7 @@ Back не должен перескакивать через несколько 
 - PR #171 добавил единый favorite playback resolver для live и persisted variants;
 - PR #172 подключил Favorites как системный virtual aggregate к существующему canonical catalog и Player;
 - PR #174 добавил versioned portable Favorites backup/import backend с безопасной credential policy;
-- текущий safe-export increment переводит TXT/M3U8 на тот же data-layer policy и открывает `.riptv` export в Favorites UI.
+- PR #175 перевёл TXT/M3U8 на тот же data-layer policy и открыл `.riptv` export в Favorites UI;
+- `.riptv` import через системный document picker использует validate-before-write merge backend и отдельный bounded-reader UI gate.
 
-Следующий этап #45 — `.riptv` import через системный file picker, затем source-variant picker и остальные aggregate views/performance hardening.
+Следующий этап #45 — source-variant picker/reconciliation, затем остальные aggregate views и performance/non-blocking rebuild hardening.

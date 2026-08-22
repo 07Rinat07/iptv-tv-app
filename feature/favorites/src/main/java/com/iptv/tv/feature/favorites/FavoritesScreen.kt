@@ -1,5 +1,8 @@
 package com.iptv.tv.feature.favorites
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -24,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -46,6 +50,20 @@ fun FavoritesScreen(
     viewModel: FavoritesViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    val importBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { selectedUri ->
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    selectedUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            viewModel.importFavoritesRiptv(selectedUri)
+        }
+    }
     var showDetails by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var sortModeName by rememberSaveable { mutableStateOf(FavoritesSortMode.CURRENT_FIRST.name) }
@@ -53,6 +71,7 @@ fun FavoritesScreen(
     val sortMode = FavoritesSortMode.entries.firstOrNull { it.name == sortModeName }
         ?: FavoritesSortMode.CURRENT_FIRST
     val locale = Locale.getDefault()
+    val isTransferBusy = state.isExporting || state.isImporting
     val visibleChannels = remember(
         state.channels,
         state.selectedChannelId,
@@ -119,27 +138,33 @@ fun FavoritesScreen(
                 }
                 OutlinedButton(
                     onClick = viewModel::removeSelectedFromFavorites,
-                    enabled = state.selectedChannelId != null
+                    enabled = state.selectedChannelId != null && !state.isImporting
                 ) {
                     Text("Удалить")
                 }
                 OutlinedButton(
                     onClick = viewModel::exportFavoritesTxt,
-                    enabled = state.channels.isNotEmpty() && !state.isExporting
+                    enabled = state.channels.isNotEmpty() && !isTransferBusy
                 ) {
                     Text("Сохранить TXT")
                 }
                 OutlinedButton(
                     onClick = viewModel::exportFavoritesM3u8,
-                    enabled = state.channels.isNotEmpty() && !state.isExporting
+                    enabled = state.channels.isNotEmpty() && !isTransferBusy
                 ) {
                     Text("Сохранить M3U8")
                 }
                 OutlinedButton(
                     onClick = viewModel::exportFavoritesRiptv,
-                    enabled = state.channels.isNotEmpty() && !state.isExporting
+                    enabled = state.channels.isNotEmpty() && !isTransferBusy
                 ) {
                     Text("Сохранить RIPTV")
+                }
+                OutlinedButton(
+                    onClick = { importBackupLauncher.launch(arrayOf("*/*")) },
+                    enabled = !isTransferBusy
+                ) {
+                    Text(if (state.isImporting) "Импорт RIPTV..." else "Импорт RIPTV")
                 }
                 OutlinedButton(onClick = { showDetails = !showDetails }) {
                     Text(if (showDetails) "Скрыть детали" else "Детали")

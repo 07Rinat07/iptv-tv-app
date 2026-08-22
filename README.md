@@ -17,7 +17,7 @@
 - **Канонический каталог плейлистов**: путь `Источник → Плейлист → Группа/Подгруппа → Канал`, breadcrumb-контекст, Back ровно на один уровень и открытие точного выбранного канала в Player.
 - **Стабильное восстановление focus каталога**: после возврата из Player приложение возвращает пользователя к прежнему уровню/строке по стабильному canonical id; после обновления дерева используется самый глубокий оставшийся корректный путь.
 - **Автономное unified Избранное**: любимый канал хранится как durable logical snapshot с вариантами источника и не удаляется вместе с исходным плейлистом. В `Мои плейлисты` доступен системный виртуальный список `Избранное`, который открывается тем же canonical catalog/Player маршрутом без создания физического плейлиста.
-- **Безопасный экспорт Favorites**: TXT/M3U8 не раскрывают credential-bearing provider URL по умолчанию, а `.riptv` сохраняет versioned logical identity/provenance/source variants с той же credential policy.
+- **Безопасный экспорт и импорт Favorites**: TXT/M3U8 не раскрывают credential-bearing provider URL по умолчанию; `.riptv` сохраняет versioned logical identity/provenance/source variants и импортируется через системный document picker с validate-before-write merge policy.
 - **История и EPG**: быстрый доступ к истории просмотра и программе передач, когда она доступна у исходного источника.
 - **Media3 / ExoPlayer как основной плеер** с изолированным **LibVLC fallback** для подтверждённых container/demux/codec несовместимостей.
 - **Встроенный BitTorrent/P2P backend** для `magnet:`, infohash, локальных `.torrent` и HTTP(S)-ссылок на `.torrent`; поток для плеера отдаётся через локальный HTTP Range.
@@ -66,9 +66,11 @@ Unified Favorites persistence и Player consumer закрыты PR #170–#172. 
 - каталог и Player используют существующий контракт, а для orphan favorite выбирается сохранённый рабочий variant;
 - физические операции `обновить / удалить плейлист / редактор` для виртуального списка недоступны.
 
-Portable backend закрыт PR #174: `.riptv` использует versioned JSON contract и сохраняет logical identity, provenance и source variants без переноса локальных Room IDs как portable identity. Текущий safe-export слой переводит TXT/M3U8 на ту же data-layer credential policy и открывает `.riptv` export в Favorites UI. Если preferred source содержит credentials, M3U8 выбирает безопасный alternate variant при наличии; favorite без безопасного URL в M3U8 не записывается, а TXT оставляет metadata с `[REDACTED]`.
+Portable backend закрыт PR #174: `.riptv` использует versioned JSON contract и сохраняет logical identity, provenance и source variants без переноса локальных Room IDs как portable identity. PR #175 перевёл TXT/M3U8 на ту же data-layer credential policy и открыл `.riptv` export в Favorites UI. Если preferred source содержит credentials, M3U8 выбирает безопасный alternate variant при наличии; favorite без безопасного URL в M3U8 не записывается, а TXT оставляет metadata с `[REDACTED]`.
 
-Следующий этап #45 — пользовательский `.riptv` import через системный file picker, затем source-variant picker. Обычный M3U/M3U8 остаётся универсальным interoperability-экспортом и не заменяет полный backup приложения.
+Экран Favorites также поддерживает **«Импорт RIPTV»** через системный Android document picker. Выбранный документ читается с ограничением размера, затем versioned decoder полностью проверяет формат и версию до записи. Валидный backup объединяется с текущей библиотекой: одинаковая logical identity не дублируется, safe variants добавляются/relink к текущим live rows, existing preferred source сохраняется, а redacted credential-bearing URL не раскрываются и не восстанавливаются как секреты.
+
+Следующий этап #45 — source-variant picker/reconciliation, затем остальные virtual aggregate views и performance/non-blocking rebuild hardening. Обычный M3U/M3U8 остаётся универсальным interoperability-экспортом и не заменяет полный backup приложения.
 
 ## Статус P2P / Torrent TV
 
@@ -128,7 +130,7 @@ APK/AAB не хранятся в Git. GitHub Actions прикладывает с
 - real Torrent TV playback smoke для P2P/runtime изменений без внешнего Ace Engine;
 - публикацию APK и отчётов как временных GitHub Actions artifacts.
 
-Для изменений Favorites persistence/data дополнительно используется dedicated Database Unit CI (`core:database` + `core:data`).
+Для изменений Favorites persistence/data/UI дополнительно используется dedicated Database Unit CI: `core:database`, `core:data` и `feature:favorites` unit tests. Это даёт отдельный exact-head gate для portable backup/import/export regression tests.
 
 ## Документация
 

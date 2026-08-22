@@ -2,6 +2,7 @@ package com.iptv.tv.feature.favorites
 
 import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -12,10 +13,13 @@ import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.EpgProgram
+import com.iptv.tv.core.model.FavoritesPortableImportResult
+import com.iptv.tv.core.model.FavoritesPortableImportStatus
 import com.iptv.tv.core.model.FavoritesShareableExportFormat
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.io.Reader
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -35,6 +39,7 @@ data class FavoritesUiState(
     val epgStatus: String = "EPG: нет данных",
     val selectedChannelId: Long? = null,
     val isExporting: Boolean = false,
+    val isImporting: Boolean = false,
     val exportedFilePath: String? = null,
     val lastInfo: String? = null,
     val lastError: String? = null
@@ -118,6 +123,42 @@ class FavoritesViewModel @Inject constructor(
         }
     }
 
+    fun importFavoritesRiptv(uri: Uri) {
+        val state = _uiState.value
+        if (state.isExporting || state.isImporting) return
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isImporting = true,
+                    lastInfo = null,
+                    lastError = null
+                )
+            }
+            runCatching {
+                val content = readPortableBackup(uri)
+                favoritesRepository.importPortableBackup(content)
+            }.onSuccess { result ->
+                val feedback = favoritesImportFeedback(result)
+                _uiState.update {
+                    it.copy(
+                        isImporting = false,
+                        lastInfo = feedback.info,
+                        lastError = feedback.error
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.update {
+                    it.copy(
+                        isImporting = false,
+                        lastInfo = null,
+                        lastError = "Не удалось импортировать RIPTV: ${throwable.message}"
+                    )
+                }
+            }
+        }
+    }
+
     private fun exportShareableFavorites(
         format: FavoritesShareableExportFormat,
         extension: String,
@@ -154,7 +195,7 @@ class FavoritesViewModel @Inject constructor(
             _uiState.update { it.copy(lastError = "Избранных каналов пока нет", lastInfo = null) }
             return
         }
-        if (_uiState.value.isExporting) return
+        if (_uiState.value.isExporting || _uiState.value.isImporting) return
 
         viewModelScope.launch {
             _uiState.update { it.copy(isExporting = true, lastError = null) }
@@ -191,6 +232,14 @@ class FavoritesViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    private fun readPortableBackup(uri: Uri): String {
+        val input = appContext.contentResolver.openInputStream(uri)
+            ?: error("Не удалось открыть выбранный файл")
+        return input.bufferedReader().use { reader ->
+            reader.readBoundedText(MAX_RIPTV_IMPORT_CHARS)
         }
     }
 
@@ -280,6 +329,60 @@ class FavoritesViewModel @Inject constructor(
     }
 }
 
+internal data class FavoritesImportFeedback(
+    val info: String? = null,
+    val error: String? = null
+)
+
+internal fun favoritesImportFeedback(
+    result: FavoritesPortableImportResult
+): FavoritesImportFeedback = when (result.status) {
+    FavoritesPortableImportStatus.SUCCESS -> FavoritesImportFeedback(
+        info = buildString {
+            append("RIPTV импорт завершен")
+            append(" · добавлено: ${result.importedFavorites}")
+            append(" · объединено: ${result.mergedFavorites}")
+            append(" · вариантов: ${result.importedVariants}")
+            if (result.redactedVariantsIgnored > 0) {
+                append(" · скрытых вариантов пропущено: ${result.redactedVariantsIgnored}")
+            }
+            if (result.skippedUnrestorableFavorites > 0) {
+                append(" · невосстановимых каналов пропущено: ${result.skippedUnrestorableFavorites}")
+            }
+        }
+    )
+
+    FavoritesPortableImportStatus.INVALID_FORMAT -> FavoritesImportFeedback(
+        error = buildString {
+            append("Неверный формат RIPTV backup")
+            result.message?.takeIf(String::isNotBlank)?.let { append(": $it") }
+        }
+    )
+
+    FavoritesPortableImportStatus.UNSUPPORTED_VERSION -> FavoritesImportFeedback(
+        error = buildString {
+            append("Версия RIPTV backup не поддерживается")
+            result.message?.takeIf(String::isNotBlank)?.let { append(": $it") }
+        }
+    )
+}
+
+internal fun Reader.readBoundedText(maxChars: Int): String {
+    require(maxChars > 0) { "maxChars must be positive" }
+    val output = StringBuilder(minOf(maxChars, 64 * 1024))
+    val buffer = CharArray(8 * 1024)
+    var total = 0
+    while (true) {
+        val readCount = read(buffer)
+        if (readCount < 0) break
+        if (readCount == 0) continue
+        total += readCount
+        require(total <= maxChars) { "Backup слишком большой" }
+        output.append(buffer, 0, readCount)
+    }
+    return output.toString()
+}
+
 private data class ExportPayload(
     val content: String,
     val infoSuffix: String
@@ -291,6 +394,7 @@ private data class SavedExport(
 )
 
 private const val FAVORITES_EPG_WINDOW_MS = 3 * 60 * 60 * 1000L
+private const val MAX_RIPTV_IMPORT_CHARS = 20_000_000
 private val FAVORITES_EXPORT_TIME_ZONE: TimeZone = TimeZone.getTimeZone("Asia/Oral")
 
 private fun favoriteExportTimestamp(): String {
