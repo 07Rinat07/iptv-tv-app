@@ -149,7 +149,7 @@ internal fun allChannelsForVirtualView(
                 gate = parentalGate
             )
         }
-        .map(ChannelEntity::toModel)
+        .map { row -> row.toModel() }
         .toList()
 }
 
