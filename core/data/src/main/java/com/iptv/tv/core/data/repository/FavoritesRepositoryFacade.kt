@@ -7,6 +7,8 @@ import com.iptv.tv.core.database.entity.FavoriteChannelEntity
 import com.iptv.tv.core.database.entity.FavoriteChannelVariantEntity
 import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.FavoritePlaybackContext
+import com.iptv.tv.core.model.FavoriteSourceVariant
 import com.iptv.tv.core.model.FavoritesPortableExport
 import com.iptv.tv.core.model.FavoritesPortableImportResult
 import com.iptv.tv.core.model.FavoritesShareableExport
@@ -19,10 +21,9 @@ import kotlinx.coroutines.flow.combine
 /**
  * Feature-facing Favorites facade.
  *
- * The durable storage implementation owns logical identity and source selection. This facade turns
- * the selected playback source back into one stable aggregate row per logical favorite: the row ID
- * stays the persisted preferred compatibility ID while playlist/source/URL come from the best
- * current live or persisted variant selected by [UnifiedFavoritePersistence].
+ * The durable storage implementation owns logical identity while specialized services own
+ * portable backup/share export and explicit source-variant selection. The aggregate row ID stays
+ * the persisted compatibility ID even when its preferred playback source changes.
  */
 @Singleton
 class FavoritesRepositoryFacade @Inject constructor(
@@ -30,7 +31,8 @@ class FavoritesRepositoryFacade @Inject constructor(
     private val favoriteSnapshotDao: FavoriteSnapshotDao,
     private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
     private val portableBackupService: FavoritesPortableBackupService,
-    private val shareableExportService: FavoritesShareableExportService
+    private val shareableExportService: FavoritesShareableExportService,
+    private val sourceVariantService: FavoriteSourceVariantService
 ) : FavoritesRepository by delegate {
     override fun observeFavorites(): Flow<List<Channel>> {
         return combine(
@@ -56,6 +58,15 @@ class FavoritesRepositoryFacade @Inject constructor(
         }
     }
 
+    override suspend fun resolvePlaybackContext(favoriteChannelId: Long): FavoritePlaybackContext? =
+        sourceVariantService.resolvePlaybackContext(favoriteChannelId)
+
+    override suspend fun getSourceVariants(favoriteChannelId: Long): List<FavoriteSourceVariant> =
+        sourceVariantService.getSourceVariants(favoriteChannelId)
+
+    override suspend fun selectPreferredSource(favoriteChannelId: Long, variantKey: String): Boolean =
+        sourceVariantService.selectPreferredSource(favoriteChannelId, variantKey)
+
     override suspend fun exportShareableFavorites(
         format: FavoritesShareableExportFormat
     ): FavoritesShareableExport = shareableExportService.export(format)
@@ -76,7 +87,7 @@ internal fun resolvedFavoriteRepresentatives(
     val liveByLogicalKey = liveChannels.groupBy(UnifiedFavoritePersistence::logicalKey)
 
     return favorites.map { favorite ->
-        val playback = UnifiedFavoritePersistence.resolvePlaybackContext(
+        val playback = FavoriteSourceVariantSelection.resolvePlaybackContext(
             requestedChannelId = favorite.preferredChannelId,
             favorite = favorite,
             persistedVariants = variantsByLogicalKey[favorite.logicalKey].orEmpty(),
