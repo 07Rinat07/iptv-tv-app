@@ -73,7 +73,8 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         val repository = VirtualRecentChannelsPlaylistRepository(
             delegate = delegate,
             historyRepository = historyRepository,
-            settingsRepository = settingsRepository
+            settingsRepository = settingsRepository,
+            aggregateScope = VirtualPlaylistAggregateScope.forTest(backgroundScope)
         )
 
         val playlists = repository.observePlaylists().first()
@@ -261,7 +262,8 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         val repository = VirtualRecentChannelsPlaylistRepository(
             delegate = delegate,
             historyRepository = mockk<HistoryRepository>(),
-            settingsRepository = mockk<SettingsRepository>()
+            settingsRepository = mockk<SettingsRepository>(),
+            aggregateScope = VirtualPlaylistAggregateScope.forTest(backgroundScope)
         )
 
         assertTrue(repository.refreshPlaylist(VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID) is AppResult.Success)
