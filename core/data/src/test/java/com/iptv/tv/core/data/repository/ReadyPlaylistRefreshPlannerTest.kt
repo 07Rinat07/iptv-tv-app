@@ -88,6 +88,34 @@ class ReadyPlaylistRefreshPlannerTest {
     }
 
     @Test
+    fun newEarlierVariantCannotStealIdReservedForLaterExactStream() {
+        val existing = channelEntity(
+            id = 77L,
+            tvgId = "shared",
+            name = "Shared",
+            streamUrl = "https://example.org/a.m3u8",
+            health = ChannelHealth.AVAILABLE,
+            hidden = true
+        )
+        val incoming = listOf(
+            channel("shared", "Shared backup", "https://example.org/b.m3u8"),
+            channel("shared", "Shared", "https://example.org/a.m3u8")
+        )
+
+        val plan = ReadyPlaylistRefreshPlanner.plan(5L, listOf(existing), incoming)
+
+        val backup = plan.upsertChannels[0]
+        val unchanged = plan.upsertChannels[1]
+        assertEquals(0L, backup.id)
+        assertEquals(ChannelHealth.UNKNOWN.name, backup.health)
+        assertFalse(backup.isHidden)
+        assertEquals(77L, unchanged.id)
+        assertEquals(ChannelHealth.AVAILABLE.name, unchanged.health)
+        assertTrue(unchanged.isHidden)
+        assertTrue(plan.staleChannelIds.isEmpty())
+    }
+
+    @Test
     fun insertsNewRowsAndMarksMissingRowsStaleWithoutReusingTheirIds() {
         val kept = channelEntity(
             id = 1L,
