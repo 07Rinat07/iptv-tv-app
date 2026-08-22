@@ -74,7 +74,7 @@ Portable backend закрыт PR #174: `.riptv` использует versioned J
 
 Экран Favorites также поддерживает **«Импорт RIPTV»** через системный Android document picker. Выбранный документ читается с ограничением размера, затем versioned decoder полностью проверяет формат и версию до записи. Валидный backup объединяется с текущей библиотекой: одинаковая logical identity не дублируется, safe variants добавляются/relink к текущим live rows, existing preferred source сохраняется, а redacted credential-bearing URL не раскрываются и не восстанавливаются как секреты.
 
-Source reconciliation, preferred-source picker и его справка завершены PR #177–#179. Системные aggregate-списки `Все каналы` и `Недавние` завершены в `main` `03f8e8e`; текущий этап #45 — performance/non-blocking rebuild hardening, начиная с catalog focus hot path. Обычный M3U/M3U8 остаётся универсальным interoperability-экспортом и не заменяет полный backup приложения.
+Source reconciliation, preferred-source picker и его справка завершены PR #177–#179. Системные aggregate-списки `Все каналы` и `Недавние`, catalog focus hot path и off-Main latest-wins rebuild завершены до production `2d22aea`. Разработка остановлена по запросу пользователя; aggregate collector/summary hardening остаётся следующим этапом после возобновления. Обычный M3U/M3U8 остаётся универсальным interoperability-экспортом и не заменяет полный backup приложения.
 
 ## Статус P2P / Torrent TV
 

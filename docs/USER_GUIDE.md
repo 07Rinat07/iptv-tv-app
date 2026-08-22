@@ -173,5 +173,6 @@ Back не должен перескакивать через несколько 
 - PR #178 подключил TV-friendly source picker к Favorites UI и не раскрывает stream URL/credentials в карточках вариантов.
 - виртуальный системный список **All channels / Все каналы** завершён в `main` `66a67a6` и сохраняет concrete channel/playlist IDs для существующего Player route без физической playlist row.
 - виртуальный системный список **Recent / Недавние** завершён в `main` `03f8e8e` с bounded MRU, logical dedup, live/durable Favorite resolution и реакцией на очистку истории/parental settings.
+- перемещение focus в длинном каталоге оптимизировано в `main` `90a285c`: подготовленные строки и breadcrumbs переиспользуются без O(N) пересборки на каждый D-pad шаг.
 
-Текущий этап #45 — performance/non-blocking rebuild hardening, начиная с reuse подготовленного catalog snapshot при перемещении focus.
+Off-Main latest-wins rebuild с сохранением самого свежего navigation checkpoint завершён в production `2d22aea`. Разработка остановлена по запросу пользователя; aggregate collector/summary hardening остаётся следующим отдельным этапом после возобновления.

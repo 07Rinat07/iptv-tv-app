@@ -6,7 +6,7 @@ This is the canonical current-state and next-action document. Dated field report
 
 ## Current integration head
 
-- Current `main`: `03f8e8e` — Recent/History virtual aggregate, deterministic MRU ordering and user/docs sync.
+- Current production baseline prepared for `main`: `2d22aea` — off-Main latest-wins catalog rebuild with stale-result guards and fresh-checkpoint reconciliation. This documentation sync is the only commit on top.
 - PR #174–#179 are merged: versioned portable backup, safe exports, RIPTV picker import, source reconciliation/preference, TV source picker and its help sync. All Channels is also complete in `main`.
 - Catalog/Favorites work does not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
 - Historical diagnostic and already-pruned branches are not production merge candidates.
@@ -32,17 +32,17 @@ The catalog/data track is developed as small fresh-main increments. Scanner disc
 13. **PR #179 — source-picker help sync.** User Guide and built-in About Help describe the merged backup/import/export and preferred-source behavior.
 14. **All Channels virtual aggregate — main `66a67a6`.** A system-owned, non-destructive view preserves concrete channel/playlist IDs and the existing Player route without creating a physical playlist row.
 15. **Recent/History virtual aggregate — main `03f8e8e`.** A bounded MRU view resolves current live/durable Favorite channels, preserves playback context, removes logical duplicates and reacts to hidden/parental/history changes without a Room playlist row.
+16. **Catalog focus performance — main `90a285c`.** Focus-only D-pad transitions retain the prepared entries/breadcrumbs instead of rebuilding O(N) UI lists; a 10k-channel harness protects checkpoint restore and exact ordering.
+17. **Non-blocking catalog rebuild — production `2d22aea`.** Canonical session creation, restore and snapshot preparation run on the injected Default dispatcher; conflated emissions carry immutable publication tokens, cancelled/stale playlist candidates cannot publish, and focus changes during restore are reconciled until stable.
 
-### Current production increment
+### Current development state
 
-**Catalog focus performance hardening — in progress.** The current fresh-main increment removes O(N) snapshot reconstruction from the D-pad focus hot path while preserving entries, breadcrumbs, checkpoint/rebuild focus restore and exact Player routing.
+**Paused after a completed increment at the user's request.** Production `2d22aea` and its deterministic regressions are complete. No aggregate collector/summary work has been started in this pause state.
 
 ### Next production increments
 
-1. **Catalog focus hot path.** Reuse prepared entries/breadcrumbs for focus-only updates and protect it with a deterministic 10k-channel regression harness.
-2. **Non-blocking rebuild.** Prepare the canonical tree off Main with latest-wins cancellation and preserve checkpoint application on Main.
-3. **Aggregate collector/summary hardening.** Remove redundant cold-flow subscriptions, coalesce unchanged summary work and bound top-50 preparation.
-4. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P views only after their capability contracts are stable.
+1. **Aggregate collector/summary hardening (when development resumes).** Remove redundant cold-flow subscriptions, coalesce unchanged summary work and bound top-50 preparation.
+2. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P views only after their capability contracts are stable.
 
 ## Portable Favorites contract
 
@@ -104,8 +104,8 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 
 ## Decision order
 
-1. Finish the catalog focus hot-path increment from fresh `main` and merge it only after exact-head feature tests, lint and Android assembly gates are green.
-2. Continue off-Main latest-wins rebuild and aggregate collector/summary hardening as separate measured increments.
+1. Keep the completed off-Main latest-wins baseline unchanged during the requested development pause.
+2. When development resumes, continue aggregate collector/summary hardening as a separate measured increment from fresh `main`.
 3. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
 4. Continue EPG/Now-Next/archive (#47) and Player UX (#46) on top of the stable catalog/Favorites identity contracts.
 5. Complete hardware/soak/release acceptance before closing master roadmap #44.
