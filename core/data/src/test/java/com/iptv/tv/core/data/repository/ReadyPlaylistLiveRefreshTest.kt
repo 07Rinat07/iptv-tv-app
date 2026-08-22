@@ -12,7 +12,6 @@ import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.parser.M3uParser
 import io.mockk.Runs
-import io.mockk.coAnswers
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.just
