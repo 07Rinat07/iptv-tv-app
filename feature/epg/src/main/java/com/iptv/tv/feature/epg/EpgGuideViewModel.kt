@@ -12,6 +12,7 @@ import com.iptv.tv.core.model.RecordingRepeatMode
 import com.iptv.tv.core.model.RecordingSchedule
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.Calendar
+import java.util.TimeZone
 import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +23,7 @@ import kotlinx.coroutines.launch
 
 private const val EPG_INITIAL_VISIBLE_ROWS = 40
 private const val EPG_VISIBLE_ROWS_STEP = 40
+private const val EPG_NOW_WINDOW_MS = 3 * 60 * 60 * 1000L
 
 enum class EpgWindowPreset {
     NOW,
@@ -215,7 +217,7 @@ class EpgGuideViewModel @Inject constructor(
         val playlistId = _uiState.value.selectedPlaylistId ?: return
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
-            val (startMs, endMs) = windowForPreset(_uiState.value.selectedPreset)
+            val (startMs, endMs) = epgWindowForPreset(_uiState.value.selectedPreset)
             _uiState.update {
                 it.copy(
                     isLoading = true,
@@ -269,34 +271,30 @@ class EpgGuideViewModel @Inject constructor(
             }
         }
     }
+}
 
-    private fun windowForPreset(preset: EpgWindowPreset): Pair<Long, Long> {
-        val now = System.currentTimeMillis()
-        val calendar = Calendar.getInstance()
-        return when (preset) {
-            EpgWindowPreset.NOW -> now to now + 3 * 60 * 60 * 1000L
-            EpgWindowPreset.TODAY -> {
-                calendar.timeInMillis = now
-                calendar.set(Calendar.HOUR_OF_DAY, 0)
-                calendar.set(Calendar.MINUTE, 0)
-                calendar.set(Calendar.SECOND, 0)
-                calendar.set(Calendar.MILLISECOND, 0)
-                val start = calendar.timeInMillis
-                start to start + 24 * 60 * 60 * 1000L
-            }
-            EpgWindowPreset.TOMORROW -> {
-                calendar.timeInMillis = now
-                calendar.add(Calendar.DAY_OF_YEAR, 1)
-                calendar.set(Calendar.HOUR_OF_DAY, 0)
-                calendar.set(Calendar.MINUTE, 0)
-                calendar.set(Calendar.SECOND, 0)
-                calendar.set(Calendar.MILLISECOND, 0)
-                val start = calendar.timeInMillis
-                start to start + 24 * 60 * 60 * 1000L
-            }
-        }
+internal fun epgWindowForPreset(
+    preset: EpgWindowPreset,
+    nowMs: Long = System.currentTimeMillis(),
+    timeZone: TimeZone = TimeZone.getDefault()
+): Pair<Long, Long> {
+    if (preset == EpgWindowPreset.NOW) {
+        return nowMs to nowMs + EPG_NOW_WINDOW_MS
     }
 
+    val dayOffset = if (preset == EpgWindowPreset.TOMORROW) 1 else 0
+    val startCalendar = Calendar.getInstance(timeZone).apply {
+        timeInMillis = nowMs
+        if (dayOffset != 0) add(Calendar.DAY_OF_YEAR, dayOffset)
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    val endCalendar = (startCalendar.clone() as Calendar).apply {
+        add(Calendar.DAY_OF_YEAR, 1)
+    }
+    return startCalendar.timeInMillis to endCalendar.timeInMillis
 }
 
 internal fun nextEpgVisibleRowLimit(
