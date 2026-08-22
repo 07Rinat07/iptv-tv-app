@@ -1,40 +1,11 @@
 package com.iptv.tv.feature.player
 
-import android.view.KeyEvent
-
-enum class PlayerRemoteAction {
-    PREVIOUS_CHANNEL,
-    NEXT_CHANNEL,
-    TOGGLE_FULLSCREEN,
-    SHOW_CHANNELS
-}
-
 /**
- * Преобразует клавиши пульта/клавиатуры в действия плеера.
+ * Returns the next channel id in a stable circular order.
  *
- * Стрелки вверх/вниз переключают каналы только в полноэкранном режиме, чтобы в обычном
- * интерфейсе не ломать стандартное перемещение фокуса по кнопкам и спискам.
+ * This helper deliberately owns no filtering/search logic: callers pass the already prepared
+ * channel-id order, keeping Scanner/query semantics outside the playback interaction layer.
  */
-fun playerRemoteActionForKeyCode(
-    keyCode: Int,
-    fullscreen: Boolean
-): PlayerRemoteAction? = when (keyCode) {
-    KeyEvent.KEYCODE_CHANNEL_UP,
-    KeyEvent.KEYCODE_MEDIA_PREVIOUS -> PlayerRemoteAction.PREVIOUS_CHANNEL
-
-    KeyEvent.KEYCODE_CHANNEL_DOWN,
-    KeyEvent.KEYCODE_MEDIA_NEXT -> PlayerRemoteAction.NEXT_CHANNEL
-
-    KeyEvent.KEYCODE_DPAD_UP -> if (fullscreen) PlayerRemoteAction.PREVIOUS_CHANNEL else null
-    KeyEvent.KEYCODE_DPAD_DOWN -> if (fullscreen) PlayerRemoteAction.NEXT_CHANNEL else null
-
-    KeyEvent.KEYCODE_F -> PlayerRemoteAction.TOGGLE_FULLSCREEN
-    KeyEvent.KEYCODE_MENU,
-    KeyEvent.KEYCODE_GUIDE -> PlayerRemoteAction.SHOW_CHANNELS
-
-    else -> null
-}
-
 fun adjacentChannelId(
     channelIds: List<Long>,
     selectedChannelId: Long?,
