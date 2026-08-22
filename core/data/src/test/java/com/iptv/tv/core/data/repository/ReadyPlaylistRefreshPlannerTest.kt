@@ -61,6 +61,31 @@ class ReadyPlaylistRefreshPlannerTest {
     }
 
     @Test
+    fun exactStreamWinsWhenSharedStableIdentityEntriesAreReordered() {
+        val first = channelEntity(
+            id = 11L,
+            tvgId = "shared",
+            name = "Shared A",
+            streamUrl = "https://example.org/a.m3u8"
+        )
+        val second = channelEntity(
+            id = 22L,
+            tvgId = "shared",
+            name = "Shared B",
+            streamUrl = "https://example.org/b.m3u8"
+        )
+        val incoming = listOf(
+            channel("shared", "Shared B", "https://example.org/b.m3u8"),
+            channel("shared", "Shared A", "https://example.org/a.m3u8")
+        )
+
+        val plan = ReadyPlaylistRefreshPlanner.plan(5L, listOf(first, second), incoming)
+
+        assertEquals(listOf(22L, 11L), plan.upsertChannels.map(ChannelEntity::id))
+        assertTrue(plan.staleChannelIds.isEmpty())
+    }
+
+    @Test
     fun insertsNewRowsAndMarksMissingRowsStaleWithoutReusingTheirIds() {
         val kept = channelEntity(
             id = 1L,
