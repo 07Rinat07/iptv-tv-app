@@ -155,7 +155,7 @@ class ReadyCatalogPlaylistRepository @Inject constructor(
         val playlist = playlistDao.findById(playlistId)
         if (
             playlist?.catalogOrigin != CatalogOriginKind.READY_CATALOG.name ||
-            playlist.sourceType != PlaylistSourceType.URL.name
+            playlist?.sourceType != PlaylistSourceType.URL.name
         ) {
             return@withContext delegate.deletePlaylist(playlistId)
         }
