@@ -46,12 +46,27 @@ data class PlaylistCatalogSnapshot(
  * canonical ids instead of by transient Room row ids or list indexes.
  */
 class PlaylistCatalogNavigationSession private constructor(
-    private val playlistId: Long,
+    val playlistId: Long,
+    private val playlistNodeId: CatalogNodeId,
     private val navigator: CanonicalCatalogNavigator,
     private val channelIdByNodeId: Map<CatalogNodeId, Long>,
     private var navigationState: CatalogNavigationState
 ) {
     fun checkpoint(): CatalogNavigationState = navigationState
+
+    /** Restores a new unpublished session without rebuilding the canonical tree or lookup maps. */
+    fun restored(checkpoint: CatalogNavigationState): PlaylistCatalogNavigationSession {
+        val restoredState = runCatching {
+            navigator.restore(checkpoint, fallbackNodeId = playlistNodeId)
+        }.getOrNull() ?: navigator.initial(playlistNodeId)
+        return PlaylistCatalogNavigationSession(
+            playlistId = playlistId,
+            playlistNodeId = playlistNodeId,
+            navigator = navigator,
+            channelIdByNodeId = channelIdByNodeId,
+            navigationState = restoredState
+        )
+    }
 
     fun snapshot(): PlaylistCatalogSnapshot {
         val context = navigator.context(navigationState)
@@ -130,23 +145,18 @@ class PlaylistCatalogNavigationSession private constructor(
             val visibleChannels = channels.filterNot(Channel::isHidden)
             val tree = LegacyPlaylistCatalogAdapter.build(playlist = playlist, channels = visibleChannels)
             val navigator = CanonicalCatalogNavigator(tree.nodes)
-            val initialState = previousCheckpoint
-                ?.let { checkpoint ->
-                    runCatching {
-                        navigator.restore(checkpoint, fallbackNodeId = tree.playlistNodeId)
-                    }.getOrNull()
-                }
-                ?: navigator.initial(tree.playlistNodeId)
             val channelIdByNodeId = tree.channelVariantIdsByNodeId.mapValues { (_, variants) ->
                 variants.first()
             }
 
-            return PlaylistCatalogNavigationSession(
+            val session = PlaylistCatalogNavigationSession(
                 playlistId = playlist.id,
+                playlistNodeId = tree.playlistNodeId,
                 navigator = navigator,
                 channelIdByNodeId = channelIdByNodeId,
-                navigationState = initialState
+                navigationState = navigator.initial(tree.playlistNodeId)
             )
+            return previousCheckpoint?.let(session::restored) ?: session
         }
     }
 }

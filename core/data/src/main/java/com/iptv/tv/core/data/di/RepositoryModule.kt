@@ -1,5 +1,7 @@
 package com.iptv.tv.core.data.di
 
+import com.iptv.tv.core.common.DefaultDispatcherProvider
+import com.iptv.tv.core.common.DispatcherProvider
 import com.iptv.tv.core.data.repository.ChannelMetadataRepositoryImpl
 import com.iptv.tv.core.data.repository.CoalescingEngineRepository
 import com.iptv.tv.core.data.repository.DiagnosticsRepositoryImpl
@@ -93,6 +95,10 @@ abstract class RepositoryBindings {
 @Module
 @InstallIn(SingletonComponent::class)
 object DataModule {
+    @Provides
+    @Singleton
+    fun provideDispatcherProvider(): DispatcherProvider = DefaultDispatcherProvider
+
     @Provides
     @Singleton
     fun provideM3uParser(): M3uParser = M3uParser()

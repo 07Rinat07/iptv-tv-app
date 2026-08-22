@@ -71,6 +71,25 @@ class PlaylistCatalogNavigationSessionTest {
     }
 
     @Test
+    fun restoredReusesPreparedTreeAndAppliesNewerCheckpoint() {
+        val sourcePlaylist = playlist()
+        val channels = listOf(
+            channel(id = 41L, name = "First", group = null),
+            channel(id = 42L, name = "Second", group = null)
+        )
+        val source = PlaylistCatalogNavigationSession.create(sourcePlaylist, channels)
+        val sourceSnapshot = source.snapshot()
+        source.focus(sourceSnapshot.entries.last().nodeId, sourceSnapshot)
+
+        val candidate = PlaylistCatalogNavigationSession.create(sourcePlaylist, channels)
+        val restored = candidate.restored(source.checkpoint())
+        val restoredSnapshot = restored.snapshot()
+
+        assertEquals(sourceSnapshot.entries.last().nodeId, restoredSnapshot.restoredFocusId)
+        assertEquals(channels.map(Channel::id), restoredSnapshot.entries.map { it.channelId })
+    }
+
+    @Test
     fun removedGroupFallsBackToDeepestValidPlaylistPathAndDropsStaleFocus() {
         val sourcePlaylist = playlist()
         val first = PlaylistCatalogNavigationSession.create(
