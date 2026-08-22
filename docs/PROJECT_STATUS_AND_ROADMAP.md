@@ -1,13 +1,13 @@
 # Project status and roadmap
 
-_Last updated: 2026-08-21_
+_Last updated: 2026-08-22_
 
 This is the canonical current-state and next-action document. Dated field reports remain immutable evidence; when an older plan describes a different current increment, this page wins.
 
 ## Current integration head
 
-- Current `main`: `c7058e2937a21024eb44fbafcc4f5b2dabaa8af8` — squash merge of PR #172, virtual Favorites catalog/Player consumer.
-- PR #172 exact head `9939e139883caad043f2b14969b1c8bac05ac7f1` passed Database Unit CI #8 and full Android CI #704 before merge.
+- Current `main`: `c8b136127d3aa0fd2043519dbc157d61bbfc9826` — PR #179, Favorites source-picker help/documentation sync.
+- PR #174–#179 are merged: versioned portable backup, safe exports, RIPTV picker import, source reconciliation/preference, TV source picker and its help sync.
 - Catalog/Favorites work does not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
 - Historical diagnostic and already-pruned branches are not production merge candidates.
 
@@ -24,18 +24,23 @@ The catalog/data track is developed as small fresh-main increments. Scanner disc
 5. **PR #171 — favorite playback resolver.** A single `FavoritePlaybackContext` selects a live matching variant when possible and a persisted variant/snapshot when the original source rows no longer exist. No second Player runtime was introduced.
 6. **PR #172 — virtual Favorites aggregate.** A stable system-owned virtual playlist exposes durable Favorites to the existing canonical catalog and Player without creating a physical Room playlist. The representative favorite ID remains stable while playback source fields come from the best live or persisted variant. Physical refresh/delete/editor actions are disabled for this virtual list.
 7. **Durability acceptance now covered.** Deleting the original playlist/channel does not delete the logical favorite; re-import can reconnect a matching logical channel; multiple source variants remain discoverable.
+8. **PR #174 — versioned portable backup backend.** The application-owned RIPTV format preserves logical identity, snapshots, provenance and source variants without exporting local Room IDs as portable identity.
+9. **PR #175 — safe share/export contract.** TXT/M3U8 and RIPTV exports share credential-aware redaction rules and do not silently disclose provider secrets.
+10. **PR #176 — portable RIPTV import.** The Android document picker validates the bounded versioned payload before an idempotent merge/relink.
+11. **PR #177 — source reconciliation.** Selectable variants are reconciled against current live rows while durable provenance remains available.
+12. **PR #178 — preferred source picker.** Favorites exposes deterministic source selection on TV without duplicating the logical favorite.
+13. **PR #179 — source-picker help sync.** User Guide and built-in About Help describe the merged backup/import/export and preferred-source behavior.
 
-### Current documentation increment
+### Current production increment
 
-Synchronize README, `USER_GUIDE`, architecture/index and built-in About Help with the already-merged #170–#172 behavior. This is documentation/help only; it must not change persistence, Player, Scanner or P2P runtime behavior.
+**All Channels virtual aggregate — in progress.** `feat/virtual-all-channels` adds a system-owned, non-destructive view over concrete channels while preserving their source provenance and existing Player route. It must pass exact-head model/data/playlists tests, lint and Android assembly gates before merge.
 
 ### Next production increments
 
-1. **Versioned portable Favorites backup/import.** Preserve logical identity, durable snapshot metadata, provenance and all source variants in an application-owned versioned format. This is separate from ordinary M3U/M3U8 interoperability export.
-2. **Export/import safety contract.** Ordinary portable playlist export must not blindly disclose provider passwords, API keys, MAC credentials, tokens or other secrets. A full private backup may later support explicitly protected credential handling, but it must not silently turn provider secrets into plain-text transfer material.
-3. **Source-variant picker / preferred source UX.** Show source variants for one logical favorite and allow deterministic preferred-source selection without duplicating the favorite.
-4. **Remaining virtual aggregate views.** Add All Channels, Recent/History and later EPG/Now-Next/archive/P2P filters as separate bounded increments.
-5. **Performance hardening.** Validate lazy rendering, cached prepared structures and non-blocking rebuild on large catalogs/favorite sets.
+1. **All Channels virtual aggregate.** Finish the current bounded increment and merge it only after exact-head gates are green.
+2. **Recent/History virtual aggregate.** Start from the resulting fresh `main` and preserve stable ordering, source provenance, parental filtering and non-destructive virtual-list semantics.
+3. **Performance hardening.** Validate lazy rendering, cached prepared structures and non-blocking rebuild on large catalogs/favorite sets.
+4. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P views only after their capability contracts are stable.
 
 ## Portable Favorites contract
 
@@ -97,14 +102,12 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 
 ## Decision order
 
-1. Merge the current Favorites docs/help sync only after exact-head Android CI is green.
-2. Start the versioned portable Favorites backup/import backend from the resulting fresh `main`; do not stack production code on the docs PR.
-3. Keep backup serialization/storage/security separate from Compose file-picking/UI where possible, then wire UI in a following bounded PR.
-4. Add source-variant picker/preferred-source UX after the portable data contract is stable.
-5. Continue remaining aggregate views/performance work under Issue #45.
-6. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
-7. Continue EPG/Now-Next/archive (#47) and Player UX (#46) on top of the stable catalog/Favorites identity contracts.
-8. Complete hardware/soak/release acceptance before closing master roadmap #44.
+1. Merge All Channels only after exact-head model/data/playlists tests, lint and Android assembly gates are green.
+2. Start Recent/History from the resulting fresh `main`; do not stack it on an unverified aggregate branch.
+3. Validate lazy/cached/non-blocking catalog rebuild after the aggregate contracts are stable.
+4. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
+5. Continue EPG/Now-Next/archive (#47) and Player UX (#46) on top of the stable catalog/Favorites identity contracts.
+6. Complete hardware/soak/release acceptance before closing master roadmap #44.
 
 ## Cross-track invariants
 

@@ -111,7 +111,7 @@ PR #172 добавил `VirtualFavoritesPlaylistRepository` и стабильн�
 
 В `PlaylistsScreen` virtual Favorites разрешает каталог и Player, но физические `refresh/delete/editor` actions отключены. Repository-level guards повторяют этот запрет, чтобы UI не был единственной защитой destructive semantics.
 
-Следующий data contract #45 — versioned portable backup/import `logical favorite + provenance + variants`; обычный M3U/M3U8 остаётся interoperability-представлением representative каналов и не заменяет полный backup.
+PR #174–#176 закрыли versioned portable backup/import и безопасный interoperability export, а PR #177–#178 — reconciliation/preferred-source contract и TV picker. Следующий catalog contract #45 — system-owned All Channels aggregate; обычный M3U/M3U8 не заменяет полный backup.
 
 Пользовательское описание находится в [`USER_GUIDE.md`](USER_GUIDE.md), а краткая встроенная справка — в `AboutScreen`.
 
@@ -200,10 +200,10 @@ P2P recovery способен выдать typed output discontinuity при п�
 
 1. кодовая regression-baseline TV navigation (#40) стабилизирована; реальную BlueStacks/TV Box приёмку вести параллельно;
 2. P2P/Ace Live transport policy меняется только по real-device evidence Issue #159; без новой producer-stage/rapid-switch evidence не менять DHT/peer/request-depth/timeout/buffer assumptions (#44);
-3. canonical catalog navigation и autonomous unified Favorites/virtual Player consumer стабилизированы PR #167/#168/#170–#172; следующий изолированный этап — versioned portable Favorites backup/import, затем source-variant picker и остальные aggregate/performance increments (#45);
+3. canonical catalog navigation, autonomous Favorites, portable transfer и preferred-source picker стабилизированы PR #167–#179; текущий изолированный этап — All Channels, затем Recent/History и aggregate performance hardening (#45);
 4. построить EPG/Now-Next/real archive поверх стабильной channel identity (#47);
 5. переработать Player UX поверх готовых Catalog + Favorites + P2P + EPG contracts (#46);
-6. catalog/Favorites user guide и встроенная Help синхронизируются отдельным docs increment; contextual Help остальных экранов продолжает задачу #43;
+6. Favorites/source-picker user guide и встроенная Help синхронизированы PR #179; contextual Help остальных экранов продолжает задачу #43;
 7. выполнить hardware/soak/release gate и только после этого закрыть master-roadmap #44.
 
 Защищённые области при catalog/Favorites изменениях:

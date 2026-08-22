@@ -92,7 +92,7 @@ V1 исправил дефект startup prebuffer: discovery/handshake latency 
 0. **Issue #40 — regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
 1. **Playback safety acceptance — EPG OOM.** Код PR #100 слит: streaming XMLTV, bounded memory/cache, negative-cache, serialized load и low-memory fail-safe. Ручные логи после фикса не показывают возврата прежнего OOM в просмотренном окне; hardware regression продолжает входить в release gate.
 2. **Master #44 — автономный P2P/Ace Live engine.** Это текущий главный приоритет. Ownership/rapid-zap базовые гонки закрыты PR #103/#105; adaptive streaming core прошёл V1–V3 и V4a/V4b. Текущий порядок внутри #44: `V4c TS/discontinuity hardening → V4d startup/zap latency parity → fixed A/B matrix → weak-network/peer-loss/soak acceptance`.
-3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** Identity/provenance и пользовательская navigation часть закрыты PR #167/#168; durable Favorites/virtual aggregate/Player consumer закрыты PR #170–#172; portable backup backend закрыт PR #174. Текущий кодовый этап — безопасный TXT/M3U8 + `.riptv` export, затем `.riptv` file-picker import, source-variant picker и оставшиеся virtual/performance checks.
+3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** Identity/provenance, durable Favorites, portable backup/import/export и preferred-source picker закрыты PR #167–#179. Текущий кодовый этап — виртуальный `Все каналы`, затем Recent/History и performance/non-blocking rebuild checks.
 4. **Issue #47 — EPG / Now-Next / real archive.** Полноценный ingestion/cache/matching/catch-up redesign строить поверх стабильной channel identity из #45.
 5. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
 6. **Issue #43 — contextual Help + built-in Help + docs baseline.** Catalog navigation уже имеет встроенную краткую справку и `USER_GUIDE`; полное contextual покрытие остальных экранов продолжить после стабилизации Catalog/EPG/Player.
@@ -105,9 +105,12 @@ V1 исправил дефект startup prebuffer: discovery/handshake latency 
 - ✅ PR #170 — автономный durable Favorites persistence с `ChannelStableIdentity`, snapshot и persisted source variants, переживающими удаление исходного playlist/channel row.
 - ✅ PR #171/#172 — единый live/persisted playback context, virtual Favorites aggregate и подключение к существующему Player без второго playback runtime.
 - ✅ PR #174 — versioned `rinat-iptv-favorites` portable backend: logical identity, provenance/source variants, validate-before-write import, idempotent merge/relink и default credential redaction; exact-head Database Unit CI #10 + Android CI #708 прошли перед squash merge.
-- 🚧 PR #175 — TXT/M3U8 переводятся на ту же data-layer credential policy; unsafe preferred source использует safe alternate variant при наличии, TXT пишет `[REDACTED]`, M3U8 пропускает favorite без safe URL; `.riptv` export открыт в Favorites UI.
-- ⏳ Следующий fresh-main инкремент — `.riptv` import через существующий `ActivityResultContracts.OpenDocument()` pattern с отображением imported/merged/redacted/skipped результата.
-- ⏳ Затем — source-variant picker и оставшиеся virtual aggregate views/performance/non-blocking rebuild проверки.
+- ✅ PR #175 — TXT/M3U8 используют ту же data-layer credential policy; unsafe preferred source заменяется безопасным alternate variant при наличии, TXT пишет `[REDACTED]`, M3U8 пропускает favorite без safe URL; `.riptv` export открыт в Favorites UI.
+- ✅ PR #176 — `.riptv` import подключён через системный Android document picker с bounded read, validate-before-write и итогом imported/merged/redacted/skipped.
+- ✅ PR #177 — selectable source variants согласуются с актуальными live rows без потери durable provenance.
+- ✅ PR #178 — TV source-variant picker сохраняет deterministic preferred source без дублирования logical favorite.
+- ✅ PR #179 — `USER_GUIDE` и встроенная About Help синхронизированы с backup/import/export и source picker.
+- 🚧 Текущий fresh-main инкремент — виртуальный системный список `Все каналы`; затем Recent/History и performance/non-blocking rebuild проверки.
 
 ## Этап 1: canonical catalog hierarchy и provenance (#45)
 
@@ -121,11 +124,11 @@ V1 исправил дефект startup prebuffer: discovery/handshake latency 
 4. ✅ PR #167/#168: navigation skeleton подключён к реальному Playlists UI — predictable one-level Back, breadcrumb context, exact-channel Player route и focus restore после Player/rebuild.
 5. ✅ PR #170–#172: Favorites переведён на единый агрегированный durable persistence/playback слой с provenance/source variants и virtual aggregate view.
 6. ✅ Dedup/re-import identity и source variants используют `ChannelStableIdentity`; повторный импорт live-эквивалента не создаёт второй logical favorite.
-7. 🚧 Virtual views: Favorites уже подключён; All channels, Recent/History и позднее Now/Next/EPG/archive/P2P filters остаются следующими отдельными инкрементами.
+7. 🚧 Virtual views: Favorites уже подключён; All Channels выполняется текущим отдельным инкрементом; Recent/History и позднее Now/Next/EPG/archive/P2P filters остаются следующими этапами.
 8. Проверить lazy rendering, кэш подготовленной структуры и non-blocking rebuild больших наборов.
-9. ✅ PR #174 + текущий #175: versioned portable Favorites contract и безопасный share/export слой не используют локальные Room IDs как portable identity и не раскрывают credential-bearing provider URLs по умолчанию.
+9. ✅ PR #174–#178: versioned portable Favorites contract, безопасный export/import и preferred-source picker не используют локальные Room IDs как portable identity и не раскрывают credential-bearing provider URLs по умолчанию.
 
-Contract/identity/provenance, durable Favorites, virtual Favorites и Player consumer уже слиты отдельными малыми PR. Текущие export/import инкременты меняют только Favorites data/UI contract и не переписывают Scanner discovery/query, Player playback policy или P2P budgets. После safe export следующий production PR начинается только от свежего `main` и добавляет `.riptv` file-picker import.
+Contract/identity/provenance, durable Favorites, virtual Favorites, portable transfer и source picker уже слиты отдельными малыми PR. После PR #179 текущий fresh-main production increment добавляет только `Все каналы`; следующие отдельные этапы — Recent/History и performance hardening. Scanner discovery/query, Player playback policy и P2P budgets не меняются.
 
 ## Этап 2: встроенный P2P engine и Ace transport
 
