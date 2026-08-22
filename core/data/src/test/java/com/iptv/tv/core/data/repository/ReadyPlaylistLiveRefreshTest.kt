@@ -12,11 +12,15 @@ import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.parser.M3uParser
 import io.mockk.Runs
+import io.mockk.coAnswers
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.just
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -72,7 +76,7 @@ class ReadyPlaylistLiveRefreshTest {
                         channels.size == 2 &&
                             channels.first { it.tvgId == "news" }.let { news ->
                                 news.id == 41L &&
-                                    news.health == ChannelHealth.AVAILABLE.name &&
+                                    news.health == ChannelHealth.UNKNOWN.name &&
                                     news.isHidden &&
                                     news.streamUrl.endsWith("/news-new.m3u8")
                             } &&
@@ -105,6 +109,66 @@ class ReadyPlaylistLiveRefreshTest {
             coVerify(exactly = 0) {
                 fixture.readyPlaylistRefreshDao.applyRefresh(any(), any(), any(), any(), any(), any())
             }
+        }
+    }
+
+    @Test
+    fun refreshFailureStillReturnsErrorWhenFailureLogCannotBePersisted() = runTest {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(503))
+            val playlistId = 22L
+            val playlist = readyPlaylist(playlistId, server.url("/ready.m3u").toString())
+            val fixture = fixture(listOf(playlist))
+            coEvery { fixture.syncLogDao.insert(any()) } throws IllegalStateException("database full")
+
+            val result = fixture.repository.refreshPlaylist(playlistId)
+
+            assertTrue(result is AppResult.Error)
+            assertTrue((result as AppResult.Error).message.contains("HTTP 503"))
+            coVerify(exactly = 0) {
+                fixture.readyPlaylistRefreshDao.applyRefresh(any(), any(), any(), any(), any(), any())
+            }
+        }
+    }
+
+    @Test
+    fun concurrentRefreshesOfSameReadyPlaylistAreSerializedBeforeSecondDownload() = runTest {
+        MockWebServer().use { server ->
+            val body = """
+                #EXTM3U
+                #EXTINF:-1 tvg-id="news",News
+                ${server.url("/news.m3u8")}
+            """.trimIndent()
+            server.enqueue(MockResponse().setBody(body))
+            server.enqueue(MockResponse().setBody(body))
+            val playlistId = 24L
+            val playlist = readyPlaylist(playlistId, server.url("/ready.m3u").toString())
+            val fixture = fixture(listOf(playlist))
+            val firstWriteStarted = CompletableDeferred<Unit>()
+            val releaseFirstWrite = CompletableDeferred<Unit>()
+            var writeCount = 0
+            coEvery {
+                fixture.readyPlaylistRefreshDao.applyRefresh(any(), any(), any(), any(), any(), any())
+            } coAnswers {
+                writeCount += 1
+                if (writeCount == 1) {
+                    firstWriteStarted.complete(Unit)
+                    releaseFirstWrite.await()
+                }
+            }
+
+            val first = async { fixture.repository.refreshPlaylist(playlistId) }
+            firstWriteStarted.await()
+            val second = async { fixture.repository.refreshPlaylist(playlistId) }
+            yield()
+
+            assertEquals(1, server.requestCount)
+
+            releaseFirstWrite.complete(Unit)
+            assertTrue(first.await() is AppResult.Success)
+            assertTrue(second.await() is AppResult.Success)
+            assertEquals(2, server.requestCount)
+            assertEquals(2, writeCount)
         }
     }
 
@@ -204,7 +268,8 @@ class ReadyPlaylistLiveRefreshTest {
                 logoCatalogResolver = LogoCatalogResolver()
             ),
             delegate = delegate,
-            readyPlaylistRefreshDao = readyPlaylistRefreshDao
+            readyPlaylistRefreshDao = readyPlaylistRefreshDao,
+            syncLogDao = syncLogDao
         )
     }
 
@@ -229,6 +294,7 @@ class ReadyPlaylistLiveRefreshTest {
     private data class Fixture(
         val repository: ReadyCatalogPlaylistRepository,
         val delegate: PlaylistRepositoryImpl,
-        val readyPlaylistRefreshDao: ReadyPlaylistRefreshDao
+        val readyPlaylistRefreshDao: ReadyPlaylistRefreshDao,
+        val syncLogDao: SyncLogDao
     )
 }
