@@ -39,12 +39,14 @@ internal object ReadyPlaylistRefreshPlanner {
 
         val reusedIds = mutableSetOf<Long>()
         val upserts = incoming.mapIndexed { index, channel ->
-            val streamMatch = existingByStream[channel.streamUrl.trim()]
+            val incomingStream = channel.streamUrl.trim()
+            val streamMatch = existingByStream[incomingStream]
                 ?.takeIf { candidate -> candidate.id !in reusedIds }
             val stableMatch = existingByStableKey[stableKey(channel)]
                 ?.firstOrNull { candidate -> candidate.id !in reusedIds }
             val matched = streamMatch ?: stableMatch
             if (matched != null) reusedIds += matched.id
+            val unchangedStream = matched?.streamUrl?.trim() == incomingStream
 
             ChannelEntity(
                 id = matched?.id ?: 0L,
@@ -54,7 +56,13 @@ internal object ReadyPlaylistRefreshPlanner {
                 groupName = channel.group,
                 logo = channel.logo ?: matched?.logo,
                 streamUrl = channel.streamUrl,
-                health = matched?.health ?: ChannelHealth.UNKNOWN.name,
+                // Health belongs to a concrete endpoint. Keep it only for an exact-stream match;
+                // a replacement URL must be revalidated instead of inheriting stale availability.
+                health = if (matched != null && unchangedStream) {
+                    matched.health
+                } else {
+                    ChannelHealth.UNKNOWN.name
+                },
                 orderIndex = index,
                 isHidden = matched?.isHidden ?: false
             )
