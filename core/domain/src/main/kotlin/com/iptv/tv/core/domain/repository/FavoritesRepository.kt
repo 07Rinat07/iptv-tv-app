@@ -2,6 +2,7 @@ package com.iptv.tv.core.domain.repository
 
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.FavoritePlaybackContext
+import com.iptv.tv.core.model.FavoriteSourceVariant
 import com.iptv.tv.core.model.FavoritesPortableExport
 import com.iptv.tv.core.model.FavoritesPortableImportResult
 import com.iptv.tv.core.model.FavoritesPortableImportStatus
@@ -25,6 +26,23 @@ interface FavoritesRepository {
      * unified persistence implementation provides durable live/persisted variant selection.
      */
     suspend fun resolvePlaybackContext(favoriteChannelId: Long): FavoritePlaybackContext? = null
+
+    /**
+     * Return the reconciled source variants for one logical favorite.
+     *
+     * Implementations may persist newly discovered live equivalents so source provenance survives
+     * later playlist deletion. [FavoriteSourceVariant.variantKey] is the selector used by
+     * [selectPreferredSource].
+     */
+    suspend fun getSourceVariants(favoriteChannelId: Long): List<FavoriteSourceVariant> = emptyList()
+
+    /**
+     * Select the preferred playback source without changing the aggregate favorite identity.
+     *
+     * Returns false when the favorite or variant cannot be resolved. Implementations must preserve
+     * all other variants and must not delete source playlist membership.
+     */
+    suspend fun selectPreferredSource(favoriteChannelId: Long, variantKey: String): Boolean = false
 
     /**
      * Build a standard TXT/M3U8 export using the same default credential policy as portable backup.
