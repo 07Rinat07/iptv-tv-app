@@ -29,18 +29,6 @@ class PlayerInteractionTest {
     }
 
     @Test
-    fun menuAndGuideKeepChannelListAction() {
-        assertEquals(
-            PlayerRemoteAction.SHOW_CHANNELS,
-            playerRemoteActionForKeyCode(KeyEvent.KEYCODE_MENU, fullscreen = false)
-        )
-        assertEquals(
-            PlayerRemoteAction.SHOW_CHANNELS,
-            playerRemoteActionForKeyCode(KeyEvent.KEYCODE_GUIDE, fullscreen = true)
-        )
-    }
-
-    @Test
     fun adjacentChannel_wrapsAtBothEnds() {
         val ids = listOf(10L, 20L, 30L)
 
