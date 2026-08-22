@@ -5,9 +5,13 @@ on:
     paths:
       - 'feature/player/**'
       - 'feature/scanner/**'
+      - 'core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis.kt'
       - 'core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource.kt'
-      - 'core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt'
+      - 'core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos.kt'
+      - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository.kt'
       - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase.kt'
+      - 'core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule.kt'
+      - 'core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt'
       - 'docs/PROJECT_STATUS_AND_ROADMAP.md'
       - '.github/workflows/player-refactor-guard.yml'
 
@@ -16,7 +20,6 @@ permissions:
 
 jobs:
   player-refactor-boundary:
-    if: startsWith(github.head_ref, 'refactor/player-')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact PR head
@@ -25,7 +28,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Keep Player refactors out of Scanner
+      - name: Keep Player changes out of Scanner contracts
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -33,8 +36,8 @@ jobs:
           set -euo pipefail
           changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
           printf '%s\n' "$changed"
-          if printf '%s\n' "$changed" | grep -Eq '^(feature/scanner/|core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource\.kt$|core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase\.kt$)'; then
-            echo 'Player refactor must not modify Scanner production/query/discovery files.' >&2
+          if printf '%s\n' "$changed" | grep -Eq '^(feature/scanner/|core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis\.kt$|core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource\.kt$|core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase\.kt$|core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule\.kt$|core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories\.kt$)'; then
+            echo 'Player changes must not modify Scanner production/query/discovery contracts.' >&2
             exit 1
           fi
 
