@@ -84,7 +84,7 @@ fun PlaylistsScreen(
         .sumOf { it.channelCount }
     var showDetails by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
-    var sortModeName by rememberSaveable { mutableStateOf(FavoritesSortMode.CURRENT_FIRST.name) }
+    var sortModeName by rememberSaveable { mutableStateOf(PlaylistSortMode.CURRENT_FIRST.name) }
     val sortMode = PlaylistSortMode.entries.firstOrNull { it.name == sortModeName }
         ?: PlaylistSortMode.CURRENT_FIRST
     val locale = Locale.getDefault()
