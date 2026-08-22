@@ -28,7 +28,7 @@ import kotlinx.coroutines.flow.map
  */
 @Singleton
 class VirtualFavoritesPlaylistRepository @Inject constructor(
-    private val delegate: PlaylistRepositoryImpl,
+    private val delegate: ReadyCatalogPlaylistRepository,
     private val favoritesRepository: FavoritesRepository,
     private val aggregateScope: VirtualPlaylistAggregateScope
 ) : PlaylistRepository by delegate {
