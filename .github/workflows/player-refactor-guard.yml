@@ -3,10 +3,12 @@ name: Player Refactor Guard
 on:
   pull_request:
     paths:
+      - 'app/src/main/java/com/iptv/tv/MainActivity.kt'
       - 'feature/player/**'
       - 'core/player/**'
       - 'core/player-vlc/**'
       - 'feature/scanner/**'
+      - 'core/model/src/main/kotlin/com/iptv/tv/core/model/Models.kt'
       - 'core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis.kt'
       - 'core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource.kt'
       - 'core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos.kt'
@@ -36,16 +38,17 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          changed="$(git diff --no-renames --name-only "$merge_base" "$HEAD_SHA")"
           printf '%s\n' "$changed"
 
-          if ! printf '%s\n' "$changed" | grep -Eq '^(feature/player/|core/player/|core/player-vlc/)'; then
-            echo 'No Player-owned production/test files changed; Scanner boundary is not applicable.'
+          if ! printf '%s\n' "$changed" | grep -Eq '^(app/src/main/java/com/iptv/tv/MainActivity\.kt$|feature/player/|core/player/|core/player-vlc/)'; then
+            echo 'No Player-owned production/test/routing files changed; Scanner boundary is not applicable.'
             exit 0
           fi
 
-          if printf '%s\n' "$changed" | grep -Eq '^(feature/scanner/|core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis\.kt$|core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource\.kt$|core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase\.kt$|core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule\.kt$|core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories\.kt$)'; then
-            echo 'Player changes must not modify Scanner production/query/discovery contracts.' >&2
+          if printf '%s\n' "$changed" | grep -Eq '^(feature/scanner/|core/model/src/main/kotlin/com/iptv/tv/core/model/Models\.kt$|core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis\.kt$|core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource\.kt$|core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase\.kt$|core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule\.kt$|core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories\.kt$)'; then
+            echo 'Player changes must not modify Scanner production/query/discovery/model contracts.' >&2
             exit 1
           fi
 
@@ -67,6 +70,8 @@ jobs:
         run: |
           ./gradlew \
             :feature:player:testDebugUnitTest \
+            :core:player:testDebugUnitTest \
+            :core:player-vlc:testDebugUnitTest \
             :feature:scanner:testDebugUnitTest \
             :core:network:testDebugUnitTest \
             :core:data:testDebugUnitTest \
