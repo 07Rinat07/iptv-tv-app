@@ -13,10 +13,13 @@ on:
       - 'core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource.kt'
       - 'core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos.kt'
       - 'core/network/src/main/java/com/iptv/tv/core/network/di/NetworkModule.kt'
+      - 'core/network/src/main/java/com/iptv/tv/core/network/dns/ResilientDns.kt'
       - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository.kt'
+      - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/SettingsRepository.kt'
       - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase.kt'
       - 'core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule.kt'
       - 'core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt'
+      - 'core/data/src/main/java/com/iptv/tv/core/data/settings/SettingsStore.kt'
       - 'docs/PROJECT_STATUS_AND_ROADMAP.md'
       - '.github/workflows/player-refactor-guard.yml'
 
@@ -43,14 +46,42 @@ jobs:
           changed="$(git diff --no-renames --name-only "$merge_base" "$HEAD_SHA")"
           printf '%s\n' "$changed"
 
-          if ! grep -Eq '^(app/src/main/java/com/iptv/tv/MainActivity\.kt$|feature/player/|core/player/|core/player-vlc/)' <<<"$changed"; then
-            echo 'No Player-owned production/test/routing files changed; Scanner boundary is not applicable.'
+          player_changed=false
+          if grep -Eq '^(feature/player/|core/player/|core/player-vlc/)' <<<"$changed"; then
+            player_changed=true
+          fi
+
+          if grep -Fxq 'app/src/main/java/com/iptv/tv/MainActivity.kt' <<<"$changed"; then
+            main_activity_diff="$(git diff --no-renames -U0 "$merge_base" "$HEAD_SHA" -- app/src/main/java/com/iptv/tv/MainActivity.kt)"
+            if grep -Eq '^[+-][^+-].*(StablePlayerScreen|Routes\.PLAYER|Routes\.playerRoute|PLAYER_(PLAYLIST|CHANNEL)_ID_ARG|playerFullscreen|isPlayerRoute)' <<<"$main_activity_diff"; then
+              player_changed=true
+            fi
+          fi
+
+          if [[ "$player_changed" != true ]]; then
+            echo 'No Player-owned production/test/routing behavior changed; Scanner boundary is not applicable.'
             exit 0
           fi
 
-          if grep -Eq '^(feature/scanner/|core/model/src/main/kotlin/com/iptv/tv/core/model/Models\.kt$|core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis\.kt$|core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource\.kt$|core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos\.kt$|core/network/src/main/java/com/iptv/tv/core/network/di/NetworkModule\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase\.kt$|core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule\.kt$|core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories\.kt$)' <<<"$changed"; then
-            echo 'Player changes must not modify Scanner production/query/discovery/model/wiring contracts.' >&2
+          if grep -Eq '^(feature/scanner/|core/model/src/main/kotlin/com/iptv/tv/core/model/Models\.kt$|core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis\.kt$|core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource\.kt$|core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos\.kt$|core/network/src/main/java/com/iptv/tv/core/network/di/NetworkModule\.kt$|core/network/src/main/java/com/iptv/tv/core/network/dns/ResilientDns\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase\.kt$|core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule\.kt$|core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories\.kt$)' <<<"$changed"; then
+            echo 'Player changes must not modify Scanner production/query/discovery/model/network contracts.' >&2
             exit 1
+          fi
+
+          if grep -Fxq 'core/data/src/main/java/com/iptv/tv/core/data/settings/SettingsStore.kt' <<<"$changed"; then
+            settings_store_diff="$(git diff --no-renames -U0 "$merge_base" "$HEAD_SHA" -- core/data/src/main/java/com/iptv/tv/core/data/settings/SettingsStore.kt)"
+            if grep -Eq '^[+-][^+-].*scanner(AiEnabled|ProxyEnabled|ProxyHost|ProxyPort|ProxyUsername|ProxyPassword|LearnedQueries)' <<<"$settings_store_diff"; then
+              echo 'Player changes must not modify Scanner preference keys in SettingsStore.' >&2
+              exit 1
+            fi
+          fi
+
+          if grep -Fxq 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/SettingsRepository.kt' <<<"$changed"; then
+            settings_repository_diff="$(git diff --no-renames -U0 "$merge_base" "$HEAD_SHA" -- core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/SettingsRepository.kt)"
+            if grep -Eq '^[+-][^+-].*(Scanner|recordScannerLearning|clearScannerLearning)' <<<"$settings_repository_diff"; then
+              echo 'Player changes must not modify Scanner-facing SettingsRepository contracts.' >&2
+              exit 1
+            fi
           fi
 
       - name: Verify exact checked-out revision
