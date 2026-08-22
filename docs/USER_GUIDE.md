@@ -90,6 +90,18 @@ Back не должен перескакивать через несколько 
 - кнопки физического обновления/удаления и редактор для него недоступны;
 - внутри используются тот же canonical catalog и существующий Player runtime, отдельный плеер для Favorites не создаётся.
 
+### Выбор источника favorite
+
+Для одного logical favorite могут одновременно существовать несколько source variants. На экране Favorites выберите канал и нажмите **«Источники»**.
+
+- список показывает происхождение варианта, имя плейлиста/тип источника, live или сохранённое состояние и health;
+- stream URL, provider credentials, MAC/API keys и tokens в карточках источников намеренно не отображаются;
+- текущий preferred variant помечается как **«Предпочтительный источник»**;
+- для другого варианта нажмите **«Использовать»** — он станет предпочтительным для последующего playback resolution;
+- переключение preferred source не удаляет остальные variants и не изменяет membership исходных плейлистов;
+- aggregate favorite остаётся одной строкой со стабильным representative ID;
+- если источник позже исчезнет, сохранённые variants остаются частью durable favorite и могут быть повторно связаны после re-import.
+
 ### Экспорт
 
 На экране Favorites доступны три варианта экспорта:
@@ -119,7 +131,7 @@ Back не должен перескакивать через несколько 
 
 ## Player
 
-При выборе канала из каталога используется точный маршрут выбранного канала. Для системного Favorites aggregate существующий Player получает выбранный live или persisted source variant через общий repository contract. После выхода из Player навигационный checkpoint каталога остаётся доступным для восстановления пути и focus.
+При выборе канала из каталога используется точный маршрут выбранного канала. Для системного Favorites aggregate существующий Player получает выбранный live или persisted source variant через общий repository contract. Явно выбранный preferred source учитывается тем же resolver без создания отдельного Player runtime. После выхода из Player навигационный checkpoint каталога остаётся доступным для восстановления пути и focus.
 
 ## Диагностика
 
@@ -144,6 +156,8 @@ Back не должен перескакивать через несколько 
 - PR #172 подключил Favorites как системный virtual aggregate к существующему canonical catalog и Player;
 - PR #174 добавил versioned portable Favorites backup/import backend с безопасной credential policy;
 - PR #175 перевёл TXT/M3U8 на тот же data-layer policy и открыл `.riptv` export в Favorites UI;
-- `.riptv` import через системный document picker использует validate-before-write merge backend и отдельный bounded-reader UI gate.
+- PR #176 подключил `.riptv` import через системный document picker с validate-before-write merge и bounded reader;
+- PR #177 добавил durable reconciliation и выбор preferred source variant без Room migration;
+- PR #178 подключил TV-friendly source picker к Favorites UI и не раскрывает stream URL/credentials в карточках вариантов.
 
-Следующий этап #45 — source-variant picker/reconciliation, затем остальные aggregate views и performance/non-blocking rebuild hardening.
+Следующий этап #45 — остальные virtual aggregate views, начиная с **All channels**, затем Recent/History и performance/non-blocking rebuild hardening.
