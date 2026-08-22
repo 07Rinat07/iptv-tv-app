@@ -6,8 +6,6 @@ import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelEpgInfo
-import com.iptv.tv.core.model.ChannelHealth
-import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistContentSummary
@@ -154,43 +152,11 @@ internal fun virtualFavoritesPlaylist(channelCount: Int): Playlist = Playlist(
 )
 
 internal fun virtualFavoritesSummary(channels: List<Channel>): PlaylistContentSummary {
-    val visible = channels.filterNot(Channel::isHidden)
-    val groupCounts = visible
-        .mapNotNull { it.group?.trim()?.takeIf(String::isNotEmpty) }
-        .groupingBy { it }
-        .eachCount()
-    return PlaylistContentSummary(
+    return virtualPlaylistContentSummary(
         playlistId = VIRTUAL_FAVORITES_PLAYLIST_ID,
         playlistName = "Избранное",
-        sourceType = PlaylistSourceType.CUSTOM,
         source = VIRTUAL_FAVORITES_SOURCE,
-        epgSourceUrl = null,
-        totalChannels = channels.size,
-        visibleChannels = visible.size,
-        hiddenChannels = channels.count(Channel::isHidden),
-        channelsWithLogo = visible.count { !it.logo.isNullOrBlank() },
-        channelsWithTvgId = visible.count { !it.tvgId.isNullOrBlank() },
-        availableChannels = visible.count { it.health == ChannelHealth.AVAILABLE },
-        unstableChannels = visible.count { it.health == ChannelHealth.UNSTABLE },
-        unavailableChannels = visible.count { it.health == ChannelHealth.UNAVAILABLE },
-        unknownHealthChannels = visible.count { it.health == ChannelHealth.UNKNOWN },
-        groupCount = groupCounts.size,
-        topGroups = groupCounts.entries
-            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
-            .take(10)
-            .map { it.key to it.value },
-        channelPreviews = visible
-            .sortedWith(compareBy<Channel> { it.orderIndex }.thenBy { it.name })
-            .take(50)
-            .map { channel ->
-                ChannelPreview(
-                    id = channel.id,
-                    name = channel.name,
-                    group = channel.group,
-                    logo = channel.logo,
-                    health = channel.health,
-                    isHidden = channel.isHidden
-                )
-            }
+        channels = channels,
+        previewComparator = compareBy<Channel> { it.orderIndex }.thenBy { it.name }
     )
 }

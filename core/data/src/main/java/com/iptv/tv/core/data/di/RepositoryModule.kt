@@ -12,7 +12,7 @@ import com.iptv.tv.core.data.repository.RecordingRepositoryImpl
 import com.iptv.tv.core.data.repository.ScannerRepositoryImpl
 import com.iptv.tv.core.data.repository.SettingsRepositoryImpl
 import com.iptv.tv.core.data.repository.TvHomeIntegrationRepositoryImpl
-import com.iptv.tv.core.data.repository.VirtualAllChannelsPlaylistRepository
+import com.iptv.tv.core.data.repository.VirtualRecentChannelsPlaylistRepository
 import com.iptv.tv.core.domain.repository.ChannelMetadataRepository
 import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.DownloadRepository
@@ -43,7 +43,7 @@ abstract class RepositoryBindings {
 
     @Binds
     @Singleton
-    abstract fun bindPlaylistRepository(impl: VirtualAllChannelsPlaylistRepository): PlaylistRepository
+    abstract fun bindPlaylistRepository(impl: VirtualRecentChannelsPlaylistRepository): PlaylistRepository
 
     @Binds
     @Singleton

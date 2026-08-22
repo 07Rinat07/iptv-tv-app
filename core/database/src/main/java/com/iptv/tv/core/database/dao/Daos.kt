@@ -157,7 +157,7 @@ interface FavoriteDao {
 
 @Dao
 interface HistoryDao {
-    @Query("SELECT * FROM history ORDER BY playedAt DESC LIMIT :limit")
+    @Query("SELECT * FROM history ORDER BY playedAt DESC, id DESC LIMIT :limit")
     fun observeHistory(limit: Int): Flow<List<HistoryEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

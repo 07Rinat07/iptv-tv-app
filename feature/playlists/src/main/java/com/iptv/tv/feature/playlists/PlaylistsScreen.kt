@@ -42,6 +42,7 @@ import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.VIRTUAL_ALL_CHANNELS_PLAYLIST_ID
 import com.iptv.tv.core.model.VIRTUAL_FAVORITES_PLAYLIST_ID
+import com.iptv.tv.core.model.VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID
 import com.iptv.tv.core.model.isSystemVirtualPlaylistId
 import java.util.Locale
 
@@ -357,6 +358,8 @@ private fun virtualSystemPlaylistDescription(playlistId: Long): String? {
             "Виртуальный системный список: объединяет каналы всех исходных плейлистов"
         VIRTUAL_FAVORITES_PLAYLIST_ID ->
             "Виртуальный системный список: обновляется автоматически из Избранного"
+        VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID ->
+            "Виртуальный системный список: последние доступные каналы без повторов"
         else -> null
     }
 }
