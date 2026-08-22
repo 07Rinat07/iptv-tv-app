@@ -6,7 +6,7 @@ This is the canonical current-state and next-action document. Dated field report
 
 ## Current integration head
 
-- Current `main`: `66a67a6` — All Channels virtual aggregate and catalog roadmap sync.
+- Current `main`: `03f8e8e` — Recent/History virtual aggregate, deterministic MRU ordering and user/docs sync.
 - PR #174–#179 are merged: versioned portable backup, safe exports, RIPTV picker import, source reconciliation/preference, TV source picker and its help sync. All Channels is also complete in `main`.
 - Catalog/Favorites work does not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
 - Historical diagnostic and already-pruned branches are not production merge candidates.
@@ -31,16 +31,18 @@ The catalog/data track is developed as small fresh-main increments. Scanner disc
 12. **PR #178 — preferred source picker.** Favorites exposes deterministic source selection on TV without duplicating the logical favorite.
 13. **PR #179 — source-picker help sync.** User Guide and built-in About Help describe the merged backup/import/export and preferred-source behavior.
 14. **All Channels virtual aggregate — main `66a67a6`.** A system-owned, non-destructive view preserves concrete channel/playlist IDs and the existing Player route without creating a physical playlist row.
+15. **Recent/History virtual aggregate — main `03f8e8e`.** A bounded MRU view resolves current live/durable Favorite channels, preserves playback context, removes logical duplicates and reacts to hidden/parental/history changes without a Room playlist row.
 
 ### Current production increment
 
-**Recent/History virtual aggregate — in progress.** The current fresh-main increment must preserve stable recency ordering, source provenance, parental filtering and the same non-destructive virtual-list semantics established by Favorites and All Channels.
+**Catalog focus performance hardening — in progress.** The current fresh-main increment removes O(N) snapshot reconstruction from the D-pad focus hot path while preserving entries, breadcrumbs, checkpoint/rebuild focus restore and exact Player routing.
 
 ### Next production increments
 
-1. **Recent/History virtual aggregate.** Finish the current bounded increment and merge it only after exact-head gates are green.
-2. **Performance hardening.** Validate lazy rendering, cached prepared structures and non-blocking rebuild on large catalogs/favorite sets after the aggregate contract is stable.
-3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P views only after their capability contracts are stable.
+1. **Catalog focus hot path.** Reuse prepared entries/breadcrumbs for focus-only updates and protect it with a deterministic 10k-channel regression harness.
+2. **Non-blocking rebuild.** Prepare the canonical tree off Main with latest-wins cancellation and preserve checkpoint application on Main.
+3. **Aggregate collector/summary hardening.** Remove redundant cold-flow subscriptions, coalesce unchanged summary work and bound top-50 preparation.
+4. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P views only after their capability contracts are stable.
 
 ## Portable Favorites contract
 
@@ -102,8 +104,8 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 
 ## Decision order
 
-1. Finish Recent/History from fresh `main` and merge it only after exact-head model/data/playlists tests, lint and Android assembly gates are green.
-2. Start performance/lazy/non-blocking rebuild hardening after the aggregate contracts are stable.
+1. Finish the catalog focus hot-path increment from fresh `main` and merge it only after exact-head feature tests, lint and Android assembly gates are green.
+2. Continue off-Main latest-wins rebuild and aggregate collector/summary hardening as separate measured increments.
 3. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
 4. Continue EPG/Now-Next/archive (#47) and Player UX (#46) on top of the stable catalog/Favorites identity contracts.
 5. Complete hardware/soak/release acceptance before closing master roadmap #44.

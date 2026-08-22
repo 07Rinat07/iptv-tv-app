@@ -172,5 +172,6 @@ Back не должен перескакивать через несколько 
 - PR #177 добавил durable reconciliation и выбор preferred source variant без Room migration;
 - PR #178 подключил TV-friendly source picker к Favorites UI и не раскрывает stream URL/credentials в карточках вариантов.
 - виртуальный системный список **All channels / Все каналы** завершён в `main` `66a67a6` и сохраняет concrete channel/playlist IDs для существующего Player route без физической playlist row.
+- виртуальный системный список **Recent / Недавние** завершён в `main` `03f8e8e` с bounded MRU, logical dedup, live/durable Favorite resolution и реакцией на очистку истории/parental settings.
 
-Текущий этап #45 — **Recent/History** virtual aggregate; следующий — performance/non-blocking rebuild hardening.
+Текущий этап #45 — performance/non-blocking rebuild hardening, начиная с reuse подготовленного catalog snapshot при перемещении focus.

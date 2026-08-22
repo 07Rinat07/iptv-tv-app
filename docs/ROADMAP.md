@@ -92,7 +92,7 @@ V1 исправил дефект startup prebuffer: discovery/handshake latency 
 0. **Issue #40 — regression baseline TV navigation.** Кодовая база D-pad/mouse уже стандартизирована; реальные BlueStacks/TV Box проверки идут параллельно. Подтверждённая ручная регрессия получает отдельный минимальный hotfix PR и не ждёт конца roadmap.
 1. **Playback safety acceptance — EPG OOM.** Код PR #100 слит: streaming XMLTV, bounded memory/cache, negative-cache, serialized load и low-memory fail-safe. Ручные логи после фикса не показывают возврата прежнего OOM в просмотренном окне; hardware regression продолжает входить в release gate.
 2. **Master #44 — автономный P2P/Ace Live engine.** Это текущий главный приоритет. Ownership/rapid-zap базовые гонки закрыты PR #103/#105; adaptive streaming core прошёл V1–V3 и V4a/V4b. Текущий порядок внутри #44: `V4c TS/discontinuity hardening → V4d startup/zap latency parity → fixed A/B matrix → weak-network/peer-loss/soak acceptance`.
-3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** Identity/provenance, durable Favorites, portable backup/import/export и preferred-source picker закрыты PR #167–#179; виртуальный `Все каналы` завершён в `main` `66a67a6`. Текущий кодовый этап — Recent/History, следующий — performance/non-blocking rebuild hardening.
+3. **Issue #45 — canonical catalog hierarchy + unified Favorites.** Identity/provenance, durable Favorites, portable backup/import/export, preferred-source picker, `Все каналы` и `Недавние` завершены в `main` `03f8e8e`. Текущий кодовый этап — catalog focus/performance hardening, затем off-Main latest-wins rebuild и aggregate collector/summary hardening.
 4. **Issue #47 — EPG / Now-Next / real archive.** Полноценный ingestion/cache/matching/catch-up redesign строить поверх стабильной channel identity из #45.
 5. **Issue #46 — Player UX redesign.** Строить fullscreen/overlay/channel selector/Now-Next/Archive/P2P controls поверх уже готовых Catalog + P2P + EPG contracts.
 6. **Issue #43 — contextual Help + built-in Help + docs baseline.** Catalog navigation уже имеет встроенную краткую справку и `USER_GUIDE`; полное contextual покрытие остальных экранов продолжить после стабилизации Catalog/EPG/Player.
@@ -111,7 +111,8 @@ V1 исправил дефект startup prebuffer: discovery/handshake latency 
 - ✅ PR #178 — TV source-variant picker сохраняет deterministic preferred source без дублирования logical favorite.
 - ✅ PR #179 — `USER_GUIDE` и встроенная About Help синхронизированы с backup/import/export и source picker.
 - ✅ Виртуальный системный список `Все каналы` завершён в `main` `66a67a6` с non-destructive semantics и сохранением concrete channel/playlist IDs для Player route.
-- 🚧 Текущий fresh-main инкремент — Recent/History; следующий отдельный этап — performance/non-blocking rebuild hardening.
+- ✅ Recent/History aggregate завершён в `main` `03f8e8e`: bounded MRU, logical dedup, live/durable Favorite resolution, hidden/parental filtering и non-destructive semantics.
+- 🚧 Текущий fresh-main инкремент — catalog focus hot path; следующие отдельные этапы — off-Main latest-wins rebuild и aggregate collector/summary hardening.
 
 ## Этап 1: canonical catalog hierarchy и provenance (#45)
 
@@ -125,11 +126,11 @@ V1 исправил дефект startup prebuffer: discovery/handshake latency 
 4. ✅ PR #167/#168: navigation skeleton подключён к реальному Playlists UI — predictable one-level Back, breadcrumb context, exact-channel Player route и focus restore после Player/rebuild.
 5. ✅ PR #170–#172: Favorites переведён на единый агрегированный durable persistence/playback слой с provenance/source variants и virtual aggregate view.
 6. ✅ Dedup/re-import identity и source variants используют `ChannelStableIdentity`; повторный импорт live-эквивалента не создаёт второй logical favorite.
-7. 🚧 Virtual views: Favorites и All Channels уже подключены; Recent/History выполняется текущим отдельным инкрементом, а позднее Now/Next/EPG/archive/P2P filters остаются следующими этапами.
-8. Следующим этапом проверить lazy rendering, кэш подготовленной структуры и non-blocking rebuild больших наборов.
+7. ✅ Virtual views: Favorites, All Channels и Recent/History подключены; позднее Now/Next/EPG/archive/P2P filters остаются отдельными этапами после стабилизации capability contracts.
+8. 🚧 Проверить lazy rendering, reuse подготовленной структуры, off-Main latest-wins rebuild и bounded aggregate preparation на больших наборах.
 9. ✅ PR #174–#178: versioned portable Favorites contract, безопасный export/import и preferred-source picker не используют локальные Room IDs как portable identity и не раскрывают credential-bearing provider URLs по умолчанию.
 
-Contract/identity/provenance, durable Favorites, virtual Favorites, portable transfer и source picker уже слиты отдельными малыми PR. `Все каналы` завершён в `main` `66a67a6`; текущий fresh-main production increment — Recent/History, следующий отдельный этап — performance hardening. Scanner discovery/query, Player playback policy и P2P budgets не меняются.
+Contract/identity/provenance, durable Favorites, portable transfer, source picker, `Все каналы` и `Недавние` уже слиты отдельными малыми инкрементами до `main` `03f8e8e`. Текущий fresh-main production increment оптимизирует focus hot path; off-Main rebuild и aggregate flow/summary hardening идут отдельно. Scanner discovery/query, Player playback policy и P2P budgets не меняются.
 
 ## Этап 2: встроенный P2P engine и Ace transport
 
