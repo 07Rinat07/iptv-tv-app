@@ -17,7 +17,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 
 /**
  * Adds the aggregate Favorites view to the legacy PlaylistRepository contract without creating a
@@ -27,21 +29,31 @@ import kotlinx.coroutines.flow.first
 @Singleton
 class VirtualFavoritesPlaylistRepository @Inject constructor(
     private val delegate: PlaylistRepositoryImpl,
-    private val favoritesRepository: FavoritesRepository
+    private val favoritesRepository: FavoritesRepository,
+    private val aggregateScope: VirtualPlaylistAggregateScope
 ) : PlaylistRepository by delegate {
+    private val favoriteChannels = favoritesRepository.observeFavorites()
+        .shareVirtualAggregate(aggregateScope)
+    private val favoriteChannelCount = favoriteChannels
+        .map(List<Channel>::size)
+        .distinctUntilChanged()
+    private val favoriteSummary = favoriteChannels
+        .map(::virtualFavoritesSummary)
+        .shareVirtualAggregate(aggregateScope)
+
     override fun observePlaylists(): Flow<List<Playlist>> {
         return combine(
             delegate.observePlaylists(),
-            favoritesRepository.observeFavorites()
-        ) { playlists, favorites ->
+            favoriteChannelCount
+        ) { playlists, channelCount ->
             playlists.filterNot { it.id == VIRTUAL_FAVORITES_PLAYLIST_ID } +
-                virtualFavoritesPlaylist(channelCount = favorites.size)
+                virtualFavoritesPlaylist(channelCount = channelCount)
         }
     }
 
     override fun observeChannels(playlistId: Long): Flow<List<Channel>> {
         return if (playlistId == VIRTUAL_FAVORITES_PLAYLIST_ID) {
-            favoritesRepository.observeFavorites()
+            favoriteChannels
         } else {
             delegate.observeChannels(playlistId)
         }
@@ -97,8 +109,7 @@ class VirtualFavoritesPlaylistRepository @Inject constructor(
         if (playlistId != VIRTUAL_FAVORITES_PLAYLIST_ID) {
             return delegate.getPlaylistContentSummary(playlistId)
         }
-        val channels = favoritesRepository.observeFavorites().first()
-        return AppResult.Success(virtualFavoritesSummary(channels))
+        return AppResult.Success(favoriteSummary.first())
     }
 
     override suspend fun getChannelEpgNowNext(channelId: Long): AppResult<ChannelEpgInfo> {
