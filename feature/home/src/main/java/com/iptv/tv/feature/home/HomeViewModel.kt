@@ -50,16 +50,11 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             beginReadyPlaylistLoad(preset)
             if (existing != null) {
-                when (val result = playlistRepository.refreshPlaylist(existing.id)) {
-                    is AppResult.Success -> completeReadyPlaylistLoad(
-                        playlistId = existing.id,
-                        message = "Список обновлён. Открывается плеер."
-                    )
-                    is AppResult.Error -> failReadyPlaylistLoad(
-                        "Не удалось обновить «${preset.name}»: ${result.message}"
-                    )
-                    AppResult.Loading -> clearReadyPlaylistLoading()
-                }
+                refreshReadyPlaylistBeforeOpen(
+                    playlistId = existing.id,
+                    presetName = preset.name,
+                    successMessage = "Список обновлён. Открывается плеер."
+                )
                 return@launch
             }
 
@@ -70,10 +65,17 @@ class HomeViewModel @Inject constructor(
                     catalogOrigin = CatalogOriginKind.READY_CATALOG
                 )
             ) {
-                is AppResult.Success -> completeReadyPlaylistLoad(
-                    playlistId = result.data.playlistId,
-                    message = "Список добавлен. Открывается плеер."
-                )
+                is AppResult.Success -> {
+                    // Generic URL import deliberately keeps its legacy semantics. Ready refresh has
+                    // stricter stream-identity handling, so run it once before the very first open:
+                    // primary/backup/quality variants that share tvg-id/name are then present from
+                    // the first user-visible session rather than only after a later refresh.
+                    refreshReadyPlaylistBeforeOpen(
+                        playlistId = result.data.playlistId,
+                        presetName = preset.name,
+                        successMessage = "Список добавлен и обновлён. Открывается плеер."
+                    )
+                }
                 is AppResult.Error -> failReadyPlaylistLoad(
                     "Не удалось загрузить «${preset.name}»: ${result.message}"
                 )
@@ -94,6 +96,23 @@ class HomeViewModel @Inject constructor(
 
     fun consumeOpenPlaylistRequest() {
         _uiState.update { it.copy(pendingOpenPlaylistId = null) }
+    }
+
+    private suspend fun refreshReadyPlaylistBeforeOpen(
+        playlistId: Long,
+        presetName: String,
+        successMessage: String
+    ) {
+        when (val refresh = playlistRepository.refreshPlaylist(playlistId)) {
+            is AppResult.Success -> completeReadyPlaylistLoad(
+                playlistId = playlistId,
+                message = successMessage
+            )
+            is AppResult.Error -> failReadyPlaylistLoad(
+                "Не удалось обновить «$presetName»: ${refresh.message}"
+            )
+            AppResult.Loading -> clearReadyPlaylistLoading()
+        }
     }
 
     private fun beginReadyPlaylistLoad(preset: ReadyPlaylistPreset) {
@@ -131,6 +150,11 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun clearReadyPlaylistLoading() {
-        _uiState.update { it.copy(isImporting = false, importingUrl = null) }
+        _uiState.update {
+            it.copy(
+                isImporting = false,
+                importingUrl = null
+            )
+        }
     }
 }
