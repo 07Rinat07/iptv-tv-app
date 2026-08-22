@@ -43,7 +43,7 @@ class HomeViewModel @Inject constructor(
     fun watchReadyPlaylist(preset: ReadyPlaylistPreset) {
         val existing = findImportedReadyPlaylist(
             playlists = _uiState.value.playlists,
-            sourceKey = preset.sourceKey
+            sourceUrl = preset.url
         )
         if (existing != null) {
             requestOpenPlaylist(existing.id, "Открывается сохранённый список: ${existing.name}")
@@ -60,18 +60,13 @@ class HomeViewModel @Inject constructor(
                     lastInfo = "Загрузка списка «${preset.name}»…"
                 )
             }
-            val result = preset.embeddedM3u?.let { embeddedM3u ->
-                playlistRepository.importReadyPlaylistText(
-                    text = embeddedM3u,
+            when (
+                val result = playlistRepository.importFromUrl(
+                    url = preset.url,
                     name = preset.name,
-                    sourceKey = preset.sourceKey
+                    catalogOrigin = CatalogOriginKind.READY_CATALOG
                 )
-            } ?: playlistRepository.importFromUrl(
-                url = preset.url,
-                name = preset.name,
-                catalogOrigin = CatalogOriginKind.READY_CATALOG
-            )
-            when (result) {
+            ) {
                 is AppResult.Success -> {
                     _uiState.update {
                         it.copy(
