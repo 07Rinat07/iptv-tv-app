@@ -56,30 +56,36 @@ Issue #45's aggregate collector/summary work is complete in `main`. Ready-catalo
 
 Player work is split into small fresh-main increments. Refactoring must preserve playback behavior first; performance-policy changes are separate commits/PRs so regressions remain attributable.
 
-### Current architecture debt
+### Production routing and architecture debt
 
-The largest Player files have accumulated multiple responsibilities:
+`MainActivity` routes the application to `StablePlayerScreen`, implemented in `feature/player/StablePlayerScreenReplacement.kt`. That production route, not the older `PlayerScreen.kt`, is the refactor and performance target.
 
-- `feature/player/PlayerScreen.kt` — roughly 108 KB: root composition, dialogs, browser/list UI, Media3 host/effects and presentation helpers in one file.
+- `feature/player/StablePlayerScreenReplacement.kt` — roughly 66 KB: production root composition, channel filtering, panels, layout selection and remote-action policy still share one file.
+- `feature/player/StablePlayerInput.kt` — production Android View/touch/key lifecycle; it must remain aligned with the `stableRemoteActionForKey` policy used by the real video surfaces.
 - `feature/player/PlayerViewModel.kt` — roughly 113 KB: broad `PlayerUiState`, playback orchestration, catalog/EPG state and frequent state updates in one ViewModel.
+- `feature/player/PlayerScreen.kt` — roughly 108 KB legacy composable. Do not spend refactor budget on it unless routing is explicitly migrated back to it or the legacy path is being retired.
 - Other large candidates include `ScannerViewModel.kt`, `EditorViewModel.kt`, `PublicRepositoryScannerDataSource.kt`, `SettingsScreen.kt` and `ImporterViewModel.kt`.
 
 The target is not class-heavy OOP. For Kotlin/Compose, apply SOLID/bounded responsibilities with small interfaces, coordinators/policies where stateful behavior belongs, pure helpers for deterministic logic and focused composables for presentation.
 
 ### Refactor sequence
 
-1. **Player composition split — active.** Mechanically split `PlayerScreen.kt` into bounded UI files (shell/navigation, channel browser/list, overlays/settings, Media3 host) without changing playback semantics or state ownership. Feature tests and full Android CI are mandatory before merge.
-2. **Player state/recomposition split.** Separate hot playback/engine telemetry from large catalog/EPG/browser state, reduce root `PlayerUiState` invalidation, move expensive derived channel models/indexes out of root composition, and publish only distinct state changes.
-3. **RAM-bounded Auto buffer.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV `ChannelHealth.UNSTABLE`, increase only time-based Media3 recovery/min-buffer thresholds while preserving existing device/multiview byte caps. Manual remains explicit. Ace/P2P buffer policy is excluded without Issue #159 device evidence.
-4. **Measured Player performance pass.** Address remaining main-thread/state churn only from deterministic evidence or profiling, keeping each optimization independently testable.
-5. **Large-file follow-up.** Apply the same responsibility-first decomposition pattern to Scanner, Editor, Importer and Settings in separate bounded PRs; do not combine unrelated modules in one rewrite.
+1. **Production Player input boundary — active, PR #183.** Keep `StablePlayerInputHandler` as the Android lifecycle/gesture adapter, extract deterministic input contracts/policy, keep `stableRemoteActionForKey` as the production key mapping source of truth, and protect Player refactors with an exact-head Scanner boundary/regression gate.
+2. **Production StablePlayer composition split.** Mechanically split `StablePlayerScreenReplacement.kt` into bounded UI responsibilities (shell/navigation, channel browser/list, panels/settings and presentation helpers) without changing playback semantics, search/filter semantics or state ownership.
+3. **Player state/recomposition split.** Separate hot playback/engine telemetry from large catalog/EPG/browser state, reduce root `PlayerUiState` invalidation, move expensive derived channel models/indexes out of root composition, and publish only distinct state changes.
+4. **RAM-bounded Auto buffer.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV `ChannelHealth.UNSTABLE`, increase only time-based Media3 recovery/min-buffer thresholds while preserving existing device/multiview byte caps. Manual remains explicit. Ace/P2P buffer policy is excluded without Issue #159 device evidence.
+5. **Measured Player performance pass.** Address remaining main-thread/state churn only from deterministic evidence or profiling, keeping each optimization independently testable.
+6. **Large-file follow-up.** Apply the same responsibility-first decomposition pattern to Scanner, Editor, Importer and Settings in separate bounded-context PRs; do not combine unrelated modules in one rewrite.
 
 ### Refactor invariants
 
+- Production Player routing is `StablePlayerScreen`; validate the actual routed implementation before every architectural change.
 - No second playback runtime.
 - No behavioral change in a mechanical file split.
 - No P2P/Ace peer/DHT/request/buffer change from a generic Player refactor.
 - Keep TV/D-pad focus behavior, Back behavior, selected-channel identity and playback-session ownership stable.
+- Keep production remote mapping (`stableRemoteActionForKey`) and `StablePlayerInputHandler` behavior aligned; do not maintain a parallel legacy remote policy as a substitute for production tests.
+- Player architecture work must not modify Scanner discovery/query/search semantics.
 - Prefer extracted pure functions/data classes and small composables over inheritance hierarchies.
 - Introduce interfaces/classes only when they own a real contract, lifecycle or policy.
 - Every refactor PR starts from fresh `main`, has focused regression coverage and merges only after exact-head gates are green.
@@ -142,6 +148,8 @@ For normal Android integration work on the exact PR head:
 5. `:app:assembleDebugAndroidTest`
 6. signed ARM TV APK build/artifacts in the full Android workflow
 
+Player architecture PRs additionally use `Player Refactor Guard`: checkout `github.event.pull_request.head.sha`, verify `git rev-parse HEAD` equals that exact SHA, reject `feature/scanner`/`core/scanner` production changes, and run both Player and Scanner unit suites.
+
 Database/Favorites persistence work additionally uses the dedicated Database Unit CI (`:core:database:testDebugUnitTest` + `:core:data:testDebugUnitTest`).
 
 P2P/runtime changes additionally require their P2P/unit/tooling gates and real `TorrentTvPlaybackSmokeTest`/hardware evidence when the touched behavior requires it. Building an instrumentation APK is not counted as running the real-device smoke.
@@ -149,10 +157,10 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 ## Decision order
 
 1. Keep PR #182's merged Ready/catalog/Favorites baseline stable; do not reopen it without a measured regression or planned capability.
-2. Execute Issue #46 Player architecture work as small behavior-preserving increments: composition split first, state/recomposition split second, then RAM-bounded Auto buffer and measured performance work.
+2. Execute Issue #46 against the production StablePlayer route: finish the input boundary, split `StablePlayerScreenReplacement.kt`, then state/recomposition, RAM-bounded Auto buffer and measured performance work.
 3. Continue Issue #47 with unambiguous matching/diagnostics and real catch-up/archive capability in independent fresh-main increments when it does not conflict with the active Player files.
 4. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
-5. Refactor other oversized Scanner/Editor/Importer/Settings files only as separate bounded-context PRs after establishing the Player decomposition pattern.
+5. Refactor other oversized Scanner/Editor/Importer/Settings files only as separate bounded-context PRs after establishing the production Player decomposition pattern.
 6. Complete hardware/soak/release acceptance before closing master roadmap #44.
 
 ## Cross-track invariants
