@@ -14,9 +14,9 @@ internal data class ReadyPlaylistRefreshPlan(
 /**
  * Reconciles a freshly downloaded Ready-catalog M3U with its existing Room rows.
  *
- * Stable logical matches retain their row ID so history, Favorites compatibility rows and player
- * routes keep pointing at the same channel. An exact stream fallback covers metadata upgrades such
- * as a publisher adding a tvg-id to a channel that previously had none.
+ * Exact stream matches win first because a shared tvg-id/name can legitimately describe several
+ * source variants. Stable logical identity is then used to retain row IDs across publisher URL
+ * changes, while an exact-stream fallback naturally covers metadata upgrades such as adding tvg-id.
  */
 internal object ReadyPlaylistRefreshPlanner {
     fun plan(
@@ -39,11 +39,11 @@ internal object ReadyPlaylistRefreshPlanner {
 
         val reusedIds = mutableSetOf<Long>()
         val upserts = incoming.mapIndexed { index, channel ->
-            val stableMatch = existingByStableKey[stableKey(channel)]
-                ?.firstOrNull { candidate -> candidate.id !in reusedIds }
             val streamMatch = existingByStream[channel.streamUrl.trim()]
                 ?.takeIf { candidate -> candidate.id !in reusedIds }
-            val matched = stableMatch ?: streamMatch
+            val stableMatch = existingByStableKey[stableKey(channel)]
+                ?.firstOrNull { candidate -> candidate.id !in reusedIds }
+            val matched = streamMatch ?: stableMatch
             if (matched != null) reusedIds += matched.id
 
             ChannelEntity(
