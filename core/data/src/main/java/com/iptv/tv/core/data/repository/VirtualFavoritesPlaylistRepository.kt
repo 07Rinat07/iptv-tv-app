@@ -35,7 +35,7 @@ class VirtualFavoritesPlaylistRepository @Inject constructor(
     private val favoriteChannels = favoritesRepository.observeFavorites()
         .shareVirtualAggregate(aggregateScope)
     private val favoriteChannelCount = favoriteChannels
-        .map(List<Channel>::size)
+        .map { channels -> channels.size }
         .distinctUntilChanged()
     private val favoriteSummary = favoriteChannels
         .map(::virtualFavoritesSummary)
