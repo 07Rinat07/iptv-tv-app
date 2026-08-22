@@ -45,7 +45,7 @@ internal object ReadyPlaylistRefreshPlanner {
             existingByStream[channel.streamUrl.trim()]
         }
         val reservedExactIds = exactMatches
-            .mapNotNullTo(hashSetOf(), ChannelEntity::id)
+            .mapNotNullTo(hashSetOf()) { candidate -> candidate?.id }
 
         val reusedIds = mutableSetOf<Long>()
         val upserts = incoming.mapIndexed { index, channel ->
