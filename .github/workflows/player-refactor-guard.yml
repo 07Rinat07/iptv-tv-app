@@ -8,6 +8,8 @@ on:
       - 'core/player/**'
       - 'core/player-vlc/**'
       - 'feature/scanner/**'
+      - 'feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsViewModel.kt'
+      - 'feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsScreen.kt'
       - 'core/model/src/main/kotlin/com/iptv/tv/core/model/Models.kt'
       - 'core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis.kt'
       - 'core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource.kt'
@@ -36,53 +38,233 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Protect Scanner contracts when Player code changes
+      - name: Protect Scanner contracts when Player behavior changes
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -euo pipefail
-          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
-          changed="$(git diff --no-renames --name-only "$merge_base" "$HEAD_SHA")"
-          printf '%s\n' "$changed"
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
 
-          player_changed=false
-          if grep -Eq '^(feature/player/|core/player/|core/player-vlc/)' <<<"$changed"; then
-            player_changed=true
-          fi
+          BASE_SHA = os.environ["BASE_SHA"]
+          HEAD_SHA = os.environ["HEAD_SHA"]
 
-          if grep -Fxq 'app/src/main/java/com/iptv/tv/MainActivity.kt' <<<"$changed"; then
-            main_activity_diff="$(git diff --no-renames -U0 "$merge_base" "$HEAD_SHA" -- app/src/main/java/com/iptv/tv/MainActivity.kt)"
-            if grep -Eq '^[+-][^+-].*(StablePlayerScreen|Routes\.PLAYER|Routes\.playerRoute|PLAYER_(PLAYLIST|CHANNEL)_ID_ARG|playerFullscreen|isPlayerRoute)' <<<"$main_activity_diff"; then
-              player_changed=true
-            fi
-          fi
+          def git_text(*args: str) -> str:
+              return subprocess.check_output(["git", *args], text=True)
 
-          if [[ "$player_changed" != true ]]; then
-            echo 'No Player-owned production/test/routing behavior changed; Scanner boundary is not applicable.'
-            exit 0
-          fi
+          merge_base = git_text("merge-base", BASE_SHA, HEAD_SHA).strip()
+          changed = set(filter(None, git_text("diff", "--no-renames", "--name-only", merge_base, HEAD_SHA).splitlines()))
+          for path in sorted(changed):
+              print(path)
 
-          if grep -Eq '^(feature/scanner/|core/model/src/main/kotlin/com/iptv/tv/core/model/Models\.kt$|core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis\.kt$|core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource\.kt$|core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos\.kt$|core/network/src/main/java/com/iptv/tv/core/network/di/NetworkModule\.kt$|core/network/src/main/java/com/iptv/tv/core/network/dns/ResilientDns\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase\.kt$|core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule\.kt$|core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories\.kt$)' <<<"$changed"; then
-            echo 'Player changes must not modify Scanner production/query/discovery/model/network contracts.' >&2
-            exit 1
-          fi
+          def content_at(ref: str, path: str) -> str:
+              try:
+                  return git_text("show", f"{ref}:{path}")
+              except subprocess.CalledProcessError:
+                  return ""
 
-          if grep -Fxq 'core/data/src/main/java/com/iptv/tv/core/data/settings/SettingsStore.kt' <<<"$changed"; then
-            settings_store_diff="$(git diff --no-renames -U0 "$merge_base" "$HEAD_SHA" -- core/data/src/main/java/com/iptv/tv/core/data/settings/SettingsStore.kt)"
-            if grep -Eq '^[+-][^+-].*scanner(AiEnabled|ProxyEnabled|ProxyHost|ProxyPort|ProxyUsername|ProxyPassword|LearnedQueries)' <<<"$settings_store_diff"; then
-              echo 'Player changes must not modify Scanner preference keys in SettingsStore.' >&2
-              exit 1
-            fi
-          fi
+          def changed_lines(path: str) -> list[str]:
+              if path not in changed:
+                  return []
+              diff = git_text("diff", "--no-renames", "-U0", merge_base, HEAD_SHA, "--", path)
+              result: list[str] = []
+              for line in diff.splitlines():
+                  if line.startswith(("+++", "---", "@@")):
+                      continue
+                  if line.startswith(("+", "-")):
+                      result.append(line[1:])
+              return result
 
-          if grep -Fxq 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/SettingsRepository.kt' <<<"$changed"; then
-            settings_repository_diff="$(git diff --no-renames -U0 "$merge_base" "$HEAD_SHA" -- core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/SettingsRepository.kt)"
-            if grep -Eq '^[+-][^+-].*(Scanner|recordScannerLearning|clearScannerLearning)' <<<"$settings_repository_diff"; then
-              echo 'Player changes must not modify Scanner-facing SettingsRepository contracts.' >&2
-              exit 1
-            fi
-          fi
+          def changed_line_matches(path: str, pattern: str) -> bool:
+              regex = re.compile(pattern, re.IGNORECASE)
+              return any(regex.search(line) for line in changed_lines(path))
+
+          def section_between(text: str, start_marker: str, end_marker: str) -> str:
+              start = text.find(start_marker)
+              if start < 0:
+                  return ""
+              end = text.find(end_marker, start + len(start_marker))
+              if end < 0:
+                  end = len(text)
+              return text[start:end]
+
+          def section_changed(path: str, start_marker: str, end_marker: str) -> bool:
+              if path not in changed:
+                  return False
+              before = section_between(content_at(merge_base, path), start_marker, end_marker)
+              after = section_between(content_at(HEAD_SHA, path), start_marker, end_marker)
+              return before != after
+
+          def braced_definition(text: str, marker: str) -> str:
+              start = text.find(marker)
+              if start < 0:
+                  return ""
+              brace = text.find("{", start + len(marker))
+              if brace < 0:
+                  line_end = text.find("\n", start)
+                  return text[start:] if line_end < 0 else text[start:line_end]
+              depth = 0
+              for index in range(brace, len(text)):
+                  char = text[index]
+                  if char == "{":
+                      depth += 1
+                  elif char == "}":
+                      depth -= 1
+                      if depth == 0:
+                          return text[start:index + 1]
+              return text[start:]
+
+          def definition_changed(path: str, marker: str) -> bool:
+              if path not in changed:
+                  return False
+              before = braced_definition(content_at(merge_base, path), marker)
+              after = braced_definition(content_at(HEAD_SHA, path), marker)
+              return before != after
+
+          def any_definition_changed(path: str, markers: list[str]) -> bool:
+              return any(definition_changed(path, marker) for marker in markers)
+
+          MAIN = "app/src/main/java/com/iptv/tv/MainActivity.kt"
+          MODELS = "core/model/src/main/kotlin/com/iptv/tv/core/model/Models.kt"
+          SETTINGS_REPO = "core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/SettingsRepository.kt"
+          SETTINGS_STORE = "core/data/src/main/java/com/iptv/tv/core/data/settings/SettingsStore.kt"
+          SETTINGS_VM = "feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsViewModel.kt"
+          SETTINGS_SCREEN = "feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsScreen.kt"
+          REPOSITORIES = "core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt"
+          REPOSITORY_MODULE = "core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule.kt"
+
+          player_changed = any(
+              path.startswith(("feature/player/", "core/player/", "core/player-vlc/"))
+              for path in changed
+          )
+
+          if MAIN in changed:
+              player_changed = player_changed or section_changed(
+                  MAIN,
+                  "composable(Routes.PLAYER) {",
+                  "composable(Routes.DOWNLOADS) {",
+              )
+              player_changed = player_changed or changed_line_matches(
+                  MAIN,
+                  r"StablePlayerScreen|isPlayerRoute|playerFullscreen|Routes\.playerRoute|Routes\.PLAYER",
+              )
+
+          player_changed = player_changed or any_definition_changed(
+              MODELS,
+              ["enum class PlayerType", "enum class BufferProfile", "data class ManualBufferSettings"],
+          )
+          player_changed = player_changed or changed_line_matches(
+              SETTINGS_STORE,
+              r"defaultPlayer|bufferProfile|manualStartMs|manualRebufferMs|manualMaxMs|channelPlayerOverrides",
+          )
+          player_changed = player_changed or changed_line_matches(
+              SETTINGS_REPO,
+              r"PlayerType|BufferProfile|ManualBufferSettings|observeDefaultPlayer|observeBufferProfile|observeManualBuffer|observeChannelPlayerOverride|setDefaultPlayer|setBufferProfile|setManualBuffer|setChannelPlayerOverride",
+          )
+          player_changed = player_changed or changed_line_matches(
+              SETTINGS_VM,
+              r"PlayerType|BufferProfile|defaultPlayer|bufferProfile|manual(Start|Rebuffer|Max)Ms|setDefaultPlayer|setBufferProfile|saveManualBuffer|updateManual(Start|Rebuffer|Max)|Плеер|буфер",
+          )
+          player_changed = player_changed or section_changed(
+              SETTINGS_SCREEN,
+              'title = "Плеер"',
+              'title = "Engine Stream"',
+          )
+          player_changed = player_changed or any_definition_changed(
+              REPOSITORIES,
+              [
+                  "fun observeDefaultPlayer(",
+                  "fun observeBufferProfile(",
+                  "fun observeManualBuffer(",
+                  "fun observeChannelPlayerOverride(",
+                  "fun setDefaultPlayer(",
+                  "fun setBufferProfile(",
+                  "fun setManualBuffer(",
+                  "fun setChannelPlayerOverride(",
+                  "fun parseChannelOverrides(",
+                  "fun encodeChannelOverrides(",
+              ],
+          )
+
+          recommended_changed = definition_changed(SETTINGS_VM, "fun applyRecommendedSettings(")
+          player_changed = player_changed or recommended_changed
+
+          if not player_changed:
+              print("No Player-owned production/test/routing/settings behavior changed; Scanner boundary is not applicable.")
+              sys.exit(0)
+
+          scanner_direct_paths = {
+              "core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis.kt",
+              "core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource.kt",
+              "core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos.kt",
+              "core/network/src/main/java/com/iptv/tv/core/network/di/NetworkModule.kt",
+              "core/network/src/main/java/com/iptv/tv/core/network/dns/ResilientDns.kt",
+              "core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository.kt",
+              "core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase.kt",
+          }
+          scanner_changed = any(path.startswith("feature/scanner/") for path in changed)
+          scanner_changed = scanner_changed or any(path in changed for path in scanner_direct_paths)
+          scanner_changed = scanner_changed or any_definition_changed(
+              MODELS,
+              [
+                  "data class ScannerProxySettings",
+                  "data class ScannerLearnedQuery",
+                  "data class PlaylistCandidate",
+                  "enum class ScannerProviderScope",
+                  "enum class ScannerSearchMode",
+                  "data class ScannerSearchRequest",
+              ],
+          )
+          scanner_changed = scanner_changed or changed_line_matches(
+              SETTINGS_STORE,
+              r"scanner(AiEnabled|ProxyEnabled|ProxyHost|ProxyPort|ProxyUsername|ProxyPassword|LearnedQueries)",
+          )
+          scanner_changed = scanner_changed or changed_line_matches(
+              SETTINGS_REPO,
+              r"Scanner|recordScannerLearning|clearScannerLearning",
+          )
+          scanner_changed = scanner_changed or changed_line_matches(
+              SETTINGS_VM,
+              r"Scanner|scanner|Proxy|proxy",
+          )
+          scanner_changed = scanner_changed or section_changed(
+              SETTINGS_SCREEN,
+              'title = "AI-сканер"',
+              'title = "Плеер"',
+          )
+          scanner_changed = scanner_changed or changed_line_matches(
+              REPOSITORY_MODULE,
+              r"ScannerRepository|ScannerRepositoryImpl|bindScannerRepository",
+          )
+          scanner_changed = scanner_changed or definition_changed(REPOSITORIES, "class ScannerRepositoryImpl")
+          scanner_changed = scanner_changed or any_definition_changed(
+              REPOSITORIES,
+              [
+                  "fun observeScannerAiEnabled(",
+                  "fun observeScannerProxySettings(",
+                  "fun observeScannerLearnedQueries(",
+                  "fun setScannerAiEnabled(",
+                  "fun setScannerProxySettings(",
+                  "fun recordScannerLearning(",
+                  "fun clearScannerLearning(",
+                  "fun encodeScannerLearnedQueries(",
+                  "fun decodeScannerLearnedQueries(",
+              ],
+          )
+          scanner_changed = scanner_changed or recommended_changed
+
+          if scanner_changed:
+              print(
+                  "Player changes must not modify Scanner production/query/discovery/model/network/settings contracts.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print("Player/Scanner ownership boundary passed.")
+          PY
 
       - name: Verify exact checked-out revision
         env:
