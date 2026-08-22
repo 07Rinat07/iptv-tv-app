@@ -108,6 +108,22 @@ class PlaylistCatalogNavigationSessionTest {
     }
 
     @Test
+    fun hiddenChannelsAreNotExposedAsLaunchableCatalogEntries() {
+        val session = PlaylistCatalogNavigationSession.create(
+            playlist = playlist(),
+            channels = listOf(
+                channel(id = 3L, name = "Visible", group = null),
+                channel(id = 4L, name = "Hidden", group = null, isHidden = true)
+            )
+        )
+
+        val entries = session.snapshot().entries
+
+        assertEquals(listOf("Visible"), entries.map { it.name })
+        assertEquals(listOf(3L), entries.map { it.channelId })
+    }
+
+    @Test
     fun sourceRootBackReturnsFalse() {
         val session = PlaylistCatalogNavigationSession.create(
             playlist = playlist(),
@@ -135,7 +151,8 @@ class PlaylistCatalogNavigationSessionTest {
         name: String,
         group: String?,
         order: Int = id.toInt(),
-        tvgId: String? = null
+        tvgId: String? = null,
+        isHidden: Boolean = false
     ) = Channel(
         id = id,
         playlistId = 100L,
@@ -146,6 +163,6 @@ class PlaylistCatalogNavigationSessionTest {
         streamUrl = "https://example.test/live/$id",
         health = ChannelHealth.UNKNOWN,
         orderIndex = order,
-        isHidden = false
+        isHidden = isHidden
     )
 }

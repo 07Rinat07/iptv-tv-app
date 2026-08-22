@@ -105,7 +105,11 @@ class PlaylistCatalogNavigationSession private constructor(
             channels: List<Channel>,
             previousCheckpoint: CatalogNavigationState? = null
         ): PlaylistCatalogNavigationSession {
-            val tree = LegacyPlaylistCatalogAdapter.build(playlist = playlist, channels = channels)
+            // Hidden rows remain available to summaries/editor flows, but exposing them in the
+            // launchable catalog is unsafe: Player intentionally filters them and would otherwise
+            // fall back to a different visible channel for the requested hidden id.
+            val visibleChannels = channels.filterNot(Channel::isHidden)
+            val tree = LegacyPlaylistCatalogAdapter.build(playlist = playlist, channels = visibleChannels)
             val navigator = CanonicalCatalogNavigator(tree.nodes)
             val initialState = previousCheckpoint
                 ?.let { checkpoint ->
