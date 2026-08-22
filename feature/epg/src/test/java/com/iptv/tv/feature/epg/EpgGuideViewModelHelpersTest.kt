@@ -46,6 +46,22 @@ class EpgGuideViewModelHelpersTest {
     }
 
     @Test
+    fun epgWindowForPreset_todayRecomputesEndAfterMidnightDstGap() {
+        val zone = TimeZone.getTimeZone("America/Havana")
+        val now = localEpochMs(zone, 2026, Calendar.MARCH, 8, 12)
+
+        val (start, end) = epgWindowForPreset(
+            preset = EpgWindowPreset.TODAY,
+            nowMs = now,
+            timeZone = zone
+        )
+
+        assertLocalTime(zone, start, 2026, Calendar.MARCH, 8, 1)
+        assertLocalTime(zone, end, 2026, Calendar.MARCH, 9, 0)
+        assertEquals(23L * 60L * 60L * 1_000L, end - start)
+    }
+
+    @Test
     fun epgWindowForPreset_tomorrowUsesNextLocalMidnightAcrossAutumnDst() {
         val zone = TimeZone.getTimeZone("America/New_York")
         val now = localEpochMs(zone, 2026, Calendar.OCTOBER, 31, 12)
