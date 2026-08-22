@@ -135,6 +135,12 @@ fun FavoritesScreen(
                 ) {
                     Text("Сохранить M3U8")
                 }
+                OutlinedButton(
+                    onClick = viewModel::exportFavoritesRiptv,
+                    enabled = state.channels.isNotEmpty() && !state.isExporting
+                ) {
+                    Text("Сохранить RIPTV")
+                }
                 OutlinedButton(onClick = { showDetails = !showDetails }) {
                     Text(if (showDetails) "Скрыть детали" else "Детали")
                 }

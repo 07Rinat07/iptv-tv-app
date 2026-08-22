@@ -12,6 +12,7 @@ import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.EpgProgram
+import com.iptv.tv.core.model.FavoritesShareableExportFormat
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -19,12 +20,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 data class FavoritesUiState(
     val title: String = "Избранное",
@@ -83,42 +84,101 @@ class FavoritesViewModel @Inject constructor(
     }
 
     fun exportFavoritesTxt() {
-        exportFavorites(extension = "txt", contentBuilder = ::buildFavoritesTxt)
+        exportShareableFavorites(
+            format = FavoritesShareableExportFormat.TXT,
+            extension = "txt",
+            mimeType = "text/plain"
+        )
     }
 
     fun exportFavoritesM3u8() {
-        exportFavorites(extension = "m3u8", contentBuilder = ::buildFavoritesM3u)
+        exportShareableFavorites(
+            format = FavoritesShareableExportFormat.M3U8,
+            extension = "m3u8",
+            mimeType = "application/vnd.apple.mpegurl"
+        )
     }
 
-    private fun exportFavorites(
+    fun exportFavoritesRiptv() {
+        launchExport(
+            extension = "riptv",
+            mimeType = "application/json"
+        ) {
+            val exported = favoritesRepository.exportPortableBackup()
+                ?: error("Полный backup избранного недоступен")
+            ExportPayload(
+                content = exported.content,
+                infoSuffix = buildString {
+                    append("каналов: ${exported.favoriteCount}; вариантов: ${exported.variantCount}")
+                    if (exported.redactedVariantCount > 0) {
+                        append("; скрыто credential-bearing вариантов: ${exported.redactedVariantCount}")
+                    }
+                }
+            )
+        }
+    }
+
+    private fun exportShareableFavorites(
+        format: FavoritesShareableExportFormat,
         extension: String,
-        contentBuilder: (List<Channel>) -> String
+        mimeType: String
     ) {
-        val channels = _uiState.value.channels
-        if (channels.isEmpty()) {
+        launchExport(extension = extension, mimeType = mimeType) {
+            val exported = favoritesRepository.exportShareableFavorites(format)
+                ?: error("Безопасный экспорт избранного недоступен")
+            if (format == FavoritesShareableExportFormat.M3U8 && exported.safeUrlCount == 0) {
+                error("Нет каналов с безопасным URL для M3U8")
+            }
+            val omittedFavorites = exported.favoriteCount - exported.safeUrlCount
+            ExportPayload(
+                content = exported.content,
+                infoSuffix = buildString {
+                    append("безопасных URL: ${exported.safeUrlCount}")
+                    if (format == FavoritesShareableExportFormat.M3U8 && omittedFavorites > 0) {
+                        append("; пропущено без безопасного URL: $omittedFavorites")
+                    }
+                    if (exported.redactedVariantCount > 0) {
+                        append("; скрыто credential-bearing вариантов: ${exported.redactedVariantCount}")
+                    }
+                }
+            )
+        }
+    }
+
+    private fun launchExport(
+        extension: String,
+        mimeType: String,
+        buildPayload: suspend () -> ExportPayload
+    ) {
+        if (_uiState.value.channels.isEmpty()) {
             _uiState.update { it.copy(lastError = "Избранных каналов пока нет", lastInfo = null) }
             return
         }
+        if (_uiState.value.isExporting) return
+
         viewModelScope.launch {
             _uiState.update { it.copy(isExporting = true, lastError = null) }
             runCatching {
+                val payload = buildPayload()
                 val fileName = "Favorites_${favoriteExportTimestamp()}.$extension"
-                val content = contentBuilder(channels)
-                saveTextToPublicDownloads(
+                val path = saveTextToPublicDownloads(
                     fileName = fileName,
-                    content = content,
-                    mimeType = if (extension == "m3u8") {
-                        "application/vnd.apple.mpegurl"
-                    } else {
-                        "text/plain"
-                    }
+                    content = payload.content,
+                    mimeType = mimeType
                 )
-            }.onSuccess { path ->
+                SavedExport(path = path, infoSuffix = payload.infoSuffix)
+            }.onSuccess { saved ->
                 _uiState.update {
                     it.copy(
                         isExporting = false,
-                        exportedFilePath = path,
-                        lastInfo = "Избранное сохранено: $path",
+                        exportedFilePath = saved.path,
+                        lastInfo = buildString {
+                            append("Избранное сохранено: ${saved.path}")
+                            saved.infoSuffix.takeIf(String::isNotBlank)?.let { suffix ->
+                                append(" · ")
+                                append(suffix)
+                            }
+                        },
                         lastError = null
                     )
                 }
@@ -179,40 +239,6 @@ class FavoritesViewModel @Inject constructor(
         }
     }
 
-    private fun buildFavoritesTxt(channels: List<Channel>): String {
-        return buildString {
-            appendLine("myscanerIPTV | Избранные каналы")
-            appendLine("Каналов: ${channels.size}")
-            appendLine("Сформировано: ${favoriteExportTimestamp()}")
-            appendLine()
-            channels.forEachIndexed { index, channel ->
-                appendLine("${index + 1}. ${channel.name}")
-                appendLine("   playlistId=${channel.playlistId} | channelId=${channel.id} | health=${channel.health}")
-                channel.group?.takeIf { it.isNotBlank() }?.let { appendLine("   group=$it") }
-                channel.tvgId?.takeIf { it.isNotBlank() }?.let { appendLine("   tvg-id=$it") }
-                channel.logo?.takeIf { it.isNotBlank() }?.let { appendLine("   logo=$it") }
-                appendLine("   url=${channel.streamUrl}")
-                appendLine()
-            }
-        }
-    }
-
-    private fun buildFavoritesM3u(channels: List<Channel>): String {
-        return buildString {
-            appendLine("#EXTM3U")
-            channels.forEach { channel ->
-                append("#EXTINF:-1")
-                appendM3uAttribute("tvg-id", channel.tvgId.orEmpty())
-                appendM3uAttribute("tvg-name", channel.name)
-                appendM3uAttribute("tvg-logo", channel.logo.orEmpty())
-                appendM3uAttribute("group-title", channel.group.orEmpty())
-                append(',')
-                appendLine(channel.name)
-                appendLine(channel.streamUrl)
-            }
-        }
-    }
-
     private fun saveTextToPublicDownloads(
         fileName: String,
         content: String,
@@ -254,6 +280,16 @@ class FavoritesViewModel @Inject constructor(
     }
 }
 
+private data class ExportPayload(
+    val content: String,
+    val infoSuffix: String
+)
+
+private data class SavedExport(
+    val path: String,
+    val infoSuffix: String
+)
+
 private const val FAVORITES_EPG_WINDOW_MS = 3 * 60 * 60 * 1000L
 private val FAVORITES_EXPORT_TIME_ZONE: TimeZone = TimeZone.getTimeZone("Asia/Oral")
 
@@ -261,15 +297,4 @@ private fun favoriteExportTimestamp(): String {
     return SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).apply {
         timeZone = FAVORITES_EXPORT_TIME_ZONE
     }.format(Date())
-}
-
-private fun StringBuilder.appendM3uAttribute(name: String, value: String): StringBuilder {
-    val cleaned = value.trim()
-    if (cleaned.isBlank()) return this
-    append(' ')
-    append(name)
-    append("=\"")
-    append(cleaned.replace("\"", "'"))
-    append('"')
-    return this
 }

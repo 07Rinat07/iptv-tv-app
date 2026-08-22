@@ -5,6 +5,8 @@ import com.iptv.tv.core.model.FavoritePlaybackContext
 import com.iptv.tv.core.model.FavoritesPortableExport
 import com.iptv.tv.core.model.FavoritesPortableImportResult
 import com.iptv.tv.core.model.FavoritesPortableImportStatus
+import com.iptv.tv.core.model.FavoritesShareableExport
+import com.iptv.tv.core.model.FavoritesShareableExportFormat
 import kotlinx.coroutines.flow.Flow
 
 interface FavoritesRepository {
@@ -23,6 +25,13 @@ interface FavoritesRepository {
      * unified persistence implementation provides durable live/persisted variant selection.
      */
     suspend fun resolvePlaybackContext(favoriteChannelId: Long): FavoritePlaybackContext? = null
+
+    /**
+     * Build a standard TXT/M3U8 export using the same default credential policy as portable backup.
+     */
+    suspend fun exportShareableFavorites(
+        format: FavoritesShareableExportFormat
+    ): FavoritesShareableExport? = null
 
     /**
      * Build the default shareable Rinat IPTV Favorites backup.
