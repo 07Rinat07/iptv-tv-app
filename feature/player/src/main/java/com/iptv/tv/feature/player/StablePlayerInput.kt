@@ -14,41 +14,6 @@ private const val HORIZONTAL_SCROLL_COOLDOWN_MS = 350L
 private const val CONTROLS_AUTO_HIDE_MS = 4_000L
 private const val MIN_GENERIC_SCROLL = 0.01f
 
-internal data class StablePlayerInputCallbacks(
-    val onToggleControls: () -> Unit,
-    val onToggleFullscreen: () -> Unit,
-    val onPreviousChannel: () -> Unit,
-    val onNextChannel: () -> Unit,
-    val onVolumeUp: () -> Unit,
-    val onVolumeDown: () -> Unit,
-    val onToggleMute: () -> Unit,
-    val onTogglePlayback: () -> Unit
-)
-
-internal fun stableScrollAction(
-    horizontal: Float,
-    vertical: Float
-): StableRemoteAction = when {
-    abs(horizontal) > abs(vertical) && horizontal > 0f -> StableRemoteAction.PREVIOUS_CHANNEL
-    abs(horizontal) > abs(vertical) && horizontal < 0f -> StableRemoteAction.NEXT_CHANNEL
-    vertical > 0f -> StableRemoteAction.VOLUME_UP
-    vertical < 0f -> StableRemoteAction.VOLUME_DOWN
-    else -> StableRemoteAction.NONE
-}
-
-internal fun stableActionRevealsControls(action: StableRemoteAction): Boolean = when (action) {
-    StableRemoteAction.NEXT_CHANNEL,
-    StableRemoteAction.PREVIOUS_CHANNEL,
-    StableRemoteAction.VOLUME_UP,
-    StableRemoteAction.VOLUME_DOWN,
-    StableRemoteAction.TOGGLE_MUTE,
-    StableRemoteAction.TOGGLE_PLAYBACK -> true
-
-    StableRemoteAction.TOGGLE_CONTROLS,
-    StableRemoteAction.TOGGLE_FULLSCREEN,
-    StableRemoteAction.NONE -> false
-}
-
 internal class StablePlayerInputHandler(context: Context) :
     View.OnTouchListener,
     View.OnGenericMotionListener,
