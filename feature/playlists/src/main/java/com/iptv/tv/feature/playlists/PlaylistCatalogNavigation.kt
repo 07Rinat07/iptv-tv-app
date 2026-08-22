@@ -79,9 +79,28 @@ class PlaylistCatalogNavigationSession private constructor(
         )
     }
 
-    /** Records focus before Player launch so returning to this destination restores the same row. */
-    fun focus(nodeId: CatalogNodeId) {
+    /**
+     * Records focus while retaining the already prepared UI lists for the current hierarchy level.
+     *
+     * Focus changes only the navigation checkpoint. Rebuilding [PlaylistCatalogSnapshot.entries]
+     * here would turn every D-pad move into an O(N) allocation for large flat catalogs.
+     */
+    fun focus(
+        nodeId: CatalogNodeId,
+        currentSnapshot: PlaylistCatalogSnapshot
+    ): PlaylistCatalogSnapshot {
+        require(currentSnapshot.playlistId == playlistId) {
+            "Catalog snapshot belongs to another playlist"
+        }
+        require(currentSnapshot.currentNodeId == navigationState.currentNodeId) {
+            "Catalog snapshot does not match the current navigation level"
+        }
         navigationState = navigator.focus(navigationState, nodeId)
+        return if (currentSnapshot.restoredFocusId == nodeId) {
+            currentSnapshot
+        } else {
+            currentSnapshot.copy(restoredFocusId = nodeId)
+        }
     }
 
     /** Enters a direct child container. Channel leaves are deliberately opened by Player instead. */

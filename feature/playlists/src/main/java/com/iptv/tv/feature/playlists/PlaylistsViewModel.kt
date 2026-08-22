@@ -123,8 +123,17 @@ class PlaylistsViewModel @Inject constructor(
 
     fun focusCatalogNode(nodeId: CatalogNodeId) {
         val navigation = catalogNavigation ?: return
-        runCatching { navigation.focus(nodeId) }
-            .onSuccess { publishCatalogSnapshot(navigation) }
+        val currentSnapshot = _uiState.value.catalog ?: return
+        val focusedSnapshot = runCatching {
+            navigation.focus(nodeId = nodeId, currentSnapshot = currentSnapshot)
+        }.getOrNull() ?: return
+        _uiState.update { current ->
+            if (current.catalog !== currentSnapshot) {
+                current
+            } else {
+                current.copy(catalog = focusedSnapshot)
+            }
+        }
     }
 
     fun refreshSelectedPlaylist() {

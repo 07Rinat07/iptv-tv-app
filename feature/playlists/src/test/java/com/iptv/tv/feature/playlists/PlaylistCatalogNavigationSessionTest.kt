@@ -8,6 +8,7 @@ import com.iptv.tv.core.model.PlaylistSourceType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -55,7 +56,7 @@ class PlaylistCatalogNavigationSessionTest {
         val group = first.snapshot().entries.single()
         first.enter(group.nodeId)
         val channel = first.snapshot().entries.single()
-        first.focus(channel.nodeId)
+        first.focus(channel.nodeId, first.snapshot())
 
         val rebuilt = PlaylistCatalogNavigationSession.create(
             playlist = sourcePlaylist.copy(name = "Renamed visible title"),
@@ -78,7 +79,8 @@ class PlaylistCatalogNavigationSessionTest {
         )
         val oldGroup = first.snapshot().entries.single()
         first.enter(oldGroup.nodeId)
-        first.focus(first.snapshot().entries.single().nodeId)
+        val groupSnapshot = first.snapshot()
+        first.focus(groupSnapshot.entries.single().nodeId, groupSnapshot)
 
         val rebuilt = PlaylistCatalogNavigationSession.create(
             playlist = sourcePlaylist,
@@ -133,6 +135,41 @@ class PlaylistCatalogNavigationSessionTest {
         assertTrue(session.back())
         assertEquals(CatalogNodeKind.SOURCE, session.snapshot().breadcrumbs.last().kind)
         assertFalse(session.back())
+    }
+
+    @Test
+    fun focusInLargeFlatCatalogReusesPreparedListsAndSurvivesRebuild() {
+        val sourcePlaylist = playlist()
+        val channels = (1L..10_000L).map { id ->
+            channel(id = id, name = "Channel $id", group = null)
+        }
+        val session = PlaylistCatalogNavigationSession.create(sourcePlaylist, channels)
+        val preparedSnapshot = session.snapshot()
+        var focusedSnapshot = preparedSnapshot
+
+        preparedSnapshot.entries.takeLast(100).forEach { entry ->
+            focusedSnapshot = session.focus(entry.nodeId, focusedSnapshot)
+            assertSame(preparedSnapshot.entries, focusedSnapshot.entries)
+            assertSame(preparedSnapshot.breadcrumbs, focusedSnapshot.breadcrumbs)
+        }
+
+        val expectedFocusId = preparedSnapshot.entries.last().nodeId
+        assertEquals(10_000, focusedSnapshot.entries.size)
+        assertEquals(expectedFocusId, focusedSnapshot.restoredFocusId)
+        assertEquals(
+            expectedFocusId,
+            session.checkpoint().focusedChildIdByParent[preparedSnapshot.currentNodeId]
+        )
+        assertEquals(channels.map { it.id }, focusedSnapshot.entries.map { it.channelId })
+
+        val rebuilt = PlaylistCatalogNavigationSession.create(
+            playlist = sourcePlaylist,
+            channels = channels,
+            previousCheckpoint = session.checkpoint()
+        ).snapshot()
+
+        assertEquals(expectedFocusId, rebuilt.restoredFocusId)
+        assertEquals(10_000L, rebuilt.entries.last().channelId)
     }
 
     private fun playlist() = Playlist(

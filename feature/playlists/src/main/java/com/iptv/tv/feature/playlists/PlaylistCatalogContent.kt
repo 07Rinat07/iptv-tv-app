@@ -52,7 +52,9 @@ fun PlaylistCatalogContent(
     // Freeze the restore target for this hierarchy level. Normal D-pad movement updates the
     // checkpoint in ViewModel, but must not retrigger scroll/requestFocus on every row change.
     val restoreTargetId = remember(snapshot.currentNodeId) { snapshot.restoredFocusId }
-    val restoredEntryIndex = snapshot.entries.indexOfFirst { entry -> entry.nodeId == restoreTargetId }
+    val restoredEntryIndex = remember(snapshot.currentNodeId, snapshot.entries, restoreTargetId) {
+        snapshot.entries.indexOfFirst { entry -> entry.nodeId == restoreTargetId }
+    }
     val restoredFocusRequester = remember(snapshot.currentNodeId, restoreTargetId) { FocusRequester() }
     val listState = rememberLazyListState()
 
