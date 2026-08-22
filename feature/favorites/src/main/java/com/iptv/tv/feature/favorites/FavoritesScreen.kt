@@ -72,6 +72,9 @@ fun FavoritesScreen(
         ?: FavoritesSortMode.CURRENT_FIRST
     val locale = Locale.getDefault()
     val isTransferBusy = state.isExporting || state.isImporting
+    val isSourceBusy = state.isLoadingSources || state.isSelectingSource
+    val isActionBusy = isTransferBusy || isSourceBusy
+    val sourcePickerOpen = state.sourcePickerChannelId != null
     val visibleChannels = remember(
         state.channels,
         state.selectedChannelId,
@@ -132,37 +135,55 @@ fun FavoritesScreen(
                             onOpenPlayer?.invoke(VIRTUAL_FAVORITES_PLAYLIST_ID, channelId)
                         }
                     },
-                    enabled = state.selectedChannelId != null && onOpenPlayer != null
+                    enabled = state.selectedChannelId != null &&
+                        onOpenPlayer != null &&
+                        !state.isSelectingSource
                 ) {
                     Text("Воспроизвести")
                 }
                 OutlinedButton(
                     onClick = viewModel::removeSelectedFromFavorites,
-                    enabled = state.selectedChannelId != null && !state.isImporting
+                    enabled = state.selectedChannelId != null && !isActionBusy
                 ) {
                     Text("Удалить")
                 }
                 OutlinedButton(
+                    onClick = if (sourcePickerOpen) {
+                        viewModel::closeSourcePicker
+                    } else {
+                        viewModel::openSourcePicker
+                    },
+                    enabled = state.selectedChannelId != null && !isTransferBusy
+                ) {
+                    Text(
+                        when {
+                            state.isLoadingSources -> "Источники..."
+                            sourcePickerOpen -> "Скрыть источники"
+                            else -> "Источники"
+                        }
+                    )
+                }
+                OutlinedButton(
                     onClick = viewModel::exportFavoritesTxt,
-                    enabled = state.channels.isNotEmpty() && !isTransferBusy
+                    enabled = state.channels.isNotEmpty() && !isActionBusy
                 ) {
                     Text("Сохранить TXT")
                 }
                 OutlinedButton(
                     onClick = viewModel::exportFavoritesM3u8,
-                    enabled = state.channels.isNotEmpty() && !isTransferBusy
+                    enabled = state.channels.isNotEmpty() && !isActionBusy
                 ) {
                     Text("Сохранить M3U8")
                 }
                 OutlinedButton(
                     onClick = viewModel::exportFavoritesRiptv,
-                    enabled = state.channels.isNotEmpty() && !isTransferBusy
+                    enabled = state.channels.isNotEmpty() && !isActionBusy
                 ) {
                     Text("Сохранить RIPTV")
                 }
                 OutlinedButton(
                     onClick = { importBackupLauncher.launch(arrayOf("*/*")) },
-                    enabled = !isTransferBusy
+                    enabled = !isActionBusy
                 ) {
                     Text(if (state.isImporting) "Импорт RIPTV..." else "Импорт RIPTV")
                 }
@@ -186,6 +207,85 @@ fun FavoritesScreen(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+        }
+
+        state.sourcePickerChannelId?.let { pickerChannelId ->
+            val channelName = state.channels
+                .firstOrNull { channel -> channel.id == pickerChannelId }
+                ?.name
+                ?: "выбранного канала"
+            item(key = "source-picker-header") {
+                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Источники: $channelName",
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = when {
+                                state.isLoadingSources -> "Загрузка вариантов источника..."
+                                state.sourceVariants.isEmpty() -> "Варианты источника не найдены"
+                                else -> "Вариантов: ${state.sourceVariants.size}. URL и учетные данные здесь не показываются."
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
+            items(
+                items = state.sourceVariants,
+                key = { variant -> "source:${variant.variantKey}" }
+            ) { variant ->
+                Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = favoriteSourceVariantTitle(variant),
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = favoriteSourceVariantSummary(variant),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (variant.isPreferred) {
+                            Text(
+                                text = "Предпочтительный источник",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Button(onClick = {}, enabled = false) {
+                                Text("Используется")
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.selectPreferredSource(variant.variantKey)
+                                },
+                                enabled = !state.isSelectingSource && !isTransferBusy
+                            ) {
+                                Text(
+                                    if (state.isSelectingSource) {
+                                        "Переключение..."
+                                    } else {
+                                        "Использовать"
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -287,7 +387,7 @@ fun FavoritesScreen(
                                                 channel.id
                                             )
                                         },
-                                        enabled = onOpenPlayer != null
+                                        enabled = onOpenPlayer != null && !state.isSelectingSource
                                     ) {
                                         Text("Играть")
                                     }
