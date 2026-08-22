@@ -45,7 +45,7 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
         }
         .shareVirtualAggregate(aggregateScope)
     private val allChannelCount = allChannels
-        .map(List<Channel>::size)
+        .map { channels -> channels.size }
         .distinctUntilChanged()
     private val allChannelsSummary = allChannels
         .map(::virtualAllChannelsSummary)
