@@ -20,6 +20,7 @@ jobs:
       - name: Checkout exact PR head
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Keep Player refactors out of Scanner
@@ -34,6 +35,11 @@ jobs:
             echo 'Player refactor must not modify Scanner production/query/discovery files.' >&2
             exit 1
           fi
+
+      - name: Verify exact checked-out revision
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$HEAD_SHA"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
