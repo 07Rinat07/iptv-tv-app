@@ -49,6 +49,12 @@ interface FavoriteSnapshotDao {
     @Query("DELETE FROM favorite_channel_variants WHERE logicalKey = :logicalKey")
     suspend fun deleteVariants(logicalKey: String): Int
 
+    @Query(
+        "DELETE FROM favorite_channel_variants " +
+            "WHERE logicalKey = :logicalKey AND variantKey = :variantKey"
+    )
+    suspend fun deleteVariant(logicalKey: String, variantKey: String): Int
+
     @Query("DELETE FROM favorite_legacy_seeds")
     suspend fun clearLegacySeeds(): Int
 }
