@@ -12,6 +12,61 @@ import org.junit.Test
 
 class FavoriteSourceVariantSelectionTest {
     @Test
+    fun changedLiveStreamRetargetsPersistedPreferredVariantWithoutChangingCompatibilityId() {
+        val oldUrl = "https://old.example/live"
+        val newUrl = "https://new.example/live"
+        val favorite = favorite(preferredChannelId = 11, preferredUrl = oldUrl)
+        val saved = variant(channelId = 11, playlistId = 1, url = oldUrl)
+        val refreshedLive = channel(id = 11, playlistId = 1, url = newUrl)
+        val source = playlist(
+            id = 1,
+            name = "Ready source",
+            sourceType = "URL",
+            catalogOrigin = "READY_CATALOG"
+        )
+
+        val result = FavoriteSourceVariantSelection.reconcileChangedLiveVariants(
+            favorite = favorite,
+            persistedVariants = listOf(saved),
+            liveChannels = listOf(refreshedLive),
+            playlists = mapOf(1L to source),
+            updatedAt = 700
+        )
+
+        assertEquals(11L, result.favorite.preferredChannelId)
+        assertEquals(newUrl, result.favorite.preferredStreamUrl)
+        assertEquals(700L, result.favorite.updatedAt)
+        assertEquals(1, result.upsertVariants.size)
+        assertEquals(newUrl, result.upsertVariants.single().streamUrl)
+        assertEquals(UnifiedFavoritePersistence.variantKey(newUrl), result.variants.single().variantKey)
+        assertEquals(setOf(UnifiedFavoritePersistence.variantKey(oldUrl)), result.obsoleteVariantKeys)
+    }
+
+    @Test
+    fun refreshingCompatibilityRowDoesNotOverrideExplicitlyPreferredDifferentSource() {
+        val compatibilityOldUrl = "https://source-a.example/old"
+        val compatibilityNewUrl = "https://source-a.example/new"
+        val explicitPreferredUrl = "https://source-b.example/live"
+        val favorite = favorite(preferredChannelId = 11, preferredUrl = explicitPreferredUrl)
+        val compatibilitySaved = variant(channelId = 11, playlistId = 1, url = compatibilityOldUrl)
+        val explicitSaved = variant(channelId = 22, playlistId = 2, url = explicitPreferredUrl)
+        val refreshedCompatibility = channel(id = 11, playlistId = 1, url = compatibilityNewUrl)
+
+        val result = FavoriteSourceVariantSelection.reconcileChangedLiveVariants(
+            favorite = favorite,
+            persistedVariants = listOf(compatibilitySaved, explicitSaved),
+            liveChannels = listOf(refreshedCompatibility),
+            playlists = emptyMap(),
+            updatedAt = 800
+        )
+
+        assertEquals(explicitPreferredUrl, result.favorite.preferredStreamUrl)
+        assertEquals(2L, result.favorite.updatedAt)
+        assertTrue(result.variants.any { it.streamUrl == compatibilityNewUrl })
+        assertTrue(result.variants.any { it.streamUrl == explicitPreferredUrl })
+    }
+
+    @Test
     fun missingLiveVariantsAddsOnlyUnseenSourceAndCopiesProvenance() {
         val firstUrl = "https://one.example/live"
         val secondUrl = "https://two.example/live"

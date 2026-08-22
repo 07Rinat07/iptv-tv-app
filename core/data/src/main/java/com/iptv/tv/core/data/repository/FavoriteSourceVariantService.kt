@@ -33,14 +33,14 @@ class FavoriteSourceVariantService @Inject constructor(
         val favorite = findFavorite(favoriteChannelId) ?: return emptyList()
         val liveChannels = liveChannels(favorite)
         val playlists = playlistsFor(liveChannels)
-        val persisted = reconcileLiveVariants(
+        val reconciled = reconcileLiveVariants(
             favorite = favorite,
             liveChannels = liveChannels,
             playlists = playlists
         )
         return FavoriteSourceVariantSelection.buildSourceVariants(
-            favorite = favorite,
-            persistedVariants = persisted,
+            favorite = reconciled.favorite,
+            persistedVariants = reconciled.variants,
             liveChannels = liveChannels,
             playlists = playlists
         )
@@ -51,15 +51,15 @@ class FavoriteSourceVariantService @Inject constructor(
         val favorite = findFavorite(favoriteChannelId) ?: return false
         val liveChannels = liveChannels(favorite)
         val playlists = playlistsFor(liveChannels)
-        val persisted = reconcileLiveVariants(
+        val reconciled = reconcileLiveVariants(
             favorite = favorite,
             liveChannels = liveChannels,
             playlists = playlists
         )
         val updated = FavoriteSourceVariantSelection.selectPreferredSource(
-            favorite = favorite,
+            favorite = reconciled.favorite,
             variantKey = variantKey,
-            persistedVariants = persisted,
+            persistedVariants = reconciled.variants,
             liveChannels = liveChannels,
             updatedAt = System.currentTimeMillis()
         ) ?: return false
@@ -71,11 +71,16 @@ class FavoriteSourceVariantService @Inject constructor(
     suspend fun resolvePlaybackContext(favoriteChannelId: Long): FavoritePlaybackContext? {
         val favorite = findFavorite(favoriteChannelId) ?: return null
         val liveChannels = liveChannels(favorite)
-        val persisted = favoriteSnapshotDao.getVariants(favorite.logicalKey)
+        val playlists = playlistsFor(liveChannels)
+        val reconciled = reconcileLiveVariants(
+            favorite = favorite,
+            liveChannels = liveChannels,
+            playlists = playlists
+        )
         return FavoriteSourceVariantSelection.resolvePlaybackContext(
             requestedChannelId = favoriteChannelId,
-            favorite = favorite,
-            persistedVariants = persisted,
+            favorite = reconciled.favorite,
+            persistedVariants = reconciled.variants,
             liveChannels = liveChannels
         )
     }
@@ -103,14 +108,34 @@ class FavoriteSourceVariantService @Inject constructor(
         favorite: FavoriteChannelEntity,
         liveChannels: List<ChannelEntity>,
         playlists: Map<Long, PlaylistEntity?>
-    ): List<FavoriteChannelVariantEntity> {
+    ): ReconciledFavoriteVariants {
         val existing = favoriteSnapshotDao.getVariants(favorite.logicalKey)
-        val additions = FavoriteSourceVariantSelection.missingLiveVariants(
+        val now = System.currentTimeMillis()
+        val changed = FavoriteSourceVariantSelection.reconcileChangedLiveVariants(
             favorite = favorite,
             persistedVariants = existing,
             liveChannels = liveChannels,
             playlists = playlists,
-            discoveredAt = System.currentTimeMillis()
+            updatedAt = now
+        )
+        if (changed.upsertVariants.isNotEmpty()) {
+            // Install the replacement before removing the retired key. A failed write therefore
+            // never destroys the only durable source snapshot; a later read can retry cleanup.
+            favoriteSnapshotDao.upsertVariants(changed.upsertVariants)
+        }
+        if (changed.favorite != favorite) {
+            favoriteSnapshotDao.upsertFavorite(changed.favorite)
+        }
+        changed.obsoleteVariantKeys.forEach { variantKey ->
+            favoriteSnapshotDao.deleteVariant(favorite.logicalKey, variantKey)
+        }
+
+        val additions = FavoriteSourceVariantSelection.missingLiveVariants(
+            favorite = changed.favorite,
+            persistedVariants = changed.variants,
+            liveChannels = liveChannels,
+            playlists = playlists,
+            discoveredAt = now
         )
         if (additions.isNotEmpty()) {
             favoriteSnapshotDao.upsertVariants(additions)
@@ -126,13 +151,111 @@ class FavoriteSourceVariantService @Inject constructor(
                 }
             )
         }
-        return (existing + additions)
-            .distinctBy(FavoriteChannelVariantEntity::variantKey)
+        return ReconciledFavoriteVariants(
+            favorite = changed.favorite,
+            variants = (changed.variants + additions)
+                .distinctBy(FavoriteChannelVariantEntity::variantKey)
+        )
     }
 }
 
+private data class ReconciledFavoriteVariants(
+    val favorite: FavoriteChannelEntity,
+    val variants: List<FavoriteChannelVariantEntity>
+)
+
+internal data class FavoriteLiveVariantReconciliation(
+    val favorite: FavoriteChannelEntity,
+    val variants: List<FavoriteChannelVariantEntity>,
+    val upsertVariants: List<FavoriteChannelVariantEntity>,
+    val obsoleteVariantKeys: Set<String>
+)
+
 /** Pure deterministic source-variant transformations used by repository code and unit tests. */
 internal object FavoriteSourceVariantSelection {
+    fun reconcileChangedLiveVariants(
+        favorite: FavoriteChannelEntity,
+        persistedVariants: List<FavoriteChannelVariantEntity>,
+        liveChannels: List<ChannelEntity>,
+        playlists: Map<Long, PlaylistEntity?>,
+        updatedAt: Long
+    ): FavoriteLiveVariantReconciliation {
+        val liveByPersistedIdentity = liveChannels.associateBy { channel ->
+            channel.playlistId to channel.id
+        }
+        val replacements = persistedVariants
+            .asSequence()
+            .filter { variant -> variant.logicalKey == favorite.logicalKey }
+            .mapNotNull { saved ->
+                val live = liveByPersistedIdentity[saved.playlistId to saved.legacyChannelId]
+                    ?: return@mapNotNull null
+                val liveKey = UnifiedFavoritePersistence.variantKey(live.streamUrl)
+                if (liveKey == saved.variantKey) return@mapNotNull null
+                val playlist = playlists[live.playlistId]
+                saved to saved.copy(
+                    variantKey = liveKey,
+                    legacyChannelId = live.id,
+                    playlistId = live.playlistId,
+                    playlistName = playlist?.name ?: saved.playlistName,
+                    sourceType = playlist?.sourceType ?: saved.sourceType,
+                    catalogOrigin = playlist?.catalogOrigin ?: saved.catalogOrigin,
+                    tvgId = live.tvgId,
+                    name = live.name,
+                    groupName = live.groupName,
+                    logo = live.logo,
+                    streamUrl = live.streamUrl,
+                    updatedAt = updatedAt
+                )
+            }
+            .toList()
+
+        if (replacements.isEmpty()) {
+            return FavoriteLiveVariantReconciliation(
+                favorite = favorite,
+                variants = persistedVariants,
+                upsertVariants = emptyList(),
+                obsoleteVariantKeys = emptySet()
+            )
+        }
+
+        val oldKeys = replacements.mapTo(linkedSetOf()) { (old, _) -> old.variantKey }
+        val replacementVariants = replacements.map { (_, replacement) -> replacement }
+        val replacementKeys = replacementVariants
+            .mapTo(hashSetOf(), FavoriteChannelVariantEntity::variantKey)
+        val normalizedByKey = linkedMapOf<String, FavoriteChannelVariantEntity>()
+        persistedVariants
+            .filterNot { variant -> variant.variantKey in oldKeys }
+            .forEach { variant -> normalizedByKey[variant.variantKey] = variant }
+        replacementVariants.forEach { variant -> normalizedByKey[variant.variantKey] = variant }
+
+        val preferredKey = UnifiedFavoritePersistence.variantKey(favorite.preferredStreamUrl)
+        val preferredReplacement = replacements.firstOrNull { (old, _) ->
+            old.variantKey == preferredKey
+        }?.second
+        val updatedFavorite = preferredReplacement?.let { replacement ->
+            favorite.copy(
+                tvgId = replacement.tvgId,
+                name = replacement.name,
+                groupName = replacement.groupName,
+                logo = replacement.logo,
+                preferredStreamUrl = replacement.streamUrl,
+                preferredPlaylistId = replacement.playlistId,
+                // The aggregate compatibility ID intentionally remains stable across source
+                // selection. Only the selected source snapshot follows its refreshed URL.
+                preferredChannelId = favorite.preferredChannelId,
+                updatedAt = updatedAt
+            )
+        } ?: favorite
+
+        return FavoriteLiveVariantReconciliation(
+            favorite = updatedFavorite,
+            variants = normalizedByKey.values.toList(),
+            upsertVariants = replacementVariants,
+            // Do not delete a key that another refreshed row has just adopted (URL swap/reorder).
+            obsoleteVariantKeys = oldKeys.filterTo(linkedSetOf()) { key -> key !in replacementKeys }
+        )
+    }
+
     fun missingLiveVariants(
         favorite: FavoriteChannelEntity,
         persistedVariants: List<FavoriteChannelVariantEntity>,

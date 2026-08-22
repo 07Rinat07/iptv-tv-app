@@ -41,60 +41,45 @@ class HomeViewModel @Inject constructor(
     }
 
     fun watchReadyPlaylist(preset: ReadyPlaylistPreset) {
+        if (_uiState.value.isImporting) return
         val existing = findImportedReadyPlaylist(
             playlists = _uiState.value.playlists,
-            sourceKey = preset.sourceKey
+            sourceUrl = preset.url
         )
-        if (existing != null) {
-            requestOpenPlaylist(existing.id, "Открывается сохранённый список: ${existing.name}")
-            return
-        }
-        if (_uiState.value.isImporting) return
 
         viewModelScope.launch {
-            _uiState.update {
-                it.copy(
-                    isImporting = true,
-                    importingUrl = preset.url,
-                    lastError = null,
-                    lastInfo = "Загрузка списка «${preset.name}»…"
+            beginReadyPlaylistLoad(preset)
+            if (existing != null) {
+                refreshReadyPlaylistBeforeOpen(
+                    playlistId = existing.id,
+                    presetName = preset.name,
+                    successMessage = "Список обновлён. Открывается плеер."
                 )
+                return@launch
             }
-            val result = preset.embeddedM3u?.let { embeddedM3u ->
-                playlistRepository.importReadyPlaylistText(
-                    text = embeddedM3u,
+
+            when (
+                val result = playlistRepository.importFromUrl(
+                    url = preset.url,
                     name = preset.name,
-                    sourceKey = preset.sourceKey
+                    catalogOrigin = CatalogOriginKind.READY_CATALOG
                 )
-            } ?: playlistRepository.importFromUrl(
-                url = preset.url,
-                name = preset.name,
-                catalogOrigin = CatalogOriginKind.READY_CATALOG
-            )
-            when (result) {
+            ) {
                 is AppResult.Success -> {
-                    _uiState.update {
-                        it.copy(
-                            isImporting = false,
-                            importingUrl = null,
-                            lastInfo = "Список добавлен. Открывается плеер.",
-                            pendingOpenPlaylistId = result.data.playlistId
-                        )
-                    }
+                    // Generic URL import deliberately keeps its legacy semantics. Ready refresh has
+                    // stricter stream-identity handling, so run it once before the very first open:
+                    // primary/backup/quality variants that share tvg-id/name are then present from
+                    // the first user-visible session rather than only after a later refresh.
+                    refreshReadyPlaylistBeforeOpen(
+                        playlistId = result.data.playlistId,
+                        presetName = preset.name,
+                        successMessage = "Список добавлен и обновлён. Открывается плеер."
+                    )
                 }
-                is AppResult.Error -> {
-                    _uiState.update {
-                        it.copy(
-                            isImporting = false,
-                            importingUrl = null,
-                            lastError = "Не удалось загрузить «${preset.name}»: ${result.message}",
-                            lastInfo = null
-                        )
-                    }
-                }
-                AppResult.Loading -> {
-                    _uiState.update { it.copy(isImporting = false, importingUrl = null) }
-                }
+                is AppResult.Error -> failReadyPlaylistLoad(
+                    "Не удалось загрузить «${preset.name}»: ${result.message}"
+                )
+                AppResult.Loading -> clearReadyPlaylistLoading()
             }
         }
     }
@@ -111,5 +96,65 @@ class HomeViewModel @Inject constructor(
 
     fun consumeOpenPlaylistRequest() {
         _uiState.update { it.copy(pendingOpenPlaylistId = null) }
+    }
+
+    private suspend fun refreshReadyPlaylistBeforeOpen(
+        playlistId: Long,
+        presetName: String,
+        successMessage: String
+    ) {
+        when (val refresh = playlistRepository.refreshPlaylist(playlistId)) {
+            is AppResult.Success -> completeReadyPlaylistLoad(
+                playlistId = playlistId,
+                message = successMessage
+            )
+            is AppResult.Error -> failReadyPlaylistLoad(
+                "Не удалось обновить «$presetName»: ${refresh.message}"
+            )
+            AppResult.Loading -> clearReadyPlaylistLoading()
+        }
+    }
+
+    private fun beginReadyPlaylistLoad(preset: ReadyPlaylistPreset) {
+        _uiState.update {
+            it.copy(
+                isImporting = true,
+                importingUrl = preset.url,
+                lastError = null,
+                lastInfo = "Загрузка списка «${preset.name}»…"
+            )
+        }
+    }
+
+    private fun completeReadyPlaylistLoad(playlistId: Long, message: String) {
+        _uiState.update {
+            it.copy(
+                isImporting = false,
+                importingUrl = null,
+                lastInfo = message,
+                lastError = null,
+                pendingOpenPlaylistId = playlistId
+            )
+        }
+    }
+
+    private fun failReadyPlaylistLoad(message: String) {
+        _uiState.update {
+            it.copy(
+                isImporting = false,
+                importingUrl = null,
+                lastError = message,
+                lastInfo = null
+            )
+        }
+    }
+
+    private fun clearReadyPlaylistLoading() {
+        _uiState.update {
+            it.copy(
+                isImporting = false,
+                importingUrl = null
+            )
+        }
     }
 }

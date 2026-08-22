@@ -25,42 +25,31 @@ import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 data class ReadyPlaylistPreset(
     val name: String,
     val url: String,
-    val note: String = "Публичный тестовый источник",
-    val sourceKey: String = url,
-    val embeddedM3u: String? = null
+    val note: String = "Публичный IPTV-источник"
 )
 
+/**
+ * Small user-curated ready catalog.
+ *
+ * Keep these entries as live URLs rather than APK snapshots so importing a ready playlist always
+ * reflects the publisher's current M3U. Existing user-imported playlists are intentionally left
+ * untouched when this catalog changes.
+ */
 val READY_PLAYLIST_PRESETS: List<ReadyPlaylistPreset> = listOf(
     ReadyPlaylistPreset(
-        name = "Ace Stream TV — Торрент ТВ (279 каналов)",
+        name = "Dimonovich FREE TV",
+        url = "https://raw.githubusercontent.com/Dimonovich/TV/Dimonovich/FREE/TV",
+        note = "Самообновляемый публичный M3U; EPG-адреса заданы в заголовке списка"
+    ),
+    ReadyPlaylistPreset(
+        name = ".NET_2 TV",
+        url = "https://dl.dropboxusercontent.com/scl/fi/ur595ef4cqmfst951kboh/.NET_2.m3u?rlkey=0cw1ficfrq0m6yg2udh16qn78&dl=0",
+        note = "Крупный публичный M3U через прямую Dropbox-ссылку"
+    ),
+    ReadyPlaylistPreset(
+        name = "IPTV.org.ua — Провайдеры",
         url = "https://iptv.org.ua/iptv/provayder.m3u",
-        note = "Встроенный Torrent TV-плейлист: только Ace Stream-каналы",
-        sourceKey = ACE_STREAM_TORRENT_SOURCE_KEY,
-        embeddedM3u = ACE_STREAM_TORRENT_M3U
-    ),
-    ReadyPlaylistPreset(
-        name = "Freetv.m3u",
-        url = "https://raw.githubusercontent.com/iprtl/m3u/live/Freetv.m3u"
-    ),
-    ReadyPlaylistPreset(
-        name = "Плейлист ТВ",
-        url = "https://raw.githubusercontent.com/Dimonovich/TV/Dimonovich/FREE/TV"
-    ),
-    ReadyPlaylistPreset(
-        name = "Сборник ТВ",
-        url = "https://raw.githubusercontent.com/Voxlist/voxlist/refs/heads/main/voxlist.m3u"
-    ),
-    ReadyPlaylistPreset(
-        name = "smolnp.github.io ТВ",
-        url = "https://smolnp.github.io/IPTVru//IPTVstable.m3u8"
-    ),
-    ReadyPlaylistPreset(
-        name = "Страны мира (EU/TR/US/RU/KZ/BY/TH)",
-        url = "https://iptv-org.github.io/iptv/index.country.m3u"
-    ),
-    ReadyPlaylistPreset(
-        name = "TV ALL list ru",
-        url = "https://raw.githubusercontent.com/naggdd/iptv/main/ru.m3u"
+        note = "Самообновляемый список каналов от разных провайдеров"
     )
 )
 
