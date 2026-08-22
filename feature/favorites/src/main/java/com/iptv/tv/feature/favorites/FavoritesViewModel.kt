@@ -13,6 +13,7 @@ import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.EpgProgram
+import com.iptv.tv.core.model.FavoriteSourceVariant
 import com.iptv.tv.core.model.FavoritesPortableImportResult
 import com.iptv.tv.core.model.FavoritesPortableImportStatus
 import com.iptv.tv.core.model.FavoritesShareableExportFormat
@@ -38,6 +39,10 @@ data class FavoritesUiState(
     val epgProgramsByChannel: Map<Long, List<EpgProgram>> = emptyMap(),
     val epgStatus: String = "EPG: нет данных",
     val selectedChannelId: Long? = null,
+    val sourcePickerChannelId: Long? = null,
+    val sourceVariants: List<FavoriteSourceVariant> = emptyList(),
+    val isLoadingSources: Boolean = false,
+    val isSelectingSource: Boolean = false,
     val isExporting: Boolean = false,
     val isImporting: Boolean = false,
     val exportedFilePath: String? = null,
@@ -58,13 +63,25 @@ class FavoritesViewModel @Inject constructor(
         viewModelScope.launch {
             favoritesRepository.observeFavorites().collect { channels ->
                 _uiState.update { state ->
-                    val selectedId = state.selectedChannelId?.takeIf { id -> channels.any { it.id == id } }
+                    val selectedId = state.selectedChannelId
+                        ?.takeIf { id -> channels.any { it.id == id } }
+                    val nextSelectedId = selectedId ?: channels.firstOrNull()?.id
+                    val keepSourcePicker = nextSelectedId != null &&
+                        state.sourcePickerChannelId == nextSelectedId
                     state.copy(
                         channels = channels,
                         epgProgramsByChannel = state.epgProgramsByChannel.filterKeys { id ->
                             channels.any { it.id == id }
                         },
-                        selectedChannelId = selectedId ?: channels.firstOrNull()?.id
+                        selectedChannelId = nextSelectedId,
+                        sourcePickerChannelId = if (keepSourcePicker) {
+                            state.sourcePickerChannelId
+                        } else {
+                            null
+                        },
+                        sourceVariants = if (keepSourcePicker) state.sourceVariants else emptyList(),
+                        isLoadingSources = if (keepSourcePicker) state.isLoadingSources else false,
+                        isSelectingSource = if (keepSourcePicker) state.isSelectingSource else false
                     )
                 }
                 loadFavoritesEpg(channels)
@@ -73,15 +90,159 @@ class FavoritesViewModel @Inject constructor(
     }
 
     fun selectChannel(channelId: Long) {
-        _uiState.update { it.copy(selectedChannelId = channelId, lastError = null) }
+        _uiState.update { state ->
+            val changed = state.selectedChannelId != channelId
+            state.copy(
+                selectedChannelId = channelId,
+                sourcePickerChannelId = if (changed) null else state.sourcePickerChannelId,
+                sourceVariants = if (changed) emptyList() else state.sourceVariants,
+                isLoadingSources = if (changed) false else state.isLoadingSources,
+                isSelectingSource = if (changed) false else state.isSelectingSource,
+                lastError = null
+            )
+        }
+    }
+
+    fun openSourcePicker() {
+        val state = _uiState.value
+        val selected = state.selectedChannelId
+        if (selected == null) {
+            _uiState.update { it.copy(lastError = "Канал не выбран", lastInfo = null) }
+            return
+        }
+        if (state.isExporting || state.isImporting || state.isSelectingSource) return
+
+        _uiState.update {
+            it.copy(
+                sourcePickerChannelId = selected,
+                sourceVariants = if (it.sourcePickerChannelId == selected) {
+                    it.sourceVariants
+                } else {
+                    emptyList()
+                },
+                isLoadingSources = true,
+                lastInfo = null,
+                lastError = null
+            )
+        }
+        viewModelScope.launch {
+            runCatching {
+                favoritesRepository.getSourceVariants(selected)
+            }.onSuccess { variants ->
+                _uiState.update { current ->
+                    if (current.sourcePickerChannelId != selected) return@update current
+                    current.copy(
+                        sourceVariants = variants,
+                        isLoadingSources = false,
+                        lastError = if (variants.isEmpty()) {
+                            "Для выбранного канала не найдены варианты источника"
+                        } else {
+                            null
+                        }
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.update { current ->
+                    if (current.sourcePickerChannelId != selected) return@update current
+                    current.copy(
+                        sourceVariants = emptyList(),
+                        isLoadingSources = false,
+                        lastError = "Не удалось загрузить источники: ${throwable.message}",
+                        lastInfo = null
+                    )
+                }
+            }
+        }
+    }
+
+    fun closeSourcePicker() {
+        _uiState.update {
+            it.copy(
+                sourcePickerChannelId = null,
+                sourceVariants = emptyList(),
+                isLoadingSources = false,
+                isSelectingSource = false
+            )
+        }
+    }
+
+    fun selectPreferredSource(variantKey: String) {
+        val state = _uiState.value
+        val channelId = state.sourcePickerChannelId
+        if (channelId == null) {
+            _uiState.update { it.copy(lastError = "Сначала откройте список источников", lastInfo = null) }
+            return
+        }
+        if (
+            variantKey.isBlank() ||
+            state.isLoadingSources ||
+            state.isSelectingSource ||
+            state.isExporting ||
+            state.isImporting
+        ) {
+            return
+        }
+        val target = state.sourceVariants.firstOrNull { it.variantKey == variantKey }
+        if (target == null) {
+            _uiState.update { it.copy(lastError = "Источник больше недоступен", lastInfo = null) }
+            return
+        }
+        if (target.isPreferred) return
+
+        _uiState.update { it.copy(isSelectingSource = true, lastInfo = null, lastError = null) }
+        viewModelScope.launch {
+            runCatching {
+                favoritesRepository.selectPreferredSource(channelId, variantKey)
+            }.onSuccess { selected ->
+                if (!selected) {
+                    _uiState.update { current ->
+                        if (current.sourcePickerChannelId != channelId) return@update current
+                        current.copy(
+                            isSelectingSource = false,
+                            lastError = "Не удалось выбрать источник",
+                            lastInfo = null
+                        )
+                    }
+                    return@onSuccess
+                }
+
+                val refreshed = runCatching {
+                    favoritesRepository.getSourceVariants(channelId)
+                }.getOrElse {
+                    state.sourceVariants.map { variant ->
+                        variant.copy(isPreferred = variant.variantKey == variantKey)
+                    }
+                }
+                _uiState.update { current ->
+                    if (current.sourcePickerChannelId != channelId) return@update current
+                    current.copy(
+                        sourceVariants = refreshed,
+                        isSelectingSource = false,
+                        lastInfo = favoriteSourceSelectionMessage(target),
+                        lastError = null
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.update { current ->
+                    if (current.sourcePickerChannelId != channelId) return@update current
+                    current.copy(
+                        isSelectingSource = false,
+                        lastInfo = null,
+                        lastError = "Не удалось выбрать источник: ${throwable.message}"
+                    )
+                }
+            }
+        }
     }
 
     fun removeSelectedFromFavorites() {
-        val selected = _uiState.value.selectedChannelId
+        val state = _uiState.value
+        val selected = state.selectedChannelId
         if (selected == null) {
             _uiState.update { it.copy(lastError = "Канал не выбран") }
             return
         }
+        if (state.isLoadingSources || state.isSelectingSource) return
         viewModelScope.launch {
             favoritesRepository.toggleFavorite(selected)
             _uiState.update { it.copy(lastInfo = "Канал удален из избранного", lastError = null) }
@@ -125,7 +286,14 @@ class FavoritesViewModel @Inject constructor(
 
     fun importFavoritesRiptv(uri: Uri) {
         val state = _uiState.value
-        if (state.isExporting || state.isImporting) return
+        if (
+            state.isExporting ||
+            state.isImporting ||
+            state.isLoadingSources ||
+            state.isSelectingSource
+        ) {
+            return
+        }
 
         viewModelScope.launch {
             _uiState.update {
@@ -191,11 +359,19 @@ class FavoritesViewModel @Inject constructor(
         mimeType: String,
         buildPayload: suspend () -> ExportPayload
     ) {
-        if (_uiState.value.channels.isEmpty()) {
+        val state = _uiState.value
+        if (state.channels.isEmpty()) {
             _uiState.update { it.copy(lastError = "Избранных каналов пока нет", lastInfo = null) }
             return
         }
-        if (_uiState.value.isExporting || _uiState.value.isImporting) return
+        if (
+            state.isExporting ||
+            state.isImporting ||
+            state.isLoadingSources ||
+            state.isSelectingSource
+        ) {
+            return
+        }
 
         viewModelScope.launch {
             _uiState.update { it.copy(isExporting = true, lastError = null) }
