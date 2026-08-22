@@ -4,6 +4,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.common.toLogSummary
 import com.iptv.tv.core.database.dao.ChannelDao
 import com.iptv.tv.core.database.dao.PlaylistDao
+import com.iptv.tv.core.database.dao.ReadyPlaylistRefreshDao
 import com.iptv.tv.core.database.dao.SyncLogDao
 import com.iptv.tv.core.database.entity.SyncLogEntity
 import com.iptv.tv.core.domain.repository.PlaylistRepository
@@ -22,15 +23,16 @@ import okhttp3.Request
 /**
  * Adds true network refresh semantics for the small built-in Ready catalog.
  *
- * The legacy repository refresh path is intentionally left unchanged for user/provider sources.
- * Ready URL playlists are re-downloaded, parsed and reconciled in-place so the publisher can update
- * a playlist without creating duplicate playlist rows or invalidating stable channel IDs.
+ * User/provider sources keep their existing refresh behavior. Ready URL playlists are downloaded,
+ * parsed and reconciled in-place so publishers can change channels and M3U EPG metadata without
+ * creating duplicate playlist rows or exposing a partially written snapshot.
  */
 @Singleton
 class ReadyCatalogPlaylistRepository @Inject constructor(
     private val delegate: PlaylistRepositoryImpl,
     private val playlistDao: PlaylistDao,
     private val channelDao: ChannelDao,
+    private val readyPlaylistRefreshDao: ReadyPlaylistRefreshDao,
     private val syncLogDao: SyncLogDao,
     private val parser: M3uParser,
     private val okHttpClient: OkHttpClient,
@@ -82,23 +84,25 @@ class ReadyCatalogPlaylistRepository @Inject constructor(
                         existing = channelDao.getChannels(playlistId),
                         incoming = incoming
                     )
-
-                    plan.upsertChannels
-                        .chunked(READY_REFRESH_DB_CHUNK)
-                        .forEach { chunk -> channelDao.insertAll(chunk) }
-                    plan.staleChannelIds
-                        .chunked(READY_REFRESH_DB_CHUNK)
-                        .forEach { chunk -> channelDao.deleteByIds(chunk) }
-
+                    val refreshedEpgSource = parsed.epgUrls
+                        .firstOrNull()
+                        ?.trim()
+                        ?.ifBlank { null }
+                        ?: playlist.epgSourceUrl?.trim()?.ifBlank { null }
                     val now = System.currentTimeMillis()
-                    playlistDao.updateLastSynced(playlistId, now)
-                    syncLogDao.insert(
-                        SyncLogEntity(
+                    readyPlaylistRefreshDao.applyRefresh(
+                        playlistId = playlistId,
+                        channels = plan.upsertChannels,
+                        staleChannelIds = plan.staleChannelIds,
+                        epgSourceUrl = refreshedEpgSource,
+                        syncedAt = now,
+                        syncLog = SyncLogEntity(
                             playlistId = playlistId,
                             status = "refresh",
                             message =
                                 "Ready playlist refreshed: channels=${plan.upsertChannels.size}, " +
-                                    "removed=${plan.staleChannelIds.size}, warnings=${parsed.warnings.size}",
+                                    "removed=${plan.staleChannelIds.size}, warnings=${parsed.warnings.size}, " +
+                                    "epg=${refreshedEpgSource ?: "-"}",
                             createdAt = now
                         )
                     )
@@ -109,6 +113,50 @@ class ReadyCatalogPlaylistRepository @Inject constructor(
             val summary = throwable.toLogSummary(maxDepth = 4)
             logRefreshFailure(playlistId, "Ready playlist refresh failed: $summary")
             AppResult.Error("Unable to refresh ready playlist: $summary", throwable)
+        }
+    }
+
+    /**
+     * Periodic sync must use the same live downloader as a manual Ready-catalog open.
+     *
+     * Refreshes stay sequential on purpose: the built-in catalog is tiny and sequential network/
+     * parse work bounds peak memory on TV boxes instead of holding several large M3Us at once.
+     */
+    override suspend fun refreshAllPlaylists(): AppResult<Int> = withContext(Dispatchers.IO) {
+        val playlistIds = playlistDao.getAllIds()
+        if (playlistIds.isEmpty()) return@withContext delegate.refreshAllPlaylists()
+
+        var refreshed = 0
+        val failures = mutableListOf<String>()
+        playlistIds.forEach { playlistId ->
+            when (val result = refreshPlaylist(playlistId)) {
+                is AppResult.Success -> refreshed += 1
+                is AppResult.Error -> failures += "id=$playlistId: ${result.message}"
+                AppResult.Loading -> failures += "id=$playlistId: unexpected loading state"
+            }
+        }
+
+        val now = System.currentTimeMillis()
+        syncLogDao.insert(
+            SyncLogEntity(
+                playlistId = null,
+                status = if (failures.isEmpty()) "refresh_all" else "refresh_all_partial",
+                message = if (failures.isEmpty()) {
+                    "Refreshed $refreshed playlists"
+                } else {
+                    "Refreshed $refreshed/${playlistIds.size} playlists; failed=${failures.size}"
+                },
+                createdAt = now
+            )
+        )
+
+        if (failures.isEmpty()) {
+            AppResult.Success(refreshed)
+        } else {
+            AppResult.Error(
+                "Playlist refresh incomplete: refreshed=$refreshed/${playlistIds.size}; " +
+                    failures.joinToString(separator = " | ", limit = 3, truncated = "…")
+            )
         }
     }
 
@@ -143,5 +191,3 @@ internal fun deduplicateReadyChannels(channels: List<Channel>): List<Channel> {
     }
     return byIdAndName.values.toList()
 }
-
-private const val READY_REFRESH_DB_CHUNK = 500
