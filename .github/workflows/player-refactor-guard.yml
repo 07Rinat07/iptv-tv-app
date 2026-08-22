@@ -12,6 +12,7 @@ on:
       - 'core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis.kt'
       - 'core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource.kt'
       - 'core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos.kt'
+      - 'core/network/src/main/java/com/iptv/tv/core/network/di/NetworkModule.kt'
       - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository.kt'
       - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase.kt'
       - 'core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule.kt'
@@ -42,13 +43,13 @@ jobs:
           changed="$(git diff --no-renames --name-only "$merge_base" "$HEAD_SHA")"
           printf '%s\n' "$changed"
 
-          if ! printf '%s\n' "$changed" | grep -Eq '^(app/src/main/java/com/iptv/tv/MainActivity\.kt$|feature/player/|core/player/|core/player-vlc/)'; then
+          if ! grep -Eq '^(app/src/main/java/com/iptv/tv/MainActivity\.kt$|feature/player/|core/player/|core/player-vlc/)' <<<"$changed"; then
             echo 'No Player-owned production/test/routing files changed; Scanner boundary is not applicable.'
             exit 0
           fi
 
-          if printf '%s\n' "$changed" | grep -Eq '^(feature/scanner/|core/model/src/main/kotlin/com/iptv/tv/core/model/Models\.kt$|core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis\.kt$|core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource\.kt$|core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase\.kt$|core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule\.kt$|core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories\.kt$)'; then
-            echo 'Player changes must not modify Scanner production/query/discovery/model contracts.' >&2
+          if grep -Eq '^(feature/scanner/|core/model/src/main/kotlin/com/iptv/tv/core/model/Models\.kt$|core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis\.kt$|core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource\.kt$|core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos\.kt$|core/network/src/main/java/com/iptv/tv/core/network/di/NetworkModule\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository\.kt$|core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase\.kt$|core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule\.kt$|core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories\.kt$)' <<<"$changed"; then
+            echo 'Player changes must not modify Scanner production/query/discovery/model/wiring contracts.' >&2
             exit 1
           fi
 
