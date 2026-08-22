@@ -11,7 +11,7 @@ import org.junit.Test
 class ReadyPlaylistRefreshPlannerTest {
 
     @Test
-    fun preservesRowStateWhenStableIdentitySurvivesStreamChange() {
+    fun preservesIdAndHiddenButResetsHealthWhenStableIdentityStreamChanges() {
         val existing = channelEntity(
             id = 41L,
             tvgId = "news-hd",
@@ -32,18 +32,19 @@ class ReadyPlaylistRefreshPlannerTest {
         assertEquals(41L, updated.id)
         assertEquals(7L, updated.playlistId)
         assertEquals("https://new.example/news.m3u8", updated.streamUrl)
-        assertEquals(ChannelHealth.AVAILABLE.name, updated.health)
+        assertEquals(ChannelHealth.UNKNOWN.name, updated.health)
         assertTrue(updated.isHidden)
         assertTrue(plan.staleChannelIds.isEmpty())
     }
 
     @Test
-    fun exactStreamFallbackPreservesIdWhenPublisherAddsTvgId() {
+    fun exactStreamFallbackPreservesIdAndHealthWhenPublisherAddsTvgId() {
         val existing = channelEntity(
             id = 9L,
             tvgId = null,
             name = "Movie",
-            streamUrl = "https://example.org/movie.m3u8"
+            streamUrl = "https://example.org/movie.m3u8",
+            health = ChannelHealth.AVAILABLE
         )
         val incoming = channel(
             tvgId = "movie-channel",
@@ -58,6 +59,7 @@ class ReadyPlaylistRefreshPlannerTest {
 
         assertEquals(9L, updated.id)
         assertEquals("movie-channel", updated.tvgId)
+        assertEquals(ChannelHealth.AVAILABLE.name, updated.health)
     }
 
     @Test
