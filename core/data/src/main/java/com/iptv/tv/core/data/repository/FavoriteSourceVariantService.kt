@@ -1,11 +1,13 @@
 package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
+import com.iptv.tv.core.database.dao.FavoriteDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.FavoriteChannelEntity
 import com.iptv.tv.core.database.entity.FavoriteChannelVariantEntity
+import com.iptv.tv.core.database.entity.FavoriteEntity
 import com.iptv.tv.core.database.entity.PlaylistEntity
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.FavoritePlaybackContext
@@ -24,6 +26,7 @@ import javax.inject.Singleton
 class FavoriteSourceVariantService @Inject constructor(
     private val favoriteSnapshotDao: FavoriteSnapshotDao,
     private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
+    private val favoriteDao: FavoriteDao,
     private val playlistDao: PlaylistDao
 ) {
     suspend fun getSourceVariants(favoriteChannelId: Long): List<FavoriteSourceVariant> {
@@ -111,6 +114,17 @@ class FavoriteSourceVariantService @Inject constructor(
         )
         if (additions.isNotEmpty()) {
             favoriteSnapshotDao.upsertVariants(additions)
+            // Keep the old FavoriteDao identity bridge alive for legacy import inheritance. The
+            // logical snapshot/variant tables remain authoritative and removal still goes through
+            // UnifiedFavoritesRepositoryImpl, which clears both representations.
+            favoriteDao.upsertAll(
+                additions.map { variant ->
+                    FavoriteEntity(
+                        channelId = variant.legacyChannelId,
+                        addedAt = variant.addedAt
+                    )
+                }
+            )
         }
         return (existing + additions)
             .distinctBy(FavoriteChannelVariantEntity::variantKey)
