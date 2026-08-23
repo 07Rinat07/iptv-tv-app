@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Iterable
 
 PRODUCER_STATUS = "embedded_ace_live_producer_boundary"
+PRODUCER_GAP_STATUS = "embedded_ace_live_producer_gap"
 COUNTERS = (
     "scheduled",
     "selected",
@@ -47,11 +48,15 @@ class RuntimeEvidence:
     counters: dict[str, int] = field(default_factory=lambda: {name: 0 for name in COUNTERS})
     sessions: set[int] = field(default_factory=set)
     records: int = 0
+    boundary_records: int = 0
+    gap_records: int = 0
+    active_gap_seen: bool = False
     last_stage: str | None = None
     last_disposition: str | None = None
 
-    def absorb(self, fields: dict[str, str]) -> None:
+    def absorb_boundary(self, fields: dict[str, str]) -> None:
         self.records += 1
+        self.boundary_records += 1
         self.last_stage = fields.get("stage", self.last_stage)
         disposition = fields.get("disposition")
         if disposition and disposition != "none":
@@ -64,6 +69,12 @@ class RuntimeEvidence:
             if value is not None:
                 self.counters[counter] = max(self.counters[counter], value)
 
+    def absorb_gap(self, fields: dict[str, str]) -> None:
+        self.records += 1
+        self.gap_records += 1
+        if fields.get("state") == "active":
+            self.active_gap_seen = True
+
 
 @dataclass(frozen=True)
 class RuntimeClassification:
@@ -73,6 +84,8 @@ class RuntimeClassification:
     counters: dict[str, int]
     sessions: tuple[int, ...]
     records: int
+    boundary_records: int
+    gap_records: int
     last_stage: str | None
     last_disposition: str | None
 
@@ -104,7 +117,9 @@ def collect_runtime_evidence(lines: Iterable[str]) -> tuple[dict[RuntimeKey, Run
     runtimes: dict[RuntimeKey, RuntimeEvidence] = {}
     uncorrelated_records = 0
     for line in lines:
-        if PRODUCER_STATUS not in line:
+        is_boundary = PRODUCER_STATUS in line
+        is_gap = PRODUCER_GAP_STATUS in line
+        if not is_boundary and not is_gap:
             continue
         fields = parse_fields(line)
         key = runtime_key_from_fields(fields)
@@ -112,13 +127,22 @@ def collect_runtime_evidence(lines: Iterable[str]) -> tuple[dict[RuntimeKey, Run
             uncorrelated_records += 1
             continue
         evidence = runtimes.setdefault(key, RuntimeEvidence(key=key))
-        evidence.absorb(fields)
+        if is_boundary:
+            evidence.absorb_boundary(fields)
+        elif is_gap:
+            evidence.absorb_gap(fields)
     return runtimes, uncorrelated_records
 
 
 def classify_runtime(evidence: RuntimeEvidence) -> RuntimeClassification:
     c = evidence.counters
-    if c["scheduled"] == 0:
+    if evidence.boundary_records == 0 and evidence.active_gap_seen:
+        missing = "scheduled"
+        action = "scheduler-output-boundary"
+    elif evidence.boundary_records == 0:
+        missing = "insufficient_boundary_evidence"
+        action = "preserve-more-correlated-producer-evidence; do-not-change-runtime-policy"
+    elif c["scheduled"] == 0:
         missing = "scheduled"
         action = "scheduler-output-boundary"
     elif c["selected"] == 0:
@@ -159,6 +183,8 @@ def classify_runtime(evidence: RuntimeEvidence) -> RuntimeClassification:
         counters=dict(c),
         sessions=tuple(sorted(evidence.sessions)),
         records=evidence.records,
+        boundary_records=evidence.boundary_records,
+        gap_records=evidence.gap_records,
         last_stage=evidence.last_stage,
         last_disposition=evidence.last_disposition,
     )
