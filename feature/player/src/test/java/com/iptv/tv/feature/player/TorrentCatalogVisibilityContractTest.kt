@@ -21,7 +21,7 @@ class TorrentCatalogVisibilityContractTest {
 
     @Test
     fun stablePlayer_rendersP2pAvailabilityInChannelLists() {
-        val source = File("src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt")
+        val source = File("src/main/java/com/iptv/tv/feature/player/StablePlayerChannelBrowser.kt")
             .readText()
 
         assertTrue(source.contains("p2pChannelAvailabilityLabel"))
