@@ -5,9 +5,19 @@ from tools.classify_p2p_producer_stage import classify_lines
 
 PREFIX = "I/P2P/AceBoundary: embedded_ace_live_producer_boundary"
 GAP_PREFIX = "I/P2P/AcePeer: embedded_ace_live_producer_gap"
+START_PREFIX = "I/P2P/AceStart: embedded_ace_live_startup_timeline"
 
 
-def boundary_line(*, stage: str, startup: int = 100, runtime: int = 4, generation: int = 9, path: str = "direct_retry", **counts: int) -> str:
+def boundary_line(
+    *,
+    stage: str,
+    startup: int = 100,
+    runtime: int = 4,
+    generation: int = 9,
+    path: str = "direct_retry",
+    disposition: str = "none",
+    **counts: int,
+) -> str:
     all_counts = {
         "scheduled": 0,
         "selected": 0,
@@ -25,15 +35,35 @@ def boundary_line(*, stage: str, startup: int = 100, runtime: int = 4, generatio
     all_counts.update(counts)
     counters = " ".join(f"{key}={value}" for key, value in all_counts.items())
     return (
-        f"{PREFIX} session=2 stage={stage} peer=7 piece=55 disposition=none bytes=18800 "
+        f"{PREFIX} session=2 stage={stage} peer=7 piece=55 disposition={disposition} bytes=18800 "
         f"startup_id={startup} runtime_id={runtime} generation={generation} path={path} {counters}"
     )
 
 
-def gap_line(*, state: str = "active", startup: int = 100, runtime: int = 4, generation: int = 9, path: str = "direct_retry") -> str:
+def gap_line(
+    *,
+    state: str = "active",
+    startup: int = 100,
+    runtime: int = 4,
+    generation: int = 9,
+    path: str = "direct_retry",
+) -> str:
     return (
         f"{GAP_PREFIX} state={state} discovered=4 connected=2 handshaked=2 windowUseful=2 "
         f"unchoked=2 producing=0 aggregate_bps=0 startup_id={startup} runtime_id={runtime} "
+        f"generation={generation} path={path}"
+    )
+
+
+def start_line(
+    *,
+    startup: int = 100,
+    runtime: int = 4,
+    generation: int = 9,
+    path: str = "direct_retry",
+) -> str:
+    return (
+        f"{START_PREFIX} phase=runtime_started startup_id={startup} runtime_id={runtime} "
         f"generation={generation} path={path}"
     )
 
@@ -45,16 +75,17 @@ class ProducerStageClassifierTest(unittest.TestCase):
         self.assertEqual(1, len(classifications))
         return classifications[0]
 
-    def test_active_producer_gap_without_boundary_classifies_scheduler_output(self):
-        result = self.classify_one(gap_line())
+    def test_active_gap_without_any_boundary_represents_zero_event_runtime(self):
+        result = self.classify_one(gap_line(), start_line())
         self.assertEqual("scheduled", result.first_missing_transition)
         self.assertEqual("scheduler-output-boundary", result.action_boundary)
         self.assertEqual(0, result.boundary_records)
         self.assertEqual(1, result.gap_records)
 
-    def test_boundary_record_with_zero_scheduled_still_classifies_scheduler_output(self):
-        result = self.classify_one(boundary_line(stage="scheduled"))
-        self.assertEqual("scheduled", result.first_missing_transition)
+    def test_correlated_runtime_without_gap_or_boundary_is_not_guessed(self):
+        result = self.classify_one(start_line())
+        self.assertEqual("insufficient_boundary_evidence", result.first_missing_transition)
+        self.assertIn("do-not-change-runtime-policy", result.action_boundary)
 
     def test_selected_and_sent_boundaries_follow_issue_159_order(self):
         selected = self.classify_one(boundary_line(stage="scheduled", scheduled=3))
@@ -100,13 +131,54 @@ class ProducerStageClassifierTest(unittest.TestCase):
         self.assertEqual("player_ready_or_frame_audio", result.first_missing_transition)
         self.assertIn("do-not-change-p2p-acquisition", result.action_boundary)
 
-    def test_cumulative_records_use_maximum_counts_not_last_line_order(self):
-        high = boundary_line(stage="sent", scheduled=4, selected=3, sent=2)
-        stale = boundary_line(stage="scheduled", scheduled=1, selected=0, sent=0)
-        result = self.classify_one(high, stale)
-        self.assertEqual(4, result.counters["scheduled"])
-        self.assertEqual(3, result.counters["selected"])
-        self.assertEqual(2, result.counters["sent"])
+    def test_later_send_stall_uses_delta_after_previous_media_append(self):
+        newest = boundary_line(
+            stage="sent",
+            scheduled=10,
+            selected=10,
+            sent=10,
+            chunk_ingress=5,
+            chunk_accepted=5,
+            piece_completed=2,
+            authenticated=2,
+            ts_resync_output=2,
+            media_appended=2,
+        )
+        previous_success = boundary_line(
+            stage="media_appended",
+            scheduled=5,
+            selected=5,
+            sent=5,
+            chunk_ingress=5,
+            chunk_accepted=5,
+            piece_completed=2,
+            authenticated=2,
+            ts_resync_output=2,
+            media_appended=2,
+        )
+        result = self.classify_one(newest, previous_success)
+        self.assertEqual("chunk_ingress", result.first_missing_transition)
+        self.assertEqual(5, result.observation_deltas["sent"])
+        self.assertEqual(0, result.observation_deltas["chunk_ingress"])
+
+    def test_newest_stage_and_disposition_are_preserved_for_newest_first_export(self):
+        newest = boundary_line(
+            stage="sent",
+            disposition="WRITE_OK",
+            scheduled=4,
+            selected=3,
+            sent=2,
+        )
+        older = boundary_line(stage="scheduled", scheduled=1)
+        result = self.classify_one(newest, older)
+        self.assertEqual("sent", result.last_stage)
+        self.assertEqual("WRITE_OK", result.last_disposition)
+
+    def test_oldest_first_input_also_uses_highest_progress_as_latest(self):
+        older = boundary_line(stage="scheduled", scheduled=1)
+        newest = boundary_line(stage="sent", scheduled=4, selected=3, sent=2)
+        result = self.classify_one(older, newest)
+        self.assertEqual("sent", result.last_stage)
         self.assertEqual("chunk_ingress", result.first_missing_transition)
 
     def test_distinct_runtime_correlations_are_not_merged(self):
