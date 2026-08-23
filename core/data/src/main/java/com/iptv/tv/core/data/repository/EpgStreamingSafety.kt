@@ -81,6 +81,29 @@ internal fun classifyEpgFailure(failure: IOException): EpgFailureKind = when (fa
 }
 
 /**
+ * Yields successful fresh candidates first. A stale snapshot is captured immediately after a
+ * fresh failure but deferred until every fresh candidate has had a chance to satisfy the caller.
+ * This preserves source selection even when the live cache intentionally holds only one source.
+ */
+internal fun <T> loadEpgCandidatesFreshFirst(
+    candidates: List<String>,
+    loadFresh: (url: String) -> T,
+    captureStaleFallback: (url: String) -> T?,
+    onLoadError: (Exception) -> Unit
+): Sequence<Pair<String, T>> = sequence {
+    val deferredStale = ArrayList<Pair<String, T>>(candidates.size)
+    for (url in candidates) {
+        try {
+            yield(url to loadFresh(url))
+        } catch (failure: Exception) {
+            onLoadError(failure)
+            captureStaleFallback(url)?.let { deferredStale += url to it }
+        }
+    }
+    deferredStale.forEach { yield(it) }
+}
+
+/**
  * Streaming hard limit for XMLTV bodies.
  *
  * Unlike ResponseBody.bytes(), this never allocates a second byte array containing the complete
@@ -157,7 +180,7 @@ internal class EpgFailureBackoffCache(
         url: String,
         reason: String,
         retryAfterMs: Long,
-        kind: EpgFailureKind = EpgFailureKind.TRANSIENT
+        kind: EpgFailureKind
     ) {
         entries[url] = EpgFailureBackoffEntry(
             failedAtMs = nowMs(),
