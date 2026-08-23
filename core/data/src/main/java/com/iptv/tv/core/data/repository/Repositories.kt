@@ -1957,11 +1957,12 @@ class PlaylistRepositoryImpl @Inject constructor(
                 return EpgMatch(programs = data.programsByChannel[exactChannelId].orEmpty(), matchedBy = "channel-id")
             }
 
-            val byContains = data.channelIdByTextKey.entries.firstOrNull { (channelKey, _) ->
-                channelKey.contains(normalizedName) || normalizedName.contains(channelKey)
-            }
-            if (byContains != null) {
-                return EpgMatch(programs = data.programsByChannel[byContains.value].orEmpty(), matchedBy = "channel-id")
+            val partialChannelId = EpgChannelMatchPolicy.uniquePartialChannelId(
+                normalizedChannelName = normalizedName,
+                channelIdByTextKey = data.channelIdByTextKey
+            )
+            if (partialChannelId != null) {
+                return EpgMatch(programs = data.programsByChannel[partialChannelId].orEmpty(), matchedBy = "channel-id")
             }
         }
 

@@ -45,12 +45,12 @@ Issue #45's aggregate collector/summary work is complete in `main`. Ready-catalo
 ### Complete
 
 1. **PR #181 — calendar-safe EPG day windows.** TODAY/TOMORROW follow local civil-day boundaries instead of fixed 24-hour arithmetic, including DST/skipped-midnight regressions.
+2. **EPG matching safety — active increment.** Preserve `tvg-id`, exact display-name and exact channel-id priority; partial channel-id fallback accepts only one distinct XMLTV candidate and fails closed when multiple channels are plausible, making the result independent from XMLTV/map order.
 
 ### Next production increments
 
-1. **EPG matching safety.** Preserve `tvg-id` and exact-name priority and stop silently choosing an arbitrary partial match when multiple XMLTV channels are plausible.
-2. **EPG diagnostics/cache/archive capability.** Continue matched/unmatched diagnostics, resilient refresh/cache behavior and real catch-up capability contracts in small independent increments.
-3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
+1. **EPG diagnostics/cache/archive capability.** Continue matched/unmatched diagnostics, resilient refresh/cache behavior and real catch-up capability contracts in small independent increments.
+2. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
 
 ## Issue #46 — Player UX, buffering and architecture
 
