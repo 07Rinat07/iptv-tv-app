@@ -747,7 +747,7 @@ class PlaylistRepositoryImpl @Inject constructor(
         }
 
         var lastLoadError: Throwable? = null
-        for ((epgUrl, epgEntry) in loadEpgCandidatesFreshFirst(
+        for ((epgUrl, epgEntry, _) in loadEpgCandidatesFreshFirst(
             candidates = candidates,
             loadFresh = ::getOrLoadXmlTv,
             captureStaleFallback = ::staleEpgEntryForActiveTransientBackoff,
@@ -815,13 +815,20 @@ class PlaylistRepositoryImpl @Inject constructor(
 
             var firstLoadedDiagnostics: PlaylistEpgDiagnostics? = null
             var lastLoadError: Throwable? = null
-            for ((epgUrl, epgEntry) in loadEpgCandidatesFreshFirst(
+            for ((epgUrl, epgEntry, servedFromStaleFallback) in loadEpgCandidatesFreshFirst(
                 candidates = candidates,
                 loadFresh = ::getOrLoadXmlTv,
                 captureStaleFallback = ::staleEpgEntryForActiveTransientBackoff,
                 onLoadError = { lastLoadError = it }
             )) {
                 val epgData = epgEntry.data
+                val diagnosticsNowMs = System.currentTimeMillis()
+                val cacheStatus = EpgDiagnosticsCacheStatusPolicy.observe(
+                    loadedAtMs = epgEntry.loadedAtMs,
+                    nowMs = diagnosticsNowMs,
+                    servedFromStaleFallback = servedFromStaleFallback,
+                    activeFailure = epgFailureBackoff.peekActive(epgUrl)
+                )
                 val diagnostics = EpgMatchDiagnosticsPolicy.summarize(
                     playlistId = playlistId,
                     epgSourceUrl = epgUrl,
@@ -837,6 +844,10 @@ class PlaylistRepositoryImpl @Inject constructor(
                             hasPrograms = match.programs.isNotEmpty()
                         )
                     }
+                ).copy(
+                    servedFromStaleFallback = cacheStatus.servedFromStaleFallback,
+                    cacheAgeMs = cacheStatus.cacheAgeMs,
+                    refreshRetryAtMs = cacheStatus.refreshRetryAtMs
                 )
                 if (firstLoadedDiagnostics == null) firstLoadedDiagnostics = diagnostics
                 if (diagnostics.channelsWithPrograms > 0) {
@@ -880,7 +891,7 @@ class PlaylistRepositoryImpl @Inject constructor(
             .toList()
         var lastLoadError: Throwable? = null
 
-        for ((epgUrl, epgEntry) in loadEpgCandidatesFreshFirst(
+        for ((epgUrl, epgEntry, _) in loadEpgCandidatesFreshFirst(
             candidates = candidates,
             loadFresh = ::getOrLoadXmlTv,
             captureStaleFallback = ::staleEpgEntryForActiveTransientBackoff,

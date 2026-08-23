@@ -85,26 +85,77 @@ internal fun classifyEpgFailure(failure: IOException): EpgFailureKind = when (fa
  * fresh failure but deferred until every fresh candidate has had a chance to satisfy the caller.
  * This preserves source selection even when the live cache intentionally holds only one source.
  */
+internal data class EpgCandidateLoad<T>(
+    val url: String,
+    val value: T,
+    val servedFromStaleFallback: Boolean
+)
+
 internal fun <T> loadEpgCandidatesFreshFirst(
     candidates: List<String>,
     loadFresh: (url: String) -> T,
     captureStaleFallback: (url: String) -> T?,
     onLoadError: (Exception) -> Unit
-): Sequence<Pair<String, T>> = sequence {
-    val deferredStale = ArrayList<Pair<String, T>>(candidates.size)
+): Sequence<EpgCandidateLoad<T>> = sequence {
+    val deferredStale = ArrayList<EpgCandidateLoad<T>>(candidates.size)
     for (url in candidates) {
         try {
-            yield(url to loadFresh(url))
+            yield(
+                EpgCandidateLoad(
+                    url = url,
+                    value = loadFresh(url),
+                    servedFromStaleFallback = false
+                )
+            )
         } catch (failure: Exception) {
             onLoadError(failure)
             if (failure is EpgLowMemoryException) {
                 deferredStale.clear()
             } else {
-                captureStaleFallback(url)?.let { deferredStale += url to it }
+                captureStaleFallback(url)?.let { stale ->
+                    deferredStale += EpgCandidateLoad(
+                        url = url,
+                        value = stale,
+                        servedFromStaleFallback = true
+                    )
+                }
             }
         }
     }
     deferredStale.forEach { yield(it) }
+}
+
+internal data class EpgDiagnosticsCacheStatus(
+    val servedFromStaleFallback: Boolean,
+    val cacheAgeMs: Long,
+    val refreshRetryAtMs: Long?
+)
+
+/** Read-only cache/refresh observability; it must never change refresh or source-selection policy. */
+internal object EpgDiagnosticsCacheStatusPolicy {
+    fun observe(
+        loadedAtMs: Long,
+        nowMs: Long,
+        servedFromStaleFallback: Boolean,
+        activeFailure: EpgFailureBackoffEntry?
+    ): EpgDiagnosticsCacheStatus {
+        val cacheAgeMs = (nowMs - loadedAtMs).coerceAtLeast(0L)
+        val refreshRetryAtMs = if (
+            servedFromStaleFallback &&
+            activeFailure?.kind?.let(EpgStaleFallbackPolicy::allowsStale) == true
+        ) {
+            activeFailure.let { failure ->
+                (failure.failedAtMs + failure.retryAfterMs).coerceAtLeast(failure.failedAtMs)
+            }
+        } else {
+            null
+        }
+        return EpgDiagnosticsCacheStatus(
+            servedFromStaleFallback = servedFromStaleFallback,
+            cacheAgeMs = cacheAgeMs,
+            refreshRetryAtMs = refreshRetryAtMs
+        )
+    }
 }
 
 /**
@@ -176,6 +227,17 @@ internal class EpgFailureBackoffCache(
         val entry = entries[url] ?: return null
         if (nowMs() - entry.failedAtMs < entry.retryAfterMs) return entry
         entries.remove(url)
+        return null
+    }
+
+    /** Read-only lookup that preserves both access order and cache membership. */
+    @Synchronized
+    fun peekActive(url: String): EpgFailureBackoffEntry? {
+        for (entry in entries.entries) {
+            if (entry.key != url) continue
+            val failure = entry.value
+            return failure.takeIf { nowMs() - it.failedAtMs < it.retryAfterMs }
+        }
         return null
     }
 
