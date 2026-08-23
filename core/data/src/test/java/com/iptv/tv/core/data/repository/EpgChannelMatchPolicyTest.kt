@@ -9,7 +9,7 @@ class EpgChannelMatchPolicyTest {
     fun uniquePartialCandidateIsAccepted() {
         val result = EpgChannelMatchPolicy.uniquePartialChannelId(
             normalizedChannelName = "discovery",
-            channelIdByTextKey = linkedMapOf(
+            channelIdsByTextKey = listOf(
                 "discoveryhd" to "xmltv.discovery.hd",
                 "history" to "xmltv.history"
             )
@@ -20,11 +20,11 @@ class EpgChannelMatchPolicyTest {
 
     @Test
     fun ambiguousPartialCandidatesFailClosed() {
-        val firstOrder = linkedMapOf(
+        val firstOrder = listOf(
             "discoveryhd" to "xmltv.discovery.hd",
             "discoveryplus" to "xmltv.discovery.plus"
         )
-        val reverseOrder = linkedMapOf(
+        val reverseOrder = listOf(
             "discoveryplus" to "xmltv.discovery.plus",
             "discoveryhd" to "xmltv.discovery.hd"
         )
@@ -37,7 +37,7 @@ class EpgChannelMatchPolicyTest {
     fun multipleMatchingAliasesForSameChannelRemainUnambiguous() {
         val result = EpgChannelMatchPolicy.uniquePartialChannelId(
             normalizedChannelName = "news",
-            channelIdByTextKey = linkedMapOf(
+            channelIdsByTextKey = listOf(
                 "worldnews" to "xmltv.news",
                 "newsworld" to "xmltv.news"
             )
@@ -47,11 +47,24 @@ class EpgChannelMatchPolicyTest {
     }
 
     @Test
+    fun collidingNormalizedKeysWithDifferentChannelsFailClosed() {
+        val result = EpgChannelMatchPolicy.uniquePartialChannelId(
+            normalizedChannelName = "news",
+            channelIdsByTextKey = listOf(
+                "newshd" to "xmltv.news-hd",
+                "newshd" to "xmltv.news hd"
+            )
+        )
+
+        assertNull(result)
+    }
+
+    @Test
     fun noPartialCandidateReturnsNull() {
         assertNull(
             EpgChannelMatchPolicy.uniquePartialChannelId(
                 normalizedChannelName = "sports",
-                channelIdByTextKey = mapOf("movies" to "xmltv.movies")
+                channelIdsByTextKey = listOf("movies" to "xmltv.movies")
             )
         )
     }
@@ -61,7 +74,7 @@ class EpgChannelMatchPolicyTest {
         assertNull(
             EpgChannelMatchPolicy.uniquePartialChannelId(
                 normalizedChannelName = "",
-                channelIdByTextKey = mapOf("news" to "xmltv.news")
+                channelIdsByTextKey = listOf("news" to "xmltv.news")
             )
         )
     }

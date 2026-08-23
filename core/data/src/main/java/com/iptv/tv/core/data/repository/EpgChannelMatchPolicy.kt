@@ -11,12 +11,12 @@ package com.iptv.tv.core.data.repository
 internal object EpgChannelMatchPolicy {
     fun uniquePartialChannelId(
         normalizedChannelName: String,
-        channelIdByTextKey: Map<String, String>
+        channelIdsByTextKey: Iterable<Pair<String, String>>
     ): String? {
         if (normalizedChannelName.isBlank()) return null
 
         var candidate: String? = null
-        for ((channelKey, channelId) in channelIdByTextKey) {
+        for ((channelKey, channelId) in channelIdsByTextKey) {
             if (channelKey.isBlank()) continue
             val matches = channelKey.contains(normalizedChannelName) ||
                 normalizedChannelName.contains(channelKey)
