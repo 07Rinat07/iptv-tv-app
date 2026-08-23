@@ -1,15 +1,15 @@
 # Project status and roadmap
 
-_Last updated: 2026-08-23_
+_Last updated: 2026-08-24_
 
 This is the canonical current-state and next-action document. Dated field reports remain immutable evidence; when an older plan describes a different current increment, this page wins.
 
 ## Current integration head
 
-- Current production `main`: `a981c762` — PR #193 bounded stale EPG fallback, merged after exact-head Android CI #883, Database Unit CI #128 and Player Refactor Guard #73.
-- PR #174–#187 and PR #189–#193 are merged. PR #186 continued the production StablePlayer presentation/composition split, PR #187 made XMLTV partial matching fail closed on ambiguity, PR #189 preserved explicit per-channel catch-up metadata, PR #190 added a bounded fail-closed archive URL resolver, PR #191 persisted catch-up capability through Room/import/Ready/Favorites, PR #192 exposed conservative per-playlist XMLTV match diagnostics, and PR #193 added fresh-first bounded stale fallback for transient EPG refresh failures without Player launch wiring. PR #188 was a closed, unmerged staging attempt and is not production history.
+- Current production `main`: `eafcfa87` — PR #196 isolated StablePlayer panel/dialog presentation after exact-head Android CI #903 and Player Refactor Guard #88.
+- PR #174–#187, PR #189–#194 and PR #196 are merged. PR #186 started the production StablePlayer presentation/composition split, PR #194 added read-only EPG cache/refresh observability, and PR #196 moved panel/dialog composition into `StablePlayerPanels.kt` without playback/input semantics changes. PR #188 and stale draft #195 were closed unmerged and are not production history.
 - Catalog/Favorites, EPG and Player architecture work do not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
-- Historical merged feature branches are not production merge candidates and should be deleted after their changes are verified in `main`.
+- Historical merged feature branches are not production merge candidates and should be deleted after their changes are verified in `main` when repository tooling supports branch deletion.
 
 ## Issue #45 — canonical catalog + autonomous unified Favorites
 
@@ -51,12 +51,12 @@ Issue #45's aggregate collector/summary work is complete in `main`. Ready-catalo
 5. **PR #191 — catch-up capability persistence.** Persist explicit per-channel catch-up metadata through the normal Channel/Room contract, generic import, Ready refresh and Favorites representation, preserving invalid-declared range state and clearing retired publisher capability without enabling Player launch.
 6. **PR #192 — structured EPG match diagnostics.** Expose a read-only per-playlist snapshot for total/matched/unmatched channels, conservative match-kind counts, channels with programmes, selected EPG source and last successful in-memory load timestamp; review hardening keeps declared zero-programme XMLTV channel IDs matchable, follows existing programme-bearing source selection and timestamps successful cache insertion.
 7. **PR #193 — bounded stale EPG fallback.** Keep the 15-minute fresh TTL unchanged, retain the last valid guide for at most two hours and only after typed transient transport/HTTP 5xx refresh failures; evaluate fresh sources first, preserve the single-entry cache bound, and keep HTTP non-5xx, malformed/oversized XMLTV and low-memory fail-closed.
+8. **PR #194 — EPG cache/refresh observability.** Extend the existing read-only diagnostics snapshot with explicit fresh/stale origin, non-negative cache age and active transient retry deadline while preserving source precedence, cache capacity and refresh policy. Review hardening keeps diagnostic backoff observation fully non-mutating.
 
 ### Next production increments
 
-1. **PR #194 — EPG cache/refresh observability — active.** Extend the existing read-only diagnostics snapshot with stale-fallback state, cache age and an active transient retry deadline without changing refresh, matching, source precedence or cache capacity.
-2. **Archive Player launch/UI integration.** Wire only persisted explicit catch-up capability and the fail-closed resolver into an intentional EPG programme action/Player launch path; do not infer archive support from live URLs and keep provider-specific unsupported modes disabled.
-3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
+1. **Archive Player launch/UI integration.** Wire only persisted explicit catch-up capability and the fail-closed resolver into an intentional EPG programme action/Player launch path; do not infer archive support from live URLs and keep provider-specific unsupported modes disabled.
+2. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
 
 ## Issue #46 — Player UX, buffering and architecture
 
@@ -66,7 +66,9 @@ Player work is split into small fresh-main increments. Refactoring must preserve
 
 `MainActivity` routes the application to `StablePlayerScreen`, implemented in `feature/player/StablePlayerScreenReplacement.kt`. That production route, not the older `PlayerScreen.kt`, is the refactor and performance target.
 
-- `feature/player/StablePlayerScreenReplacement.kt` — production root composition, channel filtering, panels, layout selection and remote-action policy still share one file, though PR #186 extracted the first presentation responsibilities.
+- `feature/player/StablePlayerScreenReplacement.kt` — production root composition, channel filtering, channel browser/list/drawer, layout selection and remote-action policy still share one file. PR #186 extracted the first presentation helpers and PR #196 moved panels/dialogs into `StablePlayerPanels.kt`.
+- `feature/player/StablePlayerPresentation.kt` — focused shared presentation helpers for channel banner, volume/scroll controls and EPG display formatting.
+- `feature/player/StablePlayerPanels.kt` — panel/dialog composition extracted mechanically in PR #196; callback/state ownership remains in the production root.
 - `feature/player/StablePlayerInput.kt` — production Android View/touch/key lifecycle; it must remain aligned with the `stableRemoteActionForKey` policy used by the real video surfaces.
 - `feature/player/PlayerViewModel.kt` — roughly 113 KB: broad `PlayerUiState`, playback orchestration, catalog/EPG state and frequent state updates in one ViewModel.
 - `feature/player/PlayerScreen.kt` — roughly 108 KB legacy composable. Do not spend refactor budget on it unless routing is explicitly migrated back to it or the legacy path is being retired.
@@ -77,7 +79,7 @@ The target is not class-heavy OOP. For Kotlin/Compose, apply SOLID/bounded respo
 ### Refactor sequence
 
 1. **Production Player input boundary — complete, PR #183.** `StablePlayerInputHandler` remains the Android lifecycle/gesture adapter, deterministic input contracts/policy are extracted, `stableRemoteActionForKey` remains the production key mapping source of truth, and Player refactors are protected by an exact-head Scanner boundary/regression gate.
-2. **Production StablePlayer composition split — in progress.** PR #186 extracted the first stable presentation responsibilities. Continue bounded mechanical splits (channel browser/list, panels/settings, shell/navigation) without changing playback semantics, search/filter semantics or state ownership. PR #188 was a closed staging attempt and did not land production code.
+2. **Production StablePlayer composition split — in progress.** PR #186 extracted the first stable presentation responsibilities and PR #196 extracted panel/dialog presentation. Continue bounded mechanical splits of channel browser/list/drawer and shell/navigation without changing playback semantics, search/filter semantics or state ownership. PR #188 and stale draft #195 were closed unmerged and did not land production code.
 3. **Player state/recomposition split.** Separate hot playback/engine telemetry from large catalog/EPG/browser state, reduce root `PlayerUiState` invalidation, move expensive derived channel models/indexes out of root composition, and publish only distinct state changes.
 4. **RAM-bounded Auto buffer.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV `ChannelHealth.UNSTABLE`, increase only time-based Media3 recovery/min-buffer thresholds while preserving existing device/multiview byte caps. Manual remains explicit. Ace/P2P buffer policy is excluded without Issue #159 device evidence.
 5. **Measured Player performance pass.** Address remaining main-thread/state churn only from deterministic evidence or profiling, keeping each optimization independently testable.
@@ -163,8 +165,8 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 ## Decision order
 
 1. Keep PR #182's merged Ready/catalog/Favorites baseline stable; do not reopen it without a measured regression or planned capability.
-2. Continue Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183 and the first composition split landed in PR #186; continue bounded composition extraction before state/recomposition, RAM-bounded Auto buffer and measured performance work.
-3. Continue Issue #47 from merged PR #192 with PR #193 bounded transient stale-cache fallback, then expose cache/refresh observability in a separate fresh-main increment.
+2. Continue Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183, presentation extraction landed in PR #186 and panel/dialog extraction landed in PR #196; continue bounded channel-browser/shell extraction before state/recomposition, RAM-bounded Auto buffer and measured performance work.
+3. Continue Issue #47 from merged PR #194 with explicit archive Player launch/UI integration, preserving fail-closed catch-up capability semantics.
 4. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
 5. Refactor other oversized Scanner/Editor/Importer/Settings files only as separate bounded-context PRs after establishing the production Player decomposition pattern.
 6. Complete hardware/soak/release acceptance before closing master roadmap #44.
