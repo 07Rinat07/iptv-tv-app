@@ -52,7 +52,7 @@ Issue #45's aggregate collector/summary work is complete in `main`. Ready-catalo
 
 ### Next production increments
 
-1. **PR #192 — structured EPG match diagnostics — active.** Expose a read-only per-playlist snapshot for total/matched/unmatched channels, conservative match-kind counts, channels with programmes, selected EPG source and last successful in-memory load timestamp; do not change matching, source precedence or refresh/cache policy.
+1. **PR #192 — structured EPG match diagnostics — active.** Expose a read-only per-playlist snapshot for total/matched/unmatched channels, conservative match-kind counts, channels with programmes, selected EPG source and last successful in-memory load timestamp; review hardening keeps declared zero-programme XMLTV channel IDs matchable, follows existing programme-bearing source selection and timestamps successful cache insertion; do not broaden matching, source precedence or refresh/cache policy.
 2. **EPG cache/refresh hardening.** Retain the last valid guide across bounded temporary fetch failures and make refresh/cache state observable in a separate fresh-main increment without broadening match heuristics.
 3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
 
