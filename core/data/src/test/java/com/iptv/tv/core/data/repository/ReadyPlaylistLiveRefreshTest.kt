@@ -94,6 +94,53 @@ class ReadyPlaylistLiveRefreshTest {
     }
 
     @Test
+    fun refreshReadyCatalogPersistsCatchUpMetadataAfterDedupAndReindex() = runTest {
+        MockWebServer().use { server ->
+            val duplicateUrl = server.url("/duplicate.m3u8")
+            server.enqueue(
+                MockResponse().setBody(
+                    """
+                    #EXTM3U
+                    #EXTINF:-1 tvg-id="duplicate-a",Duplicate A
+                    $duplicateUrl
+                    #EXTINF:-1 tvg-id="duplicate-b",Duplicate B
+                    $duplicateUrl
+                    #EXTINF:-1 tvg-id="archive" catchup="append" catchup-days="4" catchup-source="?utc=${'$'}{start}&lutc=${'$'}{timestamp}",Archive
+                    ${server.url("/archive.m3u8")}
+                    """.trimIndent()
+                )
+            )
+            val playlistId = 18L
+            val playlist = readyPlaylist(playlistId, server.url("/ready.m3u").toString())
+            val fixture = fixture(listOf(playlist))
+
+            val result = fixture.repository.refreshPlaylist(playlistId)
+
+            assertTrue(result is AppResult.Success)
+            coVerify(exactly = 1) {
+                fixture.readyPlaylistRefreshDao.applyRefresh(
+                    playlistId = playlistId,
+                    channels = match { channels ->
+                        channels.size == 2 &&
+                            channels.first { it.tvgId == "archive" }.let { archive ->
+                                archive.orderIndex == 1 &&
+                                    archive.catchUpMode == "append" &&
+                                    archive.catchUpDays == 4 &&
+                                    archive.catchUpSourceTemplate ==
+                                        "?utc=${'$'}{start}&lutc=${'$'}{timestamp}" &&
+                                    archive.catchUpDaysDeclared
+                            }
+                    },
+                    staleChannelIds = emptyList(),
+                    epgSourceUrl = null,
+                    syncedAt = any(),
+                    syncLog = any()
+                )
+            }
+        }
+    }
+
+    @Test
     fun refreshReadyCatalogDoesNotMutateSnapshotWhenDownloadFails() = runTest {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setResponseCode(503))
