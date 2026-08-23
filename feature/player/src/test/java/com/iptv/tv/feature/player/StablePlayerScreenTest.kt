@@ -41,6 +41,18 @@ class StablePlayerScreenTest {
     }
 
     @Test
+    fun `menu and guide toggle production controls`() {
+        assertEquals(
+            StableRemoteAction.TOGGLE_CONTROLS,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_MENU)
+        )
+        assertEquals(
+            StableRemoteAction.TOGGLE_CONTROLS,
+            stableRemoteActionForKey(KeyEvent.KEYCODE_GUIDE, fullscreen = true)
+        )
+    }
+
+    @Test
     fun `keyboard F toggles fullscreen`() {
         assertEquals(
             StableRemoteAction.TOGGLE_FULLSCREEN,

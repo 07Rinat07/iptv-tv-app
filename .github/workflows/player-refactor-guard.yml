@@ -1,0 +1,687 @@
+name: Player Refactor Guard
+
+on:
+  pull_request:
+    paths:
+      - 'app/src/main/java/com/iptv/tv/MainActivity.kt'
+      - 'feature/player/**'
+      - 'core/player/**'
+      - 'core/player-vlc/**'
+      - 'core/p2p/**'
+      - 'feature/scanner/**'
+      - 'feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsViewModel.kt'
+      - 'feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsScreen.kt'
+      - 'feature/settings/src/main/java/com/iptv/tv/feature/settings/NetworkTestViewModel.kt'
+      - 'feature/settings/src/main/java/com/iptv/tv/feature/settings/NetworkTestScreen.kt'
+      - 'core/model/src/main/kotlin/com/iptv/tv/core/model/Models.kt'
+      - 'core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis.kt'
+      - 'core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource.kt'
+      - 'core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos.kt'
+      - 'core/network/src/main/java/com/iptv/tv/core/network/di/NetworkModule.kt'
+      - 'core/network/src/main/java/com/iptv/tv/core/network/dns/ResilientDns.kt'
+      - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository.kt'
+      - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/SettingsRepository.kt'
+      - 'core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase.kt'
+      - 'core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule.kt'
+      - 'core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt'
+      - 'core/data/src/main/java/com/iptv/tv/core/data/settings/SettingsStore.kt'
+      - 'docs/PROJECT_STATUS_AND_ROADMAP.md'
+      - '.github/workflows/player-refactor-guard.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  player-refactor-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Protect Player, Scanner and P2P ownership boundaries
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+          from typing import Optional
+
+          BASE_SHA = os.environ["BASE_SHA"]
+          HEAD_SHA = os.environ["HEAD_SHA"]
+
+          def git_text(*args: str) -> str:
+              return subprocess.check_output(["git", *args], text=True)
+
+          merge_base = git_text("merge-base", BASE_SHA, HEAD_SHA).strip()
+          changed = set(
+              filter(
+                  None,
+                  git_text(
+                      "diff",
+                      "--no-renames",
+                      "--name-only",
+                      merge_base,
+                      HEAD_SHA,
+                  ).splitlines(),
+              )
+          )
+          for path in sorted(changed):
+              print(path)
+
+          def content_at(ref: str, path: str) -> str:
+              try:
+                  return git_text("show", f"{ref}:{path}")
+              except subprocess.CalledProcessError:
+                  return ""
+
+          def masked_code(text: str) -> str:
+              """Mask comments/string contents while preserving offsets/newlines."""
+              chars = list(text)
+              index = 0
+              state = "code"
+              quote = ""
+              while index < len(chars):
+                  current = chars[index]
+                  next_char = chars[index + 1] if index + 1 < len(chars) else ""
+
+                  if state == "code":
+                      if current == "/" and next_char == "/":
+                          chars[index] = chars[index + 1] = " "
+                          index += 2
+                          state = "line_comment"
+                          continue
+                      if current == "/" and next_char == "*":
+                          chars[index] = chars[index + 1] = " "
+                          index += 2
+                          state = "block_comment"
+                          continue
+                      if current in ('"', "'"):
+                          quote = current
+                          chars[index] = " "
+                          index += 1
+                          state = "string"
+                          continue
+                      index += 1
+                      continue
+
+                  if state == "line_comment":
+                      if current == "\n":
+                          state = "code"
+                      else:
+                          chars[index] = " "
+                      index += 1
+                      continue
+
+                  if state == "block_comment":
+                      if current == "*" and next_char == "/":
+                          chars[index] = chars[index + 1] = " "
+                          index += 2
+                          state = "code"
+                      else:
+                          if current != "\n":
+                              chars[index] = " "
+                          index += 1
+                      continue
+
+                  if state == "string":
+                      if current == "\\":
+                          chars[index] = " "
+                          if index + 1 < len(chars):
+                              if chars[index + 1] != "\n":
+                                  chars[index + 1] = " "
+                              index += 2
+                          else:
+                              index += 1
+                          continue
+                      if current == quote:
+                          chars[index] = " "
+                          index += 1
+                          state = "code"
+                      else:
+                          if current != "\n":
+                              chars[index] = " "
+                          index += 1
+                      continue
+
+              return "".join(chars)
+
+          def code_line_match(text: str, pattern: str, start: int = 0) -> Optional[re.Match[str]]:
+              masked = masked_code(text)
+              regex = re.compile(r"(?m)^[ \t]*(?:" + pattern + r")[ \t]*$")
+              return regex.search(masked, pos=start)
+
+          def section_between_code_lines(
+              text: str,
+              start_pattern: str,
+              end_pattern: str,
+          ) -> Optional[str]:
+              start_match = code_line_match(text, start_pattern)
+              if start_match is None:
+                  return None
+              end_match = code_line_match(text, end_pattern, start_match.end())
+              if end_match is None:
+                  return None
+              return text[start_match.start():end_match.start()]
+
+          def section_changed(path: str, start_pattern: str, end_pattern: str) -> bool:
+              if path not in changed:
+                  return False
+              before = section_between_code_lines(
+                  content_at(merge_base, path), start_pattern, end_pattern
+              )
+              after = section_between_code_lines(
+                  content_at(HEAD_SHA, path), start_pattern, end_pattern
+              )
+              if before is None or after is None:
+                  print(
+                      f"Ownership section missing in {path}: {start_pattern!r} -> {end_pattern!r}; "
+                      "classifying as changed (fail closed).",
+                      file=sys.stderr,
+                  )
+                  return True
+              return before != after
+
+          def declaration_span(text: str, declaration_pattern: str) -> Optional[tuple[int, int]]:
+              masked = masked_code(text)
+              match = re.compile(
+                  r"(?m)^[ \t]*(?:" + declaration_pattern + r")"
+              ).search(masked)
+              if match is None:
+                  return None
+
+              start = match.start()
+              index = match.end()
+              paren_depth = 0
+              bracket_depth = 0
+              while index < len(masked):
+                  char = masked[index]
+                  if char == "(":
+                      paren_depth += 1
+                  elif char == ")":
+                      paren_depth = max(0, paren_depth - 1)
+                  elif char == "[":
+                      bracket_depth += 1
+                  elif char == "]":
+                      bracket_depth = max(0, bracket_depth - 1)
+                  elif char == "{" and paren_depth == 0 and bracket_depth == 0:
+                      depth = 1
+                      cursor = index + 1
+                      while cursor < len(masked):
+                          nested = masked[cursor]
+                          if nested == "{":
+                              depth += 1
+                          elif nested == "}":
+                              depth -= 1
+                              if depth == 0:
+                                  return start, cursor + 1
+                          cursor += 1
+                      return start, len(text)
+                  elif char == "\n" and paren_depth == 0 and bracket_depth == 0:
+                      return start, index
+                  index += 1
+              return start, len(text)
+
+          def declaration_text(text: str, declaration_pattern: str) -> Optional[str]:
+              span = declaration_span(text, declaration_pattern)
+              if span is None:
+                  return None
+              return text[span[0]:span[1]]
+
+          def annotated_declaration_text(text: str, declaration_pattern: str) -> Optional[str]:
+              span = declaration_span(text, declaration_pattern)
+              if span is None:
+                  return None
+              start, end = span
+              prefix = text[:start]
+              lines = prefix.splitlines(keepends=True)
+              while lines and not lines[-1].strip():
+                  lines.pop()
+              while lines and lines[-1].lstrip().startswith("@"):
+                  start -= len(lines[-1])
+                  lines.pop()
+                  while lines and not lines[-1].strip():
+                      start -= len(lines[-1])
+                      lines.pop()
+              return text[start:end]
+
+          def definition_changed(
+              path: str,
+              declaration_pattern: str,
+              *,
+              include_annotations: bool = False,
+          ) -> bool:
+              if path not in changed:
+                  return False
+              extractor = annotated_declaration_text if include_annotations else declaration_text
+              before = extractor(content_at(merge_base, path), declaration_pattern)
+              after = extractor(content_at(HEAD_SHA, path), declaration_pattern)
+              if before is None or after is None:
+                  print(
+                      f"Guarded declaration {declaration_pattern!r} missing in {path}; "
+                      "classifying as changed (fail closed).",
+                      file=sys.stderr,
+                  )
+                  return True
+              return before != after
+
+          def any_definition_changed(path: str, patterns: list[str]) -> bool:
+              return any(definition_changed(path, pattern) for pattern in patterns)
+
+          def matching_code_lines(text: str, pattern: str) -> list[str]:
+              masked = masked_code(text)
+              regex = re.compile(r"(?m)^[ \t]*(?:" + pattern + r")[^\n]*$")
+              return [text[match.start():match.end()].strip() for match in regex.finditer(masked)]
+
+          def matching_lines_changed(path: str, pattern: str) -> bool:
+              if path not in changed:
+                  return False
+              before = matching_code_lines(content_at(merge_base, path), pattern)
+              after = matching_code_lines(content_at(HEAD_SHA, path), pattern)
+              return before != after
+
+          def call_texts(text: str, call_names: set[str]) -> list[str]:
+              masked = masked_code(text)
+              names = "|".join(sorted(map(re.escape, call_names), key=len, reverse=True))
+              pattern = re.compile(r"\b(?:" + names + r")\s*\(")
+              results: list[str] = []
+              for match in pattern.finditer(masked):
+                  open_paren = masked.find("(", match.start(), match.end())
+                  depth = 0
+                  cursor = open_paren
+                  while cursor < len(masked):
+                      char = masked[cursor]
+                      if char == "(":
+                          depth += 1
+                      elif char == ")":
+                          depth -= 1
+                          if depth == 0:
+                              results.append(text[match.start():cursor + 1])
+                              break
+                      cursor += 1
+              return results
+
+          def calls_changed(path: str, function_pattern: str, call_names: set[str]) -> bool:
+              if path not in changed:
+                  return False
+              before_function = declaration_text(content_at(merge_base, path), function_pattern)
+              after_function = declaration_text(content_at(HEAD_SHA, path), function_pattern)
+              if before_function is None or after_function is None:
+                  print(
+                      f"Mixed-purpose function {function_pattern!r} missing in {path}; "
+                      "classifying owned calls as changed (fail closed).",
+                      file=sys.stderr,
+                  )
+                  return True
+              return call_texts(before_function, call_names) != call_texts(after_function, call_names)
+
+          # Guard helper regressions: comments must not impersonate code markers,
+          # and bodyless declarations must not absorb the following declaration.
+          synthetic_section = (
+              "// composable(Routes.IMPORTER) {\n"
+              "composable(Routes.SCANNER) {\n"
+              "  ScannerScreen()\n"
+              "}\n"
+              "composable(Routes.IMPORTER) {\n"
+              "}\n"
+          )
+          synthetic_scanner = section_between_code_lines(
+              synthetic_section,
+              r"composable\(Routes\.SCANNER\)\s*\{",
+              r"composable\(Routes\.IMPORTER\)\s*\{",
+          )
+          if synthetic_scanner is None or "ScannerScreen" not in synthetic_scanner:
+              raise RuntimeError("section markers must bind to code lines, not comments")
+
+          synthetic_declaration = (
+              "// enum class ScannerSearchMode { FAKE }\n"
+              "data class ManualBufferSettings(\n"
+              "    val startMs: Int\n"
+              ")\n"
+              "enum class ScannerSearchMode { DEFAULT }\n"
+          )
+          manual = declaration_text(
+              synthetic_declaration, r"data\s+class\s+ManualBufferSettings\b"
+          )
+          scanner_mode = declaration_text(
+              synthetic_declaration, r"enum\s+class\s+ScannerSearchMode\b"
+          )
+          if manual is None or "ScannerSearchMode" in manual:
+              raise RuntimeError("bodyless declarations must end before the next declaration")
+          if scanner_mode is None or not scanner_mode.lstrip().startswith("enum class ScannerSearchMode"):
+              raise RuntimeError("declaration matching must ignore comments")
+
+          MAIN = "app/src/main/java/com/iptv/tv/MainActivity.kt"
+          MODELS = "core/model/src/main/kotlin/com/iptv/tv/core/model/Models.kt"
+          SETTINGS_REPO = "core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/SettingsRepository.kt"
+          SETTINGS_STORE = "core/data/src/main/java/com/iptv/tv/core/data/settings/SettingsStore.kt"
+          SETTINGS_VM = "feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsViewModel.kt"
+          SETTINGS_SCREEN = "feature/settings/src/main/java/com/iptv/tv/feature/settings/SettingsScreen.kt"
+          REPOSITORIES = "core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt"
+          REPOSITORY_MODULE = "core/data/src/main/java/com/iptv/tv/core/data/di/RepositoryModule.kt"
+          NETWORK_TEST_VM = "feature/settings/src/main/java/com/iptv/tv/feature/settings/NetworkTestViewModel.kt"
+          NETWORK_TEST_SCREEN = "feature/settings/src/main/java/com/iptv/tv/feature/settings/NetworkTestScreen.kt"
+
+          player_changed = any(
+              path.startswith(
+                  (
+                      "feature/player/src/main/",
+                      "core/player/src/main/",
+                      "core/player-vlc/src/main/",
+                  )
+              )
+              for path in changed
+          )
+
+          if MAIN in changed:
+              player_changed = player_changed or section_changed(
+                  MAIN,
+                  r"composable\(Routes\.PLAYER\)\s*\{",
+                  r"composable\(Routes\.DOWNLOADS\)\s*\{",
+              )
+              player_changed = player_changed or matching_lines_changed(
+                  MAIN,
+                  r"const\s+val\s+PLAYER(?:_WITH_ARG|_WITH_CHANNEL_ARG)?\s*=",
+              )
+              player_changed = player_changed or matching_lines_changed(
+                  MAIN,
+                  r"fun\s+playerRoute\s*\(",
+              )
+              player_changed = player_changed or matching_lines_changed(
+                  MAIN,
+                  r"AppStartDestination\.PLAYER\s*->\s*Routes\.PLAYER",
+              )
+              player_changed = player_changed or section_changed(
+                  MAIN,
+                  r'"player"\s*->\s*\{',
+                  r'"downloads"\s*->\s*Routes\.DOWNLOADS',
+              )
+              player_changed = player_changed or matching_lines_changed(
+                  MAIN,
+                  r".*\b(?:isPlayerRoute|playerFullscreen)\b.*",
+              )
+
+          player_changed = player_changed or any_definition_changed(
+              MODELS,
+              [
+                  r"enum\s+class\s+PlayerType\b",
+                  r"enum\s+class\s+BufferProfile\b",
+                  r"data\s+class\s+ManualBufferSettings\b",
+              ],
+          )
+
+          player_store_keys = [
+              "defaultPlayer",
+              "bufferProfile",
+              "manualStartMs",
+              "manualRebufferMs",
+              "manualMaxMs",
+              "channelPlayerOverrides",
+          ]
+          player_changed = player_changed or any_definition_changed(
+              SETTINGS_STORE,
+              [rf"(?:private\s+)?val\s+{re.escape(name)}\b" for name in player_store_keys],
+          )
+
+          player_repo_functions = [
+              "observeDefaultPlayer",
+              "observeBufferProfile",
+              "observeManualBuffer",
+              "observeChannelPlayerOverride",
+              "setDefaultPlayer",
+              "setBufferProfile",
+              "setManualBuffer",
+              "setChannelPlayerOverride",
+          ]
+          player_changed = player_changed or any_definition_changed(
+              SETTINGS_REPO,
+              [rf"(?:suspend\s+)?fun\s+{name}\s*\(" for name in player_repo_functions],
+          )
+
+          player_vm_functions = [
+              "setDefaultPlayer",
+              "setBufferProfile",
+              "updateManualStart",
+              "updateManualRebuffer",
+              "updateManualMax",
+              "saveManualBuffer",
+          ]
+          player_changed = player_changed or any_definition_changed(
+              SETTINGS_VM,
+              [rf"fun\s+{name}\s*\(" for name in player_vm_functions],
+          )
+          player_changed = player_changed or section_changed(
+              SETTINGS_VM,
+              r"val\s+defaultPlayer\s*:",
+              r"val\s+engineEndpoint\s*:",
+          )
+          player_changed = player_changed or section_changed(
+              SETTINGS_VM,
+              r"settingsRepository\.observeDefaultPlayer\(\)",
+              r"settingsRepository\.observeEngineEndpoint\(\)",
+          )
+          player_changed = player_changed or section_changed(
+              SETTINGS_SCREEN,
+              r"expanded\s*=\s*showPlayerSettings,",
+              r"expanded\s*=\s*showEngineSettings,",
+          )
+
+          player_repository_functions = player_repo_functions + [
+              "parseChannelOverrides",
+              "encodeChannelOverrides",
+          ]
+          player_changed = player_changed or any_definition_changed(
+              REPOSITORIES,
+              [rf"(?:override\s+)?(?:suspend\s+)?fun\s+{name}\s*\(" for name in player_repository_functions],
+          )
+
+          player_recommended_calls = {
+              "setDefaultPlayer",
+              "setBufferProfile",
+              "setManualBuffer",
+              "setChannelPlayerOverride",
+          }
+          player_changed = player_changed or calls_changed(
+              SETTINGS_VM,
+              r"fun\s+applyRecommendedSettings\s*\(",
+              player_recommended_calls,
+          )
+
+          if not player_changed:
+              print("No Player-owned production/routing/settings behavior changed; boundary is not applicable.")
+              sys.exit(0)
+
+          p2p_changed = any(path.startswith("core/p2p/") for path in changed)
+          if p2p_changed:
+              print(
+                  "Generic Player refactors must not modify core/p2p runtime policy. "
+                  "P2P changes require their own evidence-backed increment.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          scanner_direct_paths = {
+              NETWORK_TEST_VM,
+              NETWORK_TEST_SCREEN,
+              "core/network/src/main/java/com/iptv/tv/core/network/api/ScannerApis.kt",
+              "core/network/src/main/java/com/iptv/tv/core/network/datasource/PublicRepositoryScannerDataSource.kt",
+              "core/network/src/main/java/com/iptv/tv/core/network/dto/ScannerDtos.kt",
+              "core/network/src/main/java/com/iptv/tv/core/network/di/NetworkModule.kt",
+              "core/network/src/main/java/com/iptv/tv/core/network/dns/ResilientDns.kt",
+              "core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/ScannerRepository.kt",
+              "core/domain/src/main/kotlin/com/iptv/tv/core/domain/usecase/SearchPlaylistsUseCase.kt",
+          }
+          scanner_changed = any(
+              path.startswith("feature/scanner/src/main/") for path in changed
+          )
+          scanner_changed = scanner_changed or any(path in changed for path in scanner_direct_paths)
+
+          if MAIN in changed:
+              scanner_changed = scanner_changed or section_changed(
+                  MAIN,
+                  r"composable\(Routes\.SCANNER\)\s*\{",
+                  r"composable\(Routes\.IMPORTER\)\s*\{",
+              )
+              scanner_changed = scanner_changed or section_changed(
+                  MAIN,
+                  r"onOpenScanner\s*=",
+                  r"onOpenImporter\s*=",
+              )
+              scanner_changed = scanner_changed or section_changed(
+                  MAIN,
+                  r"onOpenNetworkTest\s*=",
+                  r"onOpenStartDestination\s*=",
+              )
+              scanner_changed = scanner_changed or section_changed(
+                  MAIN,
+                  r"composable\(Routes\.NETWORK_TEST\)\s*\{",
+                  r"composable\(Routes\.DIAGNOSTICS\)\s*\{",
+              )
+              scanner_changed = scanner_changed or matching_lines_changed(
+                  MAIN,
+                  r"const\s+val\s+(?:SCANNER|NETWORK_TEST)\s*=",
+              )
+              scanner_changed = scanner_changed or matching_lines_changed(
+                  MAIN,
+                  r"AppStartDestination\.SCANNER\s*->\s*Routes\.SCANNER",
+              )
+
+          scanner_changed = scanner_changed or any_definition_changed(
+              MODELS,
+              [
+                  r"data\s+class\s+ScannerProxySettings\b",
+                  r"data\s+class\s+ScannerLearnedQuery\b",
+                  r"data\s+class\s+PlaylistCandidate\b",
+                  r"enum\s+class\s+ScannerProviderScope\b",
+                  r"enum\s+class\s+ScannerSearchMode\b",
+                  r"data\s+class\s+ScannerSearchRequest\b",
+              ],
+          )
+
+          scanner_store_keys = [
+              "scannerAiEnabled",
+              "scannerProxyEnabled",
+              "scannerProxyHost",
+              "scannerProxyPort",
+              "scannerProxyUsername",
+              "scannerProxyPassword",
+              "scannerLearnedQueries",
+          ]
+          scanner_changed = scanner_changed or any_definition_changed(
+              SETTINGS_STORE,
+              [rf"(?:private\s+)?val\s+{re.escape(name)}\b" for name in scanner_store_keys],
+          )
+
+          scanner_repo_functions = [
+              "observeScannerAiEnabled",
+              "observeScannerProxySettings",
+              "observeScannerLearnedQueries",
+              "setScannerAiEnabled",
+              "setScannerProxySettings",
+              "recordScannerLearning",
+              "clearScannerLearning",
+          ]
+          scanner_changed = scanner_changed or any_definition_changed(
+              SETTINGS_REPO,
+              [rf"(?:suspend\s+)?fun\s+{name}\s*\(" for name in scanner_repo_functions],
+          )
+
+          scanner_vm_functions = [
+              "setScannerAiEnabled",
+              "setScannerProxyEnabled",
+              "updateScannerProxyHost",
+              "updateScannerProxyPort",
+              "updateScannerProxyUsername",
+              "updateScannerProxyPassword",
+              "saveScannerProxySettings",
+          ]
+          scanner_changed = scanner_changed or any_definition_changed(
+              SETTINGS_VM,
+              [rf"fun\s+{name}\s*\(" for name in scanner_vm_functions],
+          )
+          scanner_changed = scanner_changed or section_changed(
+              SETTINGS_VM,
+              r"val\s+scannerAiEnabled\s*:",
+              r"val\s+parentalEnabled\s*:",
+          )
+          scanner_changed = scanner_changed or section_changed(
+              SETTINGS_VM,
+              r"settingsRepository\.observeScannerAiEnabled\(\)",
+              r"settingsRepository\.observeParentalControlSettings\(\)",
+          )
+          scanner_changed = scanner_changed or section_changed(
+              SETTINGS_SCREEN,
+              r"expanded\s*=\s*showAiScanner,",
+              r"expanded\s*=\s*showPlayerSettings,",
+          )
+
+          scanner_changed = scanner_changed or definition_changed(
+              REPOSITORY_MODULE,
+              r"abstract\s+fun\s+bindScannerRepository\s*\(",
+              include_annotations=True,
+          )
+          scanner_changed = scanner_changed or definition_changed(
+              REPOSITORIES,
+              r"class\s+ScannerRepositoryImpl\b",
+          )
+          scanner_repository_functions = scanner_repo_functions + [
+              "encodeScannerLearnedQueries",
+              "decodeScannerLearnedQueries",
+          ]
+          scanner_changed = scanner_changed or any_definition_changed(
+              REPOSITORIES,
+              [rf"(?:override\s+)?(?:suspend\s+)?fun\s+{name}\s*\(" for name in scanner_repository_functions],
+          )
+
+          scanner_recommended_calls = {
+              "setScannerAiEnabled",
+              "setScannerProxySettings",
+          }
+          scanner_changed = scanner_changed or calls_changed(
+              SETTINGS_VM,
+              r"fun\s+applyRecommendedSettings\s*\(",
+              scanner_recommended_calls,
+          )
+
+          if scanner_changed:
+              print(
+                  "Player changes must not modify Scanner production/query/discovery/model/network/settings contracts.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print("Player/Scanner/P2P ownership boundary passed.")
+          PY
+
+      - name: Verify exact checked-out revision
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Player and Scanner regression tests
+        run: |
+          ./gradlew \
+            :feature:player:testDebugUnitTest \
+            :core:player:testDebugUnitTest \
+            :core:player-vlc:testDebugUnitTest \
+            :feature:scanner:testDebugUnitTest \
+            :feature:settings:testDebugUnitTest \
+            :core:network:testDebugUnitTest \
+            :core:data:testDebugUnitTest \
+            :core:domain:test \
+            --stacktrace

@@ -6,10 +6,10 @@ This is the canonical current-state and next-action document. Dated field report
 
 ## Current integration head
 
-- Current production `main`: `68ddecb` — PR #180 aggregate collector/summary hardening, merged only after exact-head Database Unit CI #34 and Android CI #735 completed successfully.
-- PR #174–#180 are merged: portable Favorites backup/import/export and source preference, virtual All Channels/Recent views, catalog focus/non-blocking rebuild hardening, and shared/coalesced virtual aggregate summaries.
-- Catalog/Favorites and EPG UI work do not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
-- Historical diagnostic and already-pruned branches are not production merge candidates.
+- Current production `main`: `f91bf16c` — PR #182 Ready catalog live-refresh hardening, merged only after exact-head Database Unit CI #66, Android CI #777 including signed ARM TV APK artifacts, and clean Codex review.
+- PR #174–#182 are merged: portable Favorites backup/import/export and source preference, virtual All Channels/Recent views, catalog focus/non-blocking rebuild hardening, shared/coalesced virtual aggregate summaries, calendar-safe EPG day windows, and exactly three live Ready playlists with atomic refresh/reconciliation.
+- Catalog/Favorites, EPG and Player architecture work do not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
+- Historical merged feature branches are not production merge candidates and should be deleted after their changes are verified in `main`.
 
 ## Issue #45 — canonical catalog + autonomous unified Favorites
 
@@ -38,14 +38,61 @@ The catalog/data track is developed as small fresh-main increments. Scanner disc
 
 ### Current development state
 
-Issue #45's planned aggregate collector/summary hardening is complete in `main`. The active production track has moved to Issue #47 (EPG/Now-Next/archive), starting with calendar-correct guide date windows on a fresh-main branch.
+Issue #45's aggregate collector/summary work is complete in `main`. Ready-catalog reconciliation and Favorites integration were additionally hardened in PR #182. Catalog work stays stable unless a measured regression or a planned capability requires reopening it.
+
+## Issue #47 — EPG / Now-Next / archive
+
+### Complete
+
+1. **PR #181 — calendar-safe EPG day windows.** TODAY/TOMORROW follow local civil-day boundaries instead of fixed 24-hour arithmetic, including DST/skipped-midnight regressions.
 
 ### Next production increments
 
-1. **EPG date-window correctness — Issue #47.** Treat TODAY/TOMORROW as local civil-day boundaries rather than fixed 24-hour durations, with DST regressions.
-2. **EPG matching safety — Issue #47.** Preserve `tvg-id` and exact-name priority and stop silently choosing an arbitrary partial match when multiple XMLTV channels are plausible.
-3. **EPG diagnostics/cache/archive capability — Issue #47.** Continue matched/unmatched diagnostics, resilient refresh/cache behavior and real catch-up capability contracts in small independent increments.
-4. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
+1. **EPG matching safety.** Preserve `tvg-id` and exact-name priority and stop silently choosing an arbitrary partial match when multiple XMLTV channels are plausible.
+2. **EPG diagnostics/cache/archive capability.** Continue matched/unmatched diagnostics, resilient refresh/cache behavior and real catch-up capability contracts in small independent increments.
+3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
+
+## Issue #46 — Player UX, buffering and architecture
+
+Player work is split into small fresh-main increments. Refactoring must preserve playback behavior first; performance-policy changes are separate commits/PRs so regressions remain attributable.
+
+### Production routing and architecture debt
+
+`MainActivity` routes the application to `StablePlayerScreen`, implemented in `feature/player/StablePlayerScreenReplacement.kt`. That production route, not the older `PlayerScreen.kt`, is the refactor and performance target.
+
+- `feature/player/StablePlayerScreenReplacement.kt` — roughly 66 KB: production root composition, channel filtering, panels, layout selection and remote-action policy still share one file.
+- `feature/player/StablePlayerInput.kt` — production Android View/touch/key lifecycle; it must remain aligned with the `stableRemoteActionForKey` policy used by the real video surfaces.
+- `feature/player/PlayerViewModel.kt` — roughly 113 KB: broad `PlayerUiState`, playback orchestration, catalog/EPG state and frequent state updates in one ViewModel.
+- `feature/player/PlayerScreen.kt` — roughly 108 KB legacy composable. Do not spend refactor budget on it unless routing is explicitly migrated back to it or the legacy path is being retired.
+- Other large candidates include `ScannerViewModel.kt`, `EditorViewModel.kt`, `PublicRepositoryScannerDataSource.kt`, `SettingsScreen.kt` and `ImporterViewModel.kt`.
+
+The target is not class-heavy OOP. For Kotlin/Compose, apply SOLID/bounded responsibilities with small interfaces, coordinators/policies where stateful behavior belongs, pure helpers for deterministic logic and focused composables for presentation.
+
+### Refactor sequence
+
+1. **Production Player input boundary — active, PR #183.** Keep `StablePlayerInputHandler` as the Android lifecycle/gesture adapter, extract deterministic input contracts/policy, keep `stableRemoteActionForKey` as the production key mapping source of truth, and protect Player refactors with an exact-head Scanner boundary/regression gate.
+2. **Production StablePlayer composition split.** Mechanically split `StablePlayerScreenReplacement.kt` into bounded UI responsibilities (shell/navigation, channel browser/list, panels/settings and presentation helpers) without changing playback semantics, search/filter semantics or state ownership.
+3. **Player state/recomposition split.** Separate hot playback/engine telemetry from large catalog/EPG/browser state, reduce root `PlayerUiState` invalidation, move expensive derived channel models/indexes out of root composition, and publish only distinct state changes.
+4. **RAM-bounded Auto buffer.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV `ChannelHealth.UNSTABLE`, increase only time-based Media3 recovery/min-buffer thresholds while preserving existing device/multiview byte caps. Manual remains explicit. Ace/P2P buffer policy is excluded without Issue #159 device evidence.
+5. **Measured Player performance pass.** Address remaining main-thread/state churn only from deterministic evidence or profiling, keeping each optimization independently testable.
+6. **Large-file follow-up.** Apply the same responsibility-first decomposition pattern to Scanner, Editor, Importer and Settings in separate bounded-context PRs; do not combine unrelated modules in one rewrite.
+
+### Refactor invariants
+
+- Production Player routing is `StablePlayerScreen`; validate the actual routed implementation before every architectural change.
+- No second playback runtime.
+- No behavioral change in a mechanical file split.
+- No P2P/Ace peer/DHT/request/buffer change from a generic Player refactor.
+- Keep TV/D-pad focus behavior, Back behavior, selected-channel identity and playback-session ownership stable.
+- Keep production remote mapping (`stableRemoteActionForKey`) and `StablePlayerInputHandler` behavior aligned; do not maintain a parallel legacy remote policy as a substitute for production tests.
+- Player architecture work must not modify Scanner discovery/query/search semantics.
+- Prefer extracted pure functions/data classes and small composables over inheritance hierarchies.
+- Introduce interfaces/classes only when they own a real contract, lifecycle or policy.
+- Every refactor PR starts from fresh `main`, has focused regression coverage and merges only after exact-head gates are green.
+
+## Ready catalog — PR #182 complete
+
+The built-in Ready catalog contains exactly three live presets. READY_CATALOG refreshes are network-backed and atomic, refresh playlist/EPG metadata from downloaded M3U data, preserve exact stream identity and valid source variants, reconcile Favorite source variants safely, and route scheduled refresh through the same live downloader. Manual/Scanner imports remain independent from READY_CATALOG.
 
 ## Portable Favorites contract
 
@@ -77,7 +124,7 @@ The current P2P transport policy remains evidence-driven. The latest canonical f
 
 Already-completed hardening includes terminal peer-pool ownership, production-lifetime DHT routing memory, warm-query scheduling, progress-aware direct handoff/fallback, deterministic A→B→C ownership, player-session terminal summaries and bounded MPEG-TS/continuous-fixture diagnostics.
 
-The remaining field gate is real-device evidence for producer-stage / rapid-switch behavior and the separate player/TS boundary. Do **not** infer new peer/request/buffer policy from catalog/Favorites/EPG CI.
+The remaining field gate is real-device evidence for producer-stage / rapid-switch behavior and the separate player/TS boundary. Do **not** infer new peer/request/buffer policy from catalog/Favorites/EPG/Player-refactor CI.
 
 ### Binding P2P constraints
 
@@ -95,11 +142,13 @@ The remaining field gate is real-device evidence for producer-stage / rapid-swit
 For normal Android integration work on the exact PR head:
 
 1. `lintDebug`
-2. relevant unit modules, including `:core:data:testDebugUnitTest` for Favorites/data work and `:feature:epg:testDebugUnitTest` for EPG UI/date-navigation work
+2. relevant unit modules, including `:core:data:testDebugUnitTest` for Favorites/data work, `:feature:epg:testDebugUnitTest` for EPG work and `:feature:player:testDebugUnitTest` for Player work
 3. `:feature:playlists:testDebugUnitTest` for canonical catalog changes
 4. `:app:assembleDebug`
 5. `:app:assembleDebugAndroidTest`
 6. signed ARM TV APK build/artifacts in the full Android workflow
+
+Player architecture PRs additionally use `Player Refactor Guard`: checkout `github.event.pull_request.head.sha`, verify `git rev-parse HEAD` equals that exact SHA, reject `feature/scanner`/`core/scanner` production changes, and run both Player and Scanner unit suites.
 
 Database/Favorites persistence work additionally uses the dedicated Database Unit CI (`:core:database:testDebugUnitTest` + `:core:data:testDebugUnitTest`).
 
@@ -107,16 +156,17 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 
 ## Decision order
 
-1. Keep PR #180's merged aggregate collector/summary baseline stable; do not reopen catalog performance work without a measured regression or a new planned capability.
-2. Continue Issue #47 as fresh-main EPG increments: calendar-correct day navigation, then unambiguous matching/diagnostics and real catch-up/archive capability.
-3. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
-4. Continue Player UX #46 on top of stable catalog/EPG contracts without introducing a second playback runtime.
-5. Complete hardware/soak/release acceptance before closing master roadmap #44.
+1. Keep PR #182's merged Ready/catalog/Favorites baseline stable; do not reopen it without a measured regression or planned capability.
+2. Execute Issue #46 against the production StablePlayer route: finish the input boundary, split `StablePlayerScreenReplacement.kt`, then state/recomposition, RAM-bounded Auto buffer and measured performance work.
+3. Continue Issue #47 with unambiguous matching/diagnostics and real catch-up/archive capability in independent fresh-main increments when it does not conflict with the active Player files.
+4. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
+5. Refactor other oversized Scanner/Editor/Importer/Settings files only as separate bounded-context PRs after establishing the production Player decomposition pattern.
+6. Complete hardware/soak/release acceptance before closing master roadmap #44.
 
 ## Cross-track invariants
 
-- Catalog/Favorites/EPG work must not rewrite Scanner discovery/query semantics.
-- Catalog/Favorites/EPG work must not modify Ace Live peer/DHT/request/buffer policies without P2P field evidence.
+- Catalog/Favorites/EPG/Player architecture work must not rewrite Scanner discovery/query semantics.
+- Catalog/Favorites/EPG/Player architecture work must not modify Ace Live peer/DHT/request/buffer policies without P2P field evidence.
 - Logical favorite ownership must not depend on Room auto-generated channel/playlist row lifetime.
 - Source provenance and source variants must remain discoverable after logical deduplication.
 - A virtual aggregate must not masquerade as a destructively editable physical playlist.
