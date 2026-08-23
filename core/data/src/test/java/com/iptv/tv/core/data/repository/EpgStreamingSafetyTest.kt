@@ -140,6 +140,25 @@ class EpgStreamingSafetyTest {
     }
 
     @Test
+    fun candidateLoadingDropsDeferredStaleAfterLowMemoryFailure() {
+        val singleEntryCache = mutableMapOf("primary" to "stale-primary")
+        val results = loadEpgCandidatesFreshFirst(
+            candidates = listOf("primary", "fallback"),
+            loadFresh = { url ->
+                when (url) {
+                    "primary" -> throw IOException("timeout")
+                    "fallback" -> throw EpgLowMemoryException("low heap")
+                    else -> error("unexpected candidate")
+                }
+            },
+            captureStaleFallback = { url -> singleEntryCache[url] },
+            onLoadError = {}
+        ).toList()
+
+        assertTrue(results.isEmpty())
+    }
+
+    @Test
     fun candidateLoadingPrefersHealthyFallbackBeforeStalePrimary() {
         val attempts = mutableListOf<String>()
         val singleEntryCache = mutableMapOf("primary" to "stale-primary")
