@@ -63,3 +63,23 @@ internal val MIGRATION_9_10 = object : Migration(9, 10) {
         MIGRATION_9_10_SQL.forEach(db::execSQL)
     }
 }
+
+/**
+ * Persists explicit per-channel M3U catch-up metadata without enabling archive playback.
+ *
+ * Existing channels remain live-only by default. catchUpDaysDeclared is separate from catchUpDays
+ * so an invalid declared range remains distinguishable from an absent catchup-days attribute after
+ * process restart.
+ */
+internal val MIGRATION_10_11_SQL = listOf(
+    "ALTER TABLE channels ADD COLUMN catchUpMode TEXT",
+    "ALTER TABLE channels ADD COLUMN catchUpDays INTEGER",
+    "ALTER TABLE channels ADD COLUMN catchUpSourceTemplate TEXT",
+    "ALTER TABLE channels ADD COLUMN catchUpDaysDeclared INTEGER NOT NULL DEFAULT 0"
+)
+
+internal val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        MIGRATION_10_11_SQL.forEach(db::execSQL)
+    }
+}

@@ -106,6 +106,13 @@ data class PlaylistContentSummary(
     val channelPreviews: List<ChannelPreview>
 )
 
+data class ChannelCatchUpMetadata(
+    val mode: String?,
+    val days: Int?,
+    val sourceTemplate: String?,
+    val daysDeclared: Boolean = days != null
+)
+
 data class Channel(
     val id: Long,
     val playlistId: Long,
@@ -116,7 +123,8 @@ data class Channel(
     val streamUrl: String,
     val health: ChannelHealth,
     val orderIndex: Int,
-    val isHidden: Boolean
+    val isHidden: Boolean,
+    val catchUp: ChannelCatchUpMetadata? = null
 )
 
 data class EpgProgram(

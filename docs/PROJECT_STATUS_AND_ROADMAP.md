@@ -6,8 +6,8 @@ This is the canonical current-state and next-action document. Dated field report
 
 ## Current integration head
 
-- Current production `main`: `b2c57a0a` — PR #189 explicit M3U catch-up metadata boundary, merged after exact-head Android CI #836 and resolution of the false-positive archive-capability review finding.
-- PR #174–#187 and PR #189 are merged. PR #186 continued the production StablePlayer presentation/composition split, PR #187 made XMLTV partial matching fail closed on ambiguity, and PR #189 preserved explicit per-channel catch-up metadata without enabling archive playback. PR #188 was a closed, unmerged staging attempt and is not production history.
+- Current production `main`: `3f319981` — PR #190 safe catch-up playback capability contract, merged after exact-head Android CI #849, Database Unit CI #94, Player Refactor Guard #50 and resolution of all review findings.
+- PR #174–#187 and PR #189–#190 are merged. PR #186 continued the production StablePlayer presentation/composition split, PR #187 made XMLTV partial matching fail closed on ambiguity, PR #189 preserved explicit per-channel catch-up metadata, and PR #190 added a bounded fail-closed archive URL resolver without Player launch wiring. PR #188 was a closed, unmerged staging attempt and is not production history.
 - Catalog/Favorites, EPG and Player architecture work do not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
 - Historical merged feature branches are not production merge candidates and should be deleted after their changes are verified in `main`.
 
@@ -47,11 +47,12 @@ Issue #45's aggregate collector/summary work is complete in `main`. Ready-catalo
 1. **PR #181 — calendar-safe EPG day windows.** TODAY/TOMORROW follow local civil-day boundaries instead of fixed 24-hour arithmetic, including DST/skipped-midnight regressions.
 2. **PR #187 — ambiguity-safe EPG matching.** Preserve `tvg-id`, exact display-name and exact channel-id priority; partial fallback accepts only one distinct XMLTV candidate and fails closed when multiple channels are plausible, including normalized-key collisions.
 3. **PR #189 — explicit M3U catch-up metadata boundary.** Preserve standalone `catchup`, `catchup-days` and `catchup-source` attributes per parsed channel, reject URL/title false positives, and keep live-only channels archive-disabled.
+4. **PR #190 — safe catch-up playback capability contract.** Resolve only explicit supported provider metadata into deterministic archive URLs and fail closed on unknown modes/placeholders, malformed declared ranges, URL-fragment hazards or invalid/out-of-window programme intervals; no Player launch wiring yet.
 
 ### Next production increments
 
-1. **PR #190 — catch-up playback capability contract — active.** Resolve only explicit supported provider metadata into deterministic archive URLs and fail closed on unknown modes/placeholders, malformed declared ranges, URL-fragment hazards or invalid/out-of-window programme intervals; no Player launch wiring yet.
-2. **Catch-up persistence + diagnostics/cache.** Persist verified capability metadata across import/Ready refresh, then continue matched/unmatched diagnostics and resilient EPG refresh/cache behavior.
+1. **PR #191 — catch-up capability persistence — active.** Persist explicit per-channel catch-up metadata through the normal Channel/Room contract, generic import and Ready refresh, preserving invalid-declared range state and clearing retired publisher capability without enabling Player launch.
+2. **EPG diagnostics/cache.** Continue matched/unmatched diagnostics and resilient EPG refresh/cache behavior in independent fresh-main increments.
 3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
 
 ## Issue #46 — Player UX, buffering and architecture
@@ -160,7 +161,7 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 
 1. Keep PR #182's merged Ready/catalog/Favorites baseline stable; do not reopen it without a measured regression or planned capability.
 2. Continue Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183 and the first composition split landed in PR #186; continue bounded composition extraction before state/recomposition, RAM-bounded Auto buffer and measured performance work.
-3. Continue Issue #47 from PR #189 with PR #190's safe catch-up playback contract, then persist verified catch-up capability and continue diagnostics/cache in independent fresh-main increments.
+3. Continue Issue #47 from merged PR #190 with PR #191 catch-up persistence, then continue diagnostics/cache in independent fresh-main increments.
 4. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
 5. Refactor other oversized Scanner/Editor/Importer/Settings files only as separate bounded-context PRs after establishing the production Player decomposition pattern.
 6. Complete hardware/soak/release acceptance before closing master roadmap #44.

@@ -50,7 +50,12 @@ data class ChannelEntity(
     val streamUrl: String,
     val health: String,
     val orderIndex: Int,
-    val isHidden: Boolean
+    val isHidden: Boolean,
+    val catchUpMode: String? = null,
+    val catchUpDays: Int? = null,
+    val catchUpSourceTemplate: String? = null,
+    @ColumnInfo(defaultValue = "0")
+    val catchUpDaysDeclared: Boolean = false
 )
 
 @Entity(

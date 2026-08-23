@@ -80,7 +80,11 @@ internal object ReadyPlaylistRefreshPlanner {
                     ChannelHealth.UNKNOWN.name
                 },
                 orderIndex = index,
-                isHidden = matched?.isHidden ?: false
+                isHidden = matched?.isHidden ?: false,
+                catchUpMode = channel.catchUp?.mode,
+                catchUpDays = channel.catchUp?.days,
+                catchUpSourceTemplate = channel.catchUp?.sourceTemplate,
+                catchUpDaysDeclared = channel.catchUp?.daysDeclared == true
             )
         }
         val staleIds = existing

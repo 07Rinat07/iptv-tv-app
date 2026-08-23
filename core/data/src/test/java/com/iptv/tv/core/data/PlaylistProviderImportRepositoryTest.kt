@@ -227,6 +227,41 @@ class PlaylistProviderImportRepositoryTest {
     }
 
     @Test
+    fun importFromTextPersistsCatchUpMetadataAfterDedupAndReindex() = runTest {
+        val result = repository.importFromText(
+            text = """
+                #EXTM3U
+                #EXTINF:-1 tvg-id="duplicate",Duplicate
+                https://example.test/live/duplicate
+                #EXTINF:-1 tvg-id="duplicate-copy",Duplicate copy
+                https://example.test/live/duplicate
+                #EXTINF:-1 tvg-id="archive" catchup="append" catchup-days="7" catchup-source="?utc=${'$'}{start}&lutc=${'$'}{timestamp}",Archive
+                https://example.test/live/archive
+                #EXTINF:-1 tvg-id="bad-range" catchup="default" catchup-days="seven" catchup-source="https://archive.test/replay?start={utc}",Broken range
+                https://example.test/live/bad-range
+            """.trimIndent(),
+            name = "Catch-up"
+        )
+
+        assertImportSuccess(result)
+        assertEquals(3, insertedChannels.captured.size)
+
+        val archive = insertedChannels.captured.first { it.tvgId == "archive" }
+        assertEquals(1, archive.orderIndex)
+        assertEquals("append", archive.catchUpMode)
+        assertEquals(7, archive.catchUpDays)
+        assertEquals("?utc=${'$'}{start}&lutc=${'$'}{timestamp}", archive.catchUpSourceTemplate)
+        assertTrue(archive.catchUpDaysDeclared)
+
+        val brokenRange = insertedChannels.captured.first { it.tvgId == "bad-range" }
+        assertEquals(2, brokenRange.orderIndex)
+        assertEquals("default", brokenRange.catchUpMode)
+        assertEquals(null, brokenRange.catchUpDays)
+        assertEquals("https://archive.test/replay?start={utc}", brokenRange.catchUpSourceTemplate)
+        assertTrue(brokenRange.catchUpDaysDeclared)
+    }
+
+    @Test
     fun importReadyPlaylistTextPersistsDedicatedSourceAndCatalogOrigin() = runTest {
         val sourceKey = "embedded://ready/ace-stream-tv-torrent-v1"
         val result = repository.importReadyPlaylistText(
