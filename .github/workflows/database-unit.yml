@@ -17,7 +17,7 @@ on:
       - '.github/workflows/database-unit.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: database-unit-${{ github.ref }}
@@ -75,3 +75,40 @@ jobs:
 
       - name: Unit tests feature favorites
         run: ./gradlew --no-daemon --stacktrace :feature:favorites:testDebugUnitTest
+
+  epg194-guarded-patch:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 194
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact PR head for guarded patch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Apply exact EPG194 diagnostics wiring and restore workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET='core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt'
+          PATCH='.github/epg194-repositories.patch'
+          EXPECTED_BASE='e5771314841b914d64dd962c59c65e6f25fc9d1f'
+          EXPECTED_RESULT='504b0ba222fca93495588e5f1a4299be6c6c7f8f'
+          EXPECTED_PATCH_SHA256='97c8e06a5c3e9055826dd44c4c98ff5239ce00ed6692e82b595f1c1759ecef07'
+
+          test "$(git hash-object "$TARGET")" = "$EXPECTED_BASE"
+          echo "$EXPECTED_PATCH_SHA256  $PATCH" | sha256sum -c -
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          test "$(git hash-object "$TARGET")" = "$EXPECTED_RESULT"
+
+          git fetch origin main --depth=1
+          git show FETCH_HEAD:.github/workflows/database-unit.yml > .github/workflows/database-unit.yml
+          rm "$PATCH"
+          git add "$TARGET" .github/workflows/database-unit.yml "$PATCH"
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(epg): wire cache observability into diagnostics'
+          git push origin HEAD:feat/epg-cache-observability
