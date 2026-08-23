@@ -747,7 +747,7 @@ class PlaylistRepositoryImpl @Inject constructor(
         }
 
         var lastLoadError: Throwable? = null
-        for ((epgUrl, epgEntry) in loadEpgCandidatesFreshFirst(
+        for ((epgUrl, epgEntry, _) in loadEpgCandidatesFreshFirst(
             candidates = candidates,
             loadFresh = ::getOrLoadXmlTv,
             captureStaleFallback = ::staleEpgEntryForActiveTransientBackoff,
@@ -815,7 +815,7 @@ class PlaylistRepositoryImpl @Inject constructor(
 
             var firstLoadedDiagnostics: PlaylistEpgDiagnostics? = null
             var lastLoadError: Throwable? = null
-            for ((epgUrl, epgEntry) in loadEpgCandidatesFreshFirst(
+            for ((epgUrl, epgEntry, servedFromStaleFallback) in loadEpgCandidatesFreshFirst(
                 candidates = candidates,
                 loadFresh = ::getOrLoadXmlTv,
                 captureStaleFallback = ::staleEpgEntryForActiveTransientBackoff,
@@ -826,9 +826,8 @@ class PlaylistRepositoryImpl @Inject constructor(
                 val cacheStatus = EpgDiagnosticsCacheStatusPolicy.observe(
                     loadedAtMs = epgEntry.loadedAtMs,
                     nowMs = diagnosticsNowMs,
-                    freshTtlMs = EPG_CACHE_TTL_MS,
-                    maxStaleAgeMs = EPG_STALE_FALLBACK_MAX_AGE_MS,
-                    activeFailure = epgFailureBackoff.active(epgUrl)
+                    servedFromStaleFallback = servedFromStaleFallback,
+                    activeFailure = epgFailureBackoff.peekActive(epgUrl)
                 )
                 val diagnostics = EpgMatchDiagnosticsPolicy.summarize(
                     playlistId = playlistId,
@@ -892,7 +891,7 @@ class PlaylistRepositoryImpl @Inject constructor(
             .toList()
         var lastLoadError: Throwable? = null
 
-        for ((epgUrl, epgEntry) in loadEpgCandidatesFreshFirst(
+        for ((epgUrl, epgEntry, _) in loadEpgCandidatesFreshFirst(
             candidates = candidates,
             loadFresh = ::getOrLoadXmlTv,
             captureStaleFallback = ::staleEpgEntryForActiveTransientBackoff,
