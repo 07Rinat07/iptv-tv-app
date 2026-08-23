@@ -14,6 +14,7 @@ import com.iptv.tv.core.database.entity.SyncLogEntity
 import com.iptv.tv.core.database.entity.TvHomeChannelEntity
 import com.iptv.tv.core.data.repository.DownloadSourceClassifier
 import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.ChannelCatchUpMetadata
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.ChannelMetadata
 import com.iptv.tv.core.model.CatalogOriginKind
@@ -64,7 +65,8 @@ fun ChannelEntity.toModel(): Channel {
         streamUrl = streamUrl,
         health = ChannelHealth.valueOf(health),
         orderIndex = orderIndex,
-        isHidden = isHidden
+        isHidden = isHidden,
+        catchUp = persistedCatchUpMetadata()
     )
 }
 
@@ -79,7 +81,28 @@ fun Channel.toEntity(): ChannelEntity {
         streamUrl = streamUrl,
         health = health.name,
         orderIndex = orderIndex,
-        isHidden = isHidden
+        isHidden = isHidden,
+        catchUpMode = catchUp?.mode,
+        catchUpDays = catchUp?.days,
+        catchUpSourceTemplate = catchUp?.sourceTemplate,
+        catchUpDaysDeclared = catchUp?.daysDeclared == true
+    )
+}
+
+private fun ChannelEntity.persistedCatchUpMetadata(): ChannelCatchUpMetadata? {
+    if (
+        catchUpMode == null &&
+        catchUpDays == null &&
+        catchUpSourceTemplate == null &&
+        !catchUpDaysDeclared
+    ) {
+        return null
+    }
+    return ChannelCatchUpMetadata(
+        mode = catchUpMode,
+        days = catchUpDays,
+        sourceTemplate = catchUpSourceTemplate,
+        daysDeclared = catchUpDaysDeclared
     )
 }
 
