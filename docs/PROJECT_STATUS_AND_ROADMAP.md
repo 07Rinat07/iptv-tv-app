@@ -1,13 +1,13 @@
 # Project status and roadmap
 
-_Last updated: 2026-08-22_
+_Last updated: 2026-08-23_
 
 This is the canonical current-state and next-action document. Dated field reports remain immutable evidence; when an older plan describes a different current increment, this page wins.
 
 ## Current integration head
 
-- Current production `main`: `f91bf16c` — PR #182 Ready catalog live-refresh hardening, merged only after exact-head Database Unit CI #66, Android CI #777 including signed ARM TV APK artifacts, and clean Codex review.
-- PR #174–#182 are merged: portable Favorites backup/import/export and source preference, virtual All Channels/Recent views, catalog focus/non-blocking rebuild hardening, shared/coalesced virtual aggregate summaries, calendar-safe EPG day windows, and exactly three live Ready playlists with atomic refresh/reconciliation.
+- Current production `main`: `de42ae6b` — PR #184 producer-stage field-evidence classifier, merged after exact-head Android CI #808, Playback latency tooling #16, P2P Field Tools #5 and resolved review findings.
+- PR #174–#184 are merged. After the Ready/catalog/Favorites and calendar-safe EPG work, PR #183 isolated the production Player input policy/guard and PR #184 added observational P2P field-analysis tooling without changing Ace Live runtime policy.
 - Catalog/Favorites, EPG and Player architecture work do not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
 - Historical merged feature branches are not production merge candidates and should be deleted after their changes are verified in `main`.
 
@@ -70,8 +70,8 @@ The target is not class-heavy OOP. For Kotlin/Compose, apply SOLID/bounded respo
 
 ### Refactor sequence
 
-1. **Production Player input boundary — active, PR #183.** Keep `StablePlayerInputHandler` as the Android lifecycle/gesture adapter, extract deterministic input contracts/policy, keep `stableRemoteActionForKey` as the production key mapping source of truth, and protect Player refactors with an exact-head Scanner boundary/regression gate.
-2. **Production StablePlayer composition split.** Mechanically split `StablePlayerScreenReplacement.kt` into bounded UI responsibilities (shell/navigation, channel browser/list, panels/settings and presentation helpers) without changing playback semantics, search/filter semantics or state ownership.
+1. **Production Player input boundary — complete, PR #183.** `StablePlayerInputHandler` remains the Android lifecycle/gesture adapter, deterministic input contracts/policy are extracted, `stableRemoteActionForKey` remains the production key mapping source of truth, and Player refactors are protected by an exact-head Scanner boundary/regression gate.
+2. **Production StablePlayer composition split — next.** Mechanically split `StablePlayerScreenReplacement.kt` into bounded UI responsibilities (shell/navigation, channel browser/list, panels/settings and presentation helpers) without changing playback semantics, search/filter semantics or state ownership.
 3. **Player state/recomposition split.** Separate hot playback/engine telemetry from large catalog/EPG/browser state, reduce root `PlayerUiState` invalidation, move expensive derived channel models/indexes out of root composition, and publish only distinct state changes.
 4. **RAM-bounded Auto buffer.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV `ChannelHealth.UNSTABLE`, increase only time-based Media3 recovery/min-buffer thresholds while preserving existing device/multiview byte caps. Manual remains explicit. Ace/P2P buffer policy is excluded without Issue #159 device evidence.
 5. **Measured Player performance pass.** Address remaining main-thread/state churn only from deterministic evidence or profiling, keeping each optimization independently testable.
@@ -122,7 +122,7 @@ A future shareable HTTP/LAN URL is a separate feature after portable backup/impo
 
 The current P2P transport policy remains evidence-driven. The latest canonical field evidence is the 2026-08-20 TV Box track summarized in [`testing/playback-log-analysis-2026-08-20.md`](testing/playback-log-analysis-2026-08-20.md).
 
-Already-completed hardening includes terminal peer-pool ownership, production-lifetime DHT routing memory, warm-query scheduling, progress-aware direct handoff/fallback, deterministic A→B→C ownership, player-session terminal summaries and bounded MPEG-TS/continuous-fixture diagnostics.
+Already-completed hardening includes terminal peer-pool ownership, production-lifetime DHT routing memory, warm-query scheduling, progress-aware direct handoff/fallback, deterministic A→B→C ownership, player-session terminal summaries and bounded MPEG-TS/continuous-fixture diagnostics. PR #184 additionally provides deterministic producer-stage field-evidence classification across correlated runtime/gap diagnostics, including bounded observation-window deltas and zero-event scheduler stalls; this tooling is observational and does not authorize transport-policy changes.
 
 The remaining field gate is real-device evidence for producer-stage / rapid-switch behavior and the separate player/TS boundary. Do **not** infer new peer/request/buffer policy from catalog/Favorites/EPG/Player-refactor CI.
 
@@ -157,7 +157,7 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 ## Decision order
 
 1. Keep PR #182's merged Ready/catalog/Favorites baseline stable; do not reopen it without a measured regression or planned capability.
-2. Execute Issue #46 against the production StablePlayer route: finish the input boundary, split `StablePlayerScreenReplacement.kt`, then state/recomposition, RAM-bounded Auto buffer and measured performance work.
+2. Execute Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183; next split `StablePlayerScreenReplacement.kt`, then state/recomposition, RAM-bounded Auto buffer and measured performance work.
 3. Continue Issue #47 with unambiguous matching/diagnostics and real catch-up/archive capability in independent fresh-main increments when it does not conflict with the active Player files.
 4. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
 5. Refactor other oversized Scanner/Editor/Importer/Settings files only as separate bounded-context PRs after establishing the production Player decomposition pattern.
