@@ -1,0 +1,28 @@
+--- a/core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt
++++ b/core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt
+@@ -822,6 +822,14 @@
+                 onLoadError = { lastLoadError = it }
+             )) {
+                 val epgData = epgEntry.data
++                val diagnosticsNowMs = System.currentTimeMillis()
++                val cacheStatus = EpgDiagnosticsCacheStatusPolicy.observe(
++                    loadedAtMs = epgEntry.loadedAtMs,
++                    nowMs = diagnosticsNowMs,
++                    freshTtlMs = EPG_CACHE_TTL_MS,
++                    maxStaleAgeMs = EPG_STALE_FALLBACK_MAX_AGE_MS,
++                    activeFailure = epgFailureBackoff.active(epgUrl)
++                )
+                 val diagnostics = EpgMatchDiagnosticsPolicy.summarize(
+                     playlistId = playlistId,
+                     epgSourceUrl = epgUrl,
+@@ -837,6 +845,10 @@
+                             hasPrograms = match.programs.isNotEmpty()
+                         )
+                     }
++                ).copy(
++                    servedFromStaleFallback = cacheStatus.servedFromStaleFallback,
++                    cacheAgeMs = cacheStatus.cacheAgeMs,
++                    refreshRetryAtMs = cacheStatus.refreshRetryAtMs
+                 )
+                 if (firstLoadedDiagnostics == null) firstLoadedDiagnostics = diagnostics
+                 if (diagnostics.channelsWithPrograms > 0) {
