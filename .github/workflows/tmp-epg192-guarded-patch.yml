@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - feat/epg-match-diagnostics
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -28,6 +32,7 @@ jobs:
 
           path = Path('core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt')
           workflow = Path('.github/workflows/tmp-epg192-guarded-patch.yml')
+          trigger = Path('.github/tmp-epg192-trigger')
 
           def git_blob_sha(data: bytes) -> str:
               header = f'blob {len(data)}\0'.encode()
@@ -122,15 +127,17 @@ jobs:
 
           path.write_bytes(updated)
           workflow.unlink()
+          if trigger.exists():
+              trigger.unlink()
           print(f'guarded patch verified: {original_sha} -> {updated_sha}')
           PY
 
-      - name: Commit exact guarded patch and remove temporary workflow
+      - name: Commit exact guarded patch and remove temporary files
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt .github/workflows/tmp-epg192-guarded-patch.yml
+          git add -- core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt .github/workflows/tmp-epg192-guarded-patch.yml .github/tmp-epg192-trigger
           git diff --cached --check
           git commit -m "feat(epg): wire structured match diagnostics"
           git push origin HEAD:feat/epg-match-diagnostics
