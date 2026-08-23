@@ -83,25 +83,18 @@ class M3uParser {
 
     private fun parseMeta(extInf: String): ExtInfMeta {
         val payload = extInf.removePrefix("#EXTINF:")
-        val title = payload.substringAfter(',').ifBlank { "Unknown" }
-        fun attr(name: String): String? =
-            Regex("$name=\"([^\"]+)\"").find(extInf)?.groupValues?.getOrNull(1)
-        fun flexibleAttr(name: String): String? {
-            val escapedName = Regex.escape(name)
-            val match = Regex(
-                pattern = """\b$escapedName\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s,]+))""",
-                option = RegexOption.IGNORE_CASE
-            ).find(extInf) ?: return null
-            return match.groupValues
-                .drop(1)
-                .firstOrNull { it.isNotBlank() }
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
+        val titleSeparator = findExtInfTitleSeparator(payload)
+        val attributeSection = if (titleSeparator >= 0) payload.substring(0, titleSeparator) else payload
+        val title = if (titleSeparator >= 0) {
+            payload.substring(titleSeparator + 1).ifBlank { "Unknown" }
+        } else {
+            "Unknown"
         }
+        val attributes = parseExtInfAttributes(attributeSection)
 
-        val catchUpMode = flexibleAttr("catchup")
-        val catchUpDays = flexibleAttr("catchup-days")?.toIntOrNull()?.takeIf { it > 0 }
-        val catchUpSourceTemplate = flexibleAttr("catchup-source")
+        val catchUpMode = attributes["catchup"]
+        val catchUpDays = attributes["catchup-days"]?.toIntOrNull()?.takeIf { it > 0 }
+        val catchUpSourceTemplate = attributes["catchup-source"]
         val catchUp = if (catchUpMode != null || catchUpDays != null || catchUpSourceTemplate != null) {
             ChannelCatchUpMetadata(
                 mode = catchUpMode,
@@ -113,13 +106,50 @@ class M3uParser {
         }
 
         return ExtInfMeta(
-            tvgId = attr("tvg-id"),
-            group = attr("group-title"),
-            logo = attr("tvg-logo"),
+            tvgId = attributes["tvg-id"],
+            group = attributes["group-title"],
+            logo = attributes["tvg-logo"],
             name = title,
             catchUp = catchUp
         )
     }
+
+    private fun findExtInfTitleSeparator(payload: String): Int {
+        var quote: Char? = null
+        var escaped = false
+        for (index in payload.indices) {
+            val char = payload[index]
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            if (quote != null && char == '\\') {
+                escaped = true
+                continue
+            }
+            if (quote != null) {
+                if (char == quote) quote = null
+                continue
+            }
+            if (char == '"' || char == '\'') {
+                quote = char
+            } else if (char == ',') {
+                return index
+            }
+        }
+        return -1
+    }
+
+    private fun parseExtInfAttributes(attributeSection: String): Map<String, String> =
+        EXTINF_ATTRIBUTE_REGEX.findAll(attributeSection).associate { match ->
+            val name = match.groupValues[1].lowercase()
+            val value = match.groupValues
+                .drop(2)
+                .firstOrNull { it.isNotBlank() }
+                .orEmpty()
+                .trim()
+            name to value
+        }
 
     private fun parseHeaderEpgUrls(lines: List<String>): List<String> {
         val attributeRegex = Regex(
@@ -183,6 +213,10 @@ class M3uParser {
 
     private companion object {
         const val UTF8_BOM = "\uFEFF"
+        val EXTINF_ATTRIBUTE_REGEX = Regex(
+            pattern = """(?:^|\s)([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+))""",
+            option = RegexOption.IGNORE_CASE
+        )
     }
 }
 
