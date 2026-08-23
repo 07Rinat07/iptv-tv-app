@@ -192,4 +192,92 @@ class EpgStreamingSafetyTest {
             attempts
         )
     }
+
+    @Test
+    fun diagnosticsCacheStatusReportsFreshWithoutRetryMetadata() {
+        val status = EpgDiagnosticsCacheStatusPolicy.observe(
+            loadedAtMs = 1_000L,
+            nowMs = 1_500L,
+            freshTtlMs = 1_000L,
+            maxStaleAgeMs = 5_000L,
+            activeFailure = EpgFailureBackoffEntry(
+                failedAtMs = 1_200L,
+                retryAfterMs = 2_000L,
+                reason = "timeout",
+                kind = EpgFailureKind.TRANSIENT
+            )
+        )
+
+        assertTrue(!status.servedFromStaleFallback)
+        assertEquals(500L, status.cacheAgeMs)
+        assertNull(status.refreshRetryAtMs)
+    }
+
+    @Test
+    fun diagnosticsCacheStatusReportsTransientStaleFallbackAndRetryDeadline() {
+        val status = EpgDiagnosticsCacheStatusPolicy.observe(
+            loadedAtMs = 1_000L,
+            nowMs = 2_500L,
+            freshTtlMs = 1_000L,
+            maxStaleAgeMs = 5_000L,
+            activeFailure = EpgFailureBackoffEntry(
+                failedAtMs = 2_400L,
+                retryAfterMs = 2_000L,
+                reason = "HTTP 503",
+                kind = EpgFailureKind.TRANSIENT
+            )
+        )
+
+        assertTrue(status.servedFromStaleFallback)
+        assertEquals(1_500L, status.cacheAgeMs)
+        assertEquals(4_400L, status.refreshRetryAtMs)
+    }
+
+    @Test
+    fun diagnosticsCacheStatusKeepsStaleStateAfterBackoffExpires() {
+        val status = EpgDiagnosticsCacheStatusPolicy.observe(
+            loadedAtMs = 1_000L,
+            nowMs = 2_500L,
+            freshTtlMs = 1_000L,
+            maxStaleAgeMs = 5_000L,
+            activeFailure = null
+        )
+
+        assertTrue(status.servedFromStaleFallback)
+        assertEquals(1_500L, status.cacheAgeMs)
+        assertNull(status.refreshRetryAtMs)
+    }
+
+    @Test
+    fun diagnosticsCacheStatusDoesNotExposeRetryForPermanentOrExpiredData() {
+        val permanent = EpgDiagnosticsCacheStatusPolicy.observe(
+            loadedAtMs = 1_000L,
+            nowMs = 2_500L,
+            freshTtlMs = 1_000L,
+            maxStaleAgeMs = 5_000L,
+            activeFailure = EpgFailureBackoffEntry(
+                failedAtMs = 2_400L,
+                retryAfterMs = 2_000L,
+                reason = "HTTP 404",
+                kind = EpgFailureKind.PERMANENT_HTTP
+            )
+        )
+        val expired = EpgDiagnosticsCacheStatusPolicy.observe(
+            loadedAtMs = 1_000L,
+            nowMs = 6_001L,
+            freshTtlMs = 1_000L,
+            maxStaleAgeMs = 5_000L,
+            activeFailure = EpgFailureBackoffEntry(
+                failedAtMs = 6_000L,
+                retryAfterMs = 2_000L,
+                reason = "timeout",
+                kind = EpgFailureKind.TRANSIENT
+            )
+        )
+
+        assertTrue(permanent.servedFromStaleFallback)
+        assertNull(permanent.refreshRetryAtMs)
+        assertTrue(!expired.servedFromStaleFallback)
+        assertNull(expired.refreshRetryAtMs)
+    }
 }
