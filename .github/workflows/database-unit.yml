@@ -17,7 +17,7 @@ on:
       - '.github/workflows/database-unit.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: database-unit-${{ github.ref }}
@@ -75,85 +75,3 @@ jobs:
 
       - name: Unit tests feature favorites
         run: ./gradlew --no-daemon --stacktrace :feature:favorites:testDebugUnitTest
-
-
-  epg192-guarded-patch:
-    if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout exact PR head for guarded patch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      - name: Apply exact EPG192 wiring and restore workflow files
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        shell: bash
-        run: |
-          python3 - <<'PY_PATCH'
-          from pathlib import Path
-          import base64
-          import hashlib
-          import os
-          import subprocess
-
-          repo_path = Path('core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt')
-          carrier = Path('.github/workflows/database-unit.yml')
-          temp_workflow = Path('.github/workflows/tmp-epg192-guarded-patch.yml')
-          trigger = Path('.github/tmp-epg192-trigger')
-
-          def git_blob_sha(data: bytes) -> str:
-              return hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
-
-          original = repo_path.read_bytes()
-          original_sha = git_blob_sha(original)
-          expected_original = 'f41f054536d92d60aaad46c8449cacdb62881b08'
-          if original_sha != expected_original:
-              raise SystemExit(f'base repository blob mismatch: {original_sha} != {expected_original}')
-
-          text = original.decode('utf-8')
-          import_anchor = 'import com.iptv.tv.core.model.PlaylistImportReport\n'
-          if text.count(import_anchor) != 1:
-              raise SystemExit('PlaylistImportReport import anchor not unique')
-          text = text.replace(
-              import_anchor,
-              import_anchor + 'import com.iptv.tv.core.model.PlaylistEpgDiagnostics\n',
-              1,
-          )
-
-          method_anchor = '    override suspend fun getPlaylistEpgWindow(\n'
-          if text.count(method_anchor) != 1:
-              raise SystemExit('getPlaylistEpgWindow anchor not unique')
-          diagnostics_method = base64.b64decode('ICAgIG92ZXJyaWRlIHN1c3BlbmQgZnVuIGdldFBsYXlsaXN0RXBnRGlhZ25vc3RpY3MocGxheWxpc3RJZDogTG9uZyk6IEFwcFJlc3VsdDxQbGF5bGlzdEVwZ0RpYWdub3N0aWNzPiA9CiAgICAgICAgd2l0aENvbnRleHQoRGlzcGF0Y2hlcnMuSU8pIHsKICAgICAgICAgICAgaWYgKHBsYXlsaXN0SWQgPD0gMCkgcmV0dXJuQHdpdGhDb250ZXh0IEFwcFJlc3VsdC5FcnJvcigiSW52YWxpZCBwbGF5bGlzdCBpZCIpCgogICAgICAgICAgICB2YWwgcGxheWxpc3QgPSBwbGF5bGlzdERhby5maW5kQnlJZChwbGF5bGlzdElkKQogICAgICAgICAgICAgICAgPzogcmV0dXJuQHdpdGhDb250ZXh0IEFwcFJlc3VsdC5FcnJvcigiUGxheWxpc3Qgbm90IGZvdW5kOiBpZD0kcGxheWxpc3RJZCIpCiAgICAgICAgICAgIHZhbCBjYW5kaWRhdGVzID0gcmVzb2x2ZUVwZ0NhbmRpZGF0ZXMocGxheWxpc3QpCiAgICAgICAgICAgIGlmIChjYW5kaWRhdGVzLmlzRW1wdHkoKSkgewogICAgICAgICAgICAgICAgcmV0dXJuQHdpdGhDb250ZXh0IEFwcFJlc3VsdC5FcnJvcigKICAgICAgICAgICAgICAgICAgICAiRVBHIHNvdXJjZSBVUkwgaXMgbm90IGNvbmZpZ3VyZWQgYW5kIHdhcyBub3QgZGlzY292ZXJlZCBmb3IgcGxheWxpc3QgJHtwbGF5bGlzdC5pZH0iCiAgICAgICAgICAgICAgICApCiAgICAgICAgICAgIH0KCiAgICAgICAgICAgIHZhbCBwYXJlbnRhbEdhdGUgPSBjdXJyZW50UGFyZW50YWxDaGFubmVsR2F0ZSgpCiAgICAgICAgICAgIHZhbCBjaGFubmVscyA9IGNoYW5uZWxEYW8uZ2V0Q2hhbm5lbHMocGxheWxpc3RJZCkKICAgICAgICAgICAgICAgIC5hc1NlcXVlbmNlKCkKICAgICAgICAgICAgICAgIC5maWx0ZXIgeyAhaXQuaXNIaWRkZW4gfQogICAgICAgICAgICAgICAgLmZpbHRlck5vdCB7IGl0LmlzQmxvY2tlZEJ5UGFyZW50YWwocGFyZW50YWxHYXRlKSB9CiAgICAgICAgICAgICAgICAudG9MaXN0KCkKCiAgICAgICAgICAgIHZhciBmaXJzdExvYWRlZERpYWdub3N0aWNzOiBQbGF5bGlzdEVwZ0RpYWdub3N0aWNzPyA9IG51bGwKICAgICAgICAgICAgdmFyIGxhc3RMb2FkRXJyb3I6IFRocm93YWJsZT8gPSBudWxsCiAgICAgICAgICAgIGZvciAoZXBnVXJsIGluIGNhbmRpZGF0ZXMpIHsKICAgICAgICAgICAgICAgIHZhbCBlcGdEYXRhID0gdHJ5IHsKICAgICAgICAgICAgICAgICAgICBnZXRPckxvYWRYbWxUdihlcGdVcmwpCiAgICAgICAgICAgICAgICB9IGNhdGNoICh0aHJvd2FibGU6IEV4Y2VwdGlvbikgewogICAgICAgICAgICAgICAgICAgIGxhc3RMb2FkRXJyb3IgPSB0aHJvd2FibGUKICAgICAgICAgICAgICAgICAgICBjb250aW51ZQogICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgdmFsIGRpYWdub3N0aWNzID0gRXBnTWF0Y2hEaWFnbm9zdGljc1BvbGljeS5zdW1tYXJpemUoCiAgICAgICAgICAgICAgICAgICAgcGxheWxpc3RJZCA9IHBsYXlsaXN0SWQsCiAgICAgICAgICAgICAgICAgICAgZXBnU291cmNlVXJsID0gZXBnVXJsLAogICAgICAgICAgICAgICAgICAgIHNvdXJjZUxvYWRlZEF0TXMgPSBlcGdDYWNoZVtlcGdVcmxdPy5sb2FkZWRBdE1zLAogICAgICAgICAgICAgICAgICAgIG9ic2VydmF0aW9ucyA9IGNoYW5uZWxzLm1hcCB7IGNoYW5uZWwgLT4KICAgICAgICAgICAgICAgICAgICAgICAgdmFsIG1hdGNoID0gbWF0Y2hDaGFubmVsVG9FcGcoCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBjaGFubmVsTmFtZSA9IGNoYW5uZWwubmFtZSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgIHR2Z0lkID0gY2hhbm5lbC50dmdJZCwKICAgICAgICAgICAgICAgICAgICAgICAgICAgIGRhdGEgPSBlcGdEYXRhCiAgICAgICAgICAgICAgICAgICAgICAgICkKICAgICAgICAgICAgICAgICAgICAgICAgRXBnTWF0Y2hPYnNlcnZhdGlvbigKICAgICAgICAgICAgICAgICAgICAgICAgICAgIG1hdGNoZWRCeSA9IG1hdGNoLm1hdGNoZWRCeSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgIGhhc1Byb2dyYW1zID0gbWF0Y2gucHJvZ3JhbXMuaXNOb3RFbXB0eSgpCiAgICAgICAgICAgICAgICAgICAgICAgICkKICAgICAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgICAgICApCiAgICAgICAgICAgICAgICBpZiAoZmlyc3RMb2FkZWREaWFnbm9zdGljcyA9PSBudWxsKSBmaXJzdExvYWRlZERpYWdub3N0aWNzID0gZGlhZ25vc3RpY3MKICAgICAgICAgICAgICAgIGlmIChkaWFnbm9zdGljcy5tYXRjaGVkQ2hhbm5lbHMgPiAwKSB7CiAgICAgICAgICAgICAgICAgICAgcmV0dXJuQHdpdGhDb250ZXh0IEFwcFJlc3VsdC5TdWNjZXNzKGRpYWdub3N0aWNzKQogICAgICAgICAgICAgICAgfQogICAgICAgICAgICB9CgogICAgICAgICAgICBmaXJzdExvYWRlZERpYWdub3N0aWNzPy5sZXQgeyByZXR1cm5Ad2l0aENvbnRleHQgQXBwUmVzdWx0LlN1Y2Nlc3MoaXQpIH0KICAgICAgICAgICAgaWYgKGxhc3RMb2FkRXJyb3IgIT0gbnVsbCkgewogICAgICAgICAgICAgICAgcmV0dXJuQHdpdGhDb250ZXh0IEFwcFJlc3VsdC5FcnJvcigKICAgICAgICAgICAgICAgICAgICAiVW5hYmxlIHRvIGxvYWQgRVBHIGRpYWdub3N0aWNzOiAke2xhc3RMb2FkRXJyb3IhIS50b0xvZ1N1bW1hcnkobWF4RGVwdGggPSA0KX0iLAogICAgICAgICAgICAgICAgICAgIGxhc3RMb2FkRXJyb3IKICAgICAgICAgICAgICAgICkKICAgICAgICAgICAgfQogICAgICAgICAgICBBcHBSZXN1bHQuRXJyb3IoIkVQRyBkaWFnbm9zdGljcyBhcmUgdW5hdmFpbGFibGUgZm9yIHBsYXlsaXN0ICRwbGF5bGlzdElkIikKICAgICAgICB9Cgo=').decode('utf-8')
-          text = text.replace(method_anchor, diagnostics_method + method_anchor, 1)
-
-          updated = text.encode('utf-8')
-          updated_sha = git_blob_sha(updated)
-          expected_updated = '272e138bafe77e05c800093091385046cf8e8aff'
-          if updated_sha != expected_updated:
-              raise SystemExit(f'updated repository blob mismatch: {updated_sha} != {expected_updated}')
-          repo_path.write_bytes(updated)
-
-          base_sha = os.environ['BASE_SHA']
-          restored = subprocess.check_output(['git', 'show', f'{base_sha}:.github/workflows/database-unit.yml'])
-          expected_carrier = '7740bcf62761da0b54f4c85abdf1ae1e49641aee'
-          restored_sha = git_blob_sha(restored)
-          if restored_sha != expected_carrier:
-              raise SystemExit(f'carrier restore blob mismatch: {restored_sha} != {expected_carrier}')
-          carrier.write_bytes(restored)
-          if temp_workflow.exists():
-              temp_workflow.unlink()
-          if trigger.exists():
-              trigger.unlink()
-          print(f'guarded patch verified: {original_sha} -> {updated_sha}; carrier={restored_sha}')
-          PY_PATCH
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt .github/workflows/database-unit.yml .github/workflows/tmp-epg192-guarded-patch.yml .github/tmp-epg192-trigger
-          git diff --cached --check
-          git commit -m "feat(epg): wire structured match diagnostics"
-          git push origin "HEAD:${HEAD_REF}"
