@@ -55,4 +55,20 @@ class DatabaseMigrationsTest {
             MIGRATION_9_10_SQL.last()
         )
     }
+
+    @Test
+    fun migration10To11_addsFailClosedCatchUpMetadataColumns() {
+        assertEquals(10, MIGRATION_10_11.startVersion)
+        assertEquals(11, MIGRATION_10_11.endVersion)
+        assertEquals(
+            listOf(
+                "ALTER TABLE channels ADD COLUMN catchUpMode TEXT",
+                "ALTER TABLE channels ADD COLUMN catchUpDays INTEGER",
+                "ALTER TABLE channels ADD COLUMN catchUpSourceTemplate TEXT",
+                "ALTER TABLE channels ADD COLUMN catchUpDaysDeclared INTEGER NOT NULL DEFAULT 0"
+            ),
+            MIGRATION_10_11_SQL
+        )
+    }
+
 }
