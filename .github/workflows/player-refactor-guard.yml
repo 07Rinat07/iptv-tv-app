@@ -48,6 +48,7 @@ jobs:
           import re
           import subprocess
           import sys
+          from typing import Optional
 
           BASE_SHA = os.environ["BASE_SHA"]
           HEAD_SHA = os.environ["HEAD_SHA"]
@@ -82,13 +83,13 @@ jobs:
               regex = re.compile(pattern, re.IGNORECASE)
               return any(regex.search(line) for line in changed_lines(path))
 
-          def section_between(text: str, start_marker: str, end_marker: str) -> str:
+          def section_between(text: str, start_marker: str, end_marker: str) -> Optional[str]:
               start = text.find(start_marker)
               if start < 0:
-                  return ""
+                  return None
               end = text.find(end_marker, start + len(start_marker))
               if end < 0:
-                  end = len(text)
+                  return None
               return text[start:end]
 
           def section_changed(path: str, start_marker: str, end_marker: str) -> bool:
@@ -96,36 +97,81 @@ jobs:
                   return False
               before = section_between(content_at(merge_base, path), start_marker, end_marker)
               after = section_between(content_at(HEAD_SHA, path), start_marker, end_marker)
+              if before is None or after is None:
+                  print(
+                      f"Ownership markers missing for {path}: "
+                      f"{start_marker!r} -> {end_marker!r}; classifying as changed (fail closed).",
+                      file=sys.stderr,
+                  )
+                  return True
               return before != after
 
-          def braced_definition(text: str, marker: str) -> str:
+          def declaration_text(text: str, marker: str) -> Optional[str]:
               start = text.find(marker)
               if start < 0:
-                  return ""
-              brace = text.find("{", start + len(marker))
-              if brace < 0:
-                  line_end = text.find("\n", start)
-                  return text[start:] if line_end < 0 else text[start:line_end]
-              depth = 0
-              for index in range(brace, len(text)):
+                  return None
+
+              paren_depth = 0
+              bracket_depth = 0
+              index = start
+              while index < len(text):
                   char = text[index]
-                  if char == "{":
-                      depth += 1
-                  elif char == "}":
-                      depth -= 1
-                      if depth == 0:
-                          return text[start:index + 1]
+                  if char == "(":
+                      paren_depth += 1
+                  elif char == ")":
+                      paren_depth = max(0, paren_depth - 1)
+                  elif char == "[":
+                      bracket_depth += 1
+                  elif char == "]":
+                      bracket_depth = max(0, bracket_depth - 1)
+                  elif char == "{" and paren_depth == 0 and bracket_depth == 0:
+                      depth = 1
+                      cursor = index + 1
+                      while cursor < len(text):
+                          nested = text[cursor]
+                          if nested == "{":
+                              depth += 1
+                          elif nested == "}":
+                              depth -= 1
+                              if depth == 0:
+                                  return text[start:cursor + 1]
+                          cursor += 1
+                      return text[start:]
+                  elif char == "\n" and paren_depth == 0 and bracket_depth == 0:
+                      return text[start:index]
+                  index += 1
               return text[start:]
 
           def definition_changed(path: str, marker: str) -> bool:
               if path not in changed:
                   return False
-              before = braced_definition(content_at(merge_base, path), marker)
-              after = braced_definition(content_at(HEAD_SHA, path), marker)
+              before = declaration_text(content_at(merge_base, path), marker)
+              after = declaration_text(content_at(HEAD_SHA, path), marker)
+              if before is None and after is None:
+                  return False
+              if before is None or after is None:
+                  print(
+                      f"Guarded declaration marker {marker!r} appeared/disappeared in {path}; "
+                      "classifying as changed (fail closed).",
+                      file=sys.stderr,
+                  )
+                  return True
               return before != after
 
           def any_definition_changed(path: str, markers: list[str]) -> bool:
               return any(definition_changed(path, marker) for marker in markers)
+
+          # Regression check: a bodyless Kotlin data class must not consume the
+          # following declaration's braced body.
+          synthetic = (
+              "data class ManualBufferSettings(\n"
+              "    val startMs: Int\n"
+              ")\n"
+              "enum class ScannerProviderScope { ALL }\n"
+          )
+          synthetic_manual = declaration_text(synthetic, "data class ManualBufferSettings")
+          if synthetic_manual is None or "ScannerProviderScope" in synthetic_manual:
+              raise RuntimeError("declaration_text must stop after a bodyless parenthesized declaration")
 
           MAIN = "app/src/main/java/com/iptv/tv/MainActivity.kt"
           MODELS = "core/model/src/main/kotlin/com/iptv/tv/core/model/Models.kt"
@@ -160,18 +206,38 @@ jobs:
               SETTINGS_STORE,
               r"defaultPlayer|bufferProfile|manualStartMs|manualRebufferMs|manualMaxMs|channelPlayerOverrides",
           )
-          player_changed = player_changed or changed_line_matches(
+          player_changed = player_changed or any_definition_changed(
               SETTINGS_REPO,
-              r"PlayerType|BufferProfile|ManualBufferSettings|observeDefaultPlayer|observeBufferProfile|observeManualBuffer|observeChannelPlayerOverride|setDefaultPlayer|setBufferProfile|setManualBuffer|setChannelPlayerOverride",
+              [
+                  "fun observeDefaultPlayer(",
+                  "fun observeBufferProfile(",
+                  "fun observeManualBuffer(",
+                  "fun observeChannelPlayerOverride(",
+                  "fun setDefaultPlayer(",
+                  "fun setBufferProfile(",
+                  "fun setManualBuffer(",
+                  "fun setChannelPlayerOverride(",
+              ],
+          )
+          player_changed = player_changed or any_definition_changed(
+              SETTINGS_VM,
+              [
+                  "fun setDefaultPlayer(",
+                  "fun setBufferProfile(",
+                  "fun updateManualStart(",
+                  "fun updateManualRebuffer(",
+                  "fun updateManualMax(",
+                  "fun saveManualBuffer(",
+              ],
           )
           player_changed = player_changed or changed_line_matches(
-              SETTINGS_VM,
-              r"PlayerType|BufferProfile|defaultPlayer|bufferProfile|manual(Start|Rebuffer|Max)Ms|setDefaultPlayer|setBufferProfile|saveManualBuffer|updateManual(Start|Rebuffer|Max)|Плеер|буфер",
+              SETTINGS_SCREEN,
+              r"showPlayerSettings|showBufferSettings",
           )
           player_changed = player_changed or section_changed(
               SETTINGS_SCREEN,
-              'title = "Плеер"',
-              'title = "Engine Stream"',
+              "expanded = showPlayerSettings,",
+              "expanded = showEngineSettings,",
           )
           player_changed = player_changed or any_definition_changed(
               REPOSITORIES,
@@ -207,6 +273,14 @@ jobs:
           }
           scanner_changed = any(path.startswith("feature/scanner/") for path in changed)
           scanner_changed = scanner_changed or any(path in changed for path in scanner_direct_paths)
+
+          if MAIN in changed:
+              scanner_changed = scanner_changed or section_changed(
+                  MAIN,
+                  "composable(Routes.SCANNER) {",
+                  "composable(Routes.IMPORTER) {",
+              )
+
           scanner_changed = scanner_changed or any_definition_changed(
               MODELS,
               [
@@ -222,18 +296,38 @@ jobs:
               SETTINGS_STORE,
               r"scanner(AiEnabled|ProxyEnabled|ProxyHost|ProxyPort|ProxyUsername|ProxyPassword|LearnedQueries)",
           )
-          scanner_changed = scanner_changed or changed_line_matches(
+          scanner_changed = scanner_changed or any_definition_changed(
               SETTINGS_REPO,
-              r"Scanner|recordScannerLearning|clearScannerLearning",
+              [
+                  "fun observeScannerAiEnabled(",
+                  "fun observeScannerProxySettings(",
+                  "fun observeScannerLearnedQueries(",
+                  "fun setScannerAiEnabled(",
+                  "fun setScannerProxySettings(",
+                  "fun recordScannerLearning(",
+                  "fun clearScannerLearning(",
+              ],
+          )
+          scanner_changed = scanner_changed or any_definition_changed(
+              SETTINGS_VM,
+              [
+                  "fun setScannerAiEnabled(",
+                  "fun setScannerProxyEnabled(",
+                  "fun updateScannerProxyHost(",
+                  "fun updateScannerProxyPort(",
+                  "fun updateScannerProxyUsername(",
+                  "fun updateScannerProxyPassword(",
+                  "fun saveScannerProxySettings(",
+              ],
           )
           scanner_changed = scanner_changed or changed_line_matches(
-              SETTINGS_VM,
-              r"Scanner|scanner|Proxy|proxy",
+              SETTINGS_SCREEN,
+              r"showAiScanner|showScannerProxy|showNetworkTest",
           )
           scanner_changed = scanner_changed or section_changed(
               SETTINGS_SCREEN,
-              'title = "AI-сканер"',
-              'title = "Плеер"',
+              "expanded = showAiScanner,",
+              "expanded = showPlayerSettings,",
           )
           scanner_changed = scanner_changed or changed_line_matches(
               REPOSITORY_MODULE,
