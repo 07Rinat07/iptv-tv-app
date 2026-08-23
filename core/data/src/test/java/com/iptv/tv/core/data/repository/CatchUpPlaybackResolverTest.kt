@@ -35,6 +35,27 @@ class CatchUpPlaybackResolverTest {
     }
 
     @Test
+    fun appendUsesCurrentTimestampAndPlacesTemplateBeforeFragment() {
+        val result = CatchUpPlaybackResolver.resolve(
+            rawLiveStreamUrl = "https://tv.example/live.m3u8#variant",
+            metadata = ChannelCatchUpMetadata(
+                mode = "append",
+                days = 7,
+                sourceTemplate = "?utc=${'$'}{start}&lutc=${'$'}{timestamp}"
+            ),
+            programStartEpochMs = start,
+            programEndEpochMs = end,
+            nowEpochMs = now
+        )
+
+        assertTrue(result.supported)
+        assertEquals(
+            "https://tv.example/live.m3u8?utc=1799996400&lutc=1800000000#variant",
+            result.playbackUrl
+        )
+    }
+
+    @Test
     fun shiftBuildsUtcLutcQueryWithoutProviderTemplate() {
         val result = CatchUpPlaybackResolver.resolve(
             rawLiveStreamUrl = "https://tv.example/live.m3u8?token=abc",
@@ -47,6 +68,23 @@ class CatchUpPlaybackResolverTest {
         assertTrue(result.supported)
         assertEquals(
             "https://tv.example/live.m3u8?token=abc&utc=1799996400&lutc=1800000000",
+            result.playbackUrl
+        )
+    }
+
+    @Test
+    fun shiftPlacesArchiveQueryBeforeFragment() {
+        val result = CatchUpPlaybackResolver.resolve(
+            rawLiveStreamUrl = "https://tv.example/live.m3u8#variant",
+            metadata = ChannelCatchUpMetadata(mode = "shift", days = 2, sourceTemplate = null),
+            programStartEpochMs = start,
+            programEndEpochMs = end,
+            nowEpochMs = now
+        )
+
+        assertTrue(result.supported)
+        assertEquals(
+            "https://tv.example/live.m3u8?utc=1799996400&lutc=1800000000#variant",
             result.playbackUrl
         )
     }
@@ -79,6 +117,25 @@ class CatchUpPlaybackResolverTest {
             metadata = null,
             programStartEpochMs = start,
             programEndEpochMs = end,
+            nowEpochMs = now
+        )
+
+        assertFalse(result.supported)
+        assertNull(result.playbackUrl)
+    }
+
+    @Test
+    fun invalidDeclaredDaysFailsClosedInsteadOfBecomingUnlimited() {
+        val result = CatchUpPlaybackResolver.resolve(
+            rawLiveStreamUrl = "https://tv.example/live.m3u8",
+            metadata = ChannelCatchUpMetadata(
+                mode = "append",
+                days = null,
+                sourceTemplate = "?utc=${'$'}{start}",
+                daysDeclared = true
+            ),
+            programStartEpochMs = now - 30L * 24L * 60L * 60L * 1_000L,
+            programEndEpochMs = now - 29L * 24L * 60L * 60L * 1_000L,
             nowEpochMs = now
         )
 
@@ -142,11 +199,24 @@ class CatchUpPlaybackResolverTest {
             programEndEpochMs = end,
             nowEpochMs = now
         )
+        val unterminatedPlaceholder = CatchUpPlaybackResolver.resolve(
+            rawLiveStreamUrl = "https://tv.example/live.m3u8",
+            metadata = ChannelCatchUpMetadata(
+                mode = "append",
+                days = 7,
+                sourceTemplate = "?start=${'$'}{start"
+            ),
+            programStartEpochMs = start,
+            programEndEpochMs = end,
+            nowEpochMs = now
+        )
 
         assertFalse(unsupportedMode.supported)
         assertFalse(unsupportedPlaceholder.supported)
+        assertFalse(unterminatedPlaceholder.supported)
         assertNull(unsupportedMode.playbackUrl)
         assertNull(unsupportedPlaceholder.playbackUrl)
+        assertNull(unterminatedPlaceholder.playbackUrl)
     }
 
     @Test
