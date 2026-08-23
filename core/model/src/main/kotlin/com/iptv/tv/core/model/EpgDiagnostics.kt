@@ -6,6 +6,7 @@ package com.iptv.tv.core.model
  * A channel is considered matched when the existing conservative matcher resolves it by
  * `tvg-id`, exact display name or channel-id. `channelsWithPrograms` is intentionally separate:
  * a valid channel match can exist even when that XMLTV channel currently has no programmes.
+ * Cache fields describe only the selected snapshot and never alter refresh/source policy.
  */
 data class PlaylistEpgDiagnostics(
     val playlistId: Long,
