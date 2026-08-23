@@ -17,7 +17,7 @@ on:
       - '.github/workflows/database-unit.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: database-unit-${{ github.ref }}
@@ -75,57 +75,3 @@ jobs:
 
       - name: Unit tests feature favorites
         run: ./gradlew --no-daemon --stacktrace :feature:favorites:testDebugUnitTest
-
-  epg193-guarded-patch:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'fix/epg-stale-transient-fallback' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout exact PR head for guarded patch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      - name: Apply exact EPG193 loader patch and restore workflow
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib
-
-          path = Path('core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt')
-          data = path.read_bytes()
-          blob = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
-          expected = '999d1f8bdac9cff3954a841250f134f1a833b7db'
-          if blob != expected:
-              raise SystemExit(f'base Repositories blob mismatch: {blob} != {expected}')
-          print(f'base blob verified: {blob}')
-          PY
-
-          git apply --check .github/epg193-repositories.patch
-          git apply .github/epg193-repositories.patch
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib
-
-          path = Path('core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt')
-          data = path.read_bytes()
-          blob = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
-          expected = '549fb87e5d94e83c52128d58759ff592b7ca4b66'
-          if blob != expected:
-              raise SystemExit(f'updated Repositories blob mismatch: {blob} != {expected}')
-          print(f'updated blob verified: {blob}')
-          PY
-
-          git show "$BASE_SHA:.github/workflows/database-unit.yml" > .github/workflows/database-unit.yml
-          rm .github/epg193-repositories.patch
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt .github/workflows/database-unit.yml .github/epg193-repositories.patch
-          git commit -m "fix(epg): wire bounded stale refresh fallback"
-          git push origin HEAD:fix/epg-stale-transient-fallback
