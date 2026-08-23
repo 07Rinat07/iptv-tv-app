@@ -1,0 +1,33 @@
+name: P2P Field Tools
+
+on:
+  pull_request:
+    paths:
+      - 'tools/classify_p2p_producer_stage.py'
+      - 'tools/tests/test_p2p_producer_stage_classifier.py'
+      - '.github/workflows/p2p-field-tools.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  producer-stage-classifier:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify exact checked-out revision
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+
+      - name: Run producer-stage classifier tests
+        run: python -m unittest tools.tests.test_p2p_producer_stage_classifier -v
