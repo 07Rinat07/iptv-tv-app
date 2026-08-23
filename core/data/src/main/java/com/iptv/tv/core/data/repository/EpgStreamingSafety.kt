@@ -107,6 +107,47 @@ internal fun <T> loadEpgCandidatesFreshFirst(
     deferredStale.forEach { yield(it) }
 }
 
+internal data class EpgDiagnosticsCacheStatus(
+    val servedFromStaleFallback: Boolean,
+    val cacheAgeMs: Long,
+    val refreshRetryAtMs: Long?
+)
+
+/** Read-only cache/refresh observability; it must never change refresh or source-selection policy. */
+internal object EpgDiagnosticsCacheStatusPolicy {
+    fun observe(
+        loadedAtMs: Long,
+        nowMs: Long,
+        freshTtlMs: Long,
+        maxStaleAgeMs: Long,
+        activeFailure: EpgFailureBackoffEntry?
+    ): EpgDiagnosticsCacheStatus {
+        val cacheAgeMs = (nowMs - loadedAtMs).coerceAtLeast(0L)
+        val freshness = EpgStaleFallbackPolicy.freshness(
+            loadedAtMs = loadedAtMs,
+            nowMs = nowMs,
+            freshTtlMs = freshTtlMs,
+            maxStaleAgeMs = maxStaleAgeMs
+        )
+        val servedFromStaleFallback = freshness == EpgCacheFreshness.STALE_FALLBACK
+        val refreshRetryAtMs = if (
+            servedFromStaleFallback &&
+            activeFailure?.kind?.let(EpgStaleFallbackPolicy::allowsStale) == true
+        ) {
+            activeFailure.let { failure ->
+                (failure.failedAtMs + failure.retryAfterMs).coerceAtLeast(failure.failedAtMs)
+            }
+        } else {
+            null
+        }
+        return EpgDiagnosticsCacheStatus(
+            servedFromStaleFallback = servedFromStaleFallback,
+            cacheAgeMs = cacheAgeMs,
+            refreshRetryAtMs = refreshRetryAtMs
+        )
+    }
+}
+
 /**
  * Streaming hard limit for XMLTV bodies.
  *
