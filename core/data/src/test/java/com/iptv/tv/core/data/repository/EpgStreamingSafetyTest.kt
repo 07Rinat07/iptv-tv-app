@@ -1,6 +1,7 @@
 package com.iptv.tv.core.data.repository
 
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -36,12 +37,12 @@ class EpgStreamingSafetyTest {
         var now = 1_000L
         val cache = EpgFailureBackoffCache(maxEntries = 2) { now }
 
-        cache.record("a", "bad-a", retryAfterMs = 1_000L)
-        cache.record("b", "bad-b", retryAfterMs = 1_000L)
+        cache.record("a", "bad-a", retryAfterMs = 1_000L, kind = EpgFailureKind.TRANSIENT)
+        cache.record("b", "bad-b", retryAfterMs = 1_000L, kind = EpgFailureKind.TRANSIENT)
         assertEquals(2, cache.size())
         assertEquals("bad-a", cache.active("a")?.reason)
 
-        cache.record("c", "bad-c", retryAfterMs = 1_000L)
+        cache.record("c", "bad-c", retryAfterMs = 1_000L, kind = EpgFailureKind.TRANSIENT)
         assertEquals(2, cache.size())
         assertNull(cache.active("b"))
         assertTrue(cache.active("a") != null || cache.active("c") != null)
@@ -49,5 +50,146 @@ class EpgStreamingSafetyTest {
         now = 2_100L
         assertNull(cache.active("a"))
         assertNull(cache.active("c"))
+    }
+
+    @Test
+    fun staleFallbackPolicyKeepsFreshTtlAndBoundsGraceWindow() {
+        val freshTtlMs = 15L * 60L * 1_000L
+        val maxStaleAgeMs = 2L * 60L * 60L * 1_000L
+        val loadedAtMs = 10_000L
+
+        assertEquals(
+            EpgCacheFreshness.FRESH,
+            EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = loadedAtMs,
+                nowMs = loadedAtMs + freshTtlMs,
+                freshTtlMs = freshTtlMs,
+                maxStaleAgeMs = maxStaleAgeMs
+            )
+        )
+        assertEquals(
+            EpgCacheFreshness.STALE_FALLBACK,
+            EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = loadedAtMs,
+                nowMs = loadedAtMs + freshTtlMs + 1L,
+                freshTtlMs = freshTtlMs,
+                maxStaleAgeMs = maxStaleAgeMs
+            )
+        )
+        assertEquals(
+            EpgCacheFreshness.STALE_FALLBACK,
+            EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = loadedAtMs,
+                nowMs = loadedAtMs + maxStaleAgeMs,
+                freshTtlMs = freshTtlMs,
+                maxStaleAgeMs = maxStaleAgeMs
+            )
+        )
+        assertEquals(
+            EpgCacheFreshness.EXPIRED,
+            EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = loadedAtMs,
+                nowMs = loadedAtMs + maxStaleAgeMs + 1L,
+                freshTtlMs = freshTtlMs,
+                maxStaleAgeMs = maxStaleAgeMs
+            )
+        )
+    }
+
+    @Test
+    fun staleFallbackOnlyAllowsExplicitTransientFailures() {
+        assertTrue(EpgStaleFallbackPolicy.allowsStale(EpgFailureKind.TRANSIENT))
+        assertTrue(!EpgStaleFallbackPolicy.allowsStale(EpgFailureKind.PERMANENT_HTTP))
+        assertTrue(!EpgStaleFallbackPolicy.allowsStale(EpgFailureKind.MALFORMED))
+        assertTrue(!EpgStaleFallbackPolicy.allowsStale(EpgFailureKind.LOW_MEMORY))
+    }
+
+    @Test
+    fun failureClassificationKeepsMalformedPermanentAndLowMemoryFailClosed() {
+        assertEquals(EpgFailureKind.TRANSIENT, classifyEpgFailure(IOException("timeout")))
+        assertEquals(EpgFailureKind.TRANSIENT, classifyEpgFailure(EpgHttpStatusException(503)))
+        assertEquals(EpgFailureKind.PERMANENT_HTTP, classifyEpgFailure(EpgHttpStatusException(404)))
+        assertEquals(
+            EpgFailureKind.MALFORMED,
+            classifyEpgFailure(EpgMalformedXmlException("Invalid XMLTV"))
+        )
+        assertEquals(
+            EpgFailureKind.MALFORMED,
+            classifyEpgFailure(EpgInputLimitExceededException(maxBytes = 10L))
+        )
+        assertEquals(
+            EpgFailureKind.LOW_MEMORY,
+            classifyEpgFailure(EpgLowMemoryException("low heap"))
+        )
+    }
+
+    @Test
+    fun negativeCacheRetainsFailureKindForBackoffDecisions() {
+        val cache = EpgFailureBackoffCache(maxEntries = 1) { 1_000L }
+        cache.record(
+            url = "https://epg.example/guide.xml",
+            reason = "HTTP 503",
+            retryAfterMs = 1_000L,
+            kind = EpgFailureKind.TRANSIENT
+        )
+
+        assertEquals(
+            EpgFailureKind.TRANSIENT,
+            cache.active("https://epg.example/guide.xml")?.kind
+        )
+    }
+
+    @Test
+    fun candidateLoadingDropsDeferredStaleAfterLowMemoryFailure() {
+        val singleEntryCache = mutableMapOf("primary" to "stale-primary")
+        val results = loadEpgCandidatesFreshFirst(
+            candidates = listOf("primary", "fallback"),
+            loadFresh = { url ->
+                when (url) {
+                    "primary" -> throw IOException("timeout")
+                    "fallback" -> throw EpgLowMemoryException("low heap")
+                    else -> error("unexpected candidate")
+                }
+            },
+            captureStaleFallback = { url -> singleEntryCache[url] },
+            onLoadError = {}
+        ).toList()
+
+        assertTrue(results.isEmpty())
+    }
+
+    @Test
+    fun candidateLoadingPrefersHealthyFallbackBeforeStalePrimary() {
+        val attempts = mutableListOf<String>()
+        val singleEntryCache = mutableMapOf("primary" to "stale-primary")
+        val results = loadEpgCandidatesFreshFirst(
+            candidates = listOf("primary", "fallback"),
+            loadFresh = { url ->
+                attempts += "fresh:$url"
+                when (url) {
+                    "primary" -> throw IOException("timeout")
+                    "fallback" -> {
+                        // Simulate MAX_EPG_CACHE_ENTRIES=1: a fresh fallback evicts primary.
+                        singleEntryCache.clear()
+                        "fresh-fallback"
+                    }
+                    else -> error("unexpected candidate")
+                }
+            },
+            captureStaleFallback = { url ->
+                attempts += "stale:$url"
+                singleEntryCache[url]
+            },
+            onLoadError = {}
+        ).toList()
+
+        assertEquals(
+            listOf("fallback" to "fresh-fallback", "primary" to "stale-primary"),
+            results
+        )
+        assertEquals(
+            listOf("fresh:primary", "stale:primary", "fresh:fallback"),
+            attempts
+        )
     }
 }

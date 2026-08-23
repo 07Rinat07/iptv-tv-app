@@ -747,13 +747,13 @@ class PlaylistRepositoryImpl @Inject constructor(
         }
 
         var lastLoadError: Throwable? = null
-        for (epgUrl in candidates) {
-            val epgData = try {
-                getOrLoadXmlTv(epgUrl)
-            } catch (throwable: Exception) {
-                lastLoadError = throwable
-                continue
-            }
+        for ((epgUrl, epgEntry) in loadEpgCandidatesFreshFirst(
+            candidates = candidates,
+            loadFresh = ::getOrLoadXmlTv,
+            captureStaleFallback = ::staleEpgEntryForActiveTransientBackoff,
+            onLoadError = { lastLoadError = it }
+        )) {
+            val epgData = epgEntry.data
             val match = matchChannelToEpg(
                 channelName = channelEntity.name,
                 tvgId = channelEntity.tvgId,
@@ -815,17 +815,17 @@ class PlaylistRepositoryImpl @Inject constructor(
 
             var firstLoadedDiagnostics: PlaylistEpgDiagnostics? = null
             var lastLoadError: Throwable? = null
-            for (epgUrl in candidates) {
-                val epgData = try {
-                    getOrLoadXmlTv(epgUrl)
-                } catch (throwable: Exception) {
-                    lastLoadError = throwable
-                    continue
-                }
+            for ((epgUrl, epgEntry) in loadEpgCandidatesFreshFirst(
+                candidates = candidates,
+                loadFresh = ::getOrLoadXmlTv,
+                captureStaleFallback = ::staleEpgEntryForActiveTransientBackoff,
+                onLoadError = { lastLoadError = it }
+            )) {
+                val epgData = epgEntry.data
                 val diagnostics = EpgMatchDiagnosticsPolicy.summarize(
                     playlistId = playlistId,
                     epgSourceUrl = epgUrl,
-                    sourceLoadedAtMs = epgCache[epgUrl]?.loadedAtMs,
+                    sourceLoadedAtMs = epgEntry.loadedAtMs,
                     observations = channels.map { channel ->
                         val match = matchChannelToEpg(
                             channelName = channel.name,
@@ -880,13 +880,13 @@ class PlaylistRepositoryImpl @Inject constructor(
             .toList()
         var lastLoadError: Throwable? = null
 
-        for (epgUrl in candidates) {
-            val epgData = try {
-                getOrLoadXmlTv(epgUrl)
-            } catch (throwable: Exception) {
-                lastLoadError = throwable
-                continue
-            }
+        for ((epgUrl, epgEntry) in loadEpgCandidatesFreshFirst(
+            candidates = candidates,
+            loadFresh = ::getOrLoadXmlTv,
+            captureStaleFallback = ::staleEpgEntryForActiveTransientBackoff,
+            onLoadError = { lastLoadError = it }
+        )) {
+            val epgData = epgEntry.data
             val result = channels
                 .asSequence()
                 .mapNotNull { channel ->
@@ -1614,16 +1614,16 @@ class PlaylistRepositoryImpl @Inject constructor(
         return discovered
     }
 
-    private fun getOrLoadXmlTv(url: String): XmlTvData {
+    private fun getOrLoadXmlTv(url: String): EpgCacheEntry {
         val now = System.currentTimeMillis()
-        cachedEpgData(url, now)?.let { return it }
+        freshEpgEntry(url, now)?.let { return it }
         epgFailureBackoff.active(url)?.let { failure ->
             throw IOException("EPG temporarily unavailable: ${failure.reason}")
         }
 
         return synchronized(epgLoadLock) {
             val lockedNow = System.currentTimeMillis()
-            cachedEpgData(url, lockedNow)?.let { return@synchronized it }
+            freshEpgEntry(url, lockedNow)?.let { return@synchronized it }
             epgFailureBackoff.active(url)?.let { failure ->
                 throw IOException("EPG temporarily unavailable: ${failure.reason}")
             }
@@ -1638,8 +1638,8 @@ class PlaylistRepositoryImpl @Inject constructor(
                         .get()
                         .build()
                 ).execute().use { response ->
-                    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-                    val body = response.body ?: throw IOException("Empty EPG body")
+                    if (!response.isSuccessful) throw EpgHttpStatusException(response.code)
+                    val body = response.body ?: throw EpgMalformedXmlException("Empty EPG body")
                     val contentLength = body.contentLength()
                     if (contentLength > MAX_EPG_INPUT_BYTES) {
                         throw EpgInputLimitExceededException(
@@ -1647,52 +1647,111 @@ class PlaylistRepositoryImpl @Inject constructor(
                             observedBytes = contentLength
                         )
                     }
-                    EpgBoundedInputStream(
-                        input = body.byteStream(),
-                        maxBytes = MAX_EPG_INPUT_BYTES
-                    ).use(::parseXmlTv)
+                    try {
+                        EpgBoundedInputStream(
+                            input = body.byteStream(),
+                            maxBytes = MAX_EPG_INPUT_BYTES
+                        ).use(::parseXmlTv)
+                    } catch (failure: IOException) {
+                        throw failure
+                    } catch (failure: Exception) {
+                        throw EpgMalformedXmlException(
+                            message = "Invalid XMLTV: ${failure.message ?: failure.javaClass.simpleName}",
+                            cause = failure
+                        )
+                    }
                 }
 
                 epgFailureBackoff.remove(url)
-                putEpgCache(
-                    url = url,
-                    entry = EpgCacheEntry(
-                        loadedAtMs = System.currentTimeMillis(),
-                        data = parsed
-                    )
+                val entry = EpgCacheEntry(
+                    loadedAtMs = System.currentTimeMillis(),
+                    data = parsed
                 )
-                parsed
+                putEpgCache(url = url, entry = entry)
+                entry
             } catch (_: OutOfMemoryError) {
                 epgCache.clear()
                 epgFailureBackoff.record(
                     url = url,
                     reason = "EPG aborted because heap headroom was exhausted",
-                    retryAfterMs = EPG_LOW_MEMORY_BACKOFF_MS
+                    retryAfterMs = EPG_LOW_MEMORY_BACKOFF_MS,
+                    kind = EpgFailureKind.LOW_MEMORY
                 )
-                throw IOException("EPG deferred: insufficient heap headroom")
+                throw EpgLowMemoryException("EPG deferred: insufficient heap headroom")
             } catch (throwable: Exception) {
                 val failure = throwable as? IOException
-                    ?: IOException("Unable to load EPG: ${throwable.message ?: throwable.javaClass.simpleName}")
+                    ?: EpgMalformedXmlException(
+                        message = "Unable to parse EPG: ${throwable.message ?: throwable.javaClass.simpleName}",
+                        cause = throwable
+                    )
+                val failureKind = classifyEpgFailure(failure)
                 epgFailureBackoff.record(
                     url = url,
                     reason = failure.message ?: failure.javaClass.simpleName,
-                    retryAfterMs = epgFailureBackoffMs(failure)
+                    retryAfterMs = epgFailureBackoffMs(failureKind),
+                    kind = failureKind
                 )
+                if (!EpgStaleFallbackPolicy.allowsStale(failureKind)) {
+                    epgCache.remove(url)
+                }
                 throw failure
             }
         }
     }
 
-    private fun cachedEpgData(url: String, now: Long): XmlTvData? {
+    private fun freshEpgEntry(url: String, now: Long): EpgCacheEntry? {
         val cached = epgCache[url] ?: return null
-        if (now - cached.loadedAtMs <= EPG_CACHE_TTL_MS) return cached.data
-        epgCache.remove(url, cached)
-        return null
+        return when (
+            EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = cached.loadedAtMs,
+                nowMs = now,
+                freshTtlMs = EPG_CACHE_TTL_MS,
+                maxStaleAgeMs = EPG_STALE_FALLBACK_MAX_AGE_MS
+            )
+        ) {
+            EpgCacheFreshness.FRESH -> cached
+            EpgCacheFreshness.STALE_FALLBACK -> null
+            EpgCacheFreshness.EXPIRED -> {
+                epgCache.remove(url, cached)
+                null
+            }
+        }
+    }
+
+    private fun staleEpgEntryForActiveTransientBackoff(url: String): EpgCacheEntry? {
+        val cached = staleEpgEntry(url, System.currentTimeMillis()) ?: return null
+        val failure = epgFailureBackoff.active(url) ?: return null
+        return cached.takeIf { EpgStaleFallbackPolicy.allowsStale(failure.kind) }
+    }
+
+    private fun staleEpgEntry(url: String, now: Long): EpgCacheEntry? {
+        val cached = epgCache[url] ?: return null
+        return when (
+            EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = cached.loadedAtMs,
+                nowMs = now,
+                freshTtlMs = EPG_CACHE_TTL_MS,
+                maxStaleAgeMs = EPG_STALE_FALLBACK_MAX_AGE_MS
+            )
+        ) {
+            EpgCacheFreshness.FRESH -> null
+            EpgCacheFreshness.STALE_FALLBACK -> cached
+            EpgCacheFreshness.EXPIRED -> {
+                epgCache.remove(url, cached)
+                null
+            }
+        }
     }
 
     private fun purgeExpiredEpgCache(now: Long) {
         epgCache.entries.forEach { entry ->
-            if (now - entry.value.loadedAtMs > EPG_CACHE_TTL_MS) {
+            val freshness = EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = entry.value.loadedAtMs,
+                nowMs = now,
+                freshTtlMs = EPG_CACHE_TTL_MS,
+                maxStaleAgeMs = EPG_STALE_FALLBACK_MAX_AGE_MS
+            )
+            if (freshness == EpgCacheFreshness.EXPIRED) {
                 epgCache.remove(entry.key, entry.value)
             }
         }
@@ -1706,15 +1765,11 @@ class PlaylistRepositoryImpl @Inject constructor(
         epgCache[url] = entry
     }
 
-    private fun epgFailureBackoffMs(failure: IOException): Long {
-        val message = failure.message.orEmpty().lowercase(Locale.ROOT)
-        return when {
-            failure is EpgInputLimitExceededException -> EPG_MALFORMED_BACKOFF_MS
-            "invalid xmltv" in message || "xmlpullparser" in message -> EPG_MALFORMED_BACKOFF_MS
-            "heap headroom" in message || "insufficient heap" in message -> EPG_LOW_MEMORY_BACKOFF_MS
-            message.startsWith("http 4") -> EPG_HTTP_BACKOFF_MS
-            else -> EPG_TRANSIENT_BACKOFF_MS
-        }
+    private fun epgFailureBackoffMs(failureKind: EpgFailureKind): Long = when (failureKind) {
+        EpgFailureKind.TRANSIENT -> EPG_TRANSIENT_BACKOFF_MS
+        EpgFailureKind.PERMANENT_HTTP -> EPG_HTTP_BACKOFF_MS
+        EpgFailureKind.MALFORMED -> EPG_MALFORMED_BACKOFF_MS
+        EpgFailureKind.LOW_MEMORY -> EPG_LOW_MEMORY_BACKOFF_MS
     }
 
     private fun heapHeadroomBytes(): Long {
@@ -1726,7 +1781,7 @@ class PlaylistRepositoryImpl @Inject constructor(
     private fun ensureEpgHeapHeadroom(minHeadroomBytes: Long) {
         val headroom = heapHeadroomBytes()
         if (headroom < minHeadroomBytes) {
-            throw IOException(
+            throw EpgLowMemoryException(
                 "EPG deferred: low heap headroom ${headroom / MIB}MiB, required ${minHeadroomBytes / MIB}MiB"
             )
         }
@@ -1881,7 +1936,10 @@ class PlaylistRepositoryImpl @Inject constructor(
                 event = parser.next()
             }
         } catch (throwable: XmlPullParserException) {
-            throw IOException("Invalid XMLTV format: ${throwable.message}", throwable)
+            throw EpgMalformedXmlException(
+                message = "Invalid XMLTV format: ${throwable.message}",
+                cause = throwable
+            )
         }
 
         programsByChannel.values.forEach(::sortAndDeduplicateProgramsInPlace)
@@ -2230,6 +2288,7 @@ class PlaylistRepositoryImpl @Inject constructor(
         const val HEALTH_CHECK_RETRIES = 2
         const val HEALTH_RETRY_DELAY_MS = 450L
         const val EPG_CACHE_TTL_MS = 15 * 60 * 1000L
+        const val EPG_STALE_FALLBACK_MAX_AGE_MS = 2 * 60 * 60 * 1000L
         const val EPG_DISCOVERY_RETRY_MS = 10 * 60 * 1000L
         const val MAX_EPG_SOURCE_CANDIDATES = 4
         const val MAX_EPG_CACHE_ENTRIES = 1
