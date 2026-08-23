@@ -12,6 +12,7 @@ import com.iptv.tv.core.database.entity.FavoriteLegacySeedEntity
 import com.iptv.tv.core.database.entity.PlaylistEntity
 import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.ChannelCatchUpMetadata
 import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.ChannelStableIdentity
 import com.iptv.tv.core.model.FavoritePlaybackContext
@@ -427,7 +428,22 @@ internal object UnifiedFavoritePersistence {
         streamUrl = streamUrl,
         health = runCatching { ChannelHealth.valueOf(health) }.getOrDefault(ChannelHealth.UNKNOWN),
         orderIndex = orderIndex,
-        isHidden = isHidden
+        isHidden = isHidden,
+        catchUp = if (
+            catchUpMode == null &&
+            catchUpDays == null &&
+            catchUpSourceTemplate == null &&
+            !catchUpDaysDeclared
+        ) {
+            null
+        } else {
+            ChannelCatchUpMetadata(
+                mode = catchUpMode,
+                days = catchUpDays,
+                sourceTemplate = catchUpSourceTemplate,
+                daysDeclared = catchUpDaysDeclared
+            )
+        }
     )
 
     private fun FavoriteChannelVariantEntity.toModelSafe(): Channel = Channel(
