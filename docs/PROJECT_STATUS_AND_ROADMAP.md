@@ -50,7 +50,7 @@ Issue #45's aggregate collector/summary work is complete in `main`. Ready-catalo
 
 ### Next production increments
 
-1. **PR #190 — catch-up playback capability contract — active.** Resolve only explicit supported provider metadata into deterministic archive URLs and fail closed on unknown modes/placeholders or invalid/out-of-window programme intervals; no Player launch wiring yet.
+1. **PR #190 — catch-up playback capability contract — active.** Resolve only explicit supported provider metadata into deterministic archive URLs and fail closed on unknown modes/placeholders, malformed declared ranges, URL-fragment hazards or invalid/out-of-window programme intervals; no Player launch wiring yet.
 2. **Catch-up persistence + diagnostics/cache.** Persist verified capability metadata across import/Ready refresh, then continue matched/unmatched diagnostics and resilient EPG refresh/cache behavior.
 3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
 
@@ -60,7 +60,9 @@ Player work is split into small fresh-main increments. Refactoring must preserve
 
 ### Production routing and architecture debt
 
-`eature/player/StablePlayerScreenReplacement.kt` — roughly 54 KB after PR #186: production root composition, channel filtering/browser, layout selection and remaining navigation policy still share one file; presentation/panel helpers were extracted to `StablePlayerPresentation.kt`.
+`MainActivity` routes the application to `StablePlayerScreen`, implemented in `feature/player/StablePlayerScreenReplacement.kt`. That production route, not the older `PlayerScreen.kt`, is the refactor and performance target.
+
+- `feature/player/StablePlayerScreenReplacement.kt` — production root composition, channel filtering, panels, layout selection and remote-action policy still share one file, though PR #186 extracted the first presentation responsibilities.
 - `feature/player/StablePlayerInput.kt` — production Android View/touch/key lifecycle; it must remain aligned with the `stableRemoteActionForKey` policy used by the real video surfaces.
 - `feature/player/PlayerViewModel.kt` — roughly 113 KB: broad `PlayerUiState`, playback orchestration, catalog/EPG state and frequent state updates in one ViewModel.
 - `feature/player/PlayerScreen.kt` — roughly 108 KB legacy composable. Do not spend refactor budget on it unless routing is explicitly migrated back to it or the legacy path is being retired.
@@ -71,9 +73,9 @@ The target is not class-heavy OOP. For Kotlin/Compose, apply SOLID/bounded respo
 ### Refactor sequence
 
 1. **Production Player input boundary — complete, PR #183.** `StablePlayerInputHandler` remains the Android lifecycle/gesture adapter, deterministic input contracts/policy are extracted, `stableRemoteActionForKey` remains the production key mapping source of truth, and Player refactors are protected by an exact-head Scanner boundary/regression gate.
-2. **Production StablePlayer composition split — in progress.** PR #186 extracted bounded presentation/panel helpers without changing playback semantics. Continue mechanical shell/navigation and channel browser/list extraction from fresh `main`; PR #188 was abandoned before integration and contributed no production code.
+2. **Production StablePlayer composition split — in progress.** PR #186 extracted the first stable presentation responsibilities. Continue bounded mechanical splits (channel browser/list, panels/settings, shell/navigation) without changing playback semantics, search/filter semantics or state ownership. PR #188 was a closed staging attempt and did not land production code.
 3. **Player state/recomposition split.** Separate hot playback/engine telemetry from large catalog/EPG/browser state, reduce root `PlayerUiState` invalidation, move expensive derived channel models/indexes out of root composition, and publish only distinct state changes.
-4. **RAN-bounded Auto buffer.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV `ChannelHealth.UNSTABLE`, increase only time-based Media3 recovery/min-buffer thresholds while preserving existing device/multiview byte caps. Manual remains explicit. Ace/P2P buffer policy is excluded without Issue #159 device evidence.
+4. **RAM-bounded Auto buffer.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV `ChannelHealth.UNSTABLE`, increase only time-based Media3 recovery/min-buffer thresholds while preserving existing device/multiview byte caps. Manual remains explicit. Ace/P2P buffer policy is excluded without Issue #159 device evidence.
 5. **Measured Player performance pass.** Address remaining main-thread/state churn only from deterministic evidence or profiling, keeping each optimization independently testable.
 6. **Large-file follow-up.** Apply the same responsibility-first decomposition pattern to Scanner, Editor, Importer and Settings in separate bounded-context PRs; do not combine unrelated modules in one rewrite.
 
@@ -96,7 +98,7 @@ The built-in Ready catalog contains exactly three live presets. READY_CATALOG re
 
 ## Portable Favorites contract
 
-`Избранные каналш is a user-owned library, not a view over current source rows.
+`Избранные каналы` is a user-owned library, not a view over current source rows.
 
 The full backup direction is:
 
@@ -109,7 +111,7 @@ Favorite backup
   │    ├── preferred source marker
   │    └── sourceVariants[]
   │         ├── stream/source identity
-  │        ├── original playlist/group provenance
+  │         ├── original playlist/group provenance
   │         └── non-secret metadata
   └── backup metadata
 ```
@@ -157,8 +159,8 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 ## Decision order
 
 1. Keep PR #182's merged Ready/catalog/Favorites baseline stable; do not reopen it without a measured regression or planned capability.
-2. Execute Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183 and the composition split advanced in PR #186; continue the remaining mechanical split before state/recomposition, RAM-bounded Auto buffer and measured performance work.
-3. Continue Issue #47 from PR #189 with a fail-closed catch-up playback contract, then persistence/diagnostics/cache and real archive launch wiring in independent fresh-main increments when it does not conflict with active Player files.
+2. Continue Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183 and the first composition split landed in PR #186; continue bounded composition extraction before state/recomposition, RAM-bounded Auto buffer and measured performance work.
+3. Continue Issue #47 from PR #189 with PR #190's safe catch-up playback contract, then persist verified catch-up capability and continue diagnostics/cache in independent fresh-main increments.
 4. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
 5. Refactor other oversized Scanner/Editor/Importer/Settings files only as separate bounded-context PRs after establishing the production Player decomposition pattern.
 6. Complete hardware/soak/release acceptance before closing master roadmap #44.
@@ -178,9 +180,3 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 
 - `PROJECT_STATUS_AND_ROADMAP.md` — canonical current status and next gate.
 - `USER_GUIDE.md` — user-facing controls, canonical catalog and autonomous Favorites behavior.
-- `architecture.md` — module boundaries and canonical catalog/Favorites/P2P contracts.
-- `PLAYBACK_STATUS.md` — concise user-visible playback state and P2P acceptance criteria.
-- `testing/playback-log-analysis-2026-08-20.md` — latest canonical P2P field evidence until a newer controlled device run supersedes it.
-- `ROADMAP.md` and `ACE_LIVE_IMPLEMENTATION_PLAN.md` — long-form history and architecture.
-- `ACE_LIVE_FIELD_VALIDATION_*.md` — immutable dated evidence.
-- `P2P_RUNTIME_NOTES.md`, `P2P_CONTENT_TRANSPORT.md` and `ACE_LIVE_STARTUP_TIMELINE.md` — runtime, identity and diagnostics contracts.
