@@ -142,19 +142,24 @@ class EpgStreamingSafetyTest {
     @Test
     fun candidateLoadingPrefersHealthyFallbackBeforeStalePrimary() {
         val attempts = mutableListOf<String>()
+        val singleEntryCache = mutableMapOf("primary" to "stale-primary")
         val results = loadEpgCandidatesFreshFirst(
             candidates = listOf("primary", "fallback"),
             loadFresh = { url ->
                 attempts += "fresh:$url"
                 when (url) {
                     "primary" -> throw IOException("timeout")
-                    "fallback" -> "fresh-fallback"
+                    "fallback" -> {
+                        // Simulate MAX_EPG_CACHE_ENTRIES=1: a fresh fallback evicts primary.
+                        singleEntryCache.clear()
+                        "fresh-fallback"
+                    }
                     else -> error("unexpected candidate")
                 }
             },
             captureStaleFallback = { url ->
                 attempts += "stale:$url"
-                if (url == "primary") "stale-primary" else null
+                singleEntryCache[url]
             },
             onLoadError = {}
         ).toList()
