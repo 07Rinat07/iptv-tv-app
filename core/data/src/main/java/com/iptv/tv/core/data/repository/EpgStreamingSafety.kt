@@ -230,17 +230,13 @@ internal class EpgFailureBackoffCache(
         return null
     }
 
-    /** Read-only lookup that preserves the access-order eviction policy. */
+    /** Read-only lookup that preserves both access order and cache membership. */
     @Synchronized
     fun peekActive(url: String): EpgFailureBackoffEntry? {
-        val iterator = entries.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
+        for (entry in entries.entries) {
             if (entry.key != url) continue
             val failure = entry.value
-            if (nowMs() - failure.failedAtMs < failure.retryAfterMs) return failure
-            iterator.remove()
-            return null
+            return failure.takeIf { nowMs() - it.failedAtMs < it.retryAfterMs }
         }
         return null
     }
