@@ -97,7 +97,11 @@ internal fun <T> loadEpgCandidatesFreshFirst(
             yield(url to loadFresh(url))
         } catch (failure: Exception) {
             onLoadError(failure)
-            captureStaleFallback(url)?.let { deferredStale += url to it }
+            if (failure is EpgLowMemoryException) {
+                deferredStale.clear()
+            } else {
+                captureStaleFallback(url)?.let { deferredStale += url to it }
+            }
         }
     }
     deferredStale.forEach { yield(it) }
