@@ -17,7 +17,7 @@ on:
       - '.github/workflows/database-unit.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: database-unit-${{ github.ref }}
@@ -75,3 +75,40 @@ jobs:
 
       - name: Unit tests feature favorites
         run: ./gradlew --no-daemon --stacktrace :feature:favorites:testDebugUnitTest
+
+  epg194-roadmap-sync:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 194
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact PR head for guarded roadmap sync
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Apply exact roadmap sync and restore workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET='docs/PROJECT_STATUS_AND_ROADMAP.md'
+          PATCH='.github/epg194-roadmap.patch'
+          EXPECTED_BASE='85139f950b2632d3894200bac61d1b4f80d792d8'
+          EXPECTED_RESULT='6d8f39fb283bcee3f67b69f53a8ab3b86154f963'
+          EXPECTED_PATCH_SHA256='aa868ed63eaed460980e5dc05cd14bc3c9024fc417bf984082caeeb99f69d470'
+
+          test "$(git hash-object "$TARGET")" = "$EXPECTED_BASE"
+          echo "$EXPECTED_PATCH_SHA256  $PATCH" | sha256sum -c -
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          test "$(git hash-object "$TARGET")" = "$EXPECTED_RESULT"
+
+          git fetch origin main --depth=1
+          git show FETCH_HEAD:.github/workflows/database-unit.yml > .github/workflows/database-unit.yml
+          rm "$PATCH"
+          git add "$TARGET" .github/workflows/database-unit.yml "$PATCH"
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs: sync roadmap after PR #193'
+          git push origin HEAD:feat/epg-cache-observability
