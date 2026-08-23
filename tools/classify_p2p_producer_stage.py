@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Classify Ace Live field failures by the first missing producer transition.
 
-This tool is observational only. It does not change peer selection, DHT, request depth,
-timeouts, buffering, or any other runtime policy. It consumes exported diagnostics from
-the V4d producer-boundary instrumentation and applies the decision order from Issue #159.
+Observational only: this tool never changes peer selection, DHT, request depth,
+timeouts, buffering, or any runtime policy. Exported diagnostics are newest-first;
+producer counters are cumulative, so current failures are classified from a bounded
+observation window instead of lifetime maxima.
 """
 
 from __future__ import annotations
@@ -17,6 +18,17 @@ from typing import Iterable
 
 PRODUCER_STATUS = "embedded_ace_live_producer_boundary"
 PRODUCER_GAP_STATUS = "embedded_ace_live_producer_gap"
+CORRELATED_RUNTIME_STATUSES = (
+    PRODUCER_STATUS,
+    PRODUCER_GAP_STATUS,
+    "embedded_ace_live_recovery",
+    "embedded_ace_live_startup_timeline",
+    "embedded_ace_live_peer_lifecycle",
+    "embedded_ace_live_peer_discovery",
+    "embedded_ace_live_peer_quality",
+    "embedded_ace_live_buffer_pressure",
+    "embedded_ace_live_loopback_http_lifecycle",
+)
 COUNTERS = (
     "scheduled",
     "selected",
@@ -42,38 +54,59 @@ class RuntimeKey:
     path: str
 
 
+@dataclass(frozen=True)
+class BoundarySnapshot:
+    ordinal: int
+    stage: str | None
+    disposition: str | None
+    session: int | None
+    counters: dict[str, int]
+
+    @property
+    def progress(self) -> int:
+        return sum(self.counters.values())
+
+
 @dataclass
 class RuntimeEvidence:
     key: RuntimeKey
-    counters: dict[str, int] = field(default_factory=lambda: {name: 0 for name in COUNTERS})
-    sessions: set[int] = field(default_factory=set)
     records: int = 0
     boundary_records: int = 0
     gap_records: int = 0
-    active_gap_seen: bool = False
-    last_stage: str | None = None
-    last_disposition: str | None = None
+    correlated_records: int = 0
+    active_gap_ordinals: list[int] = field(default_factory=list)
+    snapshots: list[BoundarySnapshot] = field(default_factory=list)
+    sessions: set[int] = field(default_factory=set)
 
-    def absorb_boundary(self, fields: dict[str, str]) -> None:
+    def absorb_boundary(self, fields: dict[str, str], ordinal: int) -> None:
         self.records += 1
         self.boundary_records += 1
-        self.last_stage = fields.get("stage", self.last_stage)
-        disposition = fields.get("disposition")
-        if disposition and disposition != "none":
-            self.last_disposition = disposition
+        self.correlated_records += 1
         session = _parse_int(fields.get("session"))
         if session is not None:
             self.sessions.add(session)
-        for counter in COUNTERS:
-            value = _parse_int(fields.get(counter))
-            if value is not None:
-                self.counters[counter] = max(self.counters[counter], value)
+        counters = {name: (_parse_int(fields.get(name)) or 0) for name in COUNTERS}
+        disposition = fields.get("disposition")
+        self.snapshots.append(
+            BoundarySnapshot(
+                ordinal=ordinal,
+                stage=fields.get("stage"),
+                disposition=disposition if disposition and disposition != "none" else None,
+                session=session,
+                counters=counters,
+            )
+        )
 
-    def absorb_gap(self, fields: dict[str, str]) -> None:
+    def absorb_gap(self, fields: dict[str, str], ordinal: int) -> None:
         self.records += 1
         self.gap_records += 1
+        self.correlated_records += 1
         if fields.get("state") == "active":
-            self.active_gap_seen = True
+            self.active_gap_ordinals.append(ordinal)
+
+    def absorb_correlated(self) -> None:
+        self.records += 1
+        self.correlated_records += 1
 
 
 @dataclass(frozen=True)
@@ -82,6 +115,7 @@ class RuntimeClassification:
     first_missing_transition: str
     action_boundary: str
     counters: dict[str, int]
+    observation_deltas: dict[str, int]
     sessions: tuple[int, ...]
     records: int
     boundary_records: int
@@ -116,10 +150,9 @@ def runtime_key_from_fields(fields: dict[str, str]) -> RuntimeKey | None:
 def collect_runtime_evidence(lines: Iterable[str]) -> tuple[dict[RuntimeKey, RuntimeEvidence], int]:
     runtimes: dict[RuntimeKey, RuntimeEvidence] = {}
     uncorrelated_records = 0
-    for line in lines:
-        is_boundary = PRODUCER_STATUS in line
-        is_gap = PRODUCER_GAP_STATUS in line
-        if not is_boundary and not is_gap:
+    for ordinal, line in enumerate(lines):
+        marker = next((status for status in CORRELATED_RUNTIME_STATUSES if status in line), None)
+        if marker is None:
             continue
         fields = parse_fields(line)
         key = runtime_key_from_fields(fields)
@@ -127,66 +160,103 @@ def collect_runtime_evidence(lines: Iterable[str]) -> tuple[dict[RuntimeKey, Run
             uncorrelated_records += 1
             continue
         evidence = runtimes.setdefault(key, RuntimeEvidence(key=key))
-        if is_boundary:
-            evidence.absorb_boundary(fields)
-        elif is_gap:
-            evidence.absorb_gap(fields)
+        if marker == PRODUCER_STATUS:
+            evidence.absorb_boundary(fields, ordinal)
+        elif marker == PRODUCER_GAP_STATUS:
+            evidence.absorb_gap(fields, ordinal)
+        else:
+            evidence.absorb_correlated()
     return runtimes, uncorrelated_records
 
 
+def _newest_snapshot(evidence: RuntimeEvidence) -> BoundarySnapshot | None:
+    if not evidence.snapshots:
+        return None
+    # Counters are cumulative. Highest progress is newest regardless of whether the
+    # caller supplied newest-first export rows or chronological logcat rows. Ties
+    # keep the first row, matching SyncLogDao/buildLogsText newest-first exports.
+    return max(evidence.snapshots, key=lambda snapshot: (snapshot.progress, -snapshot.ordinal))
+
+
+def _window_deltas(evidence: RuntimeEvidence, newest: BoundarySnapshot) -> dict[str, int]:
+    baseline = {name: 0 for name in COUNTERS}
+    # After a runtime has already appended media, lifetime counters cannot classify
+    # a later producer stall. Use the most recent earlier media_appended event as a
+    # baseline and classify only new cumulative progress after that point.
+    prior_media = [
+        snapshot
+        for snapshot in evidence.snapshots
+        if snapshot.stage == "media_appended" and snapshot.progress < newest.progress
+    ]
+    if prior_media:
+        baseline = max(prior_media, key=lambda snapshot: snapshot.progress).counters
+    return {
+        name: max(0, newest.counters[name] - baseline[name])
+        for name in COUNTERS
+    }
+
+
+def _decision(counters: dict[str, int]) -> tuple[str, str]:
+    if counters["scheduled"] == 0:
+        return "scheduled", "scheduler-output-boundary"
+    if counters["selected"] == 0:
+        return "selected", "request-selection-readiness-window-ownership-boundary"
+    if counters["sent"] == 0:
+        return "sent", "local-write-routing-ownership-boundary"
+    if counters["chunk_ingress"] == 0:
+        return "chunk_ingress", "remote-ingress-boundary; alternate-peer-probe-candidate-only-with-field-evidence"
+    if counters["chunk_accepted"] == 0 and counters["chunk_rejected"] > 0:
+        return "chunk_accepted", "chunk-rejection-auth-protocol-boundary"
+    if counters["chunk_accepted"] == 0:
+        return "chunk_accepted", "chunk-acceptance-boundary"
+    if counters["piece_completed"] == 0:
+        return "piece_completed", "piece-assembly-completion-boundary"
+    if counters["authenticated"] == 0:
+        return "authenticated", "authentication-resync-output-boundary"
+    if counters["ts_resync_output"] == 0:
+        return "ts_resync_output", "authentication-resync-output-boundary"
+    if counters["media_appended"] == 0:
+        return "media_appended", "authentication-resync-output-boundary"
+    return "player_ready_or_frame_audio", "player-ts-demux-boundary; do-not-change-p2p-acquisition"
+
+
 def classify_runtime(evidence: RuntimeEvidence) -> RuntimeClassification:
-    c = evidence.counters
-    if evidence.boundary_records == 0 and evidence.active_gap_seen:
-        missing = "scheduled"
-        action = "scheduler-output-boundary"
-    elif evidence.boundary_records == 0:
-        missing = "insufficient_boundary_evidence"
-        action = "preserve-more-correlated-producer-evidence; do-not-change-runtime-policy"
-    elif c["scheduled"] == 0:
-        missing = "scheduled"
-        action = "scheduler-output-boundary"
-    elif c["selected"] == 0:
-        missing = "selected"
-        action = "request-selection-readiness-window-ownership-boundary"
-    elif c["sent"] == 0:
-        missing = "sent"
-        action = "local-write-routing-ownership-boundary"
-    elif c["chunk_ingress"] == 0:
-        missing = "chunk_ingress"
-        action = "remote-ingress-boundary; alternate-peer-probe-candidate-only-with-field-evidence"
-    elif c["chunk_accepted"] == 0 and c["chunk_rejected"] > 0:
-        missing = "chunk_accepted"
-        action = "chunk-rejection-auth-protocol-boundary"
-    elif c["chunk_accepted"] == 0:
-        missing = "chunk_accepted"
-        action = "chunk-acceptance-boundary"
-    elif c["piece_completed"] == 0:
-        missing = "piece_completed"
-        action = "piece-assembly-completion-boundary"
-    elif c["authenticated"] == 0:
-        missing = "authenticated"
-        action = "authentication-resync-output-boundary"
-    elif c["ts_resync_output"] == 0:
-        missing = "ts_resync_output"
-        action = "authentication-resync-output-boundary"
-    elif c["media_appended"] == 0:
-        missing = "media_appended"
-        action = "authentication-resync-output-boundary"
+    newest = _newest_snapshot(evidence)
+    if newest is None:
+        if evidence.active_gap_ordinals:
+            missing = "scheduled"
+            action = "scheduler-output-boundary"
+        else:
+            missing = "insufficient_boundary_evidence"
+            action = "preserve-more-correlated-producer-evidence; do-not-change-runtime-policy"
+        counters = {name: 0 for name in COUNTERS}
+        deltas = dict(counters)
+        last_stage = None
+        last_disposition = None
     else:
-        missing = "player_ready_or_frame_audio"
-        action = "player-ts-demux-boundary; do-not-change-p2p-acquisition"
+        counters = dict(newest.counters)
+        deltas = _window_deltas(evidence, newest)
+        missing, action = _decision(deltas)
+        last_stage = newest.stage
+        dispositions = [snapshot for snapshot in evidence.snapshots if snapshot.disposition]
+        last_disposition = (
+            max(dispositions, key=lambda snapshot: (snapshot.progress, -snapshot.ordinal)).disposition
+            if dispositions
+            else None
+        )
 
     return RuntimeClassification(
         key=evidence.key,
         first_missing_transition=missing,
         action_boundary=action,
-        counters=dict(c),
+        counters=counters,
+        observation_deltas=deltas,
         sessions=tuple(sorted(evidence.sessions)),
         records=evidence.records,
         boundary_records=evidence.boundary_records,
         gap_records=evidence.gap_records,
-        last_stage=evidence.last_stage,
-        last_disposition=evidence.last_disposition,
+        last_stage=last_stage,
+        last_disposition=last_disposition,
     )
 
 
