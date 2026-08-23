@@ -98,9 +98,6 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
 
         val selected = favoriteChannelLookupDao.findChannelById(channelId)
         if (selected == null) {
-            // A standalone favorite can outlive its source row. The existing feature API still
-            // passes a Long channel ID, so use the persisted preferred ID as a compatibility key
-            // for removal until the UI moves to logicalKey directly.
             favoriteSnapshotDao.findFavoriteByPreferredChannelId(channelId)?.let { favorite ->
                 removeFavorite(favorite.logicalKey)
             }
@@ -133,9 +130,6 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
 
         favoriteSnapshotDao.upsertFavorite(batch.favorite)
         favoriteSnapshotDao.upsertVariants(batch.variants)
-
-        // Compatibility mirror: existing feature code outside this repository may still query the
-        // legacy favorite row IDs. Logical storage remains authoritative.
         favoriteDao.upsertAll(
             equivalents.map { channel ->
                 FavoriteEntity(channelId = channel.id, addedAt = now)
@@ -189,7 +183,6 @@ internal data class UnifiedFavoriteMigrationBatch(
     val variants: List<FavoriteChannelVariantEntity>
 )
 
-/** Pure deterministic transformations used by the repository and unit tests. */
 internal object UnifiedFavoritePersistence {
     fun logicalKey(channel: ChannelEntity): String = ChannelStableIdentity.key(
         tvgId = channel.tvgId,
@@ -298,10 +291,7 @@ internal object UnifiedFavoritePersistence {
                 .distinctBy(FavoriteChannelVariantEntity::variantKey)
         }
 
-        return UnifiedFavoriteMigrationBatch(
-            favorites = favorites,
-            variants = variants
-        )
+        return UnifiedFavoriteMigrationBatch(favorites = favorites, variants = variants)
     }
 
     fun representFavorites(
