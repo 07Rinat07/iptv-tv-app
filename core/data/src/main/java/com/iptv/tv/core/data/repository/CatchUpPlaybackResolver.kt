@@ -18,7 +18,7 @@ internal data class CatchUpPlaybackResolution(
 internal object CatchUpPlaybackResolver {
     private val supportedTemplateTokens = linkedMapOf<String, (CatchUpWindow) -> String>(
         "${'$'}{start}" to { it.startEpochSeconds.toString() },
-        "${'$'}{timestamp}" to { it.startEpochSeconds.toString() },
+        "${'$'}{timestamp}" to { it.nowEpochSeconds.toString() },
         "${'$'}{end}" to { it.endEpochSeconds.toString() },
         "${'$'}{duration}" to { it.durationSeconds.toString() },
         "{start}" to { it.startEpochSeconds.toString() },
@@ -37,6 +37,9 @@ internal object CatchUpPlaybackResolver {
         val mode = metadata?.mode?.trim()?.lowercase().orEmpty()
         if (metadata == null || mode.isBlank()) {
             return unsupported("Archive metadata is not declared")
+        }
+        if (metadata.daysDeclared && metadata.days == null) {
+            return unsupported("Declared catchup-days is invalid")
         }
         if (programStartEpochMs < 0L || programEndEpochMs <= programStartEpochMs) {
             return unsupported("Archive programme window is invalid")
@@ -70,8 +73,9 @@ internal object CatchUpPlaybackResolver {
             "append" -> {
                 val template = metadata.sourceTemplate?.trim().orEmpty()
                 if (template.isBlank()) return unsupported("Append catch-up requires catchup-source")
-                renderTemplate(template, window)?.let { liveUrl + it }
+                val rendered = renderTemplate(template, window)
                     ?: return unsupported("Catch-up template contains unsupported placeholders")
+                appendBeforeFragment(liveUrl, rendered)
             }
             "default" -> {
                 val template = metadata.sourceTemplate?.trim().orEmpty()
@@ -84,8 +88,9 @@ internal object CatchUpPlaybackResolver {
                 rendered
             }
             "shift", "timeshift" -> {
-                val delimiter = if ('?' in liveUrl) '&' else '?'
-                "$liveUrl${delimiter}utc=${window.startEpochSeconds}&lutc=${window.nowEpochSeconds}"
+                val (base, fragment) = splitFragment(liveUrl)
+                val delimiter = if ('?' in base) '&' else '?'
+                "$base${delimiter}utc=${window.startEpochSeconds}&lutc=${window.nowEpochSeconds}$fragment"
             }
             else -> return unsupported("Catch-up mode '$mode' is not supported yet")
         }
@@ -102,7 +107,18 @@ internal object CatchUpPlaybackResolver {
         supportedTemplateTokens.forEach { (token, value) ->
             rendered = rendered.replace(token, value(window))
         }
-        return rendered.takeUnless { UNSUPPORTED_PLACEHOLDER.containsMatchIn(it) }
+        return rendered.takeUnless { UNRESOLVED_PLACEHOLDER_PREFIX.containsMatchIn(it) }
+    }
+
+    private fun appendBeforeFragment(url: String, suffix: String): String {
+        val (base, fragment) = splitFragment(url)
+        return base + suffix + fragment
+    }
+
+    private fun splitFragment(url: String): Pair<String, String> {
+        val separator = url.indexOf('#')
+        if (separator < 0) return url to ""
+        return url.substring(0, separator) to url.substring(separator)
     }
 
     private fun splitTransportSuffix(rawUrl: String): Pair<String, String> {
@@ -129,5 +145,5 @@ internal object CatchUpPlaybackResolver {
     }
 
     private const val SECONDS_PER_DAY = 24L * 60L * 60L
-    private val UNSUPPORTED_PLACEHOLDER = Regex("""\$\{[^}]+}|\{[A-Za-z][^}]*}""")
+    private val UNRESOLVED_PLACEHOLDER_PREFIX = Regex("""\$\{|\{[A-Za-z]""")
 }
