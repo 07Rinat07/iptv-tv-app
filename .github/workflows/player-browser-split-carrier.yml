@@ -1,0 +1,123 @@
+name: Player browser split carrier
+
+on:
+  push:
+    branches:
+      - refactor/player-channel-browser-split-v2
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Guard and apply mechanical extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE='feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt'
+          TARGET='feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerChannelBrowser.kt'
+          ROADMAP='docs/PROJECT_STATUS_AND_ROADMAP.md'
+          test "$(git hash-object "$SOURCE")" = 'b309101599e16e26c5db593bad395bef5c2aca89'
+          test "$(git hash-object "$ROADMAP")" = '25927d63d5f226072c8f3fbbbadd70fac8170337'
+          test ! -e "$TARGET"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt')
+          target_path = Path('feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerChannelBrowser.kt')
+          roadmap_path = Path('docs/PROJECT_STATUS_AND_ROADMAP.md')
+
+          source = source_path.read_text()
+          start_marker = '@Composable\nprivate fun StableNearbyChannelsReplacement('
+          end_marker = '@OptIn(ExperimentalFoundationApi::class)\n@Composable\n@UnstableApi\nprivate fun StableFullscreenPlayerReplacement('
+          start = source.index(start_marker)
+          end = source.index(end_marker, start)
+          block = source[start:end].rstrip() + '\n'
+          block = block.replace(
+              '@Composable\nprivate fun StableNearbyChannelsReplacement(',
+              '@Composable\ninternal fun StableNearbyChannelsReplacement(',
+              1,
+          )
+          block = block.replace(
+              '@Composable\nprivate fun StableChannelBrowserReplacement(',
+              '@Composable\ninternal fun StableChannelBrowserReplacement(',
+              1,
+          )
+          block = block.replace(
+              '@Composable\nprivate fun StableChannelDrawerReplacement(',
+              '@Composable\ninternal fun StableChannelDrawerReplacement(',
+              1,
+          )
+
+          imports = '''package com.iptv.tv.feature.player
+
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.focusGroup
+          import androidx.compose.foundation.layout.Arrangement
+          import androidx.compose.foundation.layout.Column
+          import androidx.compose.foundation.layout.Row
+          import androidx.compose.foundation.layout.fillMaxHeight
+          import androidx.compose.foundation.layout.fillMaxSize
+          import androidx.compose.foundation.layout.fillMaxWidth
+          import androidx.compose.foundation.layout.heightIn
+          import androidx.compose.foundation.layout.padding
+          import androidx.compose.foundation.layout.size
+          import androidx.compose.foundation.layout.width
+          import androidx.compose.foundation.lazy.LazyColumn
+          import androidx.compose.foundation.lazy.LazyRow
+          import androidx.compose.foundation.lazy.items
+          import androidx.compose.foundation.lazy.rememberLazyListState
+          import androidx.compose.material3.AlertDialog
+          import androidx.compose.material3.Button
+          import androidx.compose.material3.Card
+          import androidx.compose.material3.MaterialTheme
+          import androidx.compose.material3.OutlinedButton
+          import androidx.compose.material3.OutlinedTextField
+          import androidx.compose.material3.Surface
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.Composable
+          import androidx.compose.runtime.LaunchedEffect
+          import androidx.compose.runtime.remember
+          import androidx.compose.runtime.rememberCoroutineScope
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.style.TextOverflow
+          import androidx.compose.ui.unit.dp
+          import coil.compose.AsyncImage
+          import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+          import com.iptv.tv.core.model.Channel
+          import com.iptv.tv.core.model.EpgProgram
+          import kotlinx.coroutines.launch
+
+          '''
+          imports = '\n'.join(line[10:] if line.startswith('          ') else line for line in imports.splitlines()) + '\n'
+          target_path.write_text(imports + block)
+          source_path.write_text(source[:start].rstrip() + '\n\n' + source[end:])
+
+          roadmap = roadmap_path.read_text()
+          old = ('2. **Production StablePlayer composition split — in progress.** PR #186 extracted the first stable presentation responsibilities and PR #196 extracted panel/dialog presentation. Continue bounded mechanical splits of channel browser/list/drawer and shell/navigation without changing playback semantics, search/filter semantics or state ownership. PR #188 and stale draft #195 were closed unmerged and did not land production code.')
+          new = ('2. **Production StablePlayer composition split — in progress.** PR #186 extracted the first stable presentation responsibilities and PR #196 extracted panel/dialog presentation. The current fresh-main increment mechanically extracts the channel browser/list/drawer and nearby-channel presentation while preserving the existing `StableChannelNavigation` policy; shell/navigation remains next. Playback semantics, search/filter semantics and state ownership are unchanged. PR #188 and stale draft #195 were closed unmerged and did not land production code.')
+          if old not in roadmap:
+              raise SystemExit('roadmap anchor not found')
+          roadmap_path.write_text(roadmap.replace(old, new, 1))
+          PY
+
+          rm -- '.github/workflows/player-browser-split-carrier.yml'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            'feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt' \
+            'feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerChannelBrowser.kt' \
+            'docs/PROJECT_STATUS_AND_ROADMAP.md' \
+            '.github/workflows/player-browser-split-carrier.yml'
+          git diff --cached --check
+          git commit -m 'refactor(player): isolate channel browser composition'
+          git push origin HEAD:refactor/player-channel-browser-split-v2
