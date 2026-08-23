@@ -184,7 +184,10 @@ class EpgStreamingSafetyTest {
         ).toList()
 
         assertEquals(
-            listOf("fallback" to "fresh-fallback", "primary" to "stale-primary"),
+            listOf(
+                EpgCandidateLoad("fallback", "fresh-fallback", servedFromStaleFallback = false),
+                EpgCandidateLoad("primary", "stale-primary", servedFromStaleFallback = true)
+            ),
             results
         )
         assertEquals(
@@ -194,14 +197,13 @@ class EpgStreamingSafetyTest {
     }
 
     @Test
-    fun diagnosticsCacheStatusReportsFreshWithoutRetryMetadata() {
+    fun diagnosticsCacheStatusUsesExplicitFreshOriginAcrossTtlBoundary() {
         val status = EpgDiagnosticsCacheStatusPolicy.observe(
             loadedAtMs = 1_000L,
-            nowMs = 1_500L,
-            freshTtlMs = 1_000L,
-            maxStaleAgeMs = 5_000L,
+            nowMs = 6_500L,
+            servedFromStaleFallback = false,
             activeFailure = EpgFailureBackoffEntry(
-                failedAtMs = 1_200L,
+                failedAtMs = 6_400L,
                 retryAfterMs = 2_000L,
                 reason = "timeout",
                 kind = EpgFailureKind.TRANSIENT
@@ -209,19 +211,18 @@ class EpgStreamingSafetyTest {
         )
 
         assertTrue(!status.servedFromStaleFallback)
-        assertEquals(500L, status.cacheAgeMs)
+        assertEquals(5_500L, status.cacheAgeMs)
         assertNull(status.refreshRetryAtMs)
     }
 
     @Test
-    fun diagnosticsCacheStatusReportsTransientStaleFallbackAndRetryDeadline() {
+    fun diagnosticsCacheStatusUsesExplicitStaleOriginAcrossAgeBoundary() {
         val status = EpgDiagnosticsCacheStatusPolicy.observe(
             loadedAtMs = 1_000L,
-            nowMs = 2_500L,
-            freshTtlMs = 1_000L,
-            maxStaleAgeMs = 5_000L,
+            nowMs = 10_000L,
+            servedFromStaleFallback = true,
             activeFailure = EpgFailureBackoffEntry(
-                failedAtMs = 2_400L,
+                failedAtMs = 9_900L,
                 retryAfterMs = 2_000L,
                 reason = "HTTP 503",
                 kind = EpgFailureKind.TRANSIENT
@@ -229,17 +230,16 @@ class EpgStreamingSafetyTest {
         )
 
         assertTrue(status.servedFromStaleFallback)
-        assertEquals(1_500L, status.cacheAgeMs)
-        assertEquals(4_400L, status.refreshRetryAtMs)
+        assertEquals(9_000L, status.cacheAgeMs)
+        assertEquals(11_900L, status.refreshRetryAtMs)
     }
 
     @Test
-    fun diagnosticsCacheStatusKeepsStaleStateAfterBackoffExpires() {
+    fun diagnosticsCacheStatusKeepsStaleOriginAfterBackoffExpires() {
         val status = EpgDiagnosticsCacheStatusPolicy.observe(
             loadedAtMs = 1_000L,
             nowMs = 2_500L,
-            freshTtlMs = 1_000L,
-            maxStaleAgeMs = 5_000L,
+            servedFromStaleFallback = true,
             activeFailure = null
         )
 
@@ -249,12 +249,11 @@ class EpgStreamingSafetyTest {
     }
 
     @Test
-    fun diagnosticsCacheStatusDoesNotExposeRetryForPermanentOrExpiredData() {
-        val permanent = EpgDiagnosticsCacheStatusPolicy.observe(
+    fun diagnosticsCacheStatusDoesNotExposeRetryForPermanentFailure() {
+        val status = EpgDiagnosticsCacheStatusPolicy.observe(
             loadedAtMs = 1_000L,
             nowMs = 2_500L,
-            freshTtlMs = 1_000L,
-            maxStaleAgeMs = 5_000L,
+            servedFromStaleFallback = true,
             activeFailure = EpgFailureBackoffEntry(
                 failedAtMs = 2_400L,
                 retryAfterMs = 2_000L,
@@ -262,22 +261,23 @@ class EpgStreamingSafetyTest {
                 kind = EpgFailureKind.PERMANENT_HTTP
             )
         )
-        val expired = EpgDiagnosticsCacheStatusPolicy.observe(
-            loadedAtMs = 1_000L,
-            nowMs = 6_001L,
-            freshTtlMs = 1_000L,
-            maxStaleAgeMs = 5_000L,
-            activeFailure = EpgFailureBackoffEntry(
-                failedAtMs = 6_000L,
-                retryAfterMs = 2_000L,
-                reason = "timeout",
-                kind = EpgFailureKind.TRANSIENT
-            )
-        )
 
-        assertTrue(permanent.servedFromStaleFallback)
-        assertNull(permanent.refreshRetryAtMs)
-        assertTrue(!expired.servedFromStaleFallback)
-        assertNull(expired.refreshRetryAtMs)
+        assertTrue(status.servedFromStaleFallback)
+        assertNull(status.refreshRetryAtMs)
+    }
+
+    @Test
+    fun peekActiveDoesNotPromoteEntryInAccessOrder() {
+        var now = 1_000L
+        val cache = EpgFailureBackoffCache(maxEntries = 2) { now }
+        cache.record("a", "bad-a", retryAfterMs = 10_000L, kind = EpgFailureKind.TRANSIENT)
+        cache.record("b", "bad-b", retryAfterMs = 10_000L, kind = EpgFailureKind.TRANSIENT)
+
+        assertEquals("bad-a", cache.peekActive("a")?.reason)
+        cache.record("c", "bad-c", retryAfterMs = 10_000L, kind = EpgFailureKind.TRANSIENT)
+
+        assertNull(cache.peekActive("a"))
+        assertEquals("bad-b", cache.peekActive("b")?.reason)
+        assertEquals("bad-c", cache.peekActive("c")?.reason)
     }
 }
