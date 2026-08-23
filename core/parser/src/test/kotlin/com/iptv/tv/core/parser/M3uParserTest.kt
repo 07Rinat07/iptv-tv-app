@@ -167,4 +167,40 @@ class M3uParserTest {
         assertNull(metadata?.days)
         assertNull(metadata?.sourceTemplate)
     }
+
+    @Test
+    fun catchUpTextInsideLogoOrTitleDoesNotInventArchiveCapability() {
+        val parser = M3uParser()
+        val raw = """
+            #EXTM3U
+            #EXTINF:-1 tvg-logo="https://img.test/logo?catchup=default,still-logo",Live catchup=append
+            https://example.com/live.m3u8
+        """.trimIndent()
+
+        val result = parser.parse(playlistId = 3, raw = raw) as ParseResult.Valid
+
+        assertEquals("Live catchup=append", result.channels.single().name)
+        assertEquals(
+            "https://img.test/logo?catchup=default,still-logo",
+            result.channels.single().logo
+        )
+        assertTrue(result.catchUpByChannelOrderIndex.isEmpty())
+    }
+
+    @Test
+    fun standaloneCatchUpAttributeRemainsVisibleBesideCatchUpTextInOtherAttributes() {
+        val parser = M3uParser()
+        val raw = """
+            #EXTM3U
+            #EXTINF:-1 tvg-logo="https://img.test/logo?catchup=wrong" catchup="append" catchup-days="2",Archive
+            https://example.com/archive.m3u8
+        """.trimIndent()
+
+        val result = parser.parse(playlistId = 4, raw = raw) as ParseResult.Valid
+
+        assertEquals(
+            ChannelCatchUpMetadata(mode = "append", days = 2, sourceTemplate = null),
+            result.catchUpByChannelOrderIndex[0]
+        )
+    }
 }
