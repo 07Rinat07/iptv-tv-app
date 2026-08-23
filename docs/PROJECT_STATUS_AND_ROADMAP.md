@@ -6,8 +6,8 @@ This is the canonical current-state and next-action document. Dated field report
 
 ## Current integration head
 
-- Current production `main`: `de42ae6b` — PR #184 producer-stage field-evidence classifier, merged after exact-head Android CI #808, Playback latency tooling #16, P2P Field Tools #5 and resolved review findings.
-- PR #174–#184 are merged. After the Ready/catalog/Favorites and calendar-safe EPG work, PR #183 isolated the production Player input policy/guard and PR #184 added observational P2P field-analysis tooling without changing Ace Live runtime policy.
+- Current production `main`: `b2c57a0a` — PR #189 explicit M3U catch-up metadata boundary, merged after exact-head Android CI #836 and resolution of the false-positive archive-capability review finding.
+- PR #174–#187 and PR #189 are merged. PR #186 continued the production StablePlayer presentation/composition split, PR #187 made XMLTV partial matching fail closed on ambiguity, and PR #189 preserved explicit per-channel catch-up metadata without enabling archive playback. PR #188 was a closed, unmerged staging attempt and is not production history.
 - Catalog/Favorites, EPG and Player architecture work do not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
 - Historical merged feature branches are not production merge candidates and should be deleted after their changes are verified in `main`.
 
@@ -45,12 +45,14 @@ Issue #45's aggregate collector/summary work is complete in `main`. Ready-catalo
 ### Complete
 
 1. **PR #181 — calendar-safe EPG day windows.** TODAY/TOMORROW follow local civil-day boundaries instead of fixed 24-hour arithmetic, including DST/skipped-midnight regressions.
-2. **EPG matching safety — active increment.** Preserve `tvg-id`, exact display-name and exact channel-id priority; partial channel-id fallback accepts only one distinct XMLTV candidate and fails closed when multiple channels are plausible, making the result independent from XMLTV/map order.
+2. **PR #187 — ambiguity-safe EPG matching.** Preserve `tvg-id`, exact display-name and exact channel-id priority; partial fallback accepts only one distinct XMLTV candidate and fails closed when multiple channels are plausible, including normalized-key collisions.
+3. **PR #189 — explicit M3U catch-up metadata boundary.** Preserve standalone `catchup`, `catchup-days` and `catchup-source` attributes per parsed channel, reject URL/title false positives, and keep live-only channels archive-disabled.
 
 ### Next production increments
 
-1. **EPG diagnostics/cache/archive capability.** Continue matched/unmatched diagnostics, resilient refresh/cache behavior and real catch-up capability contracts in small independent increments.
-2. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
+1. **PR #190 — catch-up playback capability contract — active.** Resolve only explicit supported provider metadata into deterministic archive URLs and fail closed on unknown modes/placeholders or invalid/out-of-window programme intervals; no Player launch wiring yet.
+2. **Catch-up persistence + diagnostics/cache.** Persist verified capability metadata across import/Ready refresh, then continue matched/unmatched diagnostics and resilient EPG refresh/cache behavior.
+3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
 
 ## Issue #46 — Player UX, buffering and architecture
 
@@ -58,9 +60,7 @@ Player work is split into small fresh-main increments. Refactoring must preserve
 
 ### Production routing and architecture debt
 
-`MainActivity` routes the application to `StablePlayerScreen`, implemented in `feature/player/StablePlayerScreenReplacement.kt`. That production route, not the older `PlayerScreen.kt`, is the refactor and performance target.
-
-- `feature/player/StablePlayerScreenReplacement.kt` — roughly 66 KB: production root composition, channel filtering, panels, layout selection and remote-action policy still share one file.
+`eature/player/StablePlayerScreenReplacement.kt` — roughly 54 KB after PR #186: production root composition, channel filtering/browser, layout selection and remaining navigation policy still share one file; presentation/panel helpers were extracted to `StablePlayerPresentation.kt`.
 - `feature/player/StablePlayerInput.kt` — production Android View/touch/key lifecycle; it must remain aligned with the `stableRemoteActionForKey` policy used by the real video surfaces.
 - `feature/player/PlayerViewModel.kt` — roughly 113 KB: broad `PlayerUiState`, playback orchestration, catalog/EPG state and frequent state updates in one ViewModel.
 - `feature/player/PlayerScreen.kt` — roughly 108 KB legacy composable. Do not spend refactor budget on it unless routing is explicitly migrated back to it or the legacy path is being retired.
@@ -71,9 +71,9 @@ The target is not class-heavy OOP. For Kotlin/Compose, apply SOLID/bounded respo
 ### Refactor sequence
 
 1. **Production Player input boundary — complete, PR #183.** `StablePlayerInputHandler` remains the Android lifecycle/gesture adapter, deterministic input contracts/policy are extracted, `stableRemoteActionForKey` remains the production key mapping source of truth, and Player refactors are protected by an exact-head Scanner boundary/regression gate.
-2. **Production StablePlayer composition split — next.** Mechanically split `StablePlayerScreenReplacement.kt` into bounded UI responsibilities (shell/navigation, channel browser/list, panels/settings and presentation helpers) without changing playback semantics, search/filter semantics or state ownership.
+2. **Production StablePlayer composition split — in progress.** PR #186 extracted bounded presentation/panel helpers without changing playback semantics. Continue mechanical shell/navigation and channel browser/list extraction from fresh `main`; PR #188 was abandoned before integration and contributed no production code.
 3. **Player state/recomposition split.** Separate hot playback/engine telemetry from large catalog/EPG/browser state, reduce root `PlayerUiState` invalidation, move expensive derived channel models/indexes out of root composition, and publish only distinct state changes.
-4. **RAM-bounded Auto buffer.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV `ChannelHealth.UNSTABLE`, increase only time-based Media3 recovery/min-buffer thresholds while preserving existing device/multiview byte caps. Manual remains explicit. Ace/P2P buffer policy is excluded without Issue #159 device evidence.
+4. **RAN-bounded Auto buffer.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV `ChannelHealth.UNSTABLE`, increase only time-based Media3 recovery/min-buffer thresholds while preserving existing device/multiview byte caps. Manual remains explicit. Ace/P2P buffer policy is excluded without Issue #159 device evidence.
 5. **Measured Player performance pass.** Address remaining main-thread/state churn only from deterministic evidence or profiling, keeping each optimization independently testable.
 6. **Large-file follow-up.** Apply the same responsibility-first decomposition pattern to Scanner, Editor, Importer and Settings in separate bounded-context PRs; do not combine unrelated modules in one rewrite.
 
@@ -96,7 +96,7 @@ The built-in Ready catalog contains exactly three live presets. READY_CATALOG re
 
 ## Portable Favorites contract
 
-`Избранные каналы` is a user-owned library, not a view over current source rows.
+`Избранные каналш is a user-owned library, not a view over current source rows.
 
 The full backup direction is:
 
@@ -109,7 +109,7 @@ Favorite backup
   │    ├── preferred source marker
   │    └── sourceVariants[]
   │         ├── stream/source identity
-  │         ├── original playlist/group provenance
+  │        ├── original playlist/group provenance
   │         └── non-secret metadata
   └── backup metadata
 ```
@@ -157,8 +157,8 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 ## Decision order
 
 1. Keep PR #182's merged Ready/catalog/Favorites baseline stable; do not reopen it without a measured regression or planned capability.
-2. Execute Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183; next split `StablePlayerScreenReplacement.kt`, then state/recomposition, RAM-bounded Auto buffer and measured performance work.
-3. Continue Issue #47 with unambiguous matching/diagnostics and real catch-up/archive capability in independent fresh-main increments when it does not conflict with the active Player files.
+2. Execute Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183 and the composition split advanced in PR #186; continue the remaining mechanical split before state/recomposition, RAM-bounded Auto buffer and measured performance work.
+3. Continue Issue #47 from PR #189 with a fail-closed catch-up playback contract, then persistence/diagnostics/cache and real archive launch wiring in independent fresh-main increments when it does not conflict with active Player files.
 4. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
 5. Refactor other oversized Scanner/Editor/Importer/Settings files only as separate bounded-context PRs after establishing the production Player decomposition pattern.
 6. Complete hardware/soak/release acceptance before closing master roadmap #44.
