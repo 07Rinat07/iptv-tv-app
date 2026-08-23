@@ -6,6 +6,7 @@ import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.PlaylistImportReport
+import com.iptv.tv.core.model.PlaylistEpgDiagnostics
 import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistValidationReport
 import com.iptv.tv.core.model.Playlist
@@ -62,6 +63,8 @@ interface PlaylistRepository {
     suspend fun getChannelById(channelId: Long): AppResult<Channel>
     suspend fun getPlaylistContentSummary(playlistId: Long): AppResult<PlaylistContentSummary>
     suspend fun getChannelEpgNowNext(channelId: Long): AppResult<ChannelEpgInfo>
+    suspend fun getPlaylistEpgDiagnostics(playlistId: Long): AppResult<PlaylistEpgDiagnostics> =
+        AppResult.Error("EPG diagnostics are not available for this playlist repository")
     suspend fun getPlaylistEpgWindow(
         playlistId: Long,
         startEpochMs: Long,

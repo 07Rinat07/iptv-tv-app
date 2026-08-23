@@ -49,6 +49,7 @@ import com.iptv.tv.core.model.PlayerType
 import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistImportReport
+import com.iptv.tv.core.model.PlaylistEpgDiagnostics
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.model.PlaylistProvider
 import com.iptv.tv.core.model.ProviderAccountStatus
@@ -791,6 +792,67 @@ class PlaylistRepositoryImpl @Inject constructor(
             "EPG sources were checked, but channel '${channelEntity.name}' was not matched"
         )
     }
+
+    override suspend fun getPlaylistEpgDiagnostics(playlistId: Long): AppResult<PlaylistEpgDiagnostics> =
+        withContext(Dispatchers.IO) {
+            if (playlistId <= 0) return@withContext AppResult.Error("Invalid playlist id")
+
+            val playlist = playlistDao.findById(playlistId)
+                ?: return@withContext AppResult.Error("Playlist not found: id=$playlistId")
+            val candidates = resolveEpgCandidates(playlist)
+            if (candidates.isEmpty()) {
+                return@withContext AppResult.Error(
+                    "EPG source URL is not configured and was not discovered for playlist ${playlist.id}"
+                )
+            }
+
+            val parentalGate = currentParentalChannelGate()
+            val channels = channelDao.getChannels(playlistId)
+                .asSequence()
+                .filter { !it.isHidden }
+                .filterNot { it.isBlockedByParental(parentalGate) }
+                .toList()
+
+            var firstLoadedDiagnostics: PlaylistEpgDiagnostics? = null
+            var lastLoadError: Throwable? = null
+            for (epgUrl in candidates) {
+                val epgData = try {
+                    getOrLoadXmlTv(epgUrl)
+                } catch (throwable: Exception) {
+                    lastLoadError = throwable
+                    continue
+                }
+                val diagnostics = EpgMatchDiagnosticsPolicy.summarize(
+                    playlistId = playlistId,
+                    epgSourceUrl = epgUrl,
+                    sourceLoadedAtMs = epgCache[epgUrl]?.loadedAtMs,
+                    observations = channels.map { channel ->
+                        val match = matchChannelToEpg(
+                            channelName = channel.name,
+                            tvgId = channel.tvgId,
+                            data = epgData
+                        )
+                        EpgMatchObservation(
+                            matchedBy = match.matchedBy,
+                            hasPrograms = match.programs.isNotEmpty()
+                        )
+                    }
+                )
+                if (firstLoadedDiagnostics == null) firstLoadedDiagnostics = diagnostics
+                if (diagnostics.channelsWithPrograms > 0) {
+                    return@withContext AppResult.Success(diagnostics)
+                }
+            }
+
+            firstLoadedDiagnostics?.let { return@withContext AppResult.Success(it) }
+            if (lastLoadError != null) {
+                return@withContext AppResult.Error(
+                    "Unable to load EPG diagnostics: ${lastLoadError!!.toLogSummary(maxDepth = 4)}",
+                    lastLoadError
+                )
+            }
+            AppResult.Error("EPG diagnostics are unavailable for playlist $playlistId")
+        }
 
     override suspend fun getPlaylistEpgWindow(
         playlistId: Long,
@@ -1595,7 +1657,7 @@ class PlaylistRepositoryImpl @Inject constructor(
                 putEpgCache(
                     url = url,
                     entry = EpgCacheEntry(
-                        loadedAtMs = lockedNow,
+                        loadedAtMs = System.currentTimeMillis(),
                         data = parsed
                     )
                 )
@@ -1676,6 +1738,7 @@ class PlaylistRepositoryImpl @Inject constructor(
         }
 
         val channelDisplayNames = mutableMapOf<String, MutableSet<String>>()
+        val declaredChannelIds = linkedSetOf<String>()
         val programsByChannel = mutableMapOf<String, MutableList<EpgProgram>>()
         val now = System.currentTimeMillis()
         val retainFromMs = now - EPG_RETAIN_PAST_MS
@@ -1703,8 +1766,9 @@ class PlaylistRepositoryImpl @Inject constructor(
                                     ?.take(MAX_EPG_CHANNEL_ID_CHARS)
                                     ?.takeIf { it.isNotEmpty() }
                                 currentChannelId = id?.takeIf { channelId ->
-                                    channelId in channelDisplayNames || channelDisplayNames.size < MAX_EPG_CHANNELS
+                                    channelId in declaredChannelIds || declaredChannelIds.size < MAX_EPG_CHANNELS
                                 }
+                                currentChannelId?.let(declaredChannelIds::add)
                             }
                             "programme" -> {
                                 val channel = parser.getAttributeValue(null, "channel")
@@ -1821,11 +1885,15 @@ class PlaylistRepositoryImpl @Inject constructor(
         }
 
         programsByChannel.values.forEach(::sortAndDeduplicateProgramsInPlace)
-        val channelIdByLowercase = programsByChannel.keys
+        val knownChannelIds = EpgXmlTvChannelIndexPolicy.knownChannelIds(
+            declaredChannelIds = declaredChannelIds,
+            programmedChannelIds = programsByChannel.keys
+        )
+        val channelIdByLowercase = knownChannelIds
             .associateByFirst { it.trim().lowercase(Locale.ROOT) }
-        val channelIdByTextKey = programsByChannel.keys
+        val channelIdByTextKey = knownChannelIds
             .associateByFirst { normalizeTextKey(it) }
-        val channelIdsByTextKey = programsByChannel.keys.mapNotNull { channelId ->
+        val channelIdsByTextKey = knownChannelIds.mapNotNull { channelId ->
             normalizeTextKey(channelId)
                 .takeIf { it.isNotBlank() }
                 ?.let { normalizedKey -> normalizedKey to channelId }
