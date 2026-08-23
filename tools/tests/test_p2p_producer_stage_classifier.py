@@ -4,6 +4,7 @@ from tools.classify_p2p_producer_stage import classify_lines
 
 
 PREFIX = "I/P2P/AceBoundary: embedded_ace_live_producer_boundary"
+GAP_PREFIX = "I/P2P/AcePeer: embedded_ace_live_producer_gap"
 
 
 def boundary_line(*, stage: str, startup: int = 100, runtime: int = 4, generation: int = 9, path: str = "direct_retry", **counts: int) -> str:
@@ -29,6 +30,14 @@ def boundary_line(*, stage: str, startup: int = 100, runtime: int = 4, generatio
     )
 
 
+def gap_line(*, state: str = "active", startup: int = 100, runtime: int = 4, generation: int = 9, path: str = "direct_retry") -> str:
+    return (
+        f"{GAP_PREFIX} state={state} discovered=4 connected=2 handshaked=2 windowUseful=2 "
+        f"unchoked=2 producing=0 aggregate_bps=0 startup_id={startup} runtime_id={runtime} "
+        f"generation={generation} path={path}"
+    )
+
+
 class ProducerStageClassifierTest(unittest.TestCase):
     def classify_one(self, *lines: str):
         classifications, uncorrelated = classify_lines(lines)
@@ -36,10 +45,16 @@ class ProducerStageClassifierTest(unittest.TestCase):
         self.assertEqual(1, len(classifications))
         return classifications[0]
 
-    def test_scheduler_output_is_first_boundary_when_nothing_was_scheduled(self):
-        result = self.classify_one(boundary_line(stage="scheduled"))
+    def test_active_producer_gap_without_boundary_classifies_scheduler_output(self):
+        result = self.classify_one(gap_line())
         self.assertEqual("scheduled", result.first_missing_transition)
         self.assertEqual("scheduler-output-boundary", result.action_boundary)
+        self.assertEqual(0, result.boundary_records)
+        self.assertEqual(1, result.gap_records)
+
+    def test_boundary_record_with_zero_scheduled_still_classifies_scheduler_output(self):
+        result = self.classify_one(boundary_line(stage="scheduled"))
+        self.assertEqual("scheduled", result.first_missing_transition)
 
     def test_selected_and_sent_boundaries_follow_issue_159_order(self):
         selected = self.classify_one(boundary_line(stage="scheduled", scheduled=3))
@@ -104,6 +119,11 @@ class ProducerStageClassifierTest(unittest.TestCase):
         self.assertEqual(0, uncorrelated)
         self.assertEqual([1, 2], [item.key.runtime_id for item in classifications])
         self.assertEqual(["selected", "chunk_ingress"], [item.first_missing_transition for item in classifications])
+
+    def test_gap_without_active_state_and_without_boundary_is_insufficient_evidence(self):
+        result = self.classify_one(gap_line(state="resolved"))
+        self.assertEqual("insufficient_boundary_evidence", result.first_missing_transition)
+        self.assertIn("do-not-change-runtime-policy", result.action_boundary)
 
     def test_uncorrelated_records_are_reported_and_not_guessed(self):
         line = f"{PREFIX} session=2 stage=sent scheduled=1 selected=1 sent=1"
