@@ -1,6 +1,7 @@
 package com.iptv.tv.core.data.repository
 
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -49,5 +50,92 @@ class EpgStreamingSafetyTest {
         now = 2_100L
         assertNull(cache.active("a"))
         assertNull(cache.active("c"))
+    }
+
+    @Test
+    fun staleFallbackPolicyKeepsFreshTtlAndBoundsGraceWindow() {
+        val freshTtlMs = 15L * 60L * 1_000L
+        val maxStaleAgeMs = 2L * 60L * 60L * 1_000L
+        val loadedAtMs = 10_000L
+
+        assertEquals(
+            EpgCacheFreshness.FRESH,
+            EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = loadedAtMs,
+                nowMs = loadedAtMs + freshTtlMs,
+                freshTtlMs = freshTtlMs,
+                maxStaleAgeMs = maxStaleAgeMs
+            )
+        )
+        assertEquals(
+            EpgCacheFreshness.STALE_FALLBACK,
+            EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = loadedAtMs,
+                nowMs = loadedAtMs + freshTtlMs + 1L,
+                freshTtlMs = freshTtlMs,
+                maxStaleAgeMs = maxStaleAgeMs
+            )
+        )
+        assertEquals(
+            EpgCacheFreshness.STALE_FALLBACK,
+            EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = loadedAtMs,
+                nowMs = loadedAtMs + maxStaleAgeMs,
+                freshTtlMs = freshTtlMs,
+                maxStaleAgeMs = maxStaleAgeMs
+            )
+        )
+        assertEquals(
+            EpgCacheFreshness.EXPIRED,
+            EpgStaleFallbackPolicy.freshness(
+                loadedAtMs = loadedAtMs,
+                nowMs = loadedAtMs + maxStaleAgeMs + 1L,
+                freshTtlMs = freshTtlMs,
+                maxStaleAgeMs = maxStaleAgeMs
+            )
+        )
+    }
+
+    @Test
+    fun staleFallbackOnlyAllowsExplicitTransientFailures() {
+        assertTrue(EpgStaleFallbackPolicy.allowsStale(EpgFailureKind.TRANSIENT))
+        assertTrue(!EpgStaleFallbackPolicy.allowsStale(EpgFailureKind.PERMANENT_HTTP))
+        assertTrue(!EpgStaleFallbackPolicy.allowsStale(EpgFailureKind.MALFORMED))
+        assertTrue(!EpgStaleFallbackPolicy.allowsStale(EpgFailureKind.LOW_MEMORY))
+    }
+
+    @Test
+    fun failureClassificationKeepsMalformedPermanentAndLowMemoryFailClosed() {
+        assertEquals(EpgFailureKind.TRANSIENT, classifyEpgFailure(IOException("timeout")))
+        assertEquals(EpgFailureKind.TRANSIENT, classifyEpgFailure(EpgHttpStatusException(503)))
+        assertEquals(EpgFailureKind.PERMANENT_HTTP, classifyEpgFailure(EpgHttpStatusException(404)))
+        assertEquals(
+            EpgFailureKind.MALFORMED,
+            classifyEpgFailure(EpgMalformedXmlException("Invalid XMLTV"))
+        )
+        assertEquals(
+            EpgFailureKind.MALFORMED,
+            classifyEpgFailure(EpgInputLimitExceededException(maxBytes = 10L))
+        )
+        assertEquals(
+            EpgFailureKind.LOW_MEMORY,
+            classifyEpgFailure(EpgLowMemoryException("low heap"))
+        )
+    }
+
+    @Test
+    fun negativeCacheRetainsFailureKindForBackoffDecisions() {
+        val cache = EpgFailureBackoffCache(maxEntries = 1) { 1_000L }
+        cache.record(
+            url = "https://epg.example/guide.xml",
+            reason = "HTTP 503",
+            retryAfterMs = 1_000L,
+            kind = EpgFailureKind.TRANSIENT
+        )
+
+        assertEquals(
+            EpgFailureKind.TRANSIENT,
+            cache.active("https://epg.example/guide.xml")?.kind
+        )
     }
 }
