@@ -37,12 +37,12 @@ class EpgStreamingSafetyTest {
         var now = 1_000L
         val cache = EpgFailureBackoffCache(maxEntries = 2) { now }
 
-        cache.record("a", "bad-a", retryAfterMs = 1_000L)
-        cache.record("b", "bad-b", retryAfterMs = 1_000L)
+        cache.record("a", "bad-a", retryAfterMs = 1_000L, kind = EpgFailureKind.TRANSIENT)
+        cache.record("b", "bad-b", retryAfterMs = 1_000L, kind = EpgFailureKind.TRANSIENT)
         assertEquals(2, cache.size())
         assertEquals("bad-a", cache.active("a")?.reason)
 
-        cache.record("c", "bad-c", retryAfterMs = 1_000L)
+        cache.record("c", "bad-c", retryAfterMs = 1_000L, kind = EpgFailureKind.TRANSIENT)
         assertEquals(2, cache.size())
         assertNull(cache.active("b"))
         assertTrue(cache.active("a") != null || cache.active("c") != null)
@@ -136,6 +136,36 @@ class EpgStreamingSafetyTest {
         assertEquals(
             EpgFailureKind.TRANSIENT,
             cache.active("https://epg.example/guide.xml")?.kind
+        )
+    }
+
+    @Test
+    fun candidateLoadingPrefersHealthyFallbackBeforeStalePrimary() {
+        val attempts = mutableListOf<String>()
+        val results = loadEpgCandidatesFreshFirst(
+            candidates = listOf("primary", "fallback"),
+            loadFresh = { url ->
+                attempts += "fresh:$url"
+                when (url) {
+                    "primary" -> throw IOException("timeout")
+                    "fallback" -> "fresh-fallback"
+                    else -> error("unexpected candidate")
+                }
+            },
+            captureStaleFallback = { url ->
+                attempts += "stale:$url"
+                if (url == "primary") "stale-primary" else null
+            },
+            onLoadError = {}
+        ).toList()
+
+        assertEquals(
+            listOf("fallback" to "fresh-fallback", "primary" to "stale-primary"),
+            results
+        )
+        assertEquals(
+            listOf("fresh:primary", "stale:primary", "fresh:fallback"),
+            attempts
         )
     }
 }
