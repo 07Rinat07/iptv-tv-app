@@ -17,10 +17,10 @@ internal data class CatchUpPlaybackResolution(
  */
 internal object CatchUpPlaybackResolver {
     private val supportedTemplateTokens = linkedMapOf<String, (CatchUpWindow) -> String>(
-        "${start}" to { it.startEpochSeconds.toString() },
-        "${timestamp}" to { it.startEpochSeconds.toString() },
-        "${end}" to { it.endEpochSeconds.toString() },
-        "${duration}" to { it.durationSeconds.toString() },
+        "${'$'}{start}" to { it.startEpochSeconds.toString() },
+        "${'$'}{timestamp}" to { it.startEpochSeconds.toString() },
+        "${'$'}{end}" to { it.endEpochSeconds.toString() },
+        "${'$'}{duration}" to { it.durationSeconds.toString() },
         "{start}" to { it.startEpochSeconds.toString() },
         "{utc}" to { it.startEpochSeconds.toString() },
         "{end}" to { it.endEpochSeconds.toString() },
