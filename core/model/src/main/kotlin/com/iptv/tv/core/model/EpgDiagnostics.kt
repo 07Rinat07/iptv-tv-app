@@ -17,5 +17,8 @@ data class PlaylistEpgDiagnostics(
     val tvgIdMatches: Int,
     val displayNameMatches: Int,
     val channelIdMatches: Int,
-    val channelsWithPrograms: Int
+    val channelsWithPrograms: Int,
+    val servedFromStaleFallback: Boolean = false,
+    val cacheAgeMs: Long? = null,
+    val refreshRetryAtMs: Long? = null
 )
