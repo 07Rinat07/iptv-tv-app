@@ -1,0 +1,88 @@
+name: Temporary EPG Review Patcher
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/epg-review-patcher.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/epg-ambiguous-partial-match
+          fetch-depth: 0
+
+      - name: Preserve normalized-ID collisions for ambiguity checks
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          repo = Path('core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt')
+          text = repo.read_text()
+
+          old_build = '''        val channelIdByTextKey = programsByChannel.keys\n            .associateByFirst { normalizeTextKey(it) }\n        val channelIdByDisplayNameKey = channelDisplayNames\n'''
+          new_build = '''        val channelIdByTextKey = programsByChannel.keys\n            .associateByFirst { normalizeTextKey(it) }\n        val channelIdsByTextKey = programsByChannel.keys.mapNotNull { channelId ->\n            normalizeTextKey(channelId)\n                .takeIf { it.isNotBlank() }\n                ?.let { normalizedKey -> normalizedKey to channelId }\n        }\n        val channelIdByDisplayNameKey = channelDisplayNames\n'''
+          assert text.count(old_build) == 1
+          text = text.replace(old_build, new_build, 1)
+
+          old_return = '''            channelIdByLowercase = channelIdByLowercase,\n            channelIdByTextKey = channelIdByTextKey,\n            channelIdByDisplayNameKey = channelIdByDisplayNameKey\n'''
+          new_return = '''            channelIdByLowercase = channelIdByLowercase,\n            channelIdByTextKey = channelIdByTextKey,\n            channelIdsByTextKey = channelIdsByTextKey,\n            channelIdByDisplayNameKey = channelIdByDisplayNameKey\n'''
+          assert text.count(old_return) == 1
+          text = text.replace(old_return, new_return, 1)
+
+          old_call = '''            val partialChannelId = EpgChannelMatchPolicy.uniquePartialChannelId(\n                normalizedChannelName = normalizedName,\n                channelIdByTextKey = data.channelIdByTextKey\n            )\n'''
+          new_call = '''            val partialChannelId = EpgChannelMatchPolicy.uniquePartialChannelId(\n                normalizedChannelName = normalizedName,\n                channelIdsByTextKey = data.channelIdsByTextKey\n            )\n'''
+          assert text.count(old_call) == 1
+          text = text.replace(old_call, new_call, 1)
+
+          old_data = '''        val channelIdByLowercase: Map<String, String>,\n        val channelIdByTextKey: Map<String, String>,\n        val channelIdByDisplayNameKey: Map<String, String>\n'''
+          new_data = '''        val channelIdByLowercase: Map<String, String>,\n        val channelIdByTextKey: Map<String, String>,\n        val channelIdsByTextKey: List<Pair<String, String>>,\n        val channelIdByDisplayNameKey: Map<String, String>\n'''
+          assert text.count(old_data) == 1
+          repo.write_text(text.replace(old_data, new_data, 1))
+
+          policy = Path('core/data/src/main/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicy.kt')
+          text = policy.read_text()
+          text = text.replace('channelIdByTextKey: Map<String, String>', 'channelIdsByTextKey: Iterable<Pair<String, String>>')
+          text = text.replace('for ((channelKey, channelId) in channelIdByTextKey)', 'for ((channelKey, channelId) in channelIdsByTextKey)')
+          policy.write_text(text)
+
+          tests = Path('core/data/src/test/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicyTest.kt')
+          text = tests.read_text()
+          text = text.replace('channelIdByTextKey = linkedMapOf(', 'channelIdsByTextKey = listOf(')
+          text = text.replace('channelIdByTextKey = mapOf(', 'channelIdsByTextKey = listOf(')
+          text = text.replace('val firstOrder = linkedMapOf(', 'val firstOrder = listOf(')
+          text = text.replace('val reverseOrder = linkedMapOf(', 'val reverseOrder = listOf(')
+          text = text.replace('uniquePartialChannelId("discovery", firstOrder)', 'uniquePartialChannelId("discovery", firstOrder)')
+          marker = '''    @Test\n    fun noPartialCandidateReturnsNull() {\n'''
+          regression = '''    @Test\n    fun collidingNormalizedKeysWithDifferentChannelsFailClosed() {\n        val result = EpgChannelMatchPolicy.uniquePartialChannelId(\n            normalizedChannelName = "news",\n            channelIdsByTextKey = listOf(\n                "newshd" to "xmltv.news-hd",\n                "newshd" to "xmltv.news hd"\n            )\n        )\n\n        assertNull(result)\n    }\n\n'''
+          assert text.count(marker) == 1
+          tests.write_text(text.replace(marker, regression + marker, 1))
+          PY
+
+          git diff --check
+          git diff --stat -- \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicy.kt \
+            core/data/src/test/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicyTest.kt
+
+      - name: Commit review fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicy.kt \
+            core/data/src/test/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicyTest.kt
+          git diff --cached --check
+          git commit -m "fix(epg): preserve normalized ID collisions"
+          git push origin HEAD:fix/epg-ambiguous-partial-match
