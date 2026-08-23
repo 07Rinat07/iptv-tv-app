@@ -109,9 +109,10 @@ jobs:
               return before != after
 
           def declaration_text(text: str, marker: str) -> Optional[str]:
-              start = text.find(marker)
-              if start < 0:
+              declaration = re.compile(r"(?m)^[ \t]*" + re.escape(marker)).search(text)
+              if declaration is None:
                   return None
+              start = declaration.start()
 
               paren_depth = 0
               bracket_depth = 0
@@ -161,6 +162,8 @@ jobs:
           def any_definition_changed(path: str, markers: list[str]) -> bool:
               return any(definition_changed(path, marker) for marker in markers)
 
+          # Regression check: a bodyless Kotlin data class must not consume the
+          # following declaration's braced body.
           synthetic = (
               "data class ManualBufferSettings(\n"
               "    val startMs: Int\n"
@@ -170,6 +173,14 @@ jobs:
           synthetic_manual = declaration_text(synthetic, "data class ManualBufferSettings")
           if synthetic_manual is None or "ScannerProviderScope" in synthetic_manual:
               raise RuntimeError("declaration_text must stop after a bodyless parenthesized declaration")
+
+          synthetic_comment = (
+              "// Keep enum class ScannerSearchMode stable\n"
+              "enum class ScannerSearchMode { DEFAULT }\n"
+          )
+          synthetic_scanner_mode = declaration_text(synthetic_comment, "enum class ScannerSearchMode")
+          if synthetic_scanner_mode is None or not synthetic_scanner_mode.lstrip().startswith("enum class ScannerSearchMode"):
+              raise RuntimeError("declaration_text must ignore marker text inside comments")
 
           MAIN = "app/src/main/java/com/iptv/tv/MainActivity.kt"
           MODELS = "core/model/src/main/kotlin/com/iptv/tv/core/model/Models.kt"
@@ -193,9 +204,19 @@ jobs:
                   "composable(Routes.PLAYER) {",
                   "composable(Routes.DOWNLOADS) {",
               )
+              player_changed = player_changed or section_changed(
+                  MAIN,
+                  '    const val PLAYER = "player"',
+                  '    const val DOWNLOADS = "downloads"',
+              )
+              player_changed = player_changed or section_changed(
+                  MAIN,
+                  "    fun playerRoute(playlistId: Long): String",
+                  "}\n\nprivate fun Intent?.toAppRoute(): String?",
+              )
               player_changed = player_changed or changed_line_matches(
                   MAIN,
-                  r"StablePlayerScreen|isPlayerRoute|playerFullscreen|Routes\.playerRoute|Routes\.PLAYER",
+                  r"StablePlayerScreen|isPlayerRoute|playerFullscreen",
               )
 
           player_changed = player_changed or any_definition_changed(
@@ -292,6 +313,16 @@ jobs:
                   "composable(Routes.SCANNER) {",
                   "composable(Routes.IMPORTER) {",
               )
+              scanner_changed = scanner_changed or section_changed(
+                  MAIN,
+                  "onOpenNetworkTest =",
+                  "onOpenStartDestination =",
+              )
+              scanner_changed = scanner_changed or section_changed(
+                  MAIN,
+                  "composable(Routes.NETWORK_TEST) {",
+                  "composable(Routes.DIAGNOSTICS) {",
+              )
 
           scanner_changed = scanner_changed or any_definition_changed(
               MODELS,
@@ -353,7 +384,7 @@ jobs:
           )
           scanner_changed = scanner_changed or section_changed(
               REPOSITORY_MODULE,
-              "    @Binds\n    @Singleton\n    abstract fun bindScannerRepository",
+              "abstract class RepositoryBindings {",
               "    @Binds\n    @Singleton\n    abstract fun bindPlaylistRepository",
           )
           scanner_changed = scanner_changed or definition_changed(REPOSITORIES, "class ScannerRepositoryImpl")
