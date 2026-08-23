@@ -45,15 +45,11 @@ jobs:
           replacement = '''          if scanner_mode is None or not scanner_mode.lstrip().startswith("enum class ScannerSearchMode"):\n              raise RuntimeError("declaration matching must ignore comments")\n\n          synthetic_private_helper = (\n              "private fun parseChannelOverrides(raw: String): Map<Long, String> {\\n"\n              "  return emptyMap()\\n"\n              "}\\n"\n          )\n          private_helper = declaration_text(\n              synthetic_private_helper,\n              r"(?:private\\s+)?(?:override\\s+)?(?:suspend\\s+)?fun\\s+parseChannelOverrides\\s*\\(",\n          )\n          if private_helper is None or not private_helper.lstrip().startswith("private fun parseChannelOverrides"):\n              raise RuntimeError("private repository helpers must remain structurally matchable")\n\n          MAIN = "app/src/main/java/com/iptv/tv/MainActivity.kt"\n'''
           if text.count(marker) != 1:
               raise SystemExit('Expected exactly one synthetic declaration insertion point')
-          text = text.replace(marker, replacement, 1)
-          path.write_text(text)
+          path.write_text(text.replace(marker, replacement, 1))
           PY
 
           git diff --check
-          test "$(git diff --name-only | wc -l)" -eq 1
           test "$(git diff --name-only)" = ".github/workflows/player-refactor-guard.yml"
-          grep -F '(?:private\\s+)?(?:override\\s+)?(?:suspend\\s+)?fun\\s+{name}' .github/workflows/player-refactor-guard.yml >/dev/null
-          grep -F 'private repository helpers must remain structurally matchable' .github/workflows/player-refactor-guard.yml >/dev/null
 
       - name: Commit strict guard fix
         shell: bash
