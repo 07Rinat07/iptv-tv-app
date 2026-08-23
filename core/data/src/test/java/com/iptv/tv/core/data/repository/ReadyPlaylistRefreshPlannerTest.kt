@@ -3,6 +3,7 @@ package com.iptv.tv.core.data.repository
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
+import com.iptv.tv.core.model.ChannelCatchUpMetadata
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -116,6 +117,66 @@ class ReadyPlaylistRefreshPlannerTest {
     }
 
     @Test
+    fun reindexingReadyRowsPreservesIncomingCatchUpMetadata() {
+        val incoming = channel(
+            tvgId = "archive",
+            name = "Archive",
+            streamUrl = "https://example.org/archive.m3u8",
+            orderIndex = 7,
+            catchUp = ChannelCatchUpMetadata(
+                mode = "append",
+                days = 5,
+                sourceTemplate = "?utc=${'$'}{start}",
+                daysDeclared = true
+            )
+        )
+
+        val persisted = ReadyPlaylistRefreshPlanner.plan(
+            playlistId = 5L,
+            existing = emptyList(),
+            incoming = listOf(incoming)
+        ).upsertChannels.single()
+
+        assertEquals(0, persisted.orderIndex)
+        assertEquals("append", persisted.catchUpMode)
+        assertEquals(5, persisted.catchUpDays)
+        assertEquals("?utc=${'$'}{start}", persisted.catchUpSourceTemplate)
+        assertTrue(persisted.catchUpDaysDeclared)
+    }
+
+    @Test
+    fun freshReadySnapshotClearsRetiredCatchUpMetadata() {
+        val existing = channelEntity(
+            id = 91L,
+            tvgId = "news",
+            name = "News",
+            streamUrl = "https://example.org/news.m3u8"
+        ).copy(
+            catchUpMode = "append",
+            catchUpDays = 7,
+            catchUpSourceTemplate = "?utc=${'$'}{start}",
+            catchUpDaysDeclared = true
+        )
+        val incoming = channel(
+            tvgId = "news",
+            name = "News",
+            streamUrl = "https://example.org/news.m3u8"
+        )
+
+        val persisted = ReadyPlaylistRefreshPlanner.plan(
+            playlistId = 5L,
+            existing = listOf(existing),
+            incoming = listOf(incoming)
+        ).upsertChannels.single()
+
+        assertEquals(91L, persisted.id)
+        assertEquals(null, persisted.catchUpMode)
+        assertEquals(null, persisted.catchUpDays)
+        assertEquals(null, persisted.catchUpSourceTemplate)
+        assertFalse(persisted.catchUpDaysDeclared)
+    }
+
+    @Test
     fun insertsNewRowsAndMarksMissingRowsStaleWithoutReusingTheirIds() {
         val kept = channelEntity(
             id = 1L,
@@ -166,7 +227,9 @@ class ReadyPlaylistRefreshPlannerTest {
     private fun channel(
         tvgId: String?,
         name: String,
-        streamUrl: String
+        streamUrl: String,
+        orderIndex: Int = 0,
+        catchUp: ChannelCatchUpMetadata? = null
     ) = Channel(
         id = 0L,
         playlistId = 0L,
@@ -176,7 +239,8 @@ class ReadyPlaylistRefreshPlannerTest {
         logo = null,
         streamUrl = streamUrl,
         health = ChannelHealth.UNKNOWN,
-        orderIndex = 0,
-        isHidden = false
+        orderIndex = orderIndex,
+        isHidden = false,
+        catchUp = catchUp
     )
 }
