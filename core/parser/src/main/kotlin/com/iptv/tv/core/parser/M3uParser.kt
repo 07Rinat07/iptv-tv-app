@@ -93,13 +93,15 @@ class M3uParser {
         val attributes = parseExtInfAttributes(attributeSection)
 
         val catchUpMode = attributes["catchup"]
-        val catchUpDays = attributes["catchup-days"]?.toIntOrNull()?.takeIf { it > 0 }
+        val rawCatchUpDays = attributes["catchup-days"]
+        val catchUpDays = rawCatchUpDays?.toIntOrNull()?.takeIf { it > 0 }
         val catchUpSourceTemplate = attributes["catchup-source"]
-        val catchUp = if (catchUpMode != null || catchUpDays != null || catchUpSourceTemplate != null) {
+        val catchUp = if (catchUpMode != null || rawCatchUpDays != null || catchUpSourceTemplate != null) {
             ChannelCatchUpMetadata(
                 mode = catchUpMode,
                 days = catchUpDays,
-                sourceTemplate = catchUpSourceTemplate
+                sourceTemplate = catchUpSourceTemplate,
+                daysDeclared = rawCatchUpDays != null
             )
         } else {
             null
@@ -223,7 +225,8 @@ class M3uParser {
 data class ChannelCatchUpMetadata(
     val mode: String?,
     val days: Int?,
-    val sourceTemplate: String?
+    val sourceTemplate: String?,
+    val daysDeclared: Boolean = days != null
 )
 
 data class ExtInfMeta(

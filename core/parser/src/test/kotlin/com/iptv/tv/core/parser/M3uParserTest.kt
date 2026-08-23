@@ -165,6 +165,7 @@ class M3uParserTest {
 
         assertEquals("default", metadata?.mode)
         assertNull(metadata?.days)
+        assertTrue(metadata?.daysDeclared == true)
         assertNull(metadata?.sourceTemplate)
     }
 
