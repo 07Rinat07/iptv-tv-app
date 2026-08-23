@@ -1,9 +1,9 @@
 name: Temporary Guard Self Patcher
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/epg-ambiguous-partial-match
+      - main
     paths:
       - .github/workflows/guard-self-patcher.yml
 
