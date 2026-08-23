@@ -839,7 +839,7 @@ class PlaylistRepositoryImpl @Inject constructor(
                     }
                 )
                 if (firstLoadedDiagnostics == null) firstLoadedDiagnostics = diagnostics
-                if (diagnostics.matchedChannels > 0) {
+                if (diagnostics.channelsWithPrograms > 0) {
                     return@withContext AppResult.Success(diagnostics)
                 }
             }
@@ -1657,7 +1657,7 @@ class PlaylistRepositoryImpl @Inject constructor(
                 putEpgCache(
                     url = url,
                     entry = EpgCacheEntry(
-                        loadedAtMs = lockedNow,
+                        loadedAtMs = System.currentTimeMillis(),
                         data = parsed
                     )
                 )
@@ -1738,6 +1738,7 @@ class PlaylistRepositoryImpl @Inject constructor(
         }
 
         val channelDisplayNames = mutableMapOf<String, MutableSet<String>>()
+        val declaredChannelIds = linkedSetOf<String>()
         val programsByChannel = mutableMapOf<String, MutableList<EpgProgram>>()
         val now = System.currentTimeMillis()
         val retainFromMs = now - EPG_RETAIN_PAST_MS
@@ -1765,8 +1766,9 @@ class PlaylistRepositoryImpl @Inject constructor(
                                     ?.take(MAX_EPG_CHANNEL_ID_CHARS)
                                     ?.takeIf { it.isNotEmpty() }
                                 currentChannelId = id?.takeIf { channelId ->
-                                    channelId in channelDisplayNames || channelDisplayNames.size < MAX_EPG_CHANNELS
+                                    channelId in declaredChannelIds || declaredChannelIds.size < MAX_EPG_CHANNELS
                                 }
+                                currentChannelId?.let(declaredChannelIds::add)
                             }
                             "programme" -> {
                                 val channel = parser.getAttributeValue(null, "channel")
@@ -1883,11 +1885,15 @@ class PlaylistRepositoryImpl @Inject constructor(
         }
 
         programsByChannel.values.forEach(::sortAndDeduplicateProgramsInPlace)
-        val channelIdByLowercase = programsByChannel.keys
+        val knownChannelIds = EpgXmlTvChannelIndexPolicy.knownChannelIds(
+            declaredChannelIds = declaredChannelIds,
+            programmedChannelIds = programsByChannel.keys
+        )
+        val channelIdByLowercase = knownChannelIds
             .associateByFirst { it.trim().lowercase(Locale.ROOT) }
-        val channelIdByTextKey = programsByChannel.keys
+        val channelIdByTextKey = knownChannelIds
             .associateByFirst { normalizeTextKey(it) }
-        val channelIdsByTextKey = programsByChannel.keys.mapNotNull { channelId ->
+        val channelIdsByTextKey = knownChannelIds.mapNotNull { channelId ->
             normalizeTextKey(channelId)
                 .takeIf { it.isNotBlank() }
                 ?.let { normalizedKey -> normalizedKey to channelId }
