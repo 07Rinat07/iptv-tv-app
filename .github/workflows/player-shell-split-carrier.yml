@@ -1,0 +1,121 @@
+name: Player shell split carrier
+
+on:
+  push:
+    branches:
+      - refactor/player-shell-split
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - name: Guard exact fresh-main base
+        run: |
+          test "$(git rev-parse HEAD^)" = "9d793b7b45d2214590114dc4a7db4a7bd9cdefa8"
+      - name: Extract stable player shell presentation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt')
+          text = root.read_text()
+          start_marker = '@Composable\nprivate fun StablePlayerRailReplacement('
+          end_marker = '\nprivate fun stableChannelMatchesSelection('
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          block = text[start:end]
+          block = block.replace('@Composable\nprivate fun StablePlayerRailReplacement(', '@Composable\ninternal fun StablePlayerRailReplacement(', 1)
+          block = block.replace('@OptIn(ExperimentalFoundationApi::class)\n@Composable\n@UnstableApi\nprivate fun StableCenterPaneReplacement(', '@OptIn(ExperimentalFoundationApi::class)\n@Composable\n@UnstableApi\ninternal fun StableCenterPaneReplacement(', 1)
+          block = block.replace('@OptIn(ExperimentalFoundationApi::class)\n@Composable\n@UnstableApi\nprivate fun StableFullscreenPlayerReplacement(', '@OptIn(ExperimentalFoundationApi::class)\n@Composable\n@UnstableApi\ninternal fun StableFullscreenPlayerReplacement(', 1)
+
+          imports = '''package com.iptv.tv.feature.player
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.media3.common.util.UnstableApi
+import coil.compose.AsyncImage
+import com.iptv.tv.core.designsystem.theme.tvFocusOutline
+import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.EpgProgram
+
+'''
+          Path('feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerShell.kt').write_text(imports + block.lstrip())
+          root.write_text(text[:start] + text[end:])
+
+          roadmap = Path('docs/PROJECT_STATUS_AND_ROADMAP.md')
+          docs = roadmap.read_text()
+          docs = docs.replace(
+              '- Current production `main`: `eafcfa87` — PR #196 isolated StablePlayer panel/dialog presentation after exact-head Android CI #903 and Player Refactor Guard #88.',
+              '- Current production `main`: `9d793b7b` — PR #198 isolated channel browser/list/drawer and nearby-channel presentation after exact-head Android CI #908, Player Refactor Guard #91 and P2P player smoke #18.'
+          )
+          docs = docs.replace(
+              '- PR #174–#187, PR #189–#194 and PR #196 are merged. PR #186 started the production StablePlayer presentation/composition split, PR #194 added read-only EPG cache/refresh observability, and PR #196 moved panel/dialog composition into `StablePlayerPanels.kt` without playback/input semantics changes. PR #188 and stale draft #195 were closed unmerged and are not production history.',
+              '- PR #174–#187, PR #189–#194, PR #196 and PR #198 are merged. PR #186 started the production StablePlayer presentation/composition split, PR #194 added read-only EPG cache/refresh observability, PR #196 moved panel/dialog composition into `StablePlayerPanels.kt`, and PR #198 moved channel browser/list/drawer and nearby-channel presentation into `StablePlayerChannelBrowser.kt` without playback/input semantics changes. PR #188 and stale draft #195 were closed unmerged and are not production history.'
+          )
+          docs = docs.replace(
+              '`feature/player/StablePlayerScreenReplacement.kt` — production root composition, channel filtering, channel browser/list/drawer, layout selection and remote-action policy still share one file. PR #186 extracted the first presentation helpers and PR #196 moved panels/dialogs into `StablePlayerPanels.kt`.',
+              '`feature/player/StablePlayerScreenReplacement.kt` — production root composition, channel filtering, layout selection and remote-action policy still share one file. PR #186 extracted the first presentation helpers, PR #196 moved panels/dialogs into `StablePlayerPanels.kt`, and PR #198 moved channel browser/list/drawer into `StablePlayerChannelBrowser.kt`.'
+          )
+          docs = docs.replace(
+              '2. **Production StablePlayer composition split — in progress.** PR #186 extracted the first stable presentation responsibilities and PR #196 extracted panel/dialog presentation. The current fresh-main increment mechanically extracts the channel browser/list/drawer and nearby-channel presentation while preserving the existing `StableChannelNavigation` policy; shell/navigation remains next. Playback semantics, search/filter semantics and state ownership are unchanged. PR #188 and stale draft #195 were closed unmerged and did not land production code.',
+              '2. **Production StablePlayer composition split — in progress.** PR #186 extracted the first stable presentation responsibilities, PR #196 extracted panel/dialog presentation, and PR #198 extracted the channel browser/list/drawer plus nearby-channel presentation while preserving `StableChannelNavigation`. The current fresh-main increment mechanically isolates the remaining rail/center/fullscreen shell presentation; playback semantics, search/filter semantics and state ownership stay unchanged. PR #188 and stale draft #195 were closed unmerged and did not land production code.'
+          )
+          docs = docs.replace(
+              '2. Continue Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183, presentation extraction landed in PR #186 and panel/dialog extraction landed in PR #196; continue bounded channel-browser/shell extraction before state/recomposition, RAM-bounded Auto buffer and measured performance work.',
+              '2. Continue Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183, presentation extraction landed in PR #186, panel/dialog extraction in PR #196 and channel-browser extraction in PR #198; finish the bounded shell extraction before state/recomposition, RAM-bounded Auto buffer and measured performance work.'
+          )
+          roadmap.write_text(docs)
+          PY
+      - name: Remove carrier workflow
+        run: rm .github/workflows/player-shell-split-carrier.yml
+      - name: Commit exact mechanical diff
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerShell.kt docs/PROJECT_STATUS_AND_ROADMAP.md .github/workflows/player-shell-split-carrier.yml
+          git commit -m "refactor(player): isolate stable player shell"
+          git push origin HEAD:${{ github.ref_name }}
