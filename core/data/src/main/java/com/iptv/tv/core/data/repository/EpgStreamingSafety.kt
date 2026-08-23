@@ -21,6 +21,65 @@ internal class EpgInputLimitExceededException(
     }
 )
 
+internal class EpgHttpStatusException(
+    val statusCode: Int
+) : IOException("HTTP $statusCode")
+
+internal class EpgMalformedXmlException(
+    message: String,
+    cause: Throwable? = null
+) : IOException(message, cause)
+
+internal class EpgLowMemoryException(
+    message: String
+) : IOException(message)
+
+internal enum class EpgFailureKind {
+    TRANSIENT,
+    PERMANENT_HTTP,
+    MALFORMED,
+    LOW_MEMORY
+}
+
+internal enum class EpgCacheFreshness {
+    FRESH,
+    STALE_FALLBACK,
+    EXPIRED
+}
+
+internal object EpgStaleFallbackPolicy {
+    fun freshness(
+        loadedAtMs: Long,
+        nowMs: Long,
+        freshTtlMs: Long,
+        maxStaleAgeMs: Long
+    ): EpgCacheFreshness {
+        require(freshTtlMs >= 0L) { "freshTtlMs must be non-negative" }
+        require(maxStaleAgeMs >= freshTtlMs) { "maxStaleAgeMs must cover freshTtlMs" }
+        val ageMs = (nowMs - loadedAtMs).coerceAtLeast(0L)
+        return when {
+            ageMs <= freshTtlMs -> EpgCacheFreshness.FRESH
+            ageMs <= maxStaleAgeMs -> EpgCacheFreshness.STALE_FALLBACK
+            else -> EpgCacheFreshness.EXPIRED
+        }
+    }
+
+    fun allowsStale(failureKind: EpgFailureKind): Boolean =
+        failureKind == EpgFailureKind.TRANSIENT
+}
+
+internal fun classifyEpgFailure(failure: IOException): EpgFailureKind = when (failure) {
+    is EpgInputLimitExceededException,
+    is EpgMalformedXmlException -> EpgFailureKind.MALFORMED
+    is EpgLowMemoryException -> EpgFailureKind.LOW_MEMORY
+    is EpgHttpStatusException -> if (failure.statusCode in 500..599) {
+        EpgFailureKind.TRANSIENT
+    } else {
+        EpgFailureKind.PERMANENT_HTTP
+    }
+    else -> EpgFailureKind.TRANSIENT
+}
+
 /**
  * Streaming hard limit for XMLTV bodies.
  *
@@ -67,7 +126,8 @@ internal class EpgBoundedInputStream(
 internal data class EpgFailureBackoffEntry(
     val failedAtMs: Long,
     val retryAfterMs: Long,
-    val reason: String
+    val reason: String,
+    val kind: EpgFailureKind
 )
 
 /**
@@ -93,11 +153,17 @@ internal class EpgFailureBackoffCache(
     }
 
     @Synchronized
-    fun record(url: String, reason: String, retryAfterMs: Long) {
+    fun record(
+        url: String,
+        reason: String,
+        retryAfterMs: Long,
+        kind: EpgFailureKind = EpgFailureKind.TRANSIENT
+    ) {
         entries[url] = EpgFailureBackoffEntry(
             failedAtMs = nowMs(),
             retryAfterMs = retryAfterMs.coerceAtLeast(1L),
-            reason = reason.take(240)
+            reason = reason.take(240),
+            kind = kind
         )
         while (entries.size > maxEntries) {
             val eldest = entries.entries.iterator()
