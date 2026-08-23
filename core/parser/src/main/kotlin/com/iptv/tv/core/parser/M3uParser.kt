@@ -47,7 +47,8 @@ class M3uParser {
                             streamUrl = line,
                             health = ChannelHealth.UNKNOWN,
                             orderIndex = index,
-                            isHidden = false
+                            isHidden = false,
+                            catchUp = meta.catchUp
                         )
                         meta.catchUp?.let { catchUpByChannelOrderIndex[index] = it }
                         index += 1
@@ -222,12 +223,7 @@ class M3uParser {
     }
 }
 
-data class ChannelCatchUpMetadata(
-    val mode: String?,
-    val days: Int?,
-    val sourceTemplate: String?,
-    val daysDeclared: Boolean = days != null
-)
+typealias ChannelCatchUpMetadata = com.iptv.tv.core.model.ChannelCatchUpMetadata
 
 data class ExtInfMeta(
     val tvgId: String?,
