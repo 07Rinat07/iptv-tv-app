@@ -1,0 +1,73 @@
+name: Temporary EPG Branch Patcher
+
+on:
+  push:
+    branches:
+      - fix/epg-ambiguous-partial-match
+    paths:
+      - .github/workflows/epg-branch-patcher.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/epg-ambiguous-partial-match
+          fetch-depth: 0
+
+      - name: Apply exact bounded EPG patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          repo = Path('core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt')
+          source = repo.read_text()
+          old = '''            val byContains = data.channelIdByTextKey.entries.firstOrNull { (channelKey, _) ->\n                channelKey.contains(normalizedName) || normalizedName.contains(channelKey)\n            }\n            if (byContains != null) {\n                return EpgMatch(programs = data.programsByChannel[byContains.value].orEmpty(), matchedBy = "channel-id")\n            }\n'''
+          new = '''            val partialChannelId = EpgChannelMatchPolicy.uniquePartialChannelId(\n                normalizedChannelName = normalizedName,\n                channelIdByTextKey = data.channelIdByTextKey\n            )\n            if (partialChannelId != null) {\n                return EpgMatch(programs = data.programsByChannel[partialChannelId].orEmpty(), matchedBy = "channel-id")\n            }\n'''
+          if source.count(old) != 1:
+              raise SystemExit('Expected exactly one legacy partial-match block')
+          repo.write_text(source.replace(old, new, 1))
+
+          Path('core/data/src/main/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicy.kt').write_text('''package com.iptv.tv.core.data.repository\n\n/**\n * Conservative fallback matching for XMLTV channel identifiers.\n *\n * Exact tvg-id/display-name/channel-id matching is handled by the repository before this\n * fallback is consulted. A partial match is accepted only when every matching normalized key\n * resolves to the same XMLTV channel. This keeps the result independent from XMLTV/map order and\n * fails closed when multiple channels are plausible.\n */\ninternal object EpgChannelMatchPolicy {\n    fun uniquePartialChannelId(\n        normalizedChannelName: String,\n        channelIdByTextKey: Map<String, String>\n    ): String? {\n        if (normalizedChannelName.isBlank()) return null\n\n        var candidate: String? = null\n        for ((channelKey, channelId) in channelIdByTextKey) {\n            if (channelKey.isBlank()) continue\n            val matches = channelKey.contains(normalizedChannelName) ||\n                normalizedChannelName.contains(channelKey)\n            if (!matches) continue\n\n            val existing = candidate\n            if (existing == null) {\n                candidate = channelId\n            } else if (existing != channelId) {\n                return null\n            }\n        }\n        return candidate\n    }\n}\n''')
+
+          Path('core/data/src/test/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicyTest.kt').write_text('''package com.iptv.tv.core.data.repository\n\nimport org.junit.Assert.assertEquals\nimport org.junit.Assert.assertNull\nimport org.junit.Test\n\nclass EpgChannelMatchPolicyTest {\n    @Test\n    fun uniquePartialCandidateIsAccepted() {\n        val result = EpgChannelMatchPolicy.uniquePartialChannelId(\n            normalizedChannelName = "discovery",\n            channelIdByTextKey = linkedMapOf(\n                "discoveryhd" to "xmltv.discovery.hd",\n                "history" to "xmltv.history"\n            )\n        )\n\n        assertEquals("xmltv.discovery.hd", result)\n    }\n\n    @Test\n    fun ambiguousPartialCandidatesFailClosed() {\n        val firstOrder = linkedMapOf(\n            "discoveryhd" to "xmltv.discovery.hd",\n            "discoveryplus" to "xmltv.discovery.plus"\n        )\n        val reverseOrder = linkedMapOf(\n            "discoveryplus" to "xmltv.discovery.plus",\n            "discoveryhd" to "xmltv.discovery.hd"\n        )\n\n        assertNull(EpgChannelMatchPolicy.uniquePartialChannelId("discovery", firstOrder))\n        assertNull(EpgChannelMatchPolicy.uniquePartialChannelId("discovery", reverseOrder))\n    }\n\n    @Test\n    fun multipleMatchingAliasesForSameChannelRemainUnambiguous() {\n        val result = EpgChannelMatchPolicy.uniquePartialChannelId(\n            normalizedChannelName = "news",\n            channelIdByTextKey = linkedMapOf(\n                "worldnews" to "xmltv.news",\n                "newsworld" to "xmltv.news"\n            )\n        )\n\n        assertEquals("xmltv.news", result)\n    }\n\n    @Test\n    fun noPartialCandidateReturnsNull() {\n        assertNull(\n            EpgChannelMatchPolicy.uniquePartialChannelId(\n                normalizedChannelName = "sports",\n                channelIdByTextKey = mapOf("movies" to "xmltv.movies")\n            )\n        )\n    }\n\n    @Test\n    fun blankNormalizedNameReturnsNull() {\n        assertNull(\n            EpgChannelMatchPolicy.uniquePartialChannelId(\n                normalizedChannelName = "",\n                channelIdByTextKey = mapOf("news" to "xmltv.news")\n            )\n        )\n    }\n}\n''')
+
+          roadmap = Path('docs/PROJECT_STATUS_AND_ROADMAP.md')
+          text = roadmap.read_text()
+          old_docs = '''### Complete\n\n1. **PR #181 — calendar-safe EPG day windows.** TODAY/TOMORROW follow local civil-day boundaries instead of fixed 24-hour arithmetic, including DST/skipped-midnight regressions.\n\n### Next production increments\n\n1. **EPG matching safety.** Preserve `tvg-id` and exact-name priority and stop silently choosing an arbitrary partial match when multiple XMLTV channels are plausible.\n2. **EPG diagnostics/cache/archive capability.** Continue matched/unmatched diagnostics, resilient refresh/cache behavior and real catch-up capability contracts in small independent increments.\n3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.\n'''
+          new_docs = '''### Complete\n\n1. **PR #181 — calendar-safe EPG day windows.** TODAY/TOMORROW follow local civil-day boundaries instead of fixed 24-hour arithmetic, including DST/skipped-midnight regressions.\n2. **EPG matching safety — active increment.** Preserve `tvg-id`, exact display-name and exact channel-id priority; partial channel-id fallback accepts only one distinct XMLTV candidate and fails closed when multiple channels are plausible, making the result independent from XMLTV/map order.\n\n### Next production increments\n\n1. **EPG diagnostics/cache/archive capability.** Continue matched/unmatched diagnostics, resilient refresh/cache behavior and real catch-up capability contracts in small independent increments.\n2. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.\n'''
+          if text.count(old_docs) != 1:
+              raise SystemExit('Expected exactly one EPG roadmap block')
+          roadmap.write_text(text.replace(old_docs, new_docs, 1))
+          PY
+
+      - name: Validate bounded diff
+        shell: bash
+        run: |
+          git diff --check
+          git diff --stat -- \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicy.kt \
+            core/data/src/test/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicyTest.kt \
+            docs/PROJECT_STATUS_AND_ROADMAP.md
+          test "$(git diff --name-only | grep -v '^\.github/workflows/epg-branch-patcher.yml$' | wc -l)" -eq 4
+
+      - name: Commit bounded patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicy.kt \
+            core/data/src/test/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicyTest.kt \
+            docs/PROJECT_STATUS_AND_ROADMAP.md
+          git diff --cached --check
+          git commit -m "fix(epg): reject ambiguous partial XMLTV matches"
+          git push origin HEAD:fix/epg-ambiguous-partial-match
