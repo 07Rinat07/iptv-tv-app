@@ -1,11 +1,6 @@
 name: Temporary EPG Branch Patcher
 
 on:
-  push:
-    branches:
-      - fix/epg-ambiguous-partial-match
-    paths:
-      - .github/workflows/epg-branch-patcher.yml
   pull_request:
     branches:
       - main
@@ -62,7 +57,11 @@ jobs:
             core/data/src/main/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicy.kt \
             core/data/src/test/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicyTest.kt \
             docs/PROJECT_STATUS_AND_ROADMAP.md
-          test "$(git diff --name-only | grep -v '^\.github/workflows/epg-branch-patcher.yml$' | wc -l)" -eq 4
+          test "$(git status --porcelain -- \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt \
+            core/data/src/main/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicy.kt \
+            core/data/src/test/java/com/iptv/tv/core/data/repository/EpgChannelMatchPolicyTest.kt \
+            docs/PROJECT_STATUS_AND_ROADMAP.md | wc -l)" -eq 4
 
       - name: Commit bounded patch
         shell: bash
