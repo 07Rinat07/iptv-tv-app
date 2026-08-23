@@ -1825,6 +1825,11 @@ class PlaylistRepositoryImpl @Inject constructor(
             .associateByFirst { it.trim().lowercase(Locale.ROOT) }
         val channelIdByTextKey = programsByChannel.keys
             .associateByFirst { normalizeTextKey(it) }
+        val channelIdsByTextKey = programsByChannel.keys.mapNotNull { channelId ->
+            normalizeTextKey(channelId)
+                .takeIf { it.isNotBlank() }
+                ?.let { normalizedKey -> normalizedKey to channelId }
+        }
         val channelIdByDisplayNameKey = channelDisplayNames
             .entries
             .asSequence()
@@ -1839,6 +1844,7 @@ class PlaylistRepositoryImpl @Inject constructor(
             programsByChannel = programsByChannel,
             channelIdByLowercase = channelIdByLowercase,
             channelIdByTextKey = channelIdByTextKey,
+            channelIdsByTextKey = channelIdsByTextKey,
             channelIdByDisplayNameKey = channelIdByDisplayNameKey
         )
     }
@@ -1957,11 +1963,12 @@ class PlaylistRepositoryImpl @Inject constructor(
                 return EpgMatch(programs = data.programsByChannel[exactChannelId].orEmpty(), matchedBy = "channel-id")
             }
 
-            val byContains = data.channelIdByTextKey.entries.firstOrNull { (channelKey, _) ->
-                channelKey.contains(normalizedName) || normalizedName.contains(channelKey)
-            }
-            if (byContains != null) {
-                return EpgMatch(programs = data.programsByChannel[byContains.value].orEmpty(), matchedBy = "channel-id")
+            val partialChannelId = EpgChannelMatchPolicy.uniquePartialChannelId(
+                normalizedChannelName = normalizedName,
+                channelIdsByTextKey = data.channelIdsByTextKey
+            )
+            if (partialChannelId != null) {
+                return EpgMatch(programs = data.programsByChannel[partialChannelId].orEmpty(), matchedBy = "channel-id")
             }
         }
 
@@ -2123,6 +2130,7 @@ class PlaylistRepositoryImpl @Inject constructor(
         val programsByChannel: Map<String, List<EpgProgram>>,
         val channelIdByLowercase: Map<String, String>,
         val channelIdByTextKey: Map<String, String>,
+        val channelIdsByTextKey: List<Pair<String, String>>,
         val channelIdByDisplayNameKey: Map<String, String>
     )
 

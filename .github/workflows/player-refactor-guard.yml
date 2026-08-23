@@ -357,6 +357,18 @@ jobs:
           if scanner_mode is None or not scanner_mode.lstrip().startswith("enum class ScannerSearchMode"):
               raise RuntimeError("declaration matching must ignore comments")
 
+          synthetic_private_helper = (
+              "private fun parseChannelOverrides(raw: String): Map<Long, String> {\n"
+              "  return emptyMap()\n"
+              "}\n"
+          )
+          private_helper = declaration_text(
+              synthetic_private_helper,
+              r"(?:private\s+)?(?:override\s+)?(?:suspend\s+)?fun\s+parseChannelOverrides\s*\(",
+          )
+          if private_helper is None or not private_helper.lstrip().startswith("private fun parseChannelOverrides"):
+              raise RuntimeError("private repository helpers must remain structurally matchable")
+
           MAIN = "app/src/main/java/com/iptv/tv/MainActivity.kt"
           MODELS = "core/model/src/main/kotlin/com/iptv/tv/core/model/Models.kt"
           SETTINGS_REPO = "core/domain/src/main/kotlin/com/iptv/tv/core/domain/repository/SettingsRepository.kt"
@@ -478,7 +490,7 @@ jobs:
           ]
           player_changed = player_changed or any_definition_changed(
               REPOSITORIES,
-              [rf"(?:override\s+)?(?:suspend\s+)?fun\s+{name}\s*\(" for name in player_repository_functions],
+              [rf"(?:private\s+)?(?:override\s+)?(?:suspend\s+)?fun\s+{name}\s*\(" for name in player_repository_functions],
           )
 
           player_recommended_calls = {
@@ -636,7 +648,7 @@ jobs:
           ]
           scanner_changed = scanner_changed or any_definition_changed(
               REPOSITORIES,
-              [rf"(?:override\s+)?(?:suspend\s+)?fun\s+{name}\s*\(" for name in scanner_repository_functions],
+              [rf"(?:private\s+)?(?:override\s+)?(?:suspend\s+)?fun\s+{name}\s*\(" for name in scanner_repository_functions],
           )
 
           scanner_recommended_calls = {
