@@ -119,15 +119,15 @@ class M3uParserTest {
 
         val result = parser.parse(playlistId = 9, raw = raw) as ParseResult.Valid
 
-        assertEquals(
-            ChannelCatchUpMetadata(
-                mode = "append",
-                days = 7,
-                sourceTemplate = "?utc=${'$'}{start}&lutc=${'$'}{timestamp}"
-            ),
-            result.catchUpByChannelOrderIndex[0]
+        val expectedCatchUp = ChannelCatchUpMetadata(
+            mode = "append",
+            days = 7,
+            sourceTemplate = "?utc=${'$'}{start}&lutc=${'$'}{timestamp}"
         )
+        assertEquals(expectedCatchUp, result.catchUpByChannelOrderIndex[0])
+        assertEquals(expectedCatchUp, result.channels[0].catchUp)
         assertFalse(result.catchUpByChannelOrderIndex.containsKey(1))
+        assertEquals(null, result.channels[1].catchUp)
     }
 
     @Test
