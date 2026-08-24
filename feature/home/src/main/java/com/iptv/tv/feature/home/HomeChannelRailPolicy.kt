@@ -10,7 +10,6 @@ internal fun homeChannelRailItems(
 ): List<Channel> = channels
     .asSequence()
     .filterNot { it.isHidden }
-    .sortedBy { it.orderIndex }
     .take(limit.coerceAtLeast(0))
     .toList()
 
