@@ -28,6 +28,27 @@ class StablePlayerSurfaceContinuityGuardTest {
         assertTrue(owner.contains("movableContentOf"))
     }
 
+    @Test
+    fun `embedded Android video views opt into reuse during movable relocation`() {
+        val media3 = productionSource("StablePlayerVideoSurface.kt")
+        val libVlc = productionSource("StableLibVlcVideoSurface.kt")
+
+        assertTrue(media3.contains("onReset = { }"))
+        assertTrue(libVlc.contains("onReset = { }"))
+    }
+
+    @Test
+    fun `retained input handlers synchronize from the current Compose controls state`() {
+        val media3 = productionSource("StablePlayerVideoSurface.kt")
+        val libVlc = productionSource("StableLibVlcVideoSurface.kt")
+        val input = productionSource("StablePlayerInput.kt")
+
+        assertTrue(media3.contains("controlsVisible = showControls"))
+        assertTrue(libVlc.contains("controlsVisible = showControls"))
+        assertTrue(input.contains("controlsVisible: Boolean"))
+        assertTrue(input.contains("this.controlsVisible = controlsVisible"))
+    }
+
     private fun productionSource(fileName: String): String {
         val moduleRelative = File("src/main/java/com/iptv/tv/feature/player/$fileName")
         val rootRelative = File("feature/player/src/main/java/com/iptv/tv/feature/player/$fileName")
