@@ -445,7 +445,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.readyPlaylistItems(
     onZoneFocused: ((HomeDashboardFocusZone) -> Unit)? = null
 ) {
     itemsIndexed(READY_PLAYLIST_PRESETS, key = { _, preset -> preset.url }) { index, preset ->
-        var buttonModifier = Modifier
+        var buttonModifier: Modifier = Modifier
         if (index == 0 && firstButtonFocusRequester != null) {
             buttonModifier = buttonModifier.focusRequester(firstButtonFocusRequester)
         }
