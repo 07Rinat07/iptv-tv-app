@@ -77,7 +77,7 @@ internal fun StablePlayerRailReplacement(
                         if (favoritesOnly) {
                             Button(onClick = onFavorites, modifier = Modifier.fillMaxWidth()) { Text("★ Избранное") }
                         } else {
-                            OutlinedButton(onClick = onFavorites, modifier = Modifier.fillMaxWidth()) { Text("☆ Избранное") }
+                            OutlinedButton(onClick = onFavorites, modifier = Modifier.fillMaxWidth()) { Text("☆ Избранное") } }
                         }
                     }
                     item { OutlinedButton(onClick = onSettings, modifier = Modifier.fillMaxWidth()) { Text("Настройки") } }
@@ -104,6 +104,7 @@ internal fun StableCenterPaneReplacement(
     scale: PlayerVideoScale,
     volume: Float,
     isStartingPlayback: Boolean,
+    videoSurfaceContent: StablePlayerVideoSurfaceContent,
     onVolumeChange: (Float) -> Unit,
     onToggleMute: () -> Unit,
     onReady: (Long?) -> Unit,
@@ -130,23 +131,25 @@ internal fun StableCenterPaneReplacement(
                     .tvFocusOutline()
             ) {
                 if (session != null) {
-                    StableVideoSurface(
-                        session = session,
-                        scale = scale,
-                        expanded = false,
-                        volume = volume,
-                        showControls = controlsVisible,
-                        onToggleControls = { controlsVisible = !controlsVisible },
-                        onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },
-                        onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
-                        onToggleMute = onToggleMute,
-                        onReady = { onReady(session.sessionId) },
-                        onP2pBoundaryTelemetry = onP2pBoundaryTelemetry,
-                        onError = { onError(session.sessionId, it) },
-                        onToggleFullscreen = onToggleFullscreen,
-                        onPreviousChannel = onPreviousChannel,
-                        onNextChannel = onNextChannel,
-                        modifier = Modifier.fillMaxSize()
+                    videoSurfaceContent(
+                        StablePlayerVideoSurfaceRequest(
+                            session = session,
+                            scale = scale,
+                            expanded = false,
+                            volume = volume,
+                            showControls = controlsVisible,
+                            onToggleControls = { controlsVisible = !controlsVisible },
+                            onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },
+                            onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
+                            onToggleMute = onToggleMute,
+                            onReady = { onReady(session.sessionId) },
+                            onP2pBoundaryTelemetry = onP2pBoundaryTelemetry,
+                            onError = { onError(session.sessionId, it) },
+                            onToggleFullscreen = onToggleFullscreen,
+                            onPreviousChannel = onPreviousChannel,
+                            onNextChannel = onNextChannel,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     )
                 } else {
                     Box(
@@ -349,6 +352,7 @@ internal fun StableFullscreenPlayerReplacement(
     scale: PlayerVideoScale,
     volume: Float,
     showChannelBanner: Boolean,
+    videoSurfaceContent: StablePlayerVideoSurfaceContent,
     onVolumeChange: (Float) -> Unit,
     onToggleMute: () -> Unit,
     onReady: (Long) -> Unit,
@@ -363,23 +367,25 @@ internal fun StableFullscreenPlayerReplacement(
     BackHandler(onBack = onToggleFullscreen)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         if (session != null) {
-            StableVideoSurface(
-                session = session,
-                scale = scale,
-                expanded = true,
-                volume = volume,
-                showControls = controlsVisible,
-                onToggleControls = { controlsVisible = !controlsVisible },
-                onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },
-                onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
-                onToggleMute = onToggleMute,
-                onReady = { onReady(session.sessionId) },
-                onP2pBoundaryTelemetry = onP2pBoundaryTelemetry,
-                onError = { onError(session.sessionId, it) },
-                onToggleFullscreen = onToggleFullscreen,
-                onPreviousChannel = onPreviousChannel,
-                onNextChannel = onNextChannel,
-                modifier = Modifier.fillMaxSize()
+            videoSurfaceContent(
+                StablePlayerVideoSurfaceRequest(
+                    session = session,
+                    scale = scale,
+                    expanded = true,
+                    volume = volume,
+                    showControls = controlsVisible,
+                    onToggleControls = { controlsVisible = !controlsVisible },
+                    onVolumeUp = { onVolumeChange(volume + VOLUME_STEP) },
+                    onVolumeDown = { onVolumeChange(volume - VOLUME_STEP) },
+                    onToggleMute = onToggleMute,
+                    onReady = { onReady(session.sessionId) },
+                    onP2pBoundaryTelemetry = onP2pBoundaryTelemetry,
+                    onError = { onError(session.sessionId, it) },
+                    onToggleFullscreen = onToggleFullscreen,
+                    onPreviousChannel = onPreviousChannel,
+                    onNextChannel = onNextChannel,
+                    modifier = Modifier.fillMaxSize()
+                )
             )
         } else {
             Box(
