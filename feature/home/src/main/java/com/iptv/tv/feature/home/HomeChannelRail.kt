@@ -36,6 +36,7 @@ internal fun HomeChannelRail(
     playlistName: String,
     channels: List<Channel>,
     selectedChannelId: Long?,
+    enabled: Boolean,
     listState: LazyListState,
     focusRequester: FocusRequester,
     onZoneFocused: (HomeDashboardFocusZone) -> Unit,
@@ -106,6 +107,7 @@ internal fun HomeChannelRail(
                     if (channel.id == selectedChannelId) {
                         Button(
                             onClick = { onWatchChannel(playlistId, channel.id) },
+                            enabled = enabled,
                             modifier = modifier
                         ) {
                             Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -113,6 +115,7 @@ internal fun HomeChannelRail(
                     } else {
                         OutlinedButton(
                             onClick = { onWatchChannel(playlistId, channel.id) },
+                            enabled = enabled,
                             modifier = modifier
                         ) {
                             Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis)
