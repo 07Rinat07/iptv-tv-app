@@ -170,6 +170,7 @@ fun StablePlayerScreen(
     var showChannelBanner by remember { mutableStateOf(false) }
     var volume by rememberSaveable { mutableFloatStateOf(1f) }
     var lastAudibleVolume by rememberSaveable { mutableFloatStateOf(1f) }
+    val videoSurfaceContent = rememberStablePlayerVideoSurfaceContent()
 
     fun setVolume(value: Float) {
         volume = value.coerceIn(0f, 1f)
@@ -365,6 +366,7 @@ fun StablePlayerScreen(
                 scale = state.playerVideoScale,
                 volume = volume,
                 showChannelBanner = showChannelBanner,
+                videoSurfaceContent = videoSurfaceContent,
                 onVolumeChange = ::setVolume,
                 onToggleMute = ::toggleMute,
                 onReady = { viewModel.onInternalPlaybackReady(it) },
@@ -408,6 +410,7 @@ fun StablePlayerScreen(
                             scale = state.playerVideoScale,
                             volume = volume,
                             isStartingPlayback = state.isStartingPlayback,
+                            videoSurfaceContent = videoSurfaceContent,
                             onVolumeChange = ::setVolume,
                             onToggleMute = ::toggleMute,
                             onReady = viewModel::onInternalPlaybackReady,
@@ -469,6 +472,7 @@ fun StablePlayerScreen(
                             scale = state.playerVideoScale,
                             volume = volume,
                             isStartingPlayback = state.isStartingPlayback,
+                            videoSurfaceContent = videoSurfaceContent,
                             onVolumeChange = ::setVolume,
                             onToggleMute = ::toggleMute,
                             onReady = viewModel::onInternalPlaybackReady,
