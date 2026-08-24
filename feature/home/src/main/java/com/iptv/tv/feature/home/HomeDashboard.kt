@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -30,6 +29,19 @@ import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.Playlist
 
+private data class HomeDashboardActions(
+    val onOpenScanner: (() -> Unit)?,
+    val onOpenImporter: (() -> Unit)?,
+    val onOpenReadyPlaylists: (() -> Unit)?,
+    val onOpenPlaylists: (() -> Unit)?,
+    val onOpenEpg: (() -> Unit)?,
+    val onOpenPlayer: (() -> Unit)?,
+    val onOpenSettings: (() -> Unit)?,
+    val onOpenDiagnostics: (() -> Unit)?,
+    val onPrimaryAction: (() -> Unit)?,
+    val primaryLabel: String
+)
+
 @Composable
 internal fun HomeDashboard(
     state: HomeUiState,
@@ -46,38 +58,33 @@ internal fun HomeDashboard(
     onPrimaryAction: (() -> Unit)?,
     primaryLabel: String
 ) {
+    val actions = HomeDashboardActions(
+        onOpenScanner = onOpenScanner,
+        onOpenImporter = onOpenImporter,
+        onOpenReadyPlaylists = onOpenReadyPlaylists,
+        onOpenPlaylists = onOpenPlaylists,
+        onOpenEpg = onOpenEpg,
+        onOpenPlayer = onOpenPlayer,
+        onOpenSettings = onOpenSettings,
+        onOpenDiagnostics = onOpenDiagnostics,
+        onPrimaryAction = onPrimaryAction,
+        primaryLabel = primaryLabel
+    )
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         if (shouldUseWideHomeDashboard(maxWidth.value, maxHeight.value)) {
             WideHomeDashboard(
                 state = state,
                 onWatchPlaylist = onWatchPlaylist,
                 onWatchReadyPlaylist = onWatchReadyPlaylist,
-                onOpenScanner = onOpenScanner,
-                onOpenImporter = onOpenImporter,
-                onOpenReadyPlaylists = onOpenReadyPlaylists,
-                onOpenPlaylists = onOpenPlaylists,
-                onOpenEpg = onOpenEpg,
-                onOpenPlayer = onOpenPlayer,
-                onOpenSettings = onOpenSettings,
-                onOpenDiagnostics = onOpenDiagnostics,
-                onPrimaryAction = onPrimaryAction,
-                primaryLabel = primaryLabel
+                actions = actions
             )
         } else {
             CompactHomeDashboard(
                 state = state,
                 onWatchPlaylist = onWatchPlaylist,
                 onWatchReadyPlaylist = onWatchReadyPlaylist,
-                onOpenScanner = onOpenScanner,
-                onOpenImporter = onOpenImporter,
-                onOpenReadyPlaylists = onOpenReadyPlaylists,
-                onOpenPlaylists = onOpenPlaylists,
-                onOpenEpg = onOpenEpg,
-                onOpenPlayer = onOpenPlayer,
-                onOpenSettings = onOpenSettings,
-                onOpenDiagnostics = onOpenDiagnostics,
-                onPrimaryAction = onPrimaryAction,
-                primaryLabel = primaryLabel
+                actions = actions
             )
         }
     }
@@ -88,16 +95,7 @@ private fun WideHomeDashboard(
     state: HomeUiState,
     onWatchPlaylist: (Long) -> Unit,
     onWatchReadyPlaylist: (ReadyPlaylistPreset) -> Unit,
-    onOpenScanner: (() -> Unit)?,
-    onOpenImporter: (() -> Unit)?,
-    onOpenReadyPlaylists: (() -> Unit)?,
-    onOpenPlaylists: (() -> Unit)?,
-    onOpenEpg: (() -> Unit)?,
-    onOpenPlayer: (() -> Unit)?,
-    onOpenSettings: (() -> Unit)?,
-    onOpenDiagnostics: (() -> Unit)?,
-    onPrimaryAction: (() -> Unit)?,
-    primaryLabel: String
+    actions: HomeDashboardActions
 ) {
     Row(
         modifier = Modifier
@@ -109,13 +107,7 @@ private fun WideHomeDashboard(
             modifier = Modifier
                 .width(188.dp)
                 .fillMaxHeight(),
-            onOpenPlaylists = onOpenPlaylists,
-            onOpenReadyPlaylists = onOpenReadyPlaylists,
-            onOpenImporter = onOpenImporter,
-            onOpenEpg = onOpenEpg,
-            onOpenPlayer = onOpenPlayer,
-            onOpenSettings = onOpenSettings,
-            onOpenDiagnostics = onOpenDiagnostics
+            actions = actions
         )
 
         TvScrollableLazyColumn(
@@ -139,19 +131,11 @@ private fun WideHomeDashboard(
             item {
                 HomeVideoHero(
                     isImporting = state.isImporting,
-                    onOpenPlayer = onOpenPlayer
+                    onOpenPlayer = actions.onOpenPlayer
                 )
             }
 
-            if (state.isImporting) {
-                item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
-            }
-            state.lastError?.let { error ->
-                item { Text(error, color = MaterialTheme.colorScheme.error) }
-            }
-            state.lastInfo?.let { info ->
-                item { Text(info, color = MaterialTheme.colorScheme.primary) }
-            }
+            statusItems(state)
 
             if (state.playlists.isNotEmpty()) {
                 item { Text("Мои списки каналов", style = MaterialTheme.typography.titleLarge) }
@@ -163,7 +147,7 @@ private fun WideHomeDashboard(
                     )
                 }
                 if (state.playlists.size > 6) {
-                    onOpenPlaylists?.let { action ->
+                    actions.onOpenPlaylists?.let { action ->
                         item {
                             OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth()) {
                                 Text("Показать все мои списки (${state.playlists.size})")
@@ -190,16 +174,12 @@ private fun WideHomeDashboard(
                 }
             }
 
-            items(READY_PLAYLIST_PRESETS, key = { it.url }) { preset ->
-                ReadyPlaylistCard(
-                    preset = preset,
-                    importing = state.importingUrl == preset.url,
-                    enabled = !state.isImporting,
-                    onWatch = { onWatchReadyPlaylist(preset) }
-                )
-            }
+            readyPlaylistItems(
+                state = state,
+                onWatchReadyPlaylist = onWatchReadyPlaylist
+            )
 
-            onOpenScanner?.let { action ->
+            actions.onOpenScanner?.let { action ->
                 item {
                     Button(onClick = action, modifier = Modifier.fillMaxWidth()) {
                         Text("Найти новые списки")
@@ -207,10 +187,10 @@ private fun WideHomeDashboard(
                 }
             }
 
-            onPrimaryAction?.let { action ->
+            actions.onPrimaryAction?.let { action ->
                 item {
                     OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth()) {
-                        Text(primaryLabel)
+                        Text(actions.primaryLabel)
                     }
                 }
             }
@@ -223,16 +203,7 @@ private fun CompactHomeDashboard(
     state: HomeUiState,
     onWatchPlaylist: (Long) -> Unit,
     onWatchReadyPlaylist: (ReadyPlaylistPreset) -> Unit,
-    onOpenScanner: (() -> Unit)?,
-    onOpenImporter: (() -> Unit)?,
-    onOpenReadyPlaylists: (() -> Unit)?,
-    onOpenPlaylists: (() -> Unit)?,
-    onOpenEpg: (() -> Unit)?,
-    onOpenPlayer: (() -> Unit)?,
-    onOpenSettings: (() -> Unit)?,
-    onOpenDiagnostics: (() -> Unit)?,
-    onPrimaryAction: (() -> Unit)?,
-    primaryLabel: String
+    actions: HomeDashboardActions
 ) {
     TvScrollableLazyColumn(
         modifier = Modifier
@@ -250,19 +221,11 @@ private fun CompactHomeDashboard(
         item {
             HomeVideoHero(
                 isImporting = state.isImporting,
-                onOpenPlayer = onOpenPlayer
+                onOpenPlayer = actions.onOpenPlayer
             )
         }
 
-        if (state.isImporting) {
-            item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
-        }
-        state.lastError?.let { error ->
-            item { Text(error, color = MaterialTheme.colorScheme.error) }
-        }
-        state.lastInfo?.let { info ->
-            item { Text(info, color = MaterialTheme.colorScheme.primary) }
-        }
+        statusItems(state)
 
         if (state.playlists.isNotEmpty()) {
             item { Text("Мои списки каналов", style = MaterialTheme.typography.titleLarge) }
@@ -274,7 +237,7 @@ private fun CompactHomeDashboard(
                 )
             }
             if (state.playlists.size > 8) {
-                onOpenPlaylists?.let { action ->
+                actions.onOpenPlaylists?.let { action ->
                     item {
                         OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth()) {
                             Text("Показать все мои списки (${state.playlists.size})")
@@ -294,16 +257,12 @@ private fun CompactHomeDashboard(
             }
         }
 
-        items(READY_PLAYLIST_PRESETS, key = { it.url }) { preset ->
-            ReadyPlaylistCard(
-                preset = preset,
-                importing = state.importingUrl == preset.url,
-                enabled = !state.isImporting,
-                onWatch = { onWatchReadyPlaylist(preset) }
-            )
-        }
+        readyPlaylistItems(
+            state = state,
+            onWatchReadyPlaylist = onWatchReadyPlaylist
+        )
 
-        onOpenScanner?.let { action ->
+        actions.onOpenScanner?.let { action ->
             item {
                 Button(onClick = action, modifier = Modifier.fillMaxWidth()) {
                     Text("Найти новые списки в сканере")
@@ -311,38 +270,48 @@ private fun CompactHomeDashboard(
             }
         }
 
-        item {
-            HomeNavigationActions(
-                onOpenPlaylists = onOpenPlaylists,
-                onOpenReadyPlaylists = onOpenReadyPlaylists,
-                onOpenImporter = onOpenImporter,
-                onOpenEpg = onOpenEpg,
-                onOpenPlayer = onOpenPlayer,
-                onOpenSettings = onOpenSettings,
-                onOpenDiagnostics = onOpenDiagnostics
-            )
-        }
+        item { HomeNavigationActions(actions) }
 
-        onPrimaryAction?.let { action ->
+        actions.onPrimaryAction?.let { action ->
             item {
                 OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth()) {
-                    Text(primaryLabel)
+                    Text(actions.primaryLabel)
                 }
             }
         }
     }
 }
 
+private fun androidx.compose.foundation.lazy.LazyListScope.statusItems(state: HomeUiState) {
+    if (state.isImporting) {
+        item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
+    }
+    state.lastError?.let { error ->
+        item { Text(error, color = MaterialTheme.colorScheme.error) }
+    }
+    state.lastInfo?.let { info ->
+        item { Text(info, color = MaterialTheme.colorScheme.primary) }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.readyPlaylistItems(
+    state: HomeUiState,
+    onWatchReadyPlaylist: (ReadyPlaylistPreset) -> Unit
+) {
+    items(READY_PLAYLIST_PRESETS, key = { it.url }) { preset ->
+        ReadyPlaylistCard(
+            preset = preset,
+            importing = state.importingUrl == preset.url,
+            enabled = !state.isImporting,
+            onWatch = { onWatchReadyPlaylist(preset) }
+        )
+    }
+}
+
 @Composable
 private fun HomeNavigationRail(
     modifier: Modifier,
-    onOpenPlaylists: (() -> Unit)?,
-    onOpenReadyPlaylists: (() -> Unit)?,
-    onOpenImporter: (() -> Unit)?,
-    onOpenEpg: (() -> Unit)?,
-    onOpenPlayer: (() -> Unit)?,
-    onOpenSettings: (() -> Unit)?,
-    onOpenDiagnostics: (() -> Unit)?
+    actions: HomeDashboardActions
 ) {
     Card(modifier = modifier) {
         Column(
@@ -357,69 +326,38 @@ private fun HomeNavigationRail(
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary
             )
-            HomeNavigationButtons(
-                onOpenPlaylists = onOpenPlaylists,
-                onOpenReadyPlaylists = onOpenReadyPlaylists,
-                onOpenImporter = onOpenImporter,
-                onOpenEpg = onOpenEpg,
-                onOpenPlayer = onOpenPlayer,
-                onOpenSettings = onOpenSettings,
-                onOpenDiagnostics = onOpenDiagnostics
-            )
+            HomeNavigationButtons(actions)
         }
     }
 }
 
 @Composable
-private fun HomeNavigationActions(
-    onOpenPlaylists: (() -> Unit)?,
-    onOpenReadyPlaylists: (() -> Unit)?,
-    onOpenImporter: (() -> Unit)?,
-    onOpenEpg: (() -> Unit)?,
-    onOpenPlayer: (() -> Unit)?,
-    onOpenSettings: (() -> Unit)?,
-    onOpenDiagnostics: (() -> Unit)?
-) {
+private fun HomeNavigationActions(actions: HomeDashboardActions) {
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         Text("Другие разделы", style = MaterialTheme.typography.titleMedium)
-        HomeNavigationButtons(
-            onOpenPlaylists = onOpenPlaylists,
-            onOpenReadyPlaylists = onOpenReadyPlaylists,
-            onOpenImporter = onOpenImporter,
-            onOpenEpg = onOpenEpg,
-            onOpenPlayer = onOpenPlayer,
-            onOpenSettings = onOpenSettings,
-            onOpenDiagnostics = onOpenDiagnostics
-        )
+        HomeNavigationButtons(actions)
     }
 }
 
 @Composable
-private fun HomeNavigationButtons(
-    onOpenPlaylists: (() -> Unit)?,
-    onOpenReadyPlaylists: (() -> Unit)?,
-    onOpenImporter: (() -> Unit)?,
-    onOpenEpg: (() -> Unit)?,
-    onOpenPlayer: (() -> Unit)?,
-    onOpenSettings: (() -> Unit)?,
-    onOpenDiagnostics: (() -> Unit)?
-) {
-    val actions = listOfNotNull(
-        onOpenPlaylists?.let { "Мои плейлисты" to it },
-        onOpenReadyPlaylists?.let { "Готовые списки" to it },
-        onOpenImporter?.let { "Импорт" to it },
-        onOpenEpg?.let { "Телепрограмма" to it },
-        onOpenPlayer?.let { "Плеер" to it },
-        onOpenSettings?.let { "Настройки" to it },
-        onOpenDiagnostics?.let { "Диагностика" to it }
-    )
-
-    actions.forEach { (label, action) ->
+private fun HomeNavigationButtons(actions: HomeDashboardActions) {
+    navigationActions(actions).forEach { (label, action) ->
         OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth()) {
             Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
+
+private fun navigationActions(actions: HomeDashboardActions): List<Pair<String, () -> Unit>> =
+    listOfNotNull(
+        actions.onOpenPlaylists?.let { "Мои плейлисты" to it },
+        actions.onOpenReadyPlaylists?.let { "Готовые списки" to it },
+        actions.onOpenImporter?.let { "Импорт" to it },
+        actions.onOpenEpg?.let { "Телепрограмма" to it },
+        actions.onOpenPlayer?.let { "Плеер" to it },
+        actions.onOpenSettings?.let { "Настройки" to it },
+        actions.onOpenDiagnostics?.let { "Диагностика" to it }
+    )
 
 @Composable
 private fun HomeVideoHero(
