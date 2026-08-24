@@ -87,37 +87,24 @@ data class AceLiveDhtDiscoveryResult(
  * and the concurrent metadata/refill paths from immediately repeating the same successful DHT walk
  * for the same swarm/bootstrap set. A cached batch is bypassed when any endpoint is currently inside
  * the existing swarm-scoped TCP-connect failure backoff, because filtering a stale cache hit must not
- * suppress a fresh bounded lookup for alternatives. While such a backoff is active, a startup DHT
- * fast path also disables only its early peer-count return condition for that one walk so the first
- * rediscovered dead endpoint cannot terminate discovery before an alternative is reached. The same
- * discovery time, query, branching and total-peer caps remain in force. Empty results are never
- * reused. Tests and custom callers remain uncached unless they opt in explicitly.
+ * suppress a fresh bounded lookup for alternatives. While such failures are active, a startup DHT
+ * fast path raises only its early peer-count threshold by the number of remembered failed endpoints.
+ * That guarantees enough raw candidates can remain after eligibility filtering without changing the
+ * discovery time, query, branching or total-peer caps. Empty results are never reused. Tests and
+ * custom callers remain uncached unless they opt in explicitly.
  */
 class AceLiveDhtDiscovery(
-    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val policy: AceLiveDhtPolicy = AceLiveDhtPolicy(),
-    randomInt: () -> Int = AceDhtIterativeDiscovery.DEFAULT_RANDOM_INT,
-    addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER,
+    private val randomInt: () -> Int = AceDhtIterativeDiscovery.DEFAULT_RANDOM_INT,
+    private val addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER,
     private val reuseRecentResults: Boolean = false,
     private val clockMillis: () -> Long = System::currentTimeMillis,
-    routingMemory: AceDhtRoutingMemory? = null,
+    private val routingMemory: AceDhtRoutingMemory? = null,
     private val connectFailureMemory: AceLiveTcpConnectFailureMemory =
         AceLiveTcpConnectFailureMemory.shared
 ) {
-    private val delegate = AceDhtIterativeDiscovery(
-        ioDispatcher = ioDispatcher,
-        policy = policy,
-        randomInt = randomInt,
-        addressResolver = addressResolver,
-        routingMemory = routingMemory
-    )
-    private val failureAwareDelegate = AceDhtIterativeDiscovery(
-        ioDispatcher = ioDispatcher,
-        policy = policy.copy(returnAfterPeers = null),
-        randomInt = randomInt,
-        addressResolver = addressResolver,
-        routingMemory = routingMemory
-    )
+    private val delegate = delegateFor(policy)
 
     suspend fun discover(request: AceLiveDhtDiscoveryRequest): AceLiveDhtDiscoveryResult {
         val cacheKey = request.cacheKey()
@@ -139,12 +126,17 @@ class AceLiveDhtDiscovery(
             }
         }
 
-        val discoveryDelegate = if (
-            policy.returnAfterPeers != null && connectFailureMemory.hasActiveFailure(swarmBytes)
-        ) {
-            failureAwareDelegate
+        val activeFailures = connectFailureMemory.activeFailureCount(swarmBytes)
+        val normalEarlyReturn = policy.returnAfterPeers
+        val effectiveEarlyReturn = if (normalEarlyReturn != null && activeFailures > 0) {
+            minOf(policy.maxTotalPeers, normalEarlyReturn + activeFailures)
         } else {
+            normalEarlyReturn
+        }
+        val discoveryDelegate = if (effectiveEarlyReturn == normalEarlyReturn) {
             delegate
+        } else {
+            delegateFor(policy.copy(returnAfterPeers = effectiveEarlyReturn))
         }
         val outcome = discoveryDelegate.discover(
             AceDhtLookupRequest(
@@ -173,6 +165,15 @@ class AceLiveDhtDiscovery(
         }
         return result
     }
+
+    private fun delegateFor(delegatePolicy: AceLiveDhtPolicy): AceDhtIterativeDiscovery =
+        AceDhtIterativeDiscovery(
+            ioDispatcher = ioDispatcher,
+            policy = delegatePolicy,
+            randomInt = randomInt,
+            addressResolver = addressResolver,
+            routingMemory = routingMemory
+        )
 
     private fun AceLiveDhtDiscoveryRequest.cacheKey(): String = buildString {
         append(swarmKey.toHex())
