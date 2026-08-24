@@ -7,7 +7,7 @@ This is the canonical current-state and next-action document. Dated field report
 ## Current integration head
 
 - Latest functional production baseline: `82418095e034c00d1ec0b3737c3a3cc25b6c2cc8` — PR #209 `fix(p2p): avoid repeated dead peer on direct retry`, squash-merged after exact-head Android CI #941, real Torrent TV playback smoke without external Ace Engine, full `core:p2p` regression coverage and Player Refactor Guard #109.
-- PR #200, #201, #202, #204, #207 and #209 are merged after the earlier PR #174–#198 sequence. PR #207 fixed the field-evidenced false `qualified_peer_no_media` handoff after valid `media_appended`; PR #209 preserves the existing five-second pre-handshake TCP connect-failure backoff across short-lived direct/direct-retry runtimes and keeps recently failed endpoints from immediately satisfying discovery fast paths. Neither increment widened the binding P2P time/query/peer/request/buffer budgets.
+- PR #200, #201, #202, #204, #206, #207 and #209 are merged after the earlier PR #174–#198 sequence. PR #206 added the troubleshooting baseline; PR #207 fixed the field-evidenced false `qualified_peer_no_media` handoff after valid `media_appended`; PR #209 preserves the existing five-second pre-handshake TCP connect-failure backoff across short-lived direct/direct-retry runtimes and keeps recently failed endpoints from immediately satisfying discovery fast paths. Neither P2P increment widened the binding P2P time/query/peer/request/buffer budgets.
 - The old Player shell draft PR #208 is closed unmerged because its base predates the current P2P integration. Its mechanical extraction scope remains valid and must be recreated from fresh `main` before any visual Player redesign.
 - Issue #210 now owns the confirmed Home/Live Player TV-dashboard direction and same-session dashboard ↔ fullscreen contract. Issue #211 owns ordinary-IPTV playback compatibility / Media3→LibVLC multicodec hardening and real-device codec acceptance.
 - Catalog/Favorites, EPG, Player architecture, dashboard and codec work do not constitute new Ace Live field evidence. Further P2P behavior changes remain bound to Issue #159 real-device evidence.
@@ -186,7 +186,9 @@ For normal Android integration work on the exact PR head:
 5. `:app:assembleDebugAndroidTest`
 6. signed ARM TV APK build/artifacts in the full Android workflow
 
-Player architecture and dashboard PRs additionally use `Player Refactor Guard`: checkout `github.event.pull_request.head.sha`, verify `git rev-parse HEAD` equals that exact SHA, reject `feature/scanner`/`core/scanner` production changes, and run both Player and Scanner unit suites.
+Player architecture and Live Player/dashboard PRs that touch `feature/player/**` additionally use `Player Refactor Guard`: checkout `github.event.pull_request.head.sha`, verify `git rev-parse HEAD` equals that exact SHA, reject `feature/scanner`/`core/scanner` production changes, and run both Player and Scanner unit suites.
+
+The current guard workflow does not yet trigger for a PR whose production changes are limited to `feature/home/**`. Before the first Home-only dashboard implementation PR, land a separate fresh-main CI-guard increment that adds the Home dashboard paths to both the workflow `pull_request.paths` trigger and its applicability detection; after that precondition, Home-only dashboard PRs must use the same exact-head Player/Scanner regression guard plus full Android CI.
 
 Database/Favorites persistence work additionally uses the dedicated Database Unit CI (`:core:database:testDebugUnitTest` + `:core:data:testDebugUnitTest`).
 
@@ -197,7 +199,7 @@ Codec/backend compatibility claims that depend on hardware decoding additionally
 ## Decision order
 
 1. **Complete the fresh-main mechanical Player shell split.** Recreate the valid scope of closed stale PR #208 from current `main`; no behavior, input, state ownership, Scanner or P2P changes.
-2. **Issue #210 — Home/Live Player layout.** Introduce the confirmed TV dashboard structure in small fresh-main PRs.
+2. **Issue #210 — Home/Live Player layout.** Introduce the confirmed TV dashboard structure in small fresh-main PRs. Before any PR limited to `feature/home/**`, first merge the guard-path precondition described above.
 3. **Issue #210 — focus/navigation and channel rails.** Make left rail, video, right list and bottom rail fully usable by D-pad and mouse/touchpad with visible/restored focus.
 4. **Issue #210 — dashboard ↔ fullscreen.** Use the same playback session/runtime and preserve selected channel, volume/mute, aspect/scale, EPG context and focus return; Back closes overlays, then fullscreen, then Player.
 5. **Issue #210/#47 — EPG Now/Next, Favorites and polish.** Use only explicit archive/catch-up capability for programme playback and keep unsupported modes fail-closed.
