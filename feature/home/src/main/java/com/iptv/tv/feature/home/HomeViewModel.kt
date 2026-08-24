@@ -9,6 +9,7 @@ import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.Playlist
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +33,7 @@ data class HomeUiState(
     val pendingOpenChannelId: Long? = null
 )
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val playlistRepository: PlaylistRepository
@@ -228,7 +230,6 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun selectChannelRailPlaylist(playlistId: Long) {
-        _channelRailPlaylistId.value = playlistId
         _uiState.update { state ->
             if (state.channelRailPlaylistId == playlistId) {
                 state
@@ -240,5 +241,6 @@ class HomeViewModel @Inject constructor(
                 )
             }
         }
+        _channelRailPlaylistId.value = playlistId
     }
 }
