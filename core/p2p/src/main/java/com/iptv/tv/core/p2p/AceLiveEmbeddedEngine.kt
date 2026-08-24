@@ -161,6 +161,9 @@ class AceLiveEmbeddedEngine(
                 directHasQualificationProgress = {
                     directRuntime.get()?.hasCurrentQualificationProgress() == true
                 },
+                directHasMediaProgress = {
+                    directRuntime.get()?.hasCurrentMediaProgress() == true
+                },
                 onDirectProgressGraceStarted = {
                     runCatching {
                         diagnosticsObserver(
@@ -186,6 +189,16 @@ class AceLiveEmbeddedEngine(
                             "phase=direct_retry_progress_grace, startup_id=$totalStartedAt, " +
                                 "path=direct_retry, reason=qualified_no_media, " +
                                 "grace_ms=$DIRECT_QUALIFICATION_GRACE_MILLIS"
+                        )
+                    }
+                },
+                onDirectRetryMediaHandoffStarted = {
+                    runCatching {
+                        diagnosticsObserver(
+                            "embedded_ace_live_metadata_handoff",
+                            "phase=direct_retry_media_handoff, startup_id=$totalStartedAt, " +
+                                "path=direct_retry, reason=media_appended, " +
+                                "bound=existing_startup"
                         )
                     }
                 },
@@ -611,6 +624,9 @@ class AceLiveEmbeddedEngine(
             return qualified && !closed.get()
         }
 
+        fun hasCurrentMediaProgress(): Boolean =
+            !closed.get() && lastMediaAppendAt.get() > 0L
+
         fun start() {
             check(runner == null) { "Ace Live runtime is already started" }
             startupStartedAtMillis.set(System.currentTimeMillis())
@@ -939,7 +955,7 @@ class AceLiveEmbeddedEngine(
                     diagnosticsObserver(
                         "embedded_ace_live_peer_refill",
                         "extra_probe_peers=$extraProbePeers, previous=$previousProbePeers, " +
-                            "pressure=$pressure"
+                            "pressure=$pressure, signal=${sample.pressure.signal}"
                     )
                 }
                 if (extraProbePeers > previousProbePeers && !closed.get()) {
