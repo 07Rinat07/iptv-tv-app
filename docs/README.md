@@ -5,6 +5,7 @@
 ## С чего начинать
 
 - [`PROJECT_STATUS_AND_ROADMAP.md`](PROJECT_STATUS_AND_ROADMAP.md) — **канонический текущий статус проекта, активный blocker, merge gates и порядок следующих решений**. Если старый датированный roadmap называет другой «текущий increment», приоритет имеет этот файл.
+- [`PLAYER_DASHBOARD_AND_PLAYBACK_COMPATIBILITY_PLAN.md`](PLAYER_DASHBOARD_AND_PLAYBACK_COMPATIBILITY_PLAN.md) — подтверждённая после PR #209 последовательность: mechanical Player shell split → Home/Player TV dashboard (#210) → dashboard/fullscreen без перезапуска session → EPG/Favorites polish → multicodec/Media3→LibVLC hardening (#211) → TV Box codec matrix.
 - [`USER_GUIDE.md`](USER_GUIDE.md) — пользовательское управление, «Мои плейлисты», canonical catalog, durable unified Favorites, системный virtual Favorites list, Back/focus restore, Player и базовая диагностика.
 - [`REMOTE_AND_MOUSE.md`](REMOTE_AND_MOUSE.md) — подробный контракт D-pad, клавиатуры, мыши/тачпада и production Player input/focus boundaries.
 - [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — диагностика импорта, Scanner, Player, EPG/archive, Favorites, сети, TV-input и evidence-driven P2P проблем без ослабления runtime safety gates.
@@ -15,7 +16,7 @@
 
 - [`architecture.md`](architecture.md) — canonical hierarchy, navigation runtime, logical channel identity и границы каталог/Favorites/P2P.
 - [`USER_GUIDE.md`](USER_GUIDE.md) — фактический пользовательский сценарий: ordinary playlists, системное `Избранное`, сохранение favorites после удаления источника и текущий export scope.
-- `PROJECT_STATUS_AND_ROADMAP.md` — текущая последовательность Issue #45: PR #174–#179 закрыли portable backup/import/export и preferred-source picker, All Channels + Recent завершены в `03f8e8e`, focus hot path — в `90a285c`, off-Main latest-wins rebuild — в production `2d22aea`; разработка сейчас остановлена по запросу пользователя.
+- `PROJECT_STATUS_AND_ROADMAP.md` — текущая последовательность Issue #45: PR #174–#179 закрыли portable backup/import/export и preferred-source picker, All Channels + Recent завершены в `03f8e8e`, focus hot path — в `90a285c`, off-Main latest-wins rebuild — в production `2d22aea`.
 
 ## Ace Live / P2P
 

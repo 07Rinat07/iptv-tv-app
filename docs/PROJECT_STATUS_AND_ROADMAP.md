@@ -6,10 +6,12 @@ This is the canonical current-state and next-action document. Dated field report
 
 ## Current integration head
 
-- Current production `main`: `9d793b7b` — PR #198 mechanically isolated StablePlayer channel browser/list/drawer and nearby-channel presentation after exact-head Android CI #908, Player Refactor Guard #91 and P2P player smoke #18.
-- PR #174–#187, PR #189–#194, PR #196–#198 are merged. PR #186 started the production StablePlayer presentation/composition split, PR #194 added read-only EPG cache/refresh observability, PR #196 moved panel/dialog composition into `StablePlayerPanels.kt`, and PR #198 moved channel browser/list/drawer presentation into `StablePlayerChannelBrowser.kt` without playback/input/search/P2P semantics changes. PR #188, stale draft #195 and failed staging draft #199 were closed unmerged and are not production history.
-- Catalog/Favorites, EPG and Player architecture work do not constitute new Ace Live field evidence. P2P transport decisions remain bound to the real-device evidence track described below.
-- Historical merged feature branches are not production merge candidates and should be deleted after their changes are verified in `main` when repository tooling supports branch deletion.
+- Latest functional production baseline: `82418095e034c00d1ec0b3737c3a3cc25b6c2cc8` — PR #209 `fix(p2p): avoid repeated dead peer on direct retry`, squash-merged after exact-head Android CI #941, real Torrent TV playback smoke without external Ace Engine, full `core:p2p` regression coverage and Player Refactor Guard #109.
+- PR #200, #201, #202, #204, #206, #207 and #209 are merged after the earlier PR #174–#198 sequence. PR #206 added the troubleshooting baseline; PR #207 fixed the field-evidenced false `qualified_peer_no_media` handoff after valid `media_appended`; PR #209 preserves the existing five-second pre-handshake TCP connect-failure backoff across short-lived direct/direct-retry runtimes and keeps recently failed endpoints from immediately satisfying discovery fast paths. Neither P2P increment widened the binding P2P time/query/peer/request/buffer budgets.
+- The old Player shell draft PR #208 is closed unmerged because its base predates the current P2P integration. Its mechanical extraction scope remains valid and must be recreated from fresh `main` before any visual Player redesign.
+- Issue #210 now owns the confirmed Home/Live Player TV-dashboard direction and same-session dashboard ↔ fullscreen contract. Issue #211 owns ordinary-IPTV playback compatibility / Media3→LibVLC multicodec hardening and real-device codec acceptance.
+- Catalog/Favorites, EPG, Player architecture, dashboard and codec work do not constitute new Ace Live field evidence. Further P2P behavior changes remain bound to Issue #159 real-device evidence.
+- Historical merged feature branches are not production merge candidates and should be deleted after their changes are verified in `main` when repository tooling supports genuine branch deletion.
 
 ## Issue #45 — canonical catalog + autonomous unified Favorites
 
@@ -56,7 +58,8 @@ Issue #45's aggregate collector/summary work is complete in `main`. Ready-catalo
 ### Next production increments
 
 1. **Archive Player launch/UI integration.** Wire only persisted explicit catch-up capability and the fail-closed resolver into an intentional EPG programme action/Player launch path; do not infer archive support from live URLs and keep provider-specific unsupported modes disabled.
-2. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
+2. **Player/dashboard EPG polish.** Issue #210 may surface Now/Next and intentional programme actions, but archive playback remains gated by the persisted explicit capability above.
+3. **Later aggregate filters.** Add EPG/Now-Next/archive/P2P virtual catalog views only after their capability contracts are stable.
 
 ## Issue #46 — Player UX, buffering and architecture
 
@@ -77,27 +80,47 @@ Player work is split into small fresh-main increments. Refactoring must preserve
 
 The target is not class-heavy OOP. For Kotlin/Compose, apply SOLID/bounded responsibilities with small interfaces, coordinators/policies where stateful behavior belongs, pure helpers for deterministic logic and focused composables for presentation.
 
-### Refactor sequence
+### Refactor and UX sequence
 
 1. **Production Player input boundary — complete, PR #183.** `StablePlayerInputHandler` remains the Android lifecycle/gesture adapter, deterministic input contracts/policy are extracted, `stableRemoteActionForKey` remains the production key mapping source of truth, and Player refactors are protected by an exact-head Scanner boundary/regression gate.
-2. **Production StablePlayer composition split — in progress.** PR #186 extracted the first stable presentation responsibilities, PR #196 extracted panel/dialog presentation, and PR #198 extracted channel browser/list/drawer plus nearby-channel presentation. The next fresh-main increment is the remaining shell/navigation presentation split. Playback semantics, search/filter semantics, input policy and state ownership remain unchanged. PR #188, stale draft #195 and failed staging draft #199 were closed unmerged and did not land production code.
-3. **Player state/recomposition split.** Separate hot playback/engine telemetry from large catalog/EPG/browser state, reduce root `PlayerUiState` invalidation, move expensive derived channel models/indexes out of root composition, and publish only distinct state changes.
-4. **RAM-bounded Auto buffer.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV `ChannelHealth.UNSTABLE`, increase only time-based Media3 recovery/min-buffer thresholds while preserving existing device/multiview byte caps. Manual remains explicit. Ace/P2P buffer policy is excluded without Issue #159 device evidence.
-5. **Measured Player performance pass.** Address remaining main-thread/state churn only from deterministic evidence or profiling, keeping each optimization independently testable.
-6. **Large-file follow-up.** Apply the same responsibility-first decomposition pattern to Scanner, Editor, Importer and Settings in separate bounded-context PRs; do not combine unrelated modules in one rewrite.
+2. **Production StablePlayer composition split — next mechanical increment.** PR #186 extracted the first stable presentation responsibilities, PR #196 extracted panel/dialog presentation, and PR #198 extracted channel browser/list/drawer plus nearby-channel presentation. Stale draft PR #208 attempted the remaining shell extraction but is closed unmerged because its base predates current `main`; recreate the same behavior-preserving `StablePlayerShell.kt` extraction from fresh `main`. Playback semantics, search/filter semantics, input policy and state ownership remain unchanged.
+3. **Issue #210 — Home/Live Player dashboard shell.** After the mechanical split is merged, introduce the TV-first dark dashboard layout as small fresh-main PRs: compact left navigation, large central video pane, right channel/group selector and bottom quick-channel rail. Do not create a second playback runtime.
+4. **Issue #210 — focus/navigation and channel rails.** Preserve visible focus, D-pad/Center/Back semantics, mouse/touchpad behavior and focus restore across left rail, video, channel list and bottom rail.
+5. **Issue #210 — same-session dashboard ↔ fullscreen.** Fullscreen button/double-click may expand the active video; Back/fullscreen toggle returns to dashboard while preserving the same playback session/runtime, selected channel, volume/mute, scale/aspect, EPG context and focus return target. Back closes overlays before leaving fullscreen, and leaves Player only from dashboard level.
+6. **Issue #210/#47 — Now/Next, Favorites and UI polish.** Surface reliable EPG and Favorite state without inventing archive capability. Archive actions use only Issue #47's explicit persisted catch-up contract.
+7. **Issue #211 — playback compatibility / multicodec hardening.** Keep Media3 primary and LibVLC as bounded fallback; classify network/source/container/demux/decoder/backend failures, preserve Player context across fallback when possible, and build a measured codec/container matrix rather than promising literally every codec on every device.
+8. **Real-device codec acceptance.** Validate H.264/H.265/MPEG-2 plus AAC/HE-AAC/AC-3/E-AC-3 and additional available samples on ARM TV Box, recording backend/decoder/startup/first-frame/audio/fallback evidence.
+9. **Player state/recomposition and performance follow-up.** After the confirmed UX/playback sequence, separate hot playback/engine telemetry from large catalog/EPG/browser state and address remaining main-thread/state churn only from deterministic evidence or profiling.
+10. **RAM-bounded Auto buffer follow-up.** Keep persisted `BufferProfile.STANDARD` for compatibility but present it as `Авто`; for ordinary IPTV only, tune time-based recovery/min-buffer thresholds within existing device/multiview byte caps when supported by measured evidence. Ace/P2P buffer policy remains excluded without Issue #159 device evidence.
+11. **Large-file follow-up.** Apply the same responsibility-first decomposition pattern to Scanner, Editor, Importer and Settings in separate bounded-context PRs; do not combine unrelated modules in one rewrite.
 
-### Refactor invariants
+### Refactor and UX invariants
 
 - Production Player routing is `StablePlayerScreen`; validate the actual routed implementation before every architectural change.
 - No second playback runtime.
 - No behavioral change in a mechanical file split.
-- No P2P/Ace peer/DHT/request/buffer change from a generic Player refactor.
+- Dashboard ↔ fullscreen is a presentation/state transition over the same active playback session, not a channel restart.
+- No P2P/Ace peer/DHT/request/timeout/buffer change from generic Player, dashboard or codec work.
 - Keep TV/D-pad focus behavior, Back behavior, selected-channel identity and playback-session ownership stable.
 - Keep production remote mapping (`stableRemoteActionForKey`) and `StablePlayerInputHandler` behavior aligned; do not maintain a parallel legacy remote policy as a substitute for production tests.
 - Player architecture work must not modify Scanner discovery/query/search semantics.
 - Prefer extracted pure functions/data classes and small composables over inheritance hierarchies.
 - Introduce interfaces/classes only when they own a real contract, lifecycle or policy.
-- Every refactor PR starts from fresh `main`, has focused regression coverage and merges only after exact-head gates are green.
+- Every refactor/UX/playback PR starts from fresh `main`, has focused regression coverage and merges only after exact-head gates are green.
+
+### Issue #211 compatibility target
+
+Ordinary IPTV compatibility is intentionally broad but measurable. Hardware decoder capability, Android API level, DRM and redistribution/licensing constraints mean the project must not claim literal universal codec support.
+
+- Primary backend: Media3.
+- Integrated fallback: LibVLC for classified decoder/container/demux/backend failures where the bundled backend can safely handle the stream.
+- Target video matrix: H.264/AVC, H.265/HEVC, MPEG-2 Video, MPEG-4 Part 2 where encountered, VP9, and AV1 where device/backend support exists.
+- Target audio matrix: AAC/HE-AAC, MP2/MP3, AC-3, E-AC-3 where supported, Opus where encountered, and multiple audio tracks.
+- Delivery/container matrix: MPEG-TS over HTTP/HTTPS, HLS, progressive MP4/MKV/WebM for VOD/archive, redirects/common IPTV headers, and loopback MPEG-TS from the embedded P2P runtime.
+- Preserve selected channel, volume/mute and dashboard/fullscreen context across backend fallback when technically possible; prevent Media3↔LibVLC fallback loops.
+- Expose fallback classification in diagnostics, not as permanent user noise.
+
+The detailed confirmed implementation contract is in [`PLAYER_DASHBOARD_AND_PLAYBACK_COMPATIBILITY_PLAN.md`](PLAYER_DASHBOARD_AND_PLAYBACK_COMPATIBILITY_PLAN.md).
 
 ## Ready catalog — PR #182 complete
 
@@ -129,18 +152,24 @@ A future shareable HTTP/LAN URL is a separate feature after portable backup/impo
 
 ## P2P / Ace Live evidence gate — Issue #159
 
-The current P2P transport policy remains evidence-driven. The latest canonical field evidence is the 2026-08-20 TV Box track summarized in [`testing/playback-log-analysis-2026-08-20.md`](testing/playback-log-analysis-2026-08-20.md).
+The current P2P transport policy remains evidence-driven. The latest same-device TV Box evidence is tracked in Issue #159 and the 2026-08-20 analysis documents.
 
 Already-completed hardening includes terminal peer-pool ownership, production-lifetime DHT routing memory, warm-query scheduling, progress-aware direct handoff/fallback, deterministic A→B→C ownership, player-session terminal summaries and bounded MPEG-TS/continuous-fixture diagnostics. PR #184 additionally provides deterministic producer-stage field-evidence classification across correlated runtime/gap diagnostics, including bounded observation-window deltas and zero-event scheduler stalls; this tooling is observational and does not authorize transport-policy changes.
 
-The remaining field gate is real-device evidence for producer-stage / rapid-switch behavior and the separate player/TS boundary. Do **not** infer new peer/request/buffer policy from catalog/Favorites/EPG/Player-refactor CI.
+The latest field-derived fixes are now production:
+
+- **PR #207 — media handoff preservation.** When valid TS has already reached `media_appended`, the direct-retry runtime is no longer falsely terminated as `qualified_peer_no_media`; the fixed two-second qualification grace remains unchanged for a qualified peer with no media, and the runtime with media continues only through the existing bounded startup/player handoff.
+- **PR #209 — dead-connect retry diversity.** The existing five-second first pre-handshake TCP-connect failure backoff survives direct/direct-retry runtime replacement, is scoped by exact swarm+endpoint, is cleared by a successful TCP connect, filters stale tracker/DHT candidates and raises only the DHT early-return peer-count threshold by the number of currently remembered failed endpoints. Absolute DHT time/query/branching/peer caps remain unchanged.
+
+Issue #159 remains open. The next Ace/P2P behavior change requires new TV Box evidence from current `main`; do not infer new peer/request/buffer policy from catalog/Favorites/EPG/Player/dashboard/codec CI.
 
 ### Binding P2P constraints
 
 - Discovered endpoints are not connected, handshaked, requestable or producing peers.
 - Producer `sent` proves a completed local socket write, not receipt or acceptance by the peer.
 - A 40-character Ace `content_id` is a transport identity, not automatically a BitTorrent infohash.
-- Do not increase the 60 s content-preparation bound, 30 s no-connected-peer guard, DHT budgets, peer caps, request depth or output buffers to conceal a failure.
+- Preserve the 60 s content-preparation bound, 30 s no-connected-peer guard, existing 8 s soft handoff boundary and fixed 2 s non-renewable qualification grace.
+- Do not increase DHT discovery budgets/branching/query caps, active-peer target/max, TCP connect/handshake/write timeouts, request depth/concurrency, recovery cursor/max-advance limits or output buffer/cache to conceal a failure.
 - Preserve generation/session ownership and complete non-cancellable cleanup on supersession.
 - Do not change generic IPTV or normal BitTorrent behavior to fix Ace Live.
 - Do not add an external Ace Stream Engine runtime dependency or fallback.
@@ -157,25 +186,33 @@ For normal Android integration work on the exact PR head:
 5. `:app:assembleDebugAndroidTest`
 6. signed ARM TV APK build/artifacts in the full Android workflow
 
-Player architecture PRs additionally use `Player Refactor Guard`: checkout `github.event.pull_request.head.sha`, verify `git rev-parse HEAD` equals that exact SHA, reject `feature/scanner`/`core/scanner` production changes, and run both Player and Scanner unit suites.
+Player architecture and Live Player/dashboard PRs that touch `feature/player/**` additionally use `Player Refactor Guard`: checkout `github.event.pull_request.head.sha`, verify `git rev-parse HEAD` equals that exact SHA, reject `feature/scanner`/`core/scanner` production changes, and run both Player and Scanner unit suites.
+
+The current guard workflow does not yet trigger for a PR whose production changes are limited to `feature/home/**`. Before the first Home-only dashboard implementation PR, land a separate fresh-main CI-guard increment that adds the Home dashboard paths to both the workflow `pull_request.paths` trigger and its applicability detection; after that precondition, Home-only dashboard PRs must use the same exact-head Player/Scanner regression guard plus full Android CI.
 
 Database/Favorites persistence work additionally uses the dedicated Database Unit CI (`:core:database:testDebugUnitTest` + `:core:data:testDebugUnitTest`).
 
 P2P/runtime changes additionally require their P2P/unit/tooling gates and real `TorrentTvPlaybackSmokeTest`/hardware evidence when the touched behavior requires it. Building an instrumentation APK is not counted as running the real-device smoke.
 
+Codec/backend compatibility claims that depend on hardware decoding additionally require the Issue #211 real-device matrix; emulator/unit green alone must not be described as proof of a device codec capability.
+
 ## Decision order
 
-1. Keep PR #182's merged Ready/catalog/Favorites baseline stable; do not reopen it without a measured regression or planned capability.
-2. Continue Issue #46 against the production StablePlayer route: the input boundary is complete in PR #183, presentation extraction landed in PR #186, panel/dialog extraction landed in PR #196 and channel browser/list/drawer extraction landed in PR #198; continue the bounded shell/navigation extraction before state/recomposition, RAM-bounded Auto buffer and measured performance work.
-3. Continue Issue #47 from merged PR #194 with explicit archive Player launch/UI integration, preserving fail-closed catch-up capability semantics.
-4. For P2P Issue #159, wait for new same-device producer-stage/rapid-switch evidence before changing peer selection, request timeout, DHT, request depth or buffer policy.
-5. Refactor other oversized Scanner/Editor/Importer/Settings files only as separate bounded-context PRs after establishing the production Player decomposition pattern.
-6. Complete hardware/soak/release acceptance before closing master roadmap #44.
+1. **Complete the fresh-main mechanical Player shell split.** Recreate the valid scope of closed stale PR #208 from current `main`; no behavior, input, state ownership, Scanner or P2P changes.
+2. **Issue #210 — Home/Live Player layout.** Introduce the confirmed TV dashboard structure in small fresh-main PRs. Before any PR limited to `feature/home/**`, first merge the guard-path precondition described above.
+3. **Issue #210 — focus/navigation and channel rails.** Make left rail, video, right list and bottom rail fully usable by D-pad and mouse/touchpad with visible/restored focus.
+4. **Issue #210 — dashboard ↔ fullscreen.** Use the same playback session/runtime and preserve selected channel, volume/mute, aspect/scale, EPG context and focus return; Back closes overlays, then fullscreen, then Player.
+5. **Issue #210/#47 — EPG Now/Next, Favorites and polish.** Use only explicit archive/catch-up capability for programme playback and keep unsupported modes fail-closed.
+6. **Issue #211 — Media3→LibVLC compatibility hardening.** Add deterministic fallback classification and broaden measured codec/container coverage without external ordinary-IPTV players.
+7. **Run the TV Box codec matrix.** Validate H.264/H.265/MPEG-2/AC-3/E-AC-3 and available additional samples on real ARM hardware, recording backend/decoder/first-frame/audio/fallback evidence.
+8. **P2P Issue #159 remains evidence-gated.** Do not make another Ace peer/DHT/request/timeout/buffer behavior change until new current-main TV Box evidence identifies the first missing producer transition.
+9. Refactor remaining Player state/recomposition and other oversized Scanner/Editor/Importer/Settings files only as separate measured follow-ups after the confirmed UX/playback sequence.
+10. Complete hardware/soak/release acceptance before closing master roadmap #44.
 
 ## Cross-track invariants
 
-- Catalog/Favorites/EPG/Player architecture work must not rewrite Scanner discovery/query semantics.
-- Catalog/Favorites/EPG/Player architecture work must not modify Ace Live peer/DHT/request/buffer policies without P2P field evidence.
+- Catalog/Favorites/EPG/Player architecture/dashboard/codec work must not rewrite Scanner discovery/query semantics.
+- Catalog/Favorites/EPG/Player architecture/dashboard/codec work must not modify Ace Live peer/DHT/request/timeout/buffer policies without P2P field evidence.
 - Logical favorite ownership must not depend on Room auto-generated channel/playlist row lifetime.
 - Source provenance and source variants must remain discoverable after logical deduplication.
 - A virtual aggregate must not masquerade as a destructively editable physical playlist.
@@ -186,4 +223,5 @@ P2P/runtime changes additionally require their P2P/unit/tooling gates and real `
 ## Documentation map
 
 - `PROJECT_STATUS_AND_ROADMAP.md` — canonical current status and next gate.
+- `PLAYER_DASHBOARD_AND_PLAYBACK_COMPATIBILITY_PLAN.md` — confirmed #210/#211 implementation contract and TV Box compatibility acceptance.
 - `USER_GUIDE.md` — user-facing controls, canonical catalog and autonomous Favorites behavior.
