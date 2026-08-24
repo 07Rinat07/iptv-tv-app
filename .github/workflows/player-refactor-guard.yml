@@ -5,6 +5,7 @@ on:
     paths:
       - 'app/src/main/java/com/iptv/tv/MainActivity.kt'
       - 'feature/player/**'
+      - 'feature/home/**'
       - 'core/player/**'
       - 'core/player-vlc/**'
       - 'core/p2p/**'
@@ -384,6 +385,7 @@ jobs:
               path.startswith(
                   (
                       "feature/player/src/main/",
+                      "feature/home/src/main/",
                       "core/player/src/main/",
                       "core/player-vlc/src/main/",
                   )
@@ -506,7 +508,7 @@ jobs:
           )
 
           if not player_changed:
-              print("No Player-owned production/routing/settings behavior changed; boundary is not applicable.")
+              print("No Player/dashboard-owned production/routing/settings behavior changed; boundary is not applicable.")
               sys.exit(0)
 
           p2p_changed = any(path.startswith("core/p2p/") for path in changed)
@@ -685,9 +687,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Player and Scanner regression tests
+      - name: Home, Player and Scanner regression tests
         run: |
           ./gradlew \
+            :feature:home:testDebugUnitTest \
             :feature:player:testDebugUnitTest \
             :core:player:testDebugUnitTest \
             :core:player-vlc:testDebugUnitTest \
