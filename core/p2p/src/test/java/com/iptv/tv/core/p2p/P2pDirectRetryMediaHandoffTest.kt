@@ -93,11 +93,10 @@ class P2pDirectRetryMediaHandoffTest {
         )
 
         assertTrue(result is P2pResult.Error)
-        assertTrue(
-            (result as P2pResult.Error).message.contains("failure=qualified_peer_no_media")
-        )
+        val error = result as P2pResult.Error
+        assertTrue(error.message.contains("failure=qualified_peer_no_media"))
         assertEquals(0, mediaHandoffStarted.get())
-        assertFalse(result.message.contains("media_appended"))
+        assertFalse(error.message.contains("media_appended"))
         assertEquals(18_000L, testScheduler.currentTime)
     }
 }
