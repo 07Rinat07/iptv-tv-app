@@ -13,6 +13,7 @@ fun HomeScreen(
     onOpenReadyPlaylists: (() -> Unit)? = null,
     onOpenPlaylists: (() -> Unit)? = null,
     onOpenPlaylist: ((Long) -> Unit)? = null,
+    onOpenChannel: ((Long, Long) -> Unit)? = null,
     onOpenEpg: (() -> Unit)? = null,
     onOpenPlayer: (() -> Unit)? = null,
     onOpenSettings: (() -> Unit)? = null,
@@ -23,12 +24,13 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
-    LaunchedEffect(state.pendingOpenPlaylistId) {
+    LaunchedEffect(state.pendingOpenPlaylistId, state.pendingOpenChannelId) {
         val playlistId = state.pendingOpenPlaylistId ?: return@LaunchedEffect
-        if (onOpenPlaylist != null) {
-            onOpenPlaylist(playlistId)
-        } else {
-            onOpenPlayer?.invoke()
+        val channelId = state.pendingOpenChannelId
+        when {
+            channelId != null && onOpenChannel != null -> onOpenChannel(playlistId, channelId)
+            onOpenPlaylist != null -> onOpenPlaylist(playlistId)
+            else -> onOpenPlayer?.invoke()
         }
         viewModel.consumeOpenPlaylistRequest()
     }
@@ -36,6 +38,7 @@ fun HomeScreen(
     HomeDashboard(
         state = state,
         onWatchPlaylist = { playlistId -> viewModel.requestOpenPlaylist(playlistId) },
+        onWatchChannel = viewModel::requestOpenChannel,
         onWatchReadyPlaylist = viewModel::watchReadyPlaylist,
         onOpenScanner = onOpenScanner,
         onOpenImporter = onOpenImporter,

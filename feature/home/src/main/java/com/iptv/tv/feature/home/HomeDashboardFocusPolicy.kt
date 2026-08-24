@@ -3,6 +3,7 @@ package com.iptv.tv.feature.home
 internal enum class HomeDashboardFocusZone {
     NAVIGATION,
     MAIN_CONTENT,
+    CHANNEL_RAIL,
     QUICK_SOURCES
 }
 
@@ -31,6 +32,8 @@ internal fun nextHomeDashboardFocusZone(
         HomeDashboardFocusDirection.LEFT -> HomeDashboardFocusZone.NAVIGATION
         HomeDashboardFocusDirection.RIGHT -> HomeDashboardFocusZone.QUICK_SOURCES
     }
+
+    HomeDashboardFocusZone.CHANNEL_RAIL -> null
 
     HomeDashboardFocusZone.QUICK_SOURCES -> when (direction) {
         HomeDashboardFocusDirection.LEFT -> HomeDashboardFocusZone.MAIN_CONTENT

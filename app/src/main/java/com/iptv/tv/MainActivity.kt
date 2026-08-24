@@ -275,6 +275,9 @@ private fun AppRoot(
                                 onOpenReadyPlaylists = { navController.navigate(Routes.READY_PLAYLISTS) },
                                 onOpenPlaylists = { navController.navigate(Routes.PLAYLISTS) },
                                 onOpenPlaylist = { playlistId -> navController.navigate(Routes.playerRoute(playlistId)) },
+                                onOpenChannel = { playlistId, channelId ->
+                                    navController.navigate(Routes.playerRoute(playlistId, channelId))
+                                },
                                 onOpenEpg = { navController.navigate(Routes.EPG) },
                                 onOpenPlayer = { navController.navigate(Routes.PLAYER) },
                                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },

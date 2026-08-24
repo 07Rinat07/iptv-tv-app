@@ -66,11 +66,13 @@ private data class HomeDashboardActions(
 private data class HomeDashboardFocusRequesters(
     val navigation: FocusRequester,
     val mainContent: FocusRequester,
+    val channelRail: FocusRequester,
     val quickSources: FocusRequester
 ) {
     fun requesterFor(zone: HomeDashboardFocusZone): FocusRequester = when (zone) {
         HomeDashboardFocusZone.NAVIGATION -> navigation
         HomeDashboardFocusZone.MAIN_CONTENT -> mainContent
+        HomeDashboardFocusZone.CHANNEL_RAIL -> channelRail
         HomeDashboardFocusZone.QUICK_SOURCES -> quickSources
     }
 }
@@ -79,6 +81,7 @@ private data class HomeDashboardFocusRequesters(
 internal fun HomeDashboard(
     state: HomeUiState,
     onWatchPlaylist: (Long) -> Unit,
+    onWatchChannel: (Long, Long) -> Unit,
     onWatchReadyPlaylist: (ReadyPlaylistPreset) -> Unit,
     onOpenScanner: (() -> Unit)?,
     onOpenImporter: (() -> Unit)?,
@@ -109,6 +112,7 @@ internal fun HomeDashboard(
             WideHomeDashboard(
                 state = state,
                 onWatchPlaylist = onWatchPlaylist,
+                onWatchChannel = onWatchChannel,
                 onWatchReadyPlaylist = onWatchReadyPlaylist,
                 actions = actions
             )
@@ -127,6 +131,7 @@ internal fun HomeDashboard(
 private fun WideHomeDashboard(
     state: HomeUiState,
     onWatchPlaylist: (Long) -> Unit,
+    onWatchChannel: (Long, Long) -> Unit,
     onWatchReadyPlaylist: (ReadyPlaylistPreset) -> Unit,
     actions: HomeDashboardActions
 ) {
@@ -134,10 +139,12 @@ private fun WideHomeDashboard(
         HomeDashboardFocusRequesters(
             navigation = FocusRequester(),
             mainContent = FocusRequester(),
+            channelRail = FocusRequester(),
             quickSources = FocusRequester()
         )
     }
     val mainContentListState = rememberLazyListState()
+    val channelRailListState = rememberLazyListState()
     val quickSourcesListState = rememberLazyListState()
     val focusScope = rememberCoroutineScope()
     var lastFocusedZoneName by rememberSaveable {
@@ -145,8 +152,25 @@ private fun WideHomeDashboard(
     }
     var didRestoreInitialFocus by remember { mutableStateOf(false) }
 
+    val channelRailChannels = remember(state.channelRailChannels) {
+        homeChannelRailItems(state.channelRailChannels)
+    }
+    val channelRailPlaylist = remember(state.playlists, state.channelRailPlaylistId) {
+        state.channelRailPlaylistId?.let { playlistId ->
+            state.playlists.firstOrNull { it.id == playlistId }
+        }
+    }
+    val channelRailFocusIndex = remember(channelRailChannels, state.channelRailSelectedChannelId) {
+        homeChannelRailFocusIndex(channelRailChannels, state.channelRailSelectedChannelId)
+    }
+    val channelRailFocusChannelId = channelRailFocusIndex?.let { index ->
+        channelRailChannels.getOrNull(index)?.id
+    }
+
     val hasNavigationAnchor = navigationActions(actions).isNotEmpty()
     val hasMainContentAnchor = !state.isImporting && actions.onOpenPlayer != null
+    val hasChannelRailAnchor =
+        !state.isImporting && channelRailPlaylist != null && channelRailFocusIndex != null
     val quickSourceAnchor = when {
         !state.isImporting && READY_PLAYLIST_PRESETS.isNotEmpty() -> {
             HomeDashboardQuickFocusAnchor.READY_PLAYLIST
@@ -164,6 +188,7 @@ private fun WideHomeDashboard(
     fun canFocusZone(zone: HomeDashboardFocusZone): Boolean = when (zone) {
         HomeDashboardFocusZone.NAVIGATION -> hasNavigationAnchor
         HomeDashboardFocusZone.MAIN_CONTENT -> hasMainContentAnchor
+        HomeDashboardFocusZone.CHANNEL_RAIL -> hasChannelRailAnchor
         HomeDashboardFocusZone.QUICK_SOURCES -> quickSourceAnchorItemIndex != null
     }
 
@@ -178,6 +203,10 @@ private fun WideHomeDashboard(
             HomeDashboardFocusZone.NAVIGATION -> Unit
             HomeDashboardFocusZone.MAIN_CONTENT -> {
                 mainContentListState.scrollToItem(HOME_MAIN_FOCUS_ITEM_INDEX)
+            }
+            HomeDashboardFocusZone.CHANNEL_RAIL -> {
+                val itemIndex = channelRailFocusIndex ?: return false
+                channelRailListState.scrollToItem(itemIndex)
             }
             HomeDashboardFocusZone.QUICK_SOURCES -> {
                 val itemIndex = quickSourceAnchorItemIndex ?: return false
@@ -211,11 +240,22 @@ private fun WideHomeDashboard(
             canFocusZone(restored) -> restored
             canFocusZone(HomeDashboardFocusZone.MAIN_CONTENT) -> HomeDashboardFocusZone.MAIN_CONTENT
             canFocusZone(HomeDashboardFocusZone.NAVIGATION) -> HomeDashboardFocusZone.NAVIGATION
+            canFocusZone(HomeDashboardFocusZone.CHANNEL_RAIL) -> HomeDashboardFocusZone.CHANNEL_RAIL
             canFocusZone(HomeDashboardFocusZone.QUICK_SOURCES) -> HomeDashboardFocusZone.QUICK_SOURCES
             else -> null
         }
         target?.let { requestZoneFocusNow(it) }
         didRestoreInitialFocus = true
+    }
+
+    LaunchedEffect(channelRailFocusChannelId, state.isImporting) {
+        if (
+            didRestoreInitialFocus &&
+            lastFocusedZoneName == HomeDashboardFocusZone.CHANNEL_RAIL.name &&
+            canFocusZone(HomeDashboardFocusZone.CHANNEL_RAIL)
+        ) {
+            requestZoneFocusNow(HomeDashboardFocusZone.CHANNEL_RAIL)
+        }
     }
 
     LaunchedEffect(quickSourceAnchor) {
@@ -247,74 +287,108 @@ private fun WideHomeDashboard(
             onZoneFocused = onZoneFocused
         )
 
-        TvScrollableLazyColumn(
+        Column(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxHeight()
-                .homeDashboardHorizontalFocusNavigation(
-                    zone = HomeDashboardFocusZone.MAIN_CONTENT,
-                    requestZoneFocus = requestZoneFocus
-                ),
-            state = mainContentListState,
+                .fillMaxHeight(),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text(state.title, style = MaterialTheme.typography.headlineMedium)
-                    Text(
-                        state.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
+            TvScrollableLazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .homeDashboardHorizontalFocusNavigation(
+                        zone = HomeDashboardFocusZone.MAIN_CONTENT,
+                        requestZoneFocus = requestZoneFocus
+                    ),
+                state = mainContentListState,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text(state.title, style = MaterialTheme.typography.headlineMedium)
+                        Text(
+                            state.description,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                item {
+                    HomeVideoHero(
+                        isImporting = state.isImporting,
+                        onOpenPlayer = actions.onOpenPlayer,
+                        buttonModifier = Modifier
+                            .focusRequester(focusRequesters.mainContent)
+                            .trackHomeDashboardFocus(
+                                zone = HomeDashboardFocusZone.MAIN_CONTENT,
+                                onZoneFocused = onZoneFocused
+                            )
+                            .onPreviewKeyEvent { event ->
+                                if (
+                                    event.type == KeyEventType.KeyDown &&
+                                    event.key == Key.DirectionDown
+                                ) {
+                                    requestZoneFocus(HomeDashboardFocusZone.CHANNEL_RAIL)
+                                } else {
+                                    false
+                                }
+                            }
                     )
                 }
-            }
 
-            item {
-                HomeVideoHero(
-                    isImporting = state.isImporting,
-                    onOpenPlayer = actions.onOpenPlayer,
-                    buttonModifier = Modifier
-                        .focusRequester(focusRequesters.mainContent)
-                        .trackHomeDashboardFocus(
-                            zone = HomeDashboardFocusZone.MAIN_CONTENT,
-                            onZoneFocused = onZoneFocused
+                statusItems(state)
+
+                if (state.playlists.isNotEmpty()) {
+                    item { Text("Мои списки каналов", style = MaterialTheme.typography.titleLarge) }
+                    items(state.playlists.take(6), key = { it.id }) { playlist ->
+                        SavedPlaylistCard(
+                            playlist = playlist,
+                            enabled = !state.isImporting,
+                            onWatch = { onWatchPlaylist(playlist.id) },
+                            buttonModifier = Modifier.trackHomeDashboardFocus(
+                                zone = HomeDashboardFocusZone.MAIN_CONTENT,
+                                onZoneFocused = onZoneFocused
+                            )
                         )
-                )
-            }
-
-            statusItems(state)
-
-            if (state.playlists.isNotEmpty()) {
-                item { Text("Мои списки каналов", style = MaterialTheme.typography.titleLarge) }
-                items(state.playlists.take(6), key = { it.id }) { playlist ->
-                    SavedPlaylistCard(
-                        playlist = playlist,
-                        enabled = !state.isImporting,
-                        onWatch = { onWatchPlaylist(playlist.id) },
-                        buttonModifier = Modifier.trackHomeDashboardFocus(
-                            zone = HomeDashboardFocusZone.MAIN_CONTENT,
-                            onZoneFocused = onZoneFocused
-                        )
-                    )
-                }
-                if (state.playlists.size > 6) {
-                    actions.onOpenPlaylists?.let { action ->
-                        item {
-                            OutlinedButton(
-                                onClick = action,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .trackHomeDashboardFocus(
-                                        zone = HomeDashboardFocusZone.MAIN_CONTENT,
-                                        onZoneFocused = onZoneFocused
-                                    )
-                            ) {
-                                Text("Показать все мои списки (${state.playlists.size})")
+                    }
+                    if (state.playlists.size > 6) {
+                        actions.onOpenPlaylists?.let { action ->
+                            item {
+                                OutlinedButton(
+                                    onClick = action,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .trackHomeDashboardFocus(
+                                            zone = HomeDashboardFocusZone.MAIN_CONTENT,
+                                            onZoneFocused = onZoneFocused
+                                        )
+                                ) {
+                                    Text("Показать все мои списки (${state.playlists.size})")
+                                }
                             }
                         }
                     }
                 }
+            }
+
+            if (channelRailPlaylist != null && channelRailChannels.isNotEmpty()) {
+                HomeChannelRail(
+                    playlistId = channelRailPlaylist.id,
+                    playlistName = channelRailPlaylist.name,
+                    channels = channelRailChannels,
+                    selectedChannelId = state.channelRailSelectedChannelId,
+                    enabled = !state.isImporting,
+                    listState = channelRailListState,
+                    focusRequester = focusRequesters.channelRail,
+                    onZoneFocused = onZoneFocused,
+                    requestMainFocus = {
+                        requestZoneFocus(HomeDashboardFocusZone.MAIN_CONTENT)
+                    },
+                    onWatchChannel = onWatchChannel
+                )
             }
         }
 

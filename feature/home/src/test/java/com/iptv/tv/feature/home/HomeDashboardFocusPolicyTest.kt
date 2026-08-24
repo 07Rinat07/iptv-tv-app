@@ -42,6 +42,22 @@ class HomeDashboardFocusPolicyTest {
     }
 
     @Test
+    fun `channel rail leaves horizontal dpad movement to local row`() {
+        assertNull(
+            nextHomeDashboardFocusZone(
+                HomeDashboardFocusZone.CHANNEL_RAIL,
+                HomeDashboardFocusDirection.LEFT
+            )
+        )
+        assertNull(
+            nextHomeDashboardFocusZone(
+                HomeDashboardFocusZone.CHANNEL_RAIL,
+                HomeDashboardFocusDirection.RIGHT
+            )
+        )
+    }
+
+    @Test
     fun `outer edges do not wrap or create a focus trap`() {
         assertNull(
             nextHomeDashboardFocusZone(
@@ -59,6 +75,10 @@ class HomeDashboardFocusPolicyTest {
 
     @Test
     fun `saved focus restores known zone and falls back to main content`() {
+        assertEquals(
+            HomeDashboardFocusZone.CHANNEL_RAIL,
+            restoreHomeDashboardFocusZone(HomeDashboardFocusZone.CHANNEL_RAIL.name)
+        )
         assertEquals(
             HomeDashboardFocusZone.QUICK_SOURCES,
             restoreHomeDashboardFocusZone(HomeDashboardFocusZone.QUICK_SOURCES.name)
