@@ -20,7 +20,9 @@ class AceContentMetadataPeerResolver(
                 announcePort = announcePort,
                 routingMemory = routingMemory
             )
-        }
+        },
+    private val connectFailureMemory: AceLiveTcpConnectFailureMemory =
+        AceLiveTcpConnectFailureMemory.shared
 ) {
     suspend fun resolve(contentId: String): P2pResult<AceResolvedLiveTransport> {
         val swarmKey = AceLiveSwarmKey.parseHex(contentId)
@@ -66,6 +68,10 @@ class AceContentMetadataPeerResolver(
         return try {
             currentCoroutineContext().ensureActive()
             transport = transportFactory.connect(endpoint, METADATA_CONNECTION_POLICY)
+            // A successful socket connection is newer evidence than a previous pre-handshake
+            // connect failure from the direct runtime. Clear only that exact swarm/endpoint entry;
+            // metadata handshake/protocol success is not required to prove TCP reachability.
+            connectFailureMemory.recordConnected(contentId.toByteArray(), endpoint)
             val socket = requireNotNull(transport)
             val handshakeCodec = AceContentMetadataPeerHandshakeCodec()
             socket.write(handshakeCodec.encode(contentId.toByteArray(), peerId))
