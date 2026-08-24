@@ -53,15 +53,27 @@ class AceLiveTcpConnectFailureMemory(
         nowMillis >= retryAt
     }
 
-    private fun key(swarmKey: ByteArray, endpoint: AceLiveTcpPeerEndpoint): EndpointKey {
-        require(swarmKey.size == AceLivePeerHandshakeCodec.SWARM_KEY_BYTES) {
-            "swarmKey must be ${AceLivePeerHandshakeCodec.SWARM_KEY_BYTES} bytes"
-        }
-        return EndpointKey(
-            swarm = swarmKey.toHexKey(),
+    fun hasActiveFailure(
+        swarmKey: ByteArray,
+        nowMillis: Long = clockMillis()
+    ): Boolean = synchronized(lock) {
+        val swarm = swarmKeyHex(swarmKey)
+        pruneLocked(nowMillis)
+        retryNotBefore.keys.any { key -> key.swarm == swarm }
+    }
+
+    private fun key(swarmKey: ByteArray, endpoint: AceLiveTcpPeerEndpoint): EndpointKey =
+        EndpointKey(
+            swarm = swarmKeyHex(swarmKey),
             host = endpoint.host,
             port = endpoint.port
         )
+
+    private fun swarmKeyHex(swarmKey: ByteArray): String {
+        require(swarmKey.size == AceLivePeerHandshakeCodec.SWARM_KEY_BYTES) {
+            "swarmKey must be ${AceLivePeerHandshakeCodec.SWARM_KEY_BYTES} bytes"
+        }
+        return swarmKey.toHexKey()
     }
 
     private fun pruneLocked(nowMillis: Long) {
