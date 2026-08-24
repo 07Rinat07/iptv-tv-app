@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
@@ -20,9 +21,23 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
@@ -41,6 +56,25 @@ private data class HomeDashboardActions(
     val onPrimaryAction: (() -> Unit)?,
     val primaryLabel: String
 )
+
+private data class HomeDashboardFocusRequesters(
+    val navigation: FocusRequester,
+    val mainContent: FocusRequester,
+    val quickSources: FocusRequester
+) {
+    fun requesterFor(zone: HomeDashboardFocusZone): FocusRequester = when (zone) {
+        HomeDashboardFocusZone.NAVIGATION -> navigation
+        HomeDashboardFocusZone.MAIN_CONTENT -> mainContent
+        HomeDashboardFocusZone.QUICK_SOURCES -> quickSources
+    }
+}
+
+private enum class QuickSourceFocusAnchor {
+    READY_PLAYLIST,
+    SCANNER,
+    PRIMARY_ACTION,
+    NONE
+}
 
 @Composable
 internal fun HomeDashboard(
@@ -97,6 +131,56 @@ private fun WideHomeDashboard(
     onWatchReadyPlaylist: (ReadyPlaylistPreset) -> Unit,
     actions: HomeDashboardActions
 ) {
+    val focusRequesters = remember {
+        HomeDashboardFocusRequesters(
+            navigation = FocusRequester(),
+            mainContent = FocusRequester(),
+            quickSources = FocusRequester()
+        )
+    }
+    var lastFocusedZoneName by rememberSaveable {
+        mutableStateOf(HomeDashboardFocusZone.MAIN_CONTENT.name)
+    }
+
+    val hasNavigationAnchor = navigationActions(actions).isNotEmpty()
+    val hasMainContentAnchor = !state.isImporting && actions.onOpenPlayer != null
+    val quickSourceAnchor = when {
+        !state.isImporting && READY_PLAYLIST_PRESETS.isNotEmpty() -> QuickSourceFocusAnchor.READY_PLAYLIST
+        actions.onOpenScanner != null -> QuickSourceFocusAnchor.SCANNER
+        actions.onPrimaryAction != null -> QuickSourceFocusAnchor.PRIMARY_ACTION
+        else -> QuickSourceFocusAnchor.NONE
+    }
+
+    fun canFocusZone(zone: HomeDashboardFocusZone): Boolean = when (zone) {
+        HomeDashboardFocusZone.NAVIGATION -> hasNavigationAnchor
+        HomeDashboardFocusZone.MAIN_CONTENT -> hasMainContentAnchor
+        HomeDashboardFocusZone.QUICK_SOURCES -> quickSourceAnchor != QuickSourceFocusAnchor.NONE
+    }
+
+    val onZoneFocused: (HomeDashboardFocusZone) -> Unit = { zone ->
+        lastFocusedZoneName = zone.name
+    }
+    val requestZoneFocus: (HomeDashboardFocusZone) -> Boolean = { zone ->
+        if (canFocusZone(zone)) {
+            focusRequesters.requesterFor(zone).requestFocus()
+            true
+        } else {
+            false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val restored = restoreHomeDashboardFocusZone(lastFocusedZoneName)
+        val target = when {
+            canFocusZone(restored) -> restored
+            canFocusZone(HomeDashboardFocusZone.MAIN_CONTENT) -> HomeDashboardFocusZone.MAIN_CONTENT
+            canFocusZone(HomeDashboardFocusZone.NAVIGATION) -> HomeDashboardFocusZone.NAVIGATION
+            canFocusZone(HomeDashboardFocusZone.QUICK_SOURCES) -> HomeDashboardFocusZone.QUICK_SOURCES
+            else -> null
+        }
+        target?.let { focusRequesters.requesterFor(it).requestFocus() }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -106,14 +190,24 @@ private fun WideHomeDashboard(
         HomeNavigationRail(
             modifier = Modifier
                 .width(188.dp)
-                .fillMaxHeight(),
-            actions = actions
+                .fillMaxHeight()
+                .homeDashboardHorizontalFocusNavigation(
+                    zone = HomeDashboardFocusZone.NAVIGATION,
+                    requestZoneFocus = requestZoneFocus
+                ),
+            actions = actions,
+            focusRequester = focusRequesters.navigation,
+            onZoneFocused = onZoneFocused
         )
 
         TvScrollableLazyColumn(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxHeight(),
+                .fillMaxHeight()
+                .homeDashboardHorizontalFocusNavigation(
+                    zone = HomeDashboardFocusZone.MAIN_CONTENT,
+                    requestZoneFocus = requestZoneFocus
+                ),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
@@ -131,7 +225,13 @@ private fun WideHomeDashboard(
             item {
                 HomeVideoHero(
                     isImporting = state.isImporting,
-                    onOpenPlayer = actions.onOpenPlayer
+                    onOpenPlayer = actions.onOpenPlayer,
+                    buttonModifier = Modifier
+                        .focusRequester(focusRequesters.mainContent)
+                        .trackHomeDashboardFocus(
+                            zone = HomeDashboardFocusZone.MAIN_CONTENT,
+                            onZoneFocused = onZoneFocused
+                        )
                 )
             }
 
@@ -143,13 +243,25 @@ private fun WideHomeDashboard(
                     SavedPlaylistCard(
                         playlist = playlist,
                         enabled = !state.isImporting,
-                        onWatch = { onWatchPlaylist(playlist.id) }
+                        onWatch = { onWatchPlaylist(playlist.id) },
+                        buttonModifier = Modifier.trackHomeDashboardFocus(
+                            zone = HomeDashboardFocusZone.MAIN_CONTENT,
+                            onZoneFocused = onZoneFocused
+                        )
                     )
                 }
                 if (state.playlists.size > 6) {
                     actions.onOpenPlaylists?.let { action ->
                         item {
-                            OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = action,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .trackHomeDashboardFocus(
+                                        zone = HomeDashboardFocusZone.MAIN_CONTENT,
+                                        onZoneFocused = onZoneFocused
+                                    )
+                            ) {
                                 Text("Показать все мои списки (${state.playlists.size})")
                             }
                         }
@@ -161,7 +273,11 @@ private fun WideHomeDashboard(
         TvScrollableLazyColumn(
             modifier = Modifier
                 .width(300.dp)
-                .fillMaxHeight(),
+                .fillMaxHeight()
+                .homeDashboardHorizontalFocusNavigation(
+                    zone = HomeDashboardFocusZone.QUICK_SOURCES,
+                    requestZoneFocus = requestZoneFocus
+                ),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
@@ -176,12 +292,30 @@ private fun WideHomeDashboard(
 
             readyPlaylistItems(
                 state = state,
-                onWatchReadyPlaylist = onWatchReadyPlaylist
+                onWatchReadyPlaylist = onWatchReadyPlaylist,
+                firstButtonFocusRequester = if (
+                    quickSourceAnchor == QuickSourceFocusAnchor.READY_PLAYLIST
+                ) {
+                    focusRequesters.quickSources
+                } else {
+                    null
+                },
+                focusZone = HomeDashboardFocusZone.QUICK_SOURCES,
+                onZoneFocused = onZoneFocused
             )
 
             actions.onOpenScanner?.let { action ->
                 item {
-                    Button(onClick = action, modifier = Modifier.fillMaxWidth()) {
+                    var modifier = Modifier
+                        .fillMaxWidth()
+                        .trackHomeDashboardFocus(
+                            zone = HomeDashboardFocusZone.QUICK_SOURCES,
+                            onZoneFocused = onZoneFocused
+                        )
+                    if (quickSourceAnchor == QuickSourceFocusAnchor.SCANNER) {
+                        modifier = modifier.focusRequester(focusRequesters.quickSources)
+                    }
+                    Button(onClick = action, modifier = modifier) {
                         Text("Найти новые списки")
                     }
                 }
@@ -189,7 +323,16 @@ private fun WideHomeDashboard(
 
             actions.onPrimaryAction?.let { action ->
                 item {
-                    OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth()) {
+                    var modifier = Modifier
+                        .fillMaxWidth()
+                        .trackHomeDashboardFocus(
+                            zone = HomeDashboardFocusZone.QUICK_SOURCES,
+                            onZoneFocused = onZoneFocused
+                        )
+                    if (quickSourceAnchor == QuickSourceFocusAnchor.PRIMARY_ACTION) {
+                        modifier = modifier.focusRequester(focusRequesters.quickSources)
+                    }
+                    OutlinedButton(onClick = action, modifier = modifier) {
                         Text(actions.primaryLabel)
                     }
                 }
@@ -296,14 +439,25 @@ private fun androidx.compose.foundation.lazy.LazyListScope.statusItems(state: Ho
 
 private fun androidx.compose.foundation.lazy.LazyListScope.readyPlaylistItems(
     state: HomeUiState,
-    onWatchReadyPlaylist: (ReadyPlaylistPreset) -> Unit
+    onWatchReadyPlaylist: (ReadyPlaylistPreset) -> Unit,
+    firstButtonFocusRequester: FocusRequester? = null,
+    focusZone: HomeDashboardFocusZone? = null,
+    onZoneFocused: ((HomeDashboardFocusZone) -> Unit)? = null
 ) {
-    items(READY_PLAYLIST_PRESETS, key = { it.url }) { preset ->
+    itemsIndexed(READY_PLAYLIST_PRESETS, key = { _, preset -> preset.url }) { index, preset ->
+        var buttonModifier = Modifier
+        if (index == 0 && firstButtonFocusRequester != null) {
+            buttonModifier = buttonModifier.focusRequester(firstButtonFocusRequester)
+        }
+        if (focusZone != null && onZoneFocused != null) {
+            buttonModifier = buttonModifier.trackHomeDashboardFocus(focusZone, onZoneFocused)
+        }
         ReadyPlaylistCard(
             preset = preset,
             importing = state.importingUrl == preset.url,
             enabled = !state.isImporting,
-            onWatch = { onWatchReadyPlaylist(preset) }
+            onWatch = { onWatchReadyPlaylist(preset) },
+            buttonModifier = buttonModifier
         )
     }
 }
@@ -311,7 +465,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.readyPlaylistItems(
 @Composable
 private fun HomeNavigationRail(
     modifier: Modifier,
-    actions: HomeDashboardActions
+    actions: HomeDashboardActions,
+    focusRequester: FocusRequester,
+    onZoneFocused: (HomeDashboardFocusZone) -> Unit
 ) {
     Card(modifier = modifier) {
         Column(
@@ -326,7 +482,12 @@ private fun HomeNavigationRail(
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary
             )
-            HomeNavigationButtons(actions)
+            HomeNavigationButtons(
+                actions = actions,
+                firstButtonFocusRequester = focusRequester,
+                focusZone = HomeDashboardFocusZone.NAVIGATION,
+                onZoneFocused = onZoneFocused
+            )
         }
     }
 }
@@ -340,9 +501,21 @@ private fun HomeNavigationActions(actions: HomeDashboardActions) {
 }
 
 @Composable
-private fun HomeNavigationButtons(actions: HomeDashboardActions) {
-    navigationActions(actions).forEach { (label, action) ->
-        OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth()) {
+private fun HomeNavigationButtons(
+    actions: HomeDashboardActions,
+    firstButtonFocusRequester: FocusRequester? = null,
+    focusZone: HomeDashboardFocusZone? = null,
+    onZoneFocused: ((HomeDashboardFocusZone) -> Unit)? = null
+) {
+    navigationActions(actions).forEachIndexed { index, (label, action) ->
+        var modifier = Modifier.fillMaxWidth()
+        if (index == 0 && firstButtonFocusRequester != null) {
+            modifier = modifier.focusRequester(firstButtonFocusRequester)
+        }
+        if (focusZone != null && onZoneFocused != null) {
+            modifier = modifier.trackHomeDashboardFocus(focusZone, onZoneFocused)
+        }
+        OutlinedButton(onClick = action, modifier = modifier) {
             Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -362,7 +535,8 @@ private fun navigationActions(actions: HomeDashboardActions): List<Pair<String, 
 @Composable
 private fun HomeVideoHero(
     isImporting: Boolean,
-    onOpenPlayer: (() -> Unit)?
+    onOpenPlayer: (() -> Unit)?,
+    buttonModifier: Modifier = Modifier
 ) {
     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
         Box(
@@ -388,7 +562,7 @@ private fun HomeVideoHero(
                 )
                 if (!isImporting) {
                     onOpenPlayer?.let { action ->
-                        Button(onClick = action) {
+                        Button(onClick = action, modifier = buttonModifier) {
                             Text("Открыть плеер")
                         }
                     }
@@ -402,7 +576,8 @@ private fun HomeVideoHero(
 private fun SavedPlaylistCard(
     playlist: Playlist,
     enabled: Boolean,
-    onWatch: () -> Unit
+    onWatch: () -> Unit,
+    buttonModifier: Modifier = Modifier
 ) {
     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
         Row(
@@ -424,7 +599,7 @@ private fun SavedPlaylistCard(
                 )
                 Text("Каналов: ${playlist.channelCount}", style = MaterialTheme.typography.bodySmall)
             }
-            Button(onClick = onWatch, enabled = enabled) {
+            Button(onClick = onWatch, enabled = enabled, modifier = buttonModifier) {
                 Text("Смотреть")
             }
         }
@@ -436,7 +611,8 @@ private fun ReadyPlaylistCard(
     preset: ReadyPlaylistPreset,
     importing: Boolean,
     enabled: Boolean,
-    onWatch: () -> Unit
+    onWatch: () -> Unit,
+    buttonModifier: Modifier = Modifier
 ) {
     Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
         Column(
@@ -463,9 +639,41 @@ private fun ReadyPlaylistCard(
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodySmall
             )
-            Button(onClick = onWatch, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = onWatch,
+                enabled = enabled,
+                modifier = buttonModifier.fillMaxWidth()
+            ) {
                 Text(if (importing) "Загрузка…" else "Смотреть")
             }
         }
     }
+}
+
+private fun Modifier.trackHomeDashboardFocus(
+    zone: HomeDashboardFocusZone,
+    onZoneFocused: (HomeDashboardFocusZone) -> Unit
+): Modifier = onFocusChanged { focusState ->
+    if (focusState.isFocused) {
+        onZoneFocused(zone)
+    }
+}
+
+private fun Modifier.homeDashboardHorizontalFocusNavigation(
+    zone: HomeDashboardFocusZone,
+    requestZoneFocus: (HomeDashboardFocusZone) -> Boolean
+): Modifier = onPreviewKeyEvent { event ->
+    if (event.type != KeyEventType.KeyDown) {
+        return@onPreviewKeyEvent false
+    }
+
+    val direction = when (event.key) {
+        Key.DirectionLeft -> HomeDashboardFocusDirection.LEFT
+        Key.DirectionRight -> HomeDashboardFocusDirection.RIGHT
+        else -> return@onPreviewKeyEvent false
+    }
+    val target = nextHomeDashboardFocusZone(zone, direction)
+        ?: return@onPreviewKeyEvent false
+
+    requestZoneFocus(target)
 }
