@@ -53,14 +53,19 @@ class AceLiveTcpConnectFailureMemory(
         nowMillis >= retryAt
     }
 
+    fun activeFailureCount(
+        swarmKey: ByteArray,
+        nowMillis: Long = clockMillis()
+    ): Int = synchronized(lock) {
+        val swarm = swarmKeyHex(swarmKey)
+        pruneLocked(nowMillis)
+        retryNotBefore.keys.count { key -> key.swarm == swarm }
+    }
+
     fun hasActiveFailure(
         swarmKey: ByteArray,
         nowMillis: Long = clockMillis()
-    ): Boolean = synchronized(lock) {
-        val swarm = swarmKeyHex(swarmKey)
-        pruneLocked(nowMillis)
-        retryNotBefore.keys.any { key -> key.swarm == swarm }
-    }
+    ): Boolean = activeFailureCount(swarmKey, nowMillis) > 0
 
     private fun key(swarmKey: ByteArray, endpoint: AceLiveTcpPeerEndpoint): EndpointKey =
         EndpointKey(
