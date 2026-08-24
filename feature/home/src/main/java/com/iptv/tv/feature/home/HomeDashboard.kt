@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -190,6 +189,7 @@ private fun WideHomeDashboard(
             withFrameNanos { }
             val focused = runCatching {
                 focusRequesters.requesterFor(zone).requestFocus()
+                true
             }.getOrDefault(false)
             if (focused) return true
         }
