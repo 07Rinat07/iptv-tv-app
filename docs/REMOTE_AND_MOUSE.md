@@ -25,6 +25,19 @@ The application supports mouse/touchpad interaction alongside D-pad navigation:
 
 Do not assume the wheel always changes volume or channels. List/page surfaces use the wheel for scrolling. The Player has its own specialized input contract described below.
 
+## Home TV dashboard
+
+On wide TV layouts, Home uses three horizontal focus zones: the left navigation rail, the main viewing/content area, and the right quick-source list.
+
+- **Right** moves `navigation rail -> main content -> quick sources`.
+- **Left** moves the same path in reverse.
+- The outer left/right edges do not wrap around.
+- **Up / Down** continues normal Compose traversal inside the currently focused zone.
+- The last focused Home zone is remembered so returning from another route, including Player, can restore the prior dashboard context when that target is still available.
+- During a transient import state, a zone with no enabled focus anchor is not force-focused; normal focus traversal remains available instead of trapping the remote.
+
+Mouse click and list scrolling keep their normal behavior; the Home focus graph only intercepts D-pad Left/Right while a wide-dashboard control owns focus. Compact Home layout keeps the existing single-column traversal.
+
 ## Player controls
 
 The production Player route is `StablePlayerScreen`. Its input mapping is protected by Player regression tests and should not be duplicated in a second navigation policy.
