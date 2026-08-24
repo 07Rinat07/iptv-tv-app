@@ -10,7 +10,7 @@ package com.iptv.tv.core.p2p
  * only for the same five-second first-failure backoff already used by [AceLivePeerRefillPolicy].
  * No peer, DHT, request, socket or buffer budget is widened here.
  */
-internal class AceLiveTcpConnectFailureMemory(
+class AceLiveTcpConnectFailureMemory(
     private val clockMillis: () -> Long = System::currentTimeMillis,
     private val backoffMillis: Long = AceLivePeerRefillPolicy().failureBackoffBaseMillis
 ) {
