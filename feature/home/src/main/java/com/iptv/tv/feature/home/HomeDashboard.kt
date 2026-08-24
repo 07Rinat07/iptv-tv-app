@@ -326,16 +326,6 @@ private fun WideHomeDashboard(
                                 zone = HomeDashboardFocusZone.MAIN_CONTENT,
                                 onZoneFocused = onZoneFocused
                             )
-                            .onPreviewKeyEvent { event ->
-                                if (
-                                    event.type == KeyEventType.KeyDown &&
-                                    event.key == Key.DirectionDown
-                                ) {
-                                    requestZoneFocus(HomeDashboardFocusZone.CHANNEL_RAIL)
-                                } else {
-                                    false
-                                }
-                            }
                     )
                 }
 
