@@ -11,6 +11,13 @@ internal enum class HomeDashboardFocusDirection {
     RIGHT
 }
 
+internal enum class HomeDashboardQuickFocusAnchor {
+    READY_PLAYLIST,
+    SCANNER,
+    PRIMARY_ACTION,
+    NONE
+}
+
 internal fun nextHomeDashboardFocusZone(
     current: HomeDashboardFocusZone,
     direction: HomeDashboardFocusDirection
@@ -34,3 +41,14 @@ internal fun nextHomeDashboardFocusZone(
 internal fun restoreHomeDashboardFocusZone(savedName: String?): HomeDashboardFocusZone =
     HomeDashboardFocusZone.values().firstOrNull { it.name == savedName }
         ?: HomeDashboardFocusZone.MAIN_CONTENT
+
+internal fun homeDashboardQuickFocusItemIndex(
+    anchor: HomeDashboardQuickFocusAnchor,
+    readySourceCount: Int,
+    hasScanner: Boolean
+): Int? = when (anchor) {
+    HomeDashboardQuickFocusAnchor.READY_PLAYLIST -> if (readySourceCount > 0) 1 else null
+    HomeDashboardQuickFocusAnchor.SCANNER -> if (hasScanner) 1 + readySourceCount else null
+    HomeDashboardQuickFocusAnchor.PRIMARY_ACTION -> 1 + readySourceCount + if (hasScanner) 1 else 0
+    HomeDashboardQuickFocusAnchor.NONE -> null
+}
