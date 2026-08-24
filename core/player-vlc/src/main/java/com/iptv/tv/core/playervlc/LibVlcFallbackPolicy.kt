@@ -46,6 +46,14 @@ object LibVlcFallbackPolicy {
         "engine недоступен"
     )
 
+    private val backendRuntimeMarkers = listOf(
+        "error_code_audio_track_init_failed",
+        "error_code_audio_track_write_failed",
+        "error_code_failed_runtime_check",
+        "не удалось создать media3",
+        "failed to create media3"
+    )
+
     private val decoderMarkers = listOf(
         "decoder",
         "декодер",
@@ -79,14 +87,6 @@ object LibVlcFallbackPolicy {
         "error_code_parsing"
     )
 
-    private val backendRuntimeMarkers = listOf(
-        "error_code_audio_track_init_failed",
-        "error_code_audio_track_write_failed",
-        "error_code_failed_runtime_check",
-        "не удалось создать media3",
-        "failed to create media3"
-    )
-
     fun evaluate(message: String): LibVlcFallbackDecision {
         val normalized = message.trim().lowercase(Locale.ROOT)
         if (normalized.isBlank()) {
@@ -94,6 +94,13 @@ object LibVlcFallbackPolicy {
         }
         if (nonFallbackMarkers.any(normalized::contains)) {
             return notEligible("Ошибка относится к сети, источнику, адресу или авторизации")
+        }
+        if (backendRuntimeMarkers.any(normalized::contains)) {
+            return LibVlcFallbackDecision(
+                shouldFallback = true,
+                reason = LibVlcFallbackReason.MEDIA3_PLAYBACK,
+                diagnostic = "Сбой локального Media3 playback backend допускает один запуск LibVLC"
+            )
         }
         if (decoderMarkers.any(normalized::contains)) {
             return LibVlcFallbackDecision(
@@ -114,13 +121,6 @@ object LibVlcFallbackPolicy {
                 shouldFallback = true,
                 reason = LibVlcFallbackReason.DEMUX_OR_CONTAINER,
                 diagnostic = "Media3 не разобрал контейнер или транспортный поток"
-            )
-        }
-        if (backendRuntimeMarkers.any(normalized::contains)) {
-            return LibVlcFallbackDecision(
-                shouldFallback = true,
-                reason = LibVlcFallbackReason.MEDIA3_PLAYBACK,
-                diagnostic = "Сбой локального Media3 playback backend допускает один запуск LibVLC"
             )
         }
         return notEligible("Ошибка Media3 не классифицирована как безопасная для fallback")
