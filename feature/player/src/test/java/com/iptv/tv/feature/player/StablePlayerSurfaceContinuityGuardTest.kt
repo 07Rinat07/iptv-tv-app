@@ -12,7 +12,7 @@ class StablePlayerSurfaceContinuityGuardTest {
         val shell = productionSource("StablePlayerShell.kt")
 
         assertFalse(shell.contains("StableVideoSurface("))
-        assertEquals(2, "videoSurfaceContent(".toRegex().findAll(shell).count())
+        assertEquals(2, shell.windowed("videoSurfaceContent(".length).count { it == "videoSurfaceContent(" })
         assertTrue(shell.contains("expanded = false"))
         assertTrue(shell.contains("expanded = true"))
     }
