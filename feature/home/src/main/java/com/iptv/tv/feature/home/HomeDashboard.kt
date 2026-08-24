@@ -150,10 +150,17 @@ private fun WideHomeDashboard(
     var lastFocusedZoneName by rememberSaveable {
         mutableStateOf(HomeDashboardFocusZone.MAIN_CONTENT.name)
     }
+    var lastChannelRailPlaylistId by rememberSaveable {
+        mutableStateOf(state.channelRailPlaylistId)
+    }
     var didRestoreInitialFocus by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.channelRailPlaylistId) {
-        channelRailListState.scrollToItem(0)
+        val playlistId = state.channelRailPlaylistId
+        if (playlistId != lastChannelRailPlaylistId) {
+            lastChannelRailPlaylistId = playlistId
+            channelRailListState.scrollToItem(0)
+        }
     }
 
     val channelRailChannels = remember(state.channelRailChannels) {
