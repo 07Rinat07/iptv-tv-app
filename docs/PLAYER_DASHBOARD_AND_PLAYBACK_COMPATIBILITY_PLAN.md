@@ -198,13 +198,15 @@ Fallback запускать только когда классификация �
 
 ## Merge gates
 
-Player/UI increments:
+Player/Live-Player UI increments that touch `feature/player/**`:
 
 - Player Refactor Guard;
 - relevant Player unit/regression tests;
 - full Android CI;
 - debug + AndroidTest compile;
 - signed ARM TV APK.
+
+Home-only dashboard increments are not currently covered by the Player Refactor Guard path filter. Before the first production PR limited to `feature/home/**`, first land a separate fresh-main CI-guard increment that extends the workflow trigger and applicability detection to the Home dashboard paths; after that precondition, require the same exact-head Player/Scanner guard plus full Android CI.
 
 Playback compatibility increments:
 
