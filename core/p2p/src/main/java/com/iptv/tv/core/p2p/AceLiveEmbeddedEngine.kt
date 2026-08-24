@@ -955,7 +955,7 @@ class AceLiveEmbeddedEngine(
                     diagnosticsObserver(
                         "embedded_ace_live_peer_refill",
                         "extra_probe_peers=$extraProbePeers, previous=$previousProbePeers, " +
-                            "pressure=$pressure, signal=${sample.pressure.signal}"
+                            "pressure=$pressure"
                     )
                 }
                 if (extraProbePeers > previousProbePeers && !closed.get()) {
