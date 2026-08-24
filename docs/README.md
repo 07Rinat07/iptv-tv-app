@@ -5,6 +5,7 @@
 ## С чего начинать
 
 - [`PROJECT_STATUS_AND_ROADMAP.md`](PROJECT_STATUS_AND_ROADMAP.md) — **канонический текущий статус проекта, активный blocker, merge gates и порядок следующих решений**. Если старый датированный roadmap называет другой «текущий increment», приоритет имеет этот файл.
+- [`PLAYER_DASHBOARD_AND_PLAYBACK_COMPATIBILITY_PLAN.md`](PLAYER_DASHBOARD_AND_PLAYBACK_COMPATIBILITY_PLAN.md) — подтверждённая после PR #209 последовательность: mechanical Player shell split → Home/Player TV dashboard (#210) → dashboard/fullscreen без перезапуска session → EPG/Favorites polish → multicodec/Media3→LibVLC hardening (#211) → TV Box codec matrix.
 - [`USER_GUIDE.md`](USER_GUIDE.md) — пользовательское управление, «Мои плейлисты», canonical catalog, durable unified Favorites, системный virtual Favorites list, Back/focus restore, Player и базовая диагностика.
 - [`REMOTE_AND_MOUSE.md`](REMOTE_AND_MOUSE.md) — подробный контракт D-pad, клавиатуры, мыши/тачпада и production Player input/focus boundaries.
 - [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — диагностика импорта, Scanner, Player, EPG/archive, Favorites, сети, TV-input и evidence-driven P2P проблем без ослабления runtime safety gates.
