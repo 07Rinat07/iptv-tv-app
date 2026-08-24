@@ -323,7 +323,8 @@ jobs:
               return call_texts(before_function, call_names) != call_texts(after_function, call_names)
 
           # Guard helper regressions: comments must not impersonate code markers,
-          # and bodyless declarations must not absorb the following declaration.
+          # callback markers must accept real lambda tails, and bodyless declarations
+          # must not absorb the following declaration.
           synthetic_section = (
               "// composable(Routes.IMPORTER) {\n"
               "composable(Routes.SCANNER) {\n"
@@ -339,6 +340,19 @@ jobs:
           )
           if synthetic_scanner is None or "ScannerScreen" not in synthetic_scanner:
               raise RuntimeError("section markers must bind to code lines, not comments")
+
+          synthetic_callbacks = (
+              "onOpenScanner = { navController.navigate(Routes.SCANNER) },\n"
+              "onOpenChannel = { playlistId, channelId -> open(playlistId, channelId) },\n"
+              "onOpenImporter = { navController.navigate(Routes.IMPORTER) },\n"
+          )
+          synthetic_scanner_callback = section_between_code_lines(
+              synthetic_callbacks,
+              r"onOpenScanner\s*=.*",
+              r"onOpenImporter\s*=.*",
+          )
+          if synthetic_scanner_callback is None or "onOpenChannel" not in synthetic_scanner_callback:
+              raise RuntimeError("callback section markers must accept lambda tails")
 
           synthetic_declaration = (
               "// enum class ScannerSearchMode { FAKE }\n"
@@ -544,13 +558,13 @@ jobs:
               )
               scanner_changed = scanner_changed or section_changed(
                   MAIN,
-                  r"onOpenScanner\s*=",
-                  r"onOpenImporter\s*=",
+                  r"onOpenScanner\s*=.*",
+                  r"onOpenImporter\s*=.*",
               )
               scanner_changed = scanner_changed or section_changed(
                   MAIN,
-                  r"onOpenNetworkTest\s*=",
-                  r"onOpenStartDestination\s*=",
+                  r"onOpenNetworkTest\s*=.*",
+                  r"onOpenStartDestination\s*=.*",
               )
               scanner_changed = scanner_changed or section_changed(
                   MAIN,
