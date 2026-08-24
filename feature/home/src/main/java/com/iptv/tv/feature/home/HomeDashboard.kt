@@ -152,6 +152,10 @@ private fun WideHomeDashboard(
     }
     var didRestoreInitialFocus by remember { mutableStateOf(false) }
 
+    LaunchedEffect(state.channelRailPlaylistId) {
+        channelRailListState.scrollToItem(0)
+    }
+
     val channelRailChannels = remember(state.channelRailChannels) {
         homeChannelRailItems(state.channelRailChannels)
     }
