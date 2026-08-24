@@ -17,9 +17,10 @@ data class LibVlcFallbackDecision(
 )
 
 /**
- * Ограничивает автоматический переход на LibVLC случаями, где другой декодер или demuxer
- * действительно способен помочь. Ошибки адреса, авторизации и сети не передаются второму
- * движку, чтобы слабая ТВ-приставка не выполняла бесполезный повторный запуск.
+ * Ограничивает автоматический переход на LibVLC случаями, где другой декодер, demuxer
+ * или playback backend действительно способен помочь. Ошибки адреса, авторизации, сети
+ * и неизвестные ошибки не передаются второму движку, чтобы не выполнять бесполезный
+ * повторный запуск того же источника.
  */
 object LibVlcFallbackPolicy {
     private val nonFallbackMarkers = listOf(
@@ -31,6 +32,7 @@ object LibVlcFallbackPolicy {
         "unable to resolve host",
         "connection refused",
         "connectexception",
+        "error_code_io_",
         "io_network_connection_failed",
         "network connection failed",
         "source error",
@@ -77,21 +79,21 @@ object LibVlcFallbackPolicy {
         "error_code_parsing"
     )
 
+    private val backendRuntimeMarkers = listOf(
+        "error_code_audio_track_init_failed",
+        "error_code_audio_track_write_failed",
+        "error_code_failed_runtime_check",
+        "не удалось создать media3",
+        "failed to create media3"
+    )
+
     fun evaluate(message: String): LibVlcFallbackDecision {
         val normalized = message.trim().lowercase(Locale.ROOT)
         if (normalized.isBlank()) {
-            return LibVlcFallbackDecision(
-                shouldFallback = true,
-                reason = LibVlcFallbackReason.MEDIA3_PLAYBACK,
-                diagnostic = "Media3 завершился без диагностического текста"
-            )
+            return notEligible("Media3 завершился без диагностического текста")
         }
         if (nonFallbackMarkers.any(normalized::contains)) {
-            return LibVlcFallbackDecision(
-                shouldFallback = false,
-                reason = LibVlcFallbackReason.NOT_ELIGIBLE,
-                diagnostic = "Ошибка относится к сети, адресу или авторизации"
-            )
+            return notEligible("Ошибка относится к сети, источнику, адресу или авторизации")
         }
         if (decoderMarkers.any(normalized::contains)) {
             return LibVlcFallbackDecision(
@@ -104,7 +106,7 @@ object LibVlcFallbackPolicy {
             return LibVlcFallbackDecision(
                 shouldFallback = true,
                 reason = LibVlcFallbackReason.UNSUPPORTED_FORMAT,
-                diagnostic = "Формат или профиль не поддержан Media3"
+                diagnostic = "Формат, профиль или video processing не поддержан Media3"
             )
         }
         if (demuxMarkers.any(normalized::contains)) {
@@ -114,10 +116,19 @@ object LibVlcFallbackPolicy {
                 diagnostic = "Media3 не разобрал контейнер или транспортный поток"
             )
         }
-        return LibVlcFallbackDecision(
-            shouldFallback = true,
-            reason = LibVlcFallbackReason.MEDIA3_PLAYBACK,
-            diagnostic = "Неизвестная ошибка Media3: разрешён один безопасный запуск LibVLC"
-        )
+        if (backendRuntimeMarkers.any(normalized::contains)) {
+            return LibVlcFallbackDecision(
+                shouldFallback = true,
+                reason = LibVlcFallbackReason.MEDIA3_PLAYBACK,
+                diagnostic = "Сбой локального Media3 playback backend допускает один запуск LibVLC"
+            )
+        }
+        return notEligible("Ошибка Media3 не классифицирована как безопасная для fallback")
     }
+
+    private fun notEligible(diagnostic: String): LibVlcFallbackDecision = LibVlcFallbackDecision(
+        shouldFallback = false,
+        reason = LibVlcFallbackReason.NOT_ELIGIBLE,
+        diagnostic = diagnostic
+    )
 }
