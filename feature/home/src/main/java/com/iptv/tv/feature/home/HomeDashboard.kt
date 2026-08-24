@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
@@ -25,8 +27,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -43,6 +47,9 @@ import androidx.compose.ui.unit.dp
 import com.iptv.tv.core.designsystem.components.TvScrollableLazyColumn
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.Playlist
+import kotlinx.coroutines.launch
+
+private const val HOME_MAIN_FOCUS_ITEM_INDEX = 1
 
 private data class HomeDashboardActions(
     val onOpenScanner: (() -> Unit)?,
@@ -67,13 +74,6 @@ private data class HomeDashboardFocusRequesters(
         HomeDashboardFocusZone.MAIN_CONTENT -> mainContent
         HomeDashboardFocusZone.QUICK_SOURCES -> quickSources
     }
-}
-
-private enum class QuickSourceFocusAnchor {
-    READY_PLAYLIST,
-    SCANNER,
-    PRIMARY_ACTION,
-    NONE
 }
 
 @Composable
@@ -138,34 +138,70 @@ private fun WideHomeDashboard(
             quickSources = FocusRequester()
         )
     }
+    val mainContentListState = rememberLazyListState()
+    val quickSourcesListState = rememberLazyListState()
+    val focusScope = rememberCoroutineScope()
     var lastFocusedZoneName by rememberSaveable {
         mutableStateOf(HomeDashboardFocusZone.MAIN_CONTENT.name)
     }
+    var didRestoreInitialFocus by remember { mutableStateOf(false) }
 
     val hasNavigationAnchor = navigationActions(actions).isNotEmpty()
     val hasMainContentAnchor = !state.isImporting && actions.onOpenPlayer != null
     val quickSourceAnchor = when {
-        !state.isImporting && READY_PLAYLIST_PRESETS.isNotEmpty() -> QuickSourceFocusAnchor.READY_PLAYLIST
-        actions.onOpenScanner != null -> QuickSourceFocusAnchor.SCANNER
-        actions.onPrimaryAction != null -> QuickSourceFocusAnchor.PRIMARY_ACTION
-        else -> QuickSourceFocusAnchor.NONE
+        !state.isImporting && READY_PLAYLIST_PRESETS.isNotEmpty() -> {
+            HomeDashboardQuickFocusAnchor.READY_PLAYLIST
+        }
+        actions.onOpenScanner != null -> HomeDashboardQuickFocusAnchor.SCANNER
+        actions.onPrimaryAction != null -> HomeDashboardQuickFocusAnchor.PRIMARY_ACTION
+        else -> HomeDashboardQuickFocusAnchor.NONE
     }
+    val quickSourceAnchorItemIndex = homeDashboardQuickFocusItemIndex(
+        anchor = quickSourceAnchor,
+        readySourceCount = READY_PLAYLIST_PRESETS.size,
+        hasScanner = actions.onOpenScanner != null
+    )
 
     fun canFocusZone(zone: HomeDashboardFocusZone): Boolean = when (zone) {
         HomeDashboardFocusZone.NAVIGATION -> hasNavigationAnchor
         HomeDashboardFocusZone.MAIN_CONTENT -> hasMainContentAnchor
-        HomeDashboardFocusZone.QUICK_SOURCES -> quickSourceAnchor != QuickSourceFocusAnchor.NONE
+        HomeDashboardFocusZone.QUICK_SOURCES -> quickSourceAnchorItemIndex != null
     }
 
     val onZoneFocused: (HomeDashboardFocusZone) -> Unit = { zone ->
         lastFocusedZoneName = zone.name
     }
+
+    suspend fun requestZoneFocusNow(zone: HomeDashboardFocusZone): Boolean {
+        if (!canFocusZone(zone)) return false
+
+        when (zone) {
+            HomeDashboardFocusZone.NAVIGATION -> Unit
+            HomeDashboardFocusZone.MAIN_CONTENT -> {
+                mainContentListState.scrollToItem(HOME_MAIN_FOCUS_ITEM_INDEX)
+            }
+            HomeDashboardFocusZone.QUICK_SOURCES -> {
+                val itemIndex = quickSourceAnchorItemIndex ?: return false
+                quickSourcesListState.scrollToItem(itemIndex)
+            }
+        }
+
+        repeat(2) {
+            withFrameNanos { }
+            val focused = runCatching {
+                focusRequesters.requesterFor(zone).requestFocus()
+            }.getOrDefault(false)
+            if (focused) return true
+        }
+        return false
+    }
+
     val requestZoneFocus: (HomeDashboardFocusZone) -> Boolean = { zone ->
-        if (canFocusZone(zone)) {
-            focusRequesters.requesterFor(zone).requestFocus()
-            true
-        } else {
+        if (!canFocusZone(zone)) {
             false
+        } else {
+            focusScope.launch { requestZoneFocusNow(zone) }
+            true
         }
     }
 
@@ -178,7 +214,18 @@ private fun WideHomeDashboard(
             canFocusZone(HomeDashboardFocusZone.QUICK_SOURCES) -> HomeDashboardFocusZone.QUICK_SOURCES
             else -> null
         }
-        target?.let { focusRequesters.requesterFor(it).requestFocus() }
+        target?.let { requestZoneFocusNow(it) }
+        didRestoreInitialFocus = true
+    }
+
+    LaunchedEffect(quickSourceAnchor) {
+        if (
+            didRestoreInitialFocus &&
+            lastFocusedZoneName == HomeDashboardFocusZone.QUICK_SOURCES.name &&
+            canFocusZone(HomeDashboardFocusZone.QUICK_SOURCES)
+        ) {
+            requestZoneFocusNow(HomeDashboardFocusZone.QUICK_SOURCES)
+        }
     }
 
     Row(
@@ -208,6 +255,7 @@ private fun WideHomeDashboard(
                     zone = HomeDashboardFocusZone.MAIN_CONTENT,
                     requestZoneFocus = requestZoneFocus
                 ),
+            state = mainContentListState,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
@@ -278,6 +326,7 @@ private fun WideHomeDashboard(
                     zone = HomeDashboardFocusZone.QUICK_SOURCES,
                     requestZoneFocus = requestZoneFocus
                 ),
+            state = quickSourcesListState,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
@@ -294,7 +343,7 @@ private fun WideHomeDashboard(
                 state = state,
                 onWatchReadyPlaylist = onWatchReadyPlaylist,
                 firstButtonFocusRequester = if (
-                    quickSourceAnchor == QuickSourceFocusAnchor.READY_PLAYLIST
+                    quickSourceAnchor == HomeDashboardQuickFocusAnchor.READY_PLAYLIST
                 ) {
                     focusRequesters.quickSources
                 } else {
@@ -312,7 +361,7 @@ private fun WideHomeDashboard(
                             zone = HomeDashboardFocusZone.QUICK_SOURCES,
                             onZoneFocused = onZoneFocused
                         )
-                    if (quickSourceAnchor == QuickSourceFocusAnchor.SCANNER) {
+                    if (quickSourceAnchor == HomeDashboardQuickFocusAnchor.SCANNER) {
                         modifier = modifier.focusRequester(focusRequesters.quickSources)
                     }
                     Button(onClick = action, modifier = modifier) {
@@ -329,7 +378,7 @@ private fun WideHomeDashboard(
                             zone = HomeDashboardFocusZone.QUICK_SOURCES,
                             onZoneFocused = onZoneFocused
                         )
-                    if (quickSourceAnchor == QuickSourceFocusAnchor.PRIMARY_ACTION) {
+                    if (quickSourceAnchor == HomeDashboardQuickFocusAnchor.PRIMARY_ACTION) {
                         modifier = modifier.focusRequester(focusRequesters.quickSources)
                     }
                     OutlinedButton(onClick = action, modifier = modifier) {
