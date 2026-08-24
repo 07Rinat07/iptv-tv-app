@@ -85,10 +85,11 @@ data class AceLiveDhtDiscoveryResult(
  * Production callers may opt into a short process-wide positive-result reuse window. The global DHT
  * execution gate still owns serialization and heap safety; reuse only prevents the direct live path
  * and the concurrent metadata/refill paths from immediately repeating the same successful DHT walk
- * for the same swarm/bootstrap set. Empty results are never reused: a bounded BEP-5 lookup that found
- * no peers is not proof that the distributed swarm is empty, and suppressing an immediate fresh walk
- * can strand startup on one weak routing-table path. Tests and custom callers remain uncached unless
- * they opt in explicitly.
+ * for the same swarm/bootstrap set. A cached batch is bypassed when any endpoint is currently inside
+ * the existing swarm-scoped TCP-connect failure backoff, because filtering a stale cache hit must not
+ * suppress a fresh bounded lookup for alternatives. Empty results are never reused: a bounded BEP-5
+ * lookup that found no peers is not proof that the distributed swarm is empty. Tests and custom
+ * callers remain uncached unless they opt in explicitly.
  */
 class AceLiveDhtDiscovery(
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -97,7 +98,9 @@ class AceLiveDhtDiscovery(
     addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER,
     private val reuseRecentResults: Boolean = false,
     private val clockMillis: () -> Long = System::currentTimeMillis,
-    routingMemory: AceDhtRoutingMemory? = null
+    routingMemory: AceDhtRoutingMemory? = null,
+    private val connectFailureMemory: AceLiveTcpConnectFailureMemory =
+        AceLiveTcpConnectFailureMemory.shared
 ) {
     private val delegate = AceDhtIterativeDiscovery(
         ioDispatcher = ioDispatcher,
@@ -109,21 +112,27 @@ class AceLiveDhtDiscovery(
 
     suspend fun discover(request: AceLiveDhtDiscoveryRequest): AceLiveDhtDiscoveryResult {
         val cacheKey = request.cacheKey()
+        val swarmBytes = request.swarmKey.toByteArray()
         if (reuseRecentResults) {
             recentDhtResult(cacheKey, clockMillis())?.let { cached ->
-                return cached.copy(
-                    queriesSent = 0,
-                    failedQueries = 0,
-                    rejectedEndpoints = 0,
-                    warmRoutingSeedsUsed = 0,
-                    cacheHit = true
-                )
+                val entireCachedBatchStillEligible = cached.peers.all { endpoint ->
+                    connectFailureMemory.isEligible(swarmBytes, endpoint)
+                }
+                if (entireCachedBatchStillEligible) {
+                    return cached.copy(
+                        queriesSent = 0,
+                        failedQueries = 0,
+                        rejectedEndpoints = 0,
+                        warmRoutingSeedsUsed = 0,
+                        cacheHit = true
+                    )
+                }
             }
         }
 
         val outcome = delegate.discover(
             AceDhtLookupRequest(
-                targetBytes = request.swarmKey.toByteArray(),
+                targetBytes = swarmBytes,
                 bootstrapNodes = request.bootstrapNodes,
                 localNodeId = request.localNodeId,
                 encodeGetPeersQuery = { transactionId, nodeId ->
