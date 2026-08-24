@@ -35,7 +35,7 @@ fun HomeScreen(
 
     HomeDashboard(
         state = state,
-        onWatchPlaylist = viewModel::requestOpenPlaylist,
+        onWatchPlaylist = { playlistId -> viewModel.requestOpenPlaylist(playlistId) },
         onWatchReadyPlaylist = viewModel::watchReadyPlaylist,
         onOpenScanner = onOpenScanner,
         onOpenImporter = onOpenImporter,
