@@ -32,5 +32,5 @@ internal fun nextHomeDashboardFocusZone(
 }
 
 internal fun restoreHomeDashboardFocusZone(savedName: String?): HomeDashboardFocusZone =
-    HomeDashboardFocusZone.entries.firstOrNull { it.name == savedName }
+    HomeDashboardFocusZone.values().firstOrNull { it.name == savedName }
         ?: HomeDashboardFocusZone.MAIN_CONTENT
