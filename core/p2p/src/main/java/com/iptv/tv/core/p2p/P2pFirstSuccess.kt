@@ -87,16 +87,20 @@ internal suspend fun <I, O> firstSuccessfulP2p(
  * - when a successfully resolved descriptor starts but its derived live swarm cannot produce a
  *   stream, retry the speculative direct identity once. The retry uses the same soft window and may
  *   receive the same fixed qualification grace only while its current runtime has peer progress.
- *   This keeps a volatile/dead derived swarm from turning metadata-resolution success into a
- *   playback regression, while preserving the caller's absolute preparation bound.
+ *   If that retry has already appended validated media by the end of the grace, acquisition has
+ *   succeeded: keep the same runtime alive only for its existing bounded startup-buffer handoff
+ *   instead of misclassifying it as qualified-peer-no-media. No acquisition or buffer budget is
+ *   widened by that state transition.
  */
 internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
     directSoftTimeoutMillis: Long,
     directProgressGraceMillis: Long = 0L,
     directHasQualificationProgress: () -> Boolean = { false },
+    directHasMediaProgress: () -> Boolean = { false },
     onDirectProgressGraceStarted: () -> Unit = {},
     onDirectRetryStarted: () -> Unit = {},
     onDirectRetryProgressGraceStarted: () -> Unit = {},
+    onDirectRetryMediaHandoffStarted: () -> Unit = {},
     directAttempt: suspend () -> P2pResult<T>,
     metadataResolve: suspend () -> P2pResult<M>,
     metadataAttempt: suspend (M) -> P2pResult<T>,
@@ -212,8 +216,11 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
                                     directSoftTimeoutMillis = directSoftTimeoutMillis,
                                     directProgressGraceMillis = directProgressGraceMillis,
                                     directHasQualificationProgress = directHasQualificationProgress,
+                                    directHasMediaProgress = directHasMediaProgress,
                                     onDirectRetryProgressGraceStarted =
                                         onDirectRetryProgressGraceStarted,
+                                    onDirectRetryMediaHandoffStarted =
+                                        onDirectRetryMediaHandoffStarted,
                                     directAttempt = directAttempt,
                                     isCurrent = isCurrent,
                                     superseded = superseded
@@ -261,12 +268,18 @@ internal suspend fun <T, M> raceP2pDirectAgainstMetadata(
  * Applies the handoff soft window to a fallback retry without cancelling its runtime at the exact
  * boundary. The child is always joined or cancelled before this function returns, so a failed or
  * superseded retry cannot retain loopback/TCP resources.
+ *
+ * Reaching media output is a terminal acquisition transition. If validated media was already
+ * appended during the fixed qualification grace, the retry is no longer waiting for peer/media
+ * acquisition and may finish only under the startup bound already owned by [directAttempt].
  */
 private suspend fun <T> runDirectRetryWithQualificationGrace(
     directSoftTimeoutMillis: Long,
     directProgressGraceMillis: Long,
     directHasQualificationProgress: () -> Boolean,
+    directHasMediaProgress: () -> Boolean,
     onDirectRetryProgressGraceStarted: () -> Unit,
+    onDirectRetryMediaHandoffStarted: () -> Unit,
     directAttempt: suspend () -> P2pResult<T>,
     isCurrent: () -> Boolean,
     superseded: () -> P2pResult.Error
@@ -304,6 +317,16 @@ private suspend fun <T> runDirectRetryWithQualificationGrace(
     }
     if (graceResult != null || directRetryJob.isCompleted) {
         return@supervisorScope graceResult ?: directRetryJob.await()
+    }
+
+    if (!isCurrent()) {
+        directRetryJob.cancelAndJoin()
+        return@supervisorScope superseded()
+    }
+    if (directHasMediaProgress()) {
+        runCatching(onDirectRetryMediaHandoffStarted)
+        val handoffResult = directRetryJob.await()
+        return@supervisorScope if (isCurrent()) handoffResult else superseded()
     }
 
     directRetryJob.cancelAndJoin()
