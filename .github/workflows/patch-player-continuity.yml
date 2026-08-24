@@ -1,0 +1,62 @@
+name: Patch Player continuity review fixes
+
+on:
+  push:
+    branches:
+      - feat/player-same-session-fullscreen-fresh
+    paths:
+      - .github/workflows/patch-player-continuity.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/player-same-session-fullscreen-fresh
+          fetch-depth: 0
+      - name: Apply exact bounded fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          input_path = Path('feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerInput.kt')
+          text = input_path.read_text()
+          old = '''    fun update(\n        expanded: Boolean,\n        callbacks: StablePlayerInputCallbacks\n    ) {\n        val enteringFullscreen = expanded && !this.expanded\n        this.expanded = expanded\n        this.callbacks = callbacks\n\n        if (enteringFullscreen) controlsVisible = true\n        if (expanded && controlsVisible) scheduleAutoHide() else cancelAutoHide()\n    }'''
+          new = '''    fun update(\n        expanded: Boolean,\n        controlsVisible: Boolean,\n        callbacks: StablePlayerInputCallbacks\n    ) {\n        this.expanded = expanded\n        this.controlsVisible = controlsVisible\n        this.callbacks = callbacks\n\n        if (expanded && controlsVisible) scheduleAutoHide() else cancelAutoHide()\n    }'''
+          assert old in text, 'StablePlayerInput.update contract changed unexpectedly'
+          input_path.write_text(text.replace(old, new))
+
+          media_path = Path('feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerVideoSurface.kt')
+          text = media_path.read_text()
+          old = '''    inputHandler.update(\n        expanded = expanded,\n        callbacks = StablePlayerInputCallbacks('''
+          new = '''    inputHandler.update(\n        expanded = expanded,\n        controlsVisible = showControls,\n        callbacks = StablePlayerInputCallbacks('''
+          assert old in text, 'Media3 input handler call changed unexpectedly'
+          text = text.replace(old, new, 1)
+          old = '''            update = { view ->\n                view.player = player'''
+          new = '''            onReset = { },\n            update = { view ->\n                view.player = player'''
+          assert old in text, 'Media3 AndroidView update block changed unexpectedly'
+          media_path.write_text(text.replace(old, new, 1))
+
+          vlc_path = Path('feature/player/src/main/java/com/iptv/tv/feature/player/StableLibVlcVideoSurface.kt')
+          text = vlc_path.read_text()
+          old = '''    inputHandler.update(\n        expanded = expanded,\n        callbacks = StablePlayerInputCallbacks('''
+          new = '''    inputHandler.update(\n        expanded = expanded,\n        controlsVisible = showControls,\n        callbacks = StablePlayerInputCallbacks('''
+          assert old in text, 'LibVLC input handler call changed unexpectedly'
+          text = text.replace(old, new, 1)
+          old = '''            update = { view ->\n                inputHandler.attachTo(view)'''
+          new = '''            onReset = { },\n            update = { view ->\n                inputHandler.attachTo(view)'''
+          assert old in text, 'LibVLC AndroidView update block changed unexpectedly'
+          vlc_path.write_text(text.replace(old, new, 1))
+
+          Path('.github/workflows/patch-player-continuity.yml').unlink()
+      - name: Commit bounded fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerInput.kt feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerVideoSurface.kt feature/player/src/main/java/com/iptv/tv/feature/player/StableLibVlcVideoSurface.kt .github/workflows/patch-player-continuity.yml
+          git commit -m "fix(player): retain Android views and sync controls"
+          git push origin HEAD:feat/player-same-session-fullscreen-fresh
