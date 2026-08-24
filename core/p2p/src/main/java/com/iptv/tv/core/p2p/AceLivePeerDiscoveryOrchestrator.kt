@@ -111,8 +111,8 @@ internal enum class AceLiveStartupDhtRefillPlan {
  * the existing full expansion remains the wider routing-table path without adding another probe
  * round or widening the time/query budgets.
  *
- * A weak DHT fast path (one to three endpoints) uses the same bounded probe/expansion sequence. A
- * normal DHT batch does not schedule another duplicate startup expansion.
+ * A weak DHT fast path (one to three eligible endpoints) uses the same bounded probe/expansion
+ * sequence. Raw source counts remain diagnostics and do not classify post-filter startup strength.
  */
 internal fun aceLiveStartupNeedsImmediateDhtOnlyRefill(
     result: AceLivePeerDiscoveryOrchestrationResult,
@@ -131,13 +131,19 @@ internal fun aceLiveStartupDhtRefillPlan(
     require(normalTrackerFastPathMinPeers > 0) {
         "normalTrackerFastPathMinPeers must be positive"
     }
+    val eligibleTrackerPeers = result.peers.count { peer ->
+        AceLivePeerDiscoverySource.UDP_TRACKER in peer.sources
+    }
+    val eligibleDhtPeers = result.peers.count { peer ->
+        AceLivePeerDiscoverySource.MAINLINE_DHT in peer.sources
+    }
     val trackerOnlyFastPath =
         result.dht.status == AceLivePeerDiscoverySourceStatus.NOT_REQUESTED &&
         result.tracker.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
-        result.tracker.returnedPeerCount > 0
+        eligibleTrackerPeers > 0
     val weakDhtFastPath =
         result.dht.status == AceLivePeerDiscoverySourceStatus.SUCCEEDED &&
-        result.dht.returnedPeerCount in 1 until normalTrackerFastPathMinPeers
+        eligibleDhtPeers in 1 until normalTrackerFastPathMinPeers
     return when {
         // Tracker endpoints are only candidates. Keep their immediate startup advantage, but obtain
         // independent DHT alternatives in the background in case tracker peers cannot qualify.
@@ -206,9 +212,9 @@ internal fun aceLiveDhtHasHeapHeadroom(
  * condition into a process-killing coroutine OOM.
  *
  * A final pre-handshake TCP connect failure is temporarily ineligible for the same swarm for exactly
- * the coordinator's existing first-failure backoff. It therefore cannot immediately satisfy a new
- * tracker fast path after a Runtime boundary; an eligible DHT alternative can be tried under the
- * unchanged discovery budget. Source summaries still report raw discovery counts for diagnostics.
+ * the coordinator's existing first-failure backoff. Eligibility is snapshotted once per source result
+ * so a concurrent failure cannot make the fast-path decision disagree with the returned candidate
+ * list. Raw source summaries still report unfiltered discovery counts for diagnostics.
  *
  * Multiple orchestrator instances may be active while content-id startup races metadata resolution.
  * Their DHT fallbacks are process-wide serialized and re-check heap headroom after acquiring the
@@ -248,26 +254,33 @@ class AceLivePeerDiscoveryOrchestrator(
 
         if (policy.preferTrackerFastPath && trackerRequest != null) {
             val trackerExecution = captureSource { trackerDiscover(trackerRequest) }
-            val trackerPeerCount = when (trackerExecution) {
-                is SourceExecution.Success -> trackerExecution.value.peers.count { peer ->
-                    connectFailureMemory.isEligible(swarmBytes, peer)
-                }
-                else -> 0
+            val eligibleTrackerPeers = when (trackerExecution) {
+                is SourceExecution.Success -> eligiblePeers(
+                    swarmKey = swarmBytes,
+                    peers = trackerExecution.value.peers
+                )
+                else -> emptyList()
             }
             val fastPathThreshold = minOf(policy.trackerFastPathMinPeers, policy.maxTotalPeers)
 
-            if (trackerPeerCount >= fastPathThreshold || !dhtPermitted) {
+            if (eligibleTrackerPeers.size >= fastPathThreshold || !dhtPermitted) {
                 return@supervisorScope buildResult(
                     dhtExecution = SourceExecution.NotRequested,
                     trackerExecution = trackerExecution,
-                    swarmKey = swarmBytes
+                    swarmKey = swarmBytes,
+                    eligibleTrackerPeers = eligibleTrackerPeers
                 )
             }
 
             val dhtExecution = dhtRequest?.let { sourceRequest ->
                 runDhtSource(sourceRequest)
             } ?: SourceExecution.NotRequested
-            return@supervisorScope buildResult(dhtExecution, trackerExecution, swarmBytes)
+            return@supervisorScope buildResult(
+                dhtExecution = dhtExecution,
+                trackerExecution = trackerExecution,
+                swarmKey = swarmBytes,
+                eligibleTrackerPeers = eligibleTrackerPeers
+            )
         }
 
         val dhtDeferred = dhtRequest
@@ -297,25 +310,30 @@ class AceLivePeerDiscoveryOrchestrator(
     private fun buildResult(
         dhtExecution: SourceExecution<AceLiveDhtDiscoveryResult>,
         trackerExecution: SourceExecution<AceLiveUdpTrackerDiscoveryResult>,
-        swarmKey: ByteArray
+        swarmKey: ByteArray,
+        eligibleTrackerPeers: List<AceLiveTcpPeerEndpoint>? = null
     ): AceLivePeerDiscoveryOrchestrationResult {
         val discovered = LinkedHashMap<String, MutableDiscoveredPeer>()
-        if (dhtExecution is SourceExecution.Success) {
-            addPeers(
-                target = discovered,
-                peers = dhtExecution.value.peers,
-                source = AceLivePeerDiscoverySource.MAINLINE_DHT,
-                swarmKey = swarmKey
-            )
+        val dhtPeers = when (dhtExecution) {
+            is SourceExecution.Success -> eligiblePeers(swarmKey, dhtExecution.value.peers)
+            SourceExecution.Failed,
+            SourceExecution.NotRequested -> emptyList()
         }
-        if (trackerExecution is SourceExecution.Success) {
-            addPeers(
-                target = discovered,
-                peers = trackerExecution.value.peers,
-                source = AceLivePeerDiscoverySource.UDP_TRACKER,
-                swarmKey = swarmKey
-            )
+        val trackerPeers = eligibleTrackerPeers ?: when (trackerExecution) {
+            is SourceExecution.Success -> eligiblePeers(swarmKey, trackerExecution.value.peers)
+            SourceExecution.Failed,
+            SourceExecution.NotRequested -> emptyList()
         }
+        addPeers(
+            target = discovered,
+            peers = dhtPeers,
+            source = AceLivePeerDiscoverySource.MAINLINE_DHT
+        )
+        addPeers(
+            target = discovered,
+            peers = trackerPeers,
+            source = AceLivePeerDiscoverySource.UDP_TRACKER
+        )
         val dhtResult = when (dhtExecution) {
             is SourceExecution.Success -> dhtExecution.value
             SourceExecution.Failed,
@@ -338,14 +356,19 @@ class AceLivePeerDiscoveryOrchestrator(
         )
     }
 
+    private fun eligiblePeers(
+        swarmKey: ByteArray,
+        peers: List<AceLiveTcpPeerEndpoint>
+    ): List<AceLiveTcpPeerEndpoint> = peers.filter { peer ->
+        connectFailureMemory.isEligible(swarmKey, peer)
+    }
+
     private fun addPeers(
         target: LinkedHashMap<String, MutableDiscoveredPeer>,
         peers: List<AceLiveTcpPeerEndpoint>,
-        source: AceLivePeerDiscoverySource,
-        swarmKey: ByteArray
+        source: AceLivePeerDiscoverySource
     ) {
         for (peer in peers) {
-            if (!connectFailureMemory.isEligible(swarmKey, peer)) continue
             val key = endpointKey(peer)
             val existing = target[key]
             if (existing != null) {
