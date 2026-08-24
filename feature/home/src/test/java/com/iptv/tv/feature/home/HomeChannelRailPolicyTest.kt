@@ -8,16 +8,16 @@ import org.junit.Test
 
 class HomeChannelRailPolicyTest {
     @Test
-    fun `rail keeps canonical order hides hidden channels and applies limit`() {
+    fun `rail preserves repository order hides hidden channels and applies limit`() {
         val channels = listOf(
-            channel(id = 3, orderIndex = 30),
-            channel(id = 1, orderIndex = 10),
-            channel(id = 2, orderIndex = 20, isHidden = true),
-            channel(id = 4, orderIndex = 40)
+            channel(id = 30, playlistId = 2, orderIndex = 0),
+            channel(id = 10, playlistId = 1, orderIndex = 50),
+            channel(id = 20, playlistId = 1, orderIndex = 1, isHidden = true),
+            channel(id = 40, playlistId = 2, orderIndex = 2)
         )
 
         assertEquals(
-            listOf(1L, 3L),
+            listOf(30L, 10L),
             homeChannelRailItems(channels, limit = 2).map { it.id }
         )
     }
@@ -43,11 +43,12 @@ class HomeChannelRailPolicyTest {
 
     private fun channel(
         id: Long,
+        playlistId: Long = 7,
         orderIndex: Int,
         isHidden: Boolean = false
     ): Channel = Channel(
         id = id,
-        playlistId = 7,
+        playlistId = playlistId,
         tvgId = "tvg-$id",
         name = "Channel $id",
         group = "Live",
