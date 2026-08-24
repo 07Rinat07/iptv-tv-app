@@ -85,45 +85,62 @@ data class AceLiveDhtDiscoveryResult(
  * Production callers may opt into a short process-wide positive-result reuse window. The global DHT
  * execution gate still owns serialization and heap safety; reuse only prevents the direct live path
  * and the concurrent metadata/refill paths from immediately repeating the same successful DHT walk
- * for the same swarm/bootstrap set. Empty results are never reused: a bounded BEP-5 lookup that found
- * no peers is not proof that the distributed swarm is empty, and suppressing an immediate fresh walk
- * can strand startup on one weak routing-table path. Tests and custom callers remain uncached unless
- * they opt in explicitly.
+ * for the same swarm/bootstrap set. A cached batch is bypassed when any endpoint is currently inside
+ * the existing swarm-scoped TCP-connect failure backoff, because filtering a stale cache hit must not
+ * suppress a fresh bounded lookup for alternatives. While such failures are active, a startup DHT
+ * fast path raises only its early peer-count threshold by the number of remembered failed endpoints.
+ * That guarantees enough raw candidates can remain after eligibility filtering without changing the
+ * discovery time, query, branching or total-peer caps. Empty results are never reused. Tests and
+ * custom callers remain uncached unless they opt in explicitly.
  */
 class AceLiveDhtDiscovery(
-    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    policy: AceLiveDhtPolicy = AceLiveDhtPolicy(),
-    randomInt: () -> Int = AceDhtIterativeDiscovery.DEFAULT_RANDOM_INT,
-    addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val policy: AceLiveDhtPolicy = AceLiveDhtPolicy(),
+    private val randomInt: () -> Int = AceDhtIterativeDiscovery.DEFAULT_RANDOM_INT,
+    private val addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER,
     private val reuseRecentResults: Boolean = false,
     private val clockMillis: () -> Long = System::currentTimeMillis,
-    routingMemory: AceDhtRoutingMemory? = null
+    private val routingMemory: AceDhtRoutingMemory? = null,
+    private val connectFailureMemory: AceLiveTcpConnectFailureMemory =
+        AceLiveTcpConnectFailureMemory.shared
 ) {
-    private val delegate = AceDhtIterativeDiscovery(
-        ioDispatcher = ioDispatcher,
-        policy = policy,
-        randomInt = randomInt,
-        addressResolver = addressResolver,
-        routingMemory = routingMemory
-    )
+    private val delegate = delegateFor(policy)
 
     suspend fun discover(request: AceLiveDhtDiscoveryRequest): AceLiveDhtDiscoveryResult {
         val cacheKey = request.cacheKey()
+        val swarmBytes = request.swarmKey.toByteArray()
         if (reuseRecentResults) {
             recentDhtResult(cacheKey, clockMillis())?.let { cached ->
-                return cached.copy(
-                    queriesSent = 0,
-                    failedQueries = 0,
-                    rejectedEndpoints = 0,
-                    warmRoutingSeedsUsed = 0,
-                    cacheHit = true
-                )
+                val entireCachedBatchStillEligible = cached.peers.all { endpoint ->
+                    connectFailureMemory.isEligible(swarmBytes, endpoint)
+                }
+                if (entireCachedBatchStillEligible) {
+                    return cached.copy(
+                        queriesSent = 0,
+                        failedQueries = 0,
+                        rejectedEndpoints = 0,
+                        warmRoutingSeedsUsed = 0,
+                        cacheHit = true
+                    )
+                }
             }
         }
 
-        val outcome = delegate.discover(
+        val activeFailures = connectFailureMemory.activeFailureCount(swarmBytes)
+        val normalEarlyReturn = policy.returnAfterPeers
+        val effectiveEarlyReturn = if (normalEarlyReturn != null && activeFailures > 0) {
+            minOf(policy.maxTotalPeers, normalEarlyReturn + activeFailures)
+        } else {
+            normalEarlyReturn
+        }
+        val discoveryDelegate = if (effectiveEarlyReturn == normalEarlyReturn) {
+            delegate
+        } else {
+            delegateFor(policy.copy(returnAfterPeers = effectiveEarlyReturn))
+        }
+        val outcome = discoveryDelegate.discover(
             AceDhtLookupRequest(
-                targetBytes = request.swarmKey.toByteArray(),
+                targetBytes = swarmBytes,
                 bootstrapNodes = request.bootstrapNodes,
                 localNodeId = request.localNodeId,
                 encodeGetPeersQuery = { transactionId, nodeId ->
@@ -148,6 +165,15 @@ class AceLiveDhtDiscovery(
         }
         return result
     }
+
+    private fun delegateFor(delegatePolicy: AceLiveDhtPolicy): AceDhtIterativeDiscovery =
+        AceDhtIterativeDiscovery(
+            ioDispatcher = ioDispatcher,
+            policy = delegatePolicy,
+            randomInt = randomInt,
+            addressResolver = addressResolver,
+            routingMemory = routingMemory
+        )
 
     private fun AceLiveDhtDiscoveryRequest.cacheKey(): String = buildString {
         append(swarmKey.toHex())

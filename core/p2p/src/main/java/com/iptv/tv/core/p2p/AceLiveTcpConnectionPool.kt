@@ -96,6 +96,8 @@ class AceLiveTcpConnectionPool(
     private val clockMillis: () -> Long = System::currentTimeMillis,
     private val recoveryDiagnostics: AceLiveRecoveryDiagnosticsReporter =
         AceLiveRecoveryDiagnosticsReporter(),
+    private val connectFailureMemory: AceLiveTcpConnectFailureMemory =
+        AceLiveTcpConnectFailureMemory.shared,
     private val onEvent: (AceLiveTcpPoolEvent) -> Unit = {}
 ) {
     private val poolMutex = Mutex()
@@ -367,6 +369,13 @@ class AceLiveTcpConnectionPool(
                     throw cancelled
                 } catch (_: Throwable) {
                     val retrying = reconnectAttempt < reconnectBudget(runtime)
+                    if (!retrying && !runtime.handshakeAcceptedAtLeastOnce) {
+                        connectFailureMemory.recordFinalPreHandshakeFailure(
+                            swarmKey = runtime.swarmKey,
+                            endpoint = runtime.endpoint,
+                            nowMillis = clockMillis()
+                        )
+                    }
                     emit(AceLiveTcpPoolEvent.ConnectFailed(runtime.peerId, retrying))
                     if (!retrying) break
                     reconnectAttempt += 1
@@ -374,6 +383,9 @@ class AceLiveTcpConnectionPool(
                     continue
                 }
 
+                // A real TCP connection disproves any still-live negative endpoint memory for this
+                // exact swarm, even before the application handshake is evaluated.
+                connectFailureMemory.recordConnected(runtime.swarmKey, runtime.endpoint)
                 runtime.transport = transport
                 val exit = try {
                     runConnectedTransport(runtime, transport, reconnectAttempt)
