@@ -72,4 +72,57 @@ class HomeDashboardFocusPolicyTest {
             restoreHomeDashboardFocusZone(null)
         )
     }
+
+    @Test
+    fun `quick focus item indexes follow rendered lazy list order`() {
+        assertEquals(
+            1,
+            homeDashboardQuickFocusItemIndex(
+                HomeDashboardQuickFocusAnchor.READY_PLAYLIST,
+                readySourceCount = 3,
+                hasScanner = true
+            )
+        )
+        assertEquals(
+            4,
+            homeDashboardQuickFocusItemIndex(
+                HomeDashboardQuickFocusAnchor.SCANNER,
+                readySourceCount = 3,
+                hasScanner = true
+            )
+        )
+        assertEquals(
+            5,
+            homeDashboardQuickFocusItemIndex(
+                HomeDashboardQuickFocusAnchor.PRIMARY_ACTION,
+                readySourceCount = 3,
+                hasScanner = true
+            )
+        )
+    }
+
+    @Test
+    fun `quick focus policy rejects missing anchors`() {
+        assertNull(
+            homeDashboardQuickFocusItemIndex(
+                HomeDashboardQuickFocusAnchor.READY_PLAYLIST,
+                readySourceCount = 0,
+                hasScanner = false
+            )
+        )
+        assertNull(
+            homeDashboardQuickFocusItemIndex(
+                HomeDashboardQuickFocusAnchor.SCANNER,
+                readySourceCount = 3,
+                hasScanner = false
+            )
+        )
+        assertNull(
+            homeDashboardQuickFocusItemIndex(
+                HomeDashboardQuickFocusAnchor.NONE,
+                readySourceCount = 3,
+                hasScanner = true
+            )
+        )
+    }
 }
