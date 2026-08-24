@@ -91,6 +91,7 @@ internal fun StableLibVlcVideoSurface(
     val inputHandler = remember(context) { StablePlayerInputHandler(context) }
     inputHandler.update(
         expanded = expanded,
+        controlsVisible = showControls,
         callbacks = StablePlayerInputCallbacks(
             onToggleControls = { currentToggleControls() },
             onToggleFullscreen = { currentToggleFullscreen() },
@@ -136,6 +137,7 @@ internal fun StableLibVlcVideoSurface(
                     if (expanded) post { requestFocus() }
                 }
             },
+            onReset = { },
             update = { view ->
                 inputHandler.attachTo(view)
                 controller.setVolume(volume)

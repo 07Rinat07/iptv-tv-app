@@ -86,13 +86,13 @@ internal class StablePlayerInputHandler(context: Context) :
 
     fun update(
         expanded: Boolean,
+        controlsVisible: Boolean,
         callbacks: StablePlayerInputCallbacks
     ) {
-        val enteringFullscreen = expanded && !this.expanded
         this.expanded = expanded
+        this.controlsVisible = controlsVisible
         this.callbacks = callbacks
 
-        if (enteringFullscreen) controlsVisible = true
         if (expanded && controlsVisible) scheduleAutoHide() else cancelAutoHide()
     }
 

@@ -251,6 +251,7 @@ private fun StableMedia3VideoSurface(
     val inputHandler = remember(context) { StablePlayerInputHandler(context) }
     inputHandler.update(
         expanded = expanded,
+        controlsVisible = showControls,
         callbacks = StablePlayerInputCallbacks(
             onToggleControls = onToggleControls,
             onToggleFullscreen = onToggleFullscreen,
@@ -602,6 +603,7 @@ private fun StableMedia3VideoSurface(
                     if (expanded) post { requestFocus() }
                 }
             },
+            onReset = { },
             update = { view ->
                 view.player = player
                 view.resizeMode = when (scale) {
