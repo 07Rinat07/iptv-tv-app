@@ -175,6 +175,57 @@ class AceLiveTcpConnectFailureMemoryTest {
         assertEquals(2, result.dht.returnedPeerCount)
     }
 
+    @Test
+    fun `startup refill strength uses eligible dht peers while preserving raw count`() = runBlocking {
+        val now = 30_000L
+        val memory = AceLiveTcpConnectFailureMemory(
+            clockMillis = { now },
+            backoffMillis = 5_000L
+        )
+        val swarm = swarm(6)
+        val peers = listOf(
+            AceLiveTcpPeerEndpoint("1.1.1.1", 9201),
+            AceLiveTcpPeerEndpoint("8.8.8.8", 9202),
+            AceLiveTcpPeerEndpoint("9.9.9.9", 9203),
+            AceLiveTcpPeerEndpoint("4.2.2.2", 9204),
+            AceLiveTcpPeerEndpoint("208.67.222.222", 9205)
+        )
+        peers.take(3).forEach { peer ->
+            memory.recordFinalPreHandshakeFailure(swarm.toByteArray(), peer)
+        }
+        val orchestrator = AceLivePeerDiscoveryOrchestrator(
+            dhtDiscover = {
+                AceLiveDhtDiscoveryResult(
+                    peers = peers,
+                    queriesSent = 6,
+                    failedQueries = 1,
+                    rejectedEndpoints = 0
+                )
+            },
+            policy = AceLivePeerDiscoveryOrchestrationPolicy(
+                preferTrackerFastPath = false
+            ),
+            dhtHeadroomAvailable = { true },
+            connectFailureMemory = memory
+        )
+
+        val result = orchestrator.discover(
+            AceLivePeerDiscoveryOrchestrationRequest(
+                dhtRequest = AceLiveDhtDiscoveryRequest(
+                    swarmKey = swarm,
+                    bootstrapNodes = listOf(AceLiveDhtBootstrapNode("bootstrap.test", 6881))
+                )
+            )
+        )
+
+        assertEquals(peers.drop(3), result.tcpEndpoints())
+        assertEquals(5, result.dht.returnedPeerCount)
+        assertEquals(
+            AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND,
+            aceLiveStartupDhtRefillPlan(result)
+        )
+    }
+
     private fun swarm(fill: Int): AceLiveSwarmKey =
         AceLiveSwarmKey.fromBytes(ByteArray(AceLiveSwarmKey.BYTES) { fill.toByte() })
 }
