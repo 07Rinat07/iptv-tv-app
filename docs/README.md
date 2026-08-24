@@ -16,7 +16,7 @@
 
 - [`architecture.md`](architecture.md) — canonical hierarchy, navigation runtime, logical channel identity и границы каталог/Favorites/P2P.
 - [`USER_GUIDE.md`](USER_GUIDE.md) — фактический пользовательский сценарий: ordinary playlists, системное `Избранное`, сохранение favorites после удаления источника и текущий export scope.
-- `PROJECT_STATUS_AND_ROADMAP.md` — текущая последовательность Issue #45: PR #174–#179 закрыли portable backup/import/export и preferred-source picker, All Channels + Recent завершены в `03f8e8e`, focus hot path — в `90a285c`, off-Main latest-wins rebuild — в production `2d22aea`; разработка сейчас остановлена по запросу пользователя.
+- `PROJECT_STATUS_AND_ROADMAP.md` — текущая последовательность Issue #45: PR #174–#179 закрыли portable backup/import/export и preferred-source picker, All Channels + Recent завершены в `03f8e8e`, focus hot path — в `90a285c`, off-Main latest-wins rebuild — в production `2d22aea`.
 
 ## Ace Live / P2P
 
