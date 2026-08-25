@@ -57,7 +57,7 @@ class P2pChannelAvailabilityTest {
     @Test
     fun playingChannel_showsObservedPeerCount() {
         assertEquals(
-            "P2P · играет · пиры 3",
+            "P2P · играет · 3 пир.",
             p2pChannelAvailabilityLabel(
                 P2pChannelAvailability(
                     state = P2pChannelAvailabilityState.PLAYING,
