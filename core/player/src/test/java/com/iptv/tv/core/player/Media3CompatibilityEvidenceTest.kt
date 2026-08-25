@@ -1,54 +1,56 @@
 package com.iptv.tv.core.player
 
-import androidx.media3.common.C
-import androidx.media3.common.Format
-import androidx.media3.common.MimeTypes
-import androidx.media3.common.TrackGroup
-import androidx.media3.common.Tracks
-import androidx.media3.common.util.UnstableApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-@OptIn(UnstableApi::class)
 class Media3CompatibilityEvidenceTest {
     @Test
     fun `tracker keeps decoder names and truthful selected adaptive track set`() {
-        val video1080 = Format.Builder()
-            .setSampleMimeType(MimeTypes.VIDEO_H264)
-            .setContainerMimeType(MimeTypes.VIDEO_MP4)
-            .setCodecs("avc1.640028")
-            .setWidth(1920)
-            .setHeight(1080)
-            .setFrameRate(25f)
-            .build()
-        val video720 = Format.Builder()
-            .setSampleMimeType(MimeTypes.VIDEO_H264)
-            .setCodecs("avc1.4d401f")
-            .setWidth(1280)
-            .setHeight(720)
-            .setFrameRate(25f)
-            .build()
-        val audio = Format.Builder()
-            .setSampleMimeType(MimeTypes.AUDIO_E_AC3)
-            .setCodecs("ec-3")
-            .setLanguage("rus")
-            .setChannelCount(6)
-            .setSampleRate(48_000)
-            .build()
-
-        val tracks = Tracks(
-            listOf(
-                selectedGroup("video", arrayOf(video1080, video720), booleanArrayOf(true, true)),
-                selectedGroup("audio", arrayOf(audio), booleanArrayOf(true))
-            )
-        )
         val tracker = Media3CompatibilityEvidenceTracker()
 
         tracker.onVideoDecoderInitialized("c2.android.avc.decoder")
         tracker.onAudioDecoderInitialized("c2.android.eac3.decoder")
-        tracker.onTracksChanged(tracks)
+        tracker.onTrackSelectionChanged(
+            Media3TrackSelectionEvidence(
+                videoTrackPresent = true,
+                audioTrackPresent = true,
+                selectedVideoTracks = listOf(
+                    Media3TrackEvidence(
+                        kind = Media3TrackKind.VIDEO,
+                        sampleMimeType = "video/avc",
+                        containerMimeType = "video/mp4",
+                        codecs = "avc1.640028",
+                        language = null,
+                        width = 1920,
+                        height = 1080,
+                        frameRate = 25f
+                    ),
+                    Media3TrackEvidence(
+                        kind = Media3TrackKind.VIDEO,
+                        sampleMimeType = "video/avc",
+                        containerMimeType = null,
+                        codecs = "avc1.4d401f",
+                        language = null,
+                        width = 1280,
+                        height = 720,
+                        frameRate = 25f
+                    )
+                ),
+                selectedAudioTracks = listOf(
+                    Media3TrackEvidence(
+                        kind = Media3TrackKind.AUDIO,
+                        sampleMimeType = "audio/eac3",
+                        containerMimeType = null,
+                        codecs = "ec-3",
+                        language = "rus",
+                        channelCount = 6,
+                        sampleRate = 48_000
+                    )
+                )
+            )
+        )
         val evidence = tracker.snapshot()
 
         assertEquals("c2.android.avc.decoder", evidence.videoDecoderName)
@@ -62,31 +64,32 @@ class Media3CompatibilityEvidenceTest {
     }
 
     @Test
-    fun `selection ignores unselected tracks and the wrong track type`() {
-        val video = Format.Builder()
-            .setSampleMimeType(MimeTypes.VIDEO_H265)
-            .setWidth(3840)
-            .setHeight(2160)
-            .build()
-        val audio = Format.Builder()
-            .setSampleMimeType(MimeTypes.AUDIO_AAC)
-            .setChannelCount(2)
-            .setSampleRate(44_100)
-            .build()
-        val tracks = Tracks(
-            listOf(
-                selectedGroup("video", arrayOf(video), booleanArrayOf(false)),
-                selectedGroup("audio", arrayOf(audio), booleanArrayOf(true))
+    fun `track presence stays distinct from current selection`() {
+        val tracker = Media3CompatibilityEvidenceTracker()
+        tracker.onTrackSelectionChanged(
+            Media3TrackSelectionEvidence(
+                videoTrackPresent = true,
+                audioTrackPresent = true,
+                selectedVideoTracks = emptyList(),
+                selectedAudioTracks = listOf(
+                    Media3TrackEvidence(
+                        kind = Media3TrackKind.AUDIO,
+                        sampleMimeType = "audio/mp4a-latm",
+                        containerMimeType = null,
+                        codecs = "mp4a.40.2",
+                        language = null,
+                        channelCount = 2,
+                        sampleRate = 44_100
+                    )
+                )
             )
         )
-        val tracker = Media3CompatibilityEvidenceTracker().apply { onTracksChanged(tracks) }
 
-        assertTrue(tracker.snapshot().videoTrackPresent)
-        assertTrue(selectedMedia3TrackEvidence(tracks, Media3TrackKind.VIDEO).isEmpty())
-        assertEquals(
-            MimeTypes.AUDIO_AAC,
-            selectedMedia3TrackEvidence(tracks, Media3TrackKind.AUDIO).single().sampleMimeType
-        )
+        val evidence = tracker.snapshot()
+        assertTrue(evidence.videoTrackPresent)
+        assertTrue(evidence.audioTrackPresent)
+        assertTrue(evidence.selectedVideoTracks.isEmpty())
+        assertEquals("audio/mp4a-latm", evidence.selectedAudioTracks.single().sampleMimeType)
     }
 
     @Test
@@ -127,15 +130,4 @@ class Media3CompatibilityEvidenceTest {
         assertFalse(message.contains("software_decoder="))
         assertFalse(message.contains("audio4_mime="))
     }
-
-    private fun selectedGroup(
-        id: String,
-        formats: Array<Format>,
-        selected: BooleanArray
-    ): Tracks.Group = Tracks.Group(
-        TrackGroup(id, *formats),
-        false,
-        IntArray(formats.size) { C.FORMAT_HANDLED },
-        selected
-    )
 }
