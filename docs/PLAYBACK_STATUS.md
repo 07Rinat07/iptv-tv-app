@@ -1,107 +1,63 @@
 # Статус воспроизведения
 
-Актуальный срез: **20 августа 2026 года**.
+_Актуализирован: 25 августа 2026 после ручного теста._
 
-## Главный приоритет
+Подробный полевой baseline: [`FIELD_VALIDATION_2026-08-25.md`](FIELD_VALIDATION_2026-08-25.md).
 
-Автономный встроенный Ace Live/P2P runtime остаётся главным техническим приоритетом. Внешний Ace
-Stream Engine используется только как A/B benchmark и не является runtime dependency или fallback.
+## Обычный IPTV
 
-Цепочка проверки разделена на независимые границы:
+Статус: **частично подтверждён рабочим на реальном устройстве**.
 
-`DHT/tracker → TCP → handshake → useful/unchoked → media output → loopback → Media3 READY/frame`.
+В diagnostics есть успешные `first_video_frame` и READY для Media3:
+- H.264 + AAC;
+- H.264 + MP2;
+- 720p/1080p варианты;
+- несколько сессий без rebuffer.
 
-Количество найденных endpoint не считается успехом. Успех startup — подтверждённый media output и
-готовый плеер в пределах общего bounded deadline.
+На скриншотах также подтверждены реальные случаи видео через LibVLC fallback.
 
-## Что подтверждено
+Вывод: ordinary IPTV playback stack не является текущей целью полного переписывания. Исправления должны быть локальными и измеримыми.
 
-- Обычный IPTV работает через Media3; LibVLC fallback разрешён только для container/demux/codec
-  класса, а не для сетевых/P2P ошибок.
-- Magnet/infohash/.torrent обслуживает встроенный libtorrent backend.
-- Torrent TV `content_id` и Ace Live identities обслуживает встроенный runtime.
-- Adaptive buffer, request scheduling, peer-quality accounting, generation ownership и loopback
-  lifecycle находятся в `main` до этого инкремента.
-- PR #155 добавил bounded startup DHT candidate batch.
-- Terminal pool guard из PR #158 корректно закрывает late-start race, но сам по себе не устраняет
-  startup stall.
+## Player UX
 
-## Новый лог 20.08.2026
+Статус: **P0 не принят** — issue #231.
 
-Подробный разбор: [`testing/playback-log-analysis-2026-08-20.md`](testing/playback-log-analysis-2026-08-20.md).
+Маршрутизация ведёт в `StablePlayerScreen`, но ручной тест не показал ожидаемый новый TV-first Player. Видимый интерфейс остаётся legacy-looking.
 
-Подтверждены три разных дефекта:
+Следующая цель после memory/Home: новый production Player должен быть очевидно видимым и сохранять одну playback session между dashboard/fullscreen.
 
-1. перспективный direct-runtime с connect на 7.810 с и handshake на 8.007 с отменялся фиксированным
-   metadata handoff около 8 секунд;
-2. instance-local warm DHT не переживал создание нового production discovery/runtime, а bootstrap
-   DNS выполнялся до KRPC query loop;
-3. отменённые каналы оставались `SEARCHING` в UI-кэше и создавали ложное впечатление нескольких
-   одновременно зависших поисков.
+## Embedded Torrent TV / Ace Live
 
-Отдельно подтверждён player blocker: один поток отдал Media3 около 20,97 МБ за 32,4 секунды без load
-error, но READY появился только после EOF при переключении. Это нельзя исправлять увеличением peer
-timeout или считать доказательством отсутствия пиров.
+Статус: **P0 не принят** — issue #232.
 
-Follow-up лог `myscanerIPTV-logs-1787221389074.txt` подтвердил использование warm DHT contacts, но
-нашёл второй fixed-timeout edge: fallback direct после metadata failure успел пройти
-connect/handshake/useful/unchoked и был отменён примерно через 0.4 секунды. Этот retry теперь также
-получает только при текущем qualification один bounded двухсекундный grace внутри общего 60 с.
+Same-device comparison с Televizo + Ace Stream Engine показывает существенно худшую успешность поиска/подключения peers.
 
-Следующий лог `myscanerIPTV-logs-1787228578987.txt` подтвердил заметное полевое улучшение. В
-ограниченном окне стало больше переходов к Media3, снизилась видимая доля failed DHT query, выросло
-число handshake и появился producing peer. Канал 65 прошёл полный путь до первого видеокадра
-примерно за 6.05 с и звука примерно за 6.09 с без зарегистрированного rebuffer.
+Зафиксированы классы отказа:
+- tracker candidate, `connected=0`;
+- DHT находит peers, TCP соединяется, но `handshaked=0`;
+- peer найден, но media не приходит;
+- `p2p_stalled` после начала playback;
+- generic `P2P-поток не подготовлен`.
 
-Это пока не общий процент успешного воспроизведения: экспорт ограничен 120 structured-строками,
-набор каналов не зафиксирован как идентичный, а `load_started` не означает показанный кадр. Каналы
-64 и 66 подтвердили работу двухсекундного grace, но остались на границе
-`useful/unchoked peer → media output`.
+Одновременно есть несколько успешных P2P boundary sessions с READY/first audio/first video frame. Это значит, что после появления media player boundary способен работать.
 
-## Текущий bounded fix
+### Обязательный порядок диагностики/исправления
 
-- Engine-owned TTL/LRU routing memory переиспользуется новыми live и metadata DHT wrappers.
-- В память попадает только ответивший KRPC node с совпавшим remote node ID; ошибки и mismatch удаляют
-  remembered contact. Node-ID и IPv4-network diversity ограничивают повторение одного источника.
-- Warm KRPC идёт параллельно с глобально bounded bootstrap DNS pipeline. Bootstrap сохраняет lane и
-  query token, а первый wave распределяется по hostname до дополнительных IP одного оператора.
-- Direct-runtime получает только один двухсекундный grace, если его **текущее** runtime-состояние
-  показывает свежий connect либо requestable/producing peer. Та же политика применяется к одной
-  fallback-direct попытке после неудачного metadata startup. Общий content preparation остаётся 60 с.
-- Закрытый TCP pool терминально запрещает поздний запуск transport.
-- При выборе нового канала старый незавершённый `SEARCHING` сбрасывается в `UNCHECKED`.
-- Если квалифицированный fallback так и не отдаёт media, UI честно показывает найденный пир без
-  данных потока и состояние `ERROR`, а не «нет пиров».
-- Producer-boundary события теперь сохраняются в structured diagnostics и связываются с
-  startup/runtime/generation/path. Отдельные стадии показывают `scheduled`, `selected`, фактически
-  записанный в socket `sent`, timeout/requeue, chunk ingress, piece completion, authentication,
-  TS-resync output и media append.
-- Throttled recovery больше не скрывает активный `poolStale` от фонового refill; при этом timeout и
-  cursor-advance действия не повторяются, а существующие лимиты пиров не увеличены.
+`discovery -> connect -> handshake -> metadata/live-window -> selected -> sent -> chunk_ingress -> accepted -> piece_completed -> authenticated -> ts_resync_output -> media_appended -> player READY/frame/audio`
 
-## Что ещё не решено
+Исправлять нужно первую отсутствующую стадию конкретного запуска.
 
-- Главный следующий P2P blocker — определить первую потерянную стадию между outbound request и
-  authenticated media append на фиксированной матрице каналов 64–66.
-- Если лог подтвердит `sent → no ingress`, следующим bounded fix будет alternate-peer probe и
-  предпочтение другого покрывающего peer после request timeout. Общий grace заранее не увеличивается.
-- Нужен terminal summary каждой P2P/player сессии; текущие 120 строк не дают надёжного знаменателя
-  success rate.
-- Нужен реальный TV Box gate текущего exact head; unit-тесты не доказывают полевую скорость DHT.
-- Нужен deterministic A→B→C integration test с отменой во время DHT/refill/handoff.
-- Media3/TS startup требует PAT/PMT/PID/continuity/random-access telemetry и fixture, достигающий READY
-  до EOF; поведенческий TS fix пока намеренно не смешивается с DHT.
-- Embedded peer-quality metrics ещё не полностью являются источником UI `enginePeers/speed`.
-- Strict BEP-42 и per-lookup IPv4-prefix caps остаются отдельным compatibility-measured hardening.
-- Не завершены weak-network, peer-loss, 2 h и 8 h ARM soak tests.
+Запрещено:
+- объявлять канал нераздающимся, если тот же канал работает в same-device Ace Stream benchmark;
+- увеличивать глобальные timeouts/buffers как замену отсутствующему protocol progress;
+- добавлять внешний Ace Engine как обязательный fallback/dependency.
 
-## Критерий готовности
+## Current gates
 
-- повторяемый startup/zap healthy swarm без внешнего Ace Engine;
-- bounded точная ошибка недоступного swarm без вечного `SEARCHING`;
-- старый runtime/loopback/pool не переживает supersession;
-- Media3 достигает READY/first frame во время live response, не впервые после EOF;
-- фиксированная channel matrix, A↔B и 20 rapid switches проходят на одном устройстве;
-- exact-head unit/lint/build/instrumentation/smoke и длительные soak gates зелёные.
+1. #229 memory stability.
+2. #230 Home root.
+3. #231 Player UX.
+4. #232 Torrent TV protocol parity.
+5. #233 rapid playback request source.
 
-Канонический порядок работ: [`PROJECT_STATUS_AND_ROADMAP.md`](PROJECT_STATUS_AND_ROADMAP.md).
+Полный acceptance Torrent TV возвращается только после закрытия этих recovery blockers.
