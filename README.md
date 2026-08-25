@@ -5,7 +5,7 @@
 Проект активно развивается. Подробная архитектура, статус разработки, roadmap, технические исследования и служебные материалы находятся в каталоге [`docs/`](docs/).
 
 <p align="center">
-  <img src="docs/images/rinat-iptv-player-preview.svg" alt="Rinat IPTV — интерфейс плеера" width="900">
+  <img src="docs/images/rinat-iptv-player-preview.png" alt="Rinat IPTV — интерфейс плеера" width="900">
 </p>
 
 ## Возможности
