@@ -10,8 +10,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -47,63 +47,84 @@ internal fun StableChannelBannerReplacement(
         ?.takeIf { PlayerP2pDescriptor.detect(it.streamUrl) != null }
         ?.let { p2pChannelAvailabilityLabel(P2pChannelAvailabilityUiCache.statuses[it.id]) }
 
-    Card(modifier = modifier.fillMaxWidth(0.66f)) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth(0.44f)
+            .widthIn(max = 520.dp),
+        shape = MaterialTheme.shapes.small,
+        color = Color.Black.copy(alpha = 0.80f),
+        contentColor = Color.White,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
+    ) {
         Row(
-            modifier = Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
             verticalAlignment = Alignment.Top
         ) {
-            AsyncImage(
-                model = channel?.logo,
-                contentDescription = channel?.name,
-                modifier = Modifier.size(46.dp)
-            )
+            if (!channel?.logo.isNullOrBlank()) {
+                AsyncImage(
+                    model = channel?.logo,
+                    contentDescription = channel?.name,
+                    modifier = Modifier.size(36.dp)
+                )
+            }
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(5.dp)
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 Text(
                     channel?.name ?: "Канал",
+                    color = Color.White,
                     fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
-                        ?: "Сейчас · программа не найдена",
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                current?.let { program ->
+                if (current != null) {
+                    Text(
+                        "Сейчас ${stableRange(current)} · ${current.title}",
+                        color = Color.White.copy(alpha = 0.92f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                     LinearProgressIndicator(
-                        progress = { stableProgramProgress(program, nowMs) },
+                        progress = { stableProgramProgress(current, nowMs) },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    val remaining = stableProgramRemainingMinutes(program, nowMs)
+                } else {
                     Text(
-                        if (remaining > 0) "Осталось ≈ $remaining мин" else "Передача завершается",
+                        "Программа не найдена",
+                        color = Color.White.copy(alpha = 0.66f),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-                Text(
-                    next?.let { "Далее ${stableTime(it.startEpochMs)} · ${it.title}" }
-                        ?: "Далее · данных нет",
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                next?.let {
+                    Text(
+                        "Далее ${stableTime(it.startEpochMs)} · ${it.title}",
+                        color = Color.White.copy(alpha = 0.72f),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 if (p2pLabel != null) {
                     Surface(
-                        shape = MaterialTheme.shapes.small,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
-                        color = MaterialTheme.colorScheme.surfaceVariant
+                        shape = MaterialTheme.shapes.extraSmall,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
                     ) {
                         Text(
                             p2pLabel,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                             color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.labelMedium
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
