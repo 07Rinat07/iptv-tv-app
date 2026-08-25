@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -31,6 +32,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -198,6 +202,9 @@ internal fun StableChannelBrowserReplacement(
     onToggleFavorite: (Long) -> Unit,
     onOpenGroups: () -> Unit
 ) {
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
     Surface(
         modifier = modifier,
         shape = MaterialTheme.shapes.large,
@@ -209,7 +216,10 @@ internal fun StableChannelBrowserReplacement(
             Modifier.fillMaxSize().padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         "Каналы",
@@ -222,6 +232,15 @@ internal fun StableChannelBrowserReplacement(
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
+                OutlinedButton(
+                    onClick = {
+                        searchFocusRequester.requestFocus()
+                        keyboardController?.show()
+                    },
+                    modifier = Modifier.tvFocusOutline()
+                ) {
+                    Text("Поиск", style = MaterialTheme.typography.labelMedium)
+                }
                 OutlinedButton(onClick = onOpenGroups, modifier = Modifier.tvFocusOutline()) {
                     Text("Группы", style = MaterialTheme.typography.labelMedium)
                 }
@@ -230,10 +249,22 @@ internal fun StableChannelBrowserReplacement(
             OutlinedTextField(
                 value = query,
                 onValueChange = onQueryChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Поиск") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(searchFocusRequester),
+                label = { Text("Поиск канала") },
+                placeholder = { Text("Название, группа или tvg-id") },
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodySmall
+                textStyle = MaterialTheme.typography.bodySmall,
+                trailingIcon = if (query.isNotBlank()) {
+                    {
+                        IconButton(onClick = { onQueryChange("") }) {
+                            Text("×", style = MaterialTheme.typography.titleMedium)
+                        }
+                    }
+                } else {
+                    null
+                }
             )
 
             StableChannelListReplacement(
@@ -421,7 +452,17 @@ internal fun StableChannelDrawerReplacement(
                     onValueChange = onQueryChange,
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("Поиск канала") },
-                    singleLine = true
+                    placeholder = { Text("Название, группа или tvg-id") },
+                    singleLine = true,
+                    trailingIcon = if (query.isNotBlank()) {
+                        {
+                            IconButton(onClick = { onQueryChange("") }) {
+                                Text("×", style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+                    } else {
+                        null
+                    }
                 )
                 StableChannelListReplacement(
                     modifier = Modifier.fillMaxWidth().weight(1f),
