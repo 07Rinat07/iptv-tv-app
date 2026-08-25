@@ -45,7 +45,7 @@ class FavoriteLiveChannelResolver @Inject constructor(
             )
             if (page.isEmpty()) break
 
-            FavoriteChannelIdentityReconciliation.collectMatchingIds(
+            FavoriteLiveChannelIdentityReconciliation.collectMatchingIds(
                 rows = page,
                 logicalKeys = logicalKeys,
                 destination = matched
@@ -63,7 +63,7 @@ class FavoriteLiveChannelResolver @Inject constructor(
     }
 }
 
-internal object FavoriteChannelIdentityReconciliation {
+internal object FavoriteLiveChannelIdentityReconciliation {
     fun collectMatchingIds(
         rows: List<FavoriteChannelIdentityRow>,
         logicalKeys: Set<String>,
