@@ -75,18 +75,20 @@ class PlaybackCompatibilityMatrixContractTest {
         "multi_audio_result"
     )
 
-    private val forbiddenEvidencePlaceholders = setOf(
+    private val forbiddenStructuredFragments = listOf(
         "PENDING",
         "UNKNOWN",
         "NOT_APPLICABLE",
-        "NONE",
+        "NOT-APPLICABLE",
+        "NOT/APPLICABLE",
         "N/A",
-        "NA",
         "TBD",
         "UNSPECIFIED",
         "NULL",
-        "-"
+        "..."
     )
+
+    private val forbiddenStructuredTokens = setOf("NONE", "NA")
 
     @Test
     fun `matrix schema ids and profile levels are stable`() {
@@ -221,6 +223,7 @@ class PlaybackCompatibilityMatrixContractTest {
                 assertEquals("PASS", row.getValue("startup_result"))
                 assertEquals("PASS", row.getValue("first_frame"))
                 assertEquals("PASS", row.getValue("first_audio"))
+                assertEquals("PASS", row.getValue("channel_switch"))
                 if (isMultiAudio) {
                     assertEquals("PASS", row.getValue("multi_audio_result"))
                 }
@@ -256,7 +259,7 @@ class PlaybackCompatibilityMatrixContractTest {
             val value = row.getValue(column)
             assertTrue(
                 "$sampleId: executed row requires concrete $column",
-                value.length >= 3 && value.uppercase() !in forbiddenEvidencePlaceholders
+                value.length >= 3 && !value.containsForbiddenEvidencePlaceholder()
             )
         }
 
@@ -282,6 +285,15 @@ class PlaybackCompatibilityMatrixContractTest {
             "$sampleId: evidence_artifact must be a stable URI reference",
             Regex("""[A-Za-z][A-Za-z0-9+.-]*://\S+""").matches(row.getValue("evidence_artifact"))
         )
+    }
+
+    private fun String.containsForbiddenEvidencePlaceholder(): Boolean {
+        val normalized = uppercase()
+        if (forbiddenStructuredFragments.any { fragment -> fragment in normalized }) return true
+        return normalized
+            .split(Regex("""[^A-Z0-9]+"""))
+            .filter(String::isNotBlank)
+            .any { token -> token in forbiddenStructuredTokens }
     }
 
     private fun Map<String, String>.audioCodecs(): List<String> =

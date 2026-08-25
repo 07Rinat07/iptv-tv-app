@@ -88,9 +88,9 @@ Device gate — категория цели, а не доказательств�
 - `channel_switch`;
 - `multi_audio_result`.
 
-Значения `PENDING`, `UNKNOWN`, `NOT_APPLICABLE`, `NONE`, `N/A`, `NA`, `TBD`, `UNSPECIFIED`, `NULL` и `-` не считаются конкретной provenance для выполненной строки.
+Placeholder markers (`PENDING`, `UNKNOWN`, `NOT_APPLICABLE`, `NONE`, `N/A`, `NA`, `TBD`, `UNSPECIFIED`, `NULL`, `...`) запрещены не только как полное значение provenance, но и внутри структурированного payload. Например, `github-actions:UNKNOWN`, `version:UNKNOWN` и `https://...` не являются допустимым evidence.
 
-`startup_result` фиксируется отдельно от first-frame/first-audio, чтобы различать ошибку запуска и более поздний decoder/rendering failure. Для общего `PASS` обязательны `startup_result=PASS`, `first_frame=PASS` и `first_audio=PASS`, а backend — `MEDIA3` или `LIBVLC`.
+`startup_result` фиксируется отдельно от first-frame/first-audio, чтобы различать ошибку запуска и более поздний decoder/rendering failure. Для общего `PASS` обязательны `startup_result=PASS`, `first_frame=PASS`, `first_audio=PASS` и `channel_switch=PASS`, а backend — `MEDIA3` или `LIBVLC`.
 
 Для single-audio executed rows `multi_audio_result=NOT_APPLICABLE`. Для multi-audio строки общий `PASS` разрешён только при `multi_audio_result=PASS`; если обнаружение или переключение альтернативной дорожки не прошло, общий status не может оставаться `PASS`.
 
