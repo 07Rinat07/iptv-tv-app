@@ -1,5 +1,6 @@
 package com.iptv.tv.feature.player
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -11,9 +12,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.Card
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
@@ -21,7 +24,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.EpgProgram
 import java.text.SimpleDateFormat
@@ -38,14 +43,71 @@ internal fun StableChannelBannerReplacement(
     val nowMs = System.currentTimeMillis()
     val current = stableCurrentProgram(programs, nowMs)
     val next = stableNextProgram(programs, current, nowMs)
-    Card(modifier = modifier.fillMaxWidth(0.62f)) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(channel?.name ?: "Канал", fontWeight = FontWeight.Bold)
-            Text(current?.let { "Сейчас ${stableRange(it)} · ${it.title}" } ?: "Сейчас: программа не найдена")
-            Text(
-                next?.let { "Далее ${stableRange(it)} · ${it.title}" } ?: "Далее: данных нет",
-                style = MaterialTheme.typography.bodySmall
+    val p2pLabel = channel
+        ?.takeIf { PlayerP2pDescriptor.detect(it.streamUrl) != null }
+        ?.let { p2pChannelAvailabilityLabel(P2pChannelAvailabilityUiCache.statuses[it.id]) }
+
+    Card(modifier = modifier.fillMaxWidth(0.66f)) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            AsyncImage(
+                model = channel?.logo,
+                contentDescription = channel?.name,
+                modifier = Modifier.size(46.dp)
             )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    channel?.name ?: "Канал",
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
+                        ?: "Сейчас · программа не найдена",
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                current?.let { program ->
+                    LinearProgressIndicator(
+                        progress = { stableProgramProgress(program, nowMs) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    val remaining = stableProgramRemainingMinutes(program, nowMs)
+                    Text(
+                        if (remaining > 0) "Осталось ≈ $remaining мин" else "Передача завершается",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    next?.let { "Далее ${stableTime(it.startEpochMs)} · ${it.title}" }
+                        ?: "Далее · данных нет",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (p2pLabel != null) {
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            p2pLabel,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -168,6 +230,16 @@ internal fun stableNextProgram(
     val threshold = current?.endEpochMs ?: nowMs
     return programs.filter { it.startEpochMs >= threshold }.minByOrNull { it.startEpochMs }
 }
+
+internal fun stableProgramProgress(program: EpgProgram, nowMs: Long): Float {
+    val duration = (program.endEpochMs - program.startEpochMs).coerceAtLeast(1L)
+    return ((nowMs - program.startEpochMs).toDouble() / duration.toDouble())
+        .coerceIn(0.0, 1.0)
+        .toFloat()
+}
+
+internal fun stableProgramRemainingMinutes(program: EpgProgram, nowMs: Long): Long =
+    ((program.endEpochMs - nowMs).coerceAtLeast(0L) + 59_999L) / 60_000L
 
 internal fun stableTime(epochMs: Long): String =
     SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epochMs))
