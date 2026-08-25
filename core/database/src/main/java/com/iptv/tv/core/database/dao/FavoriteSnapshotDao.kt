@@ -59,12 +59,7 @@ interface FavoriteSnapshotDao {
     suspend fun clearLegacySeeds(): Int
 }
 
-/**
- * Small projection used while reconciling logical favorites with a potentially huge channel table.
- *
- * Keep this row intentionally narrow: large imports must never materialize the complete
- * [ChannelEntity] table just to compare stable channel identities.
- */
+/** Narrow projection used to reconcile stable favorite identity in bounded pages. */
 data class FavoriteChannelIdentityRow(
     val id: Long,
     val tvgId: String?,
@@ -72,19 +67,31 @@ data class FavoriteChannelIdentityRow(
     val streamUrl: String
 )
 
+/** Narrow projection used only to calculate the parental-filtered All-channels count. */
+data class ParentalChannelGateRow(
+    val tvgId: String?,
+    val name: String,
+    val groupName: String?
+)
+
 /**
- * Read-only channel lookup dedicated to the logical Favorites layer.
+ * Channel lookups shared by Favorites and the system-owned All-channels virtual playlist.
  *
- * The previous implementation exposed `Flow<List<ChannelEntity>>` for the entire `channels`
- * table. On large Scanner/Torrent-TV imports that kept full rows (URLs, logos and catch-up
- * metadata) resident and repeatedly rebuilt them on Room invalidation. Reconciliation is now
- * driven by a cheap invalidation query and bounded identity pages; full rows are fetched only for
- * the small set of matching favorite IDs.
+ * Favorites must use [observeChannelTableInvalidation], [getChannelIdentityPage] and
+ * [findChannelsByIds]. The full [observeAllChannels] stream is retained only for the explicit
+ * All-channels catalog view; it must not be used to compute normal playlist/Home counters or
+ * favorite reconciliation.
  */
 @Dao
 interface FavoriteChannelLookupDao {
     @Query("SELECT COUNT(*) FROM channels")
     fun observeChannelTableInvalidation(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM channels WHERE isHidden = 0")
+    fun observeVisibleChannelCount(): Flow<Int>
+
+    @Query("SELECT tvgId, name, groupName FROM channels WHERE isHidden = 0")
+    fun observeVisibleParentalGateRows(): Flow<List<ParentalChannelGateRow>>
 
     @Query(
         "SELECT id, tvgId, name, streamUrl FROM channels " +
@@ -100,4 +107,7 @@ interface FavoriteChannelLookupDao {
 
     @Query("SELECT * FROM channels WHERE id = :channelId LIMIT 1")
     suspend fun findChannelById(channelId: Long): ChannelEntity?
+
+    @Query("SELECT * FROM channels ORDER BY playlistId ASC, orderIndex ASC, id ASC")
+    fun observeAllChannels(): Flow<List<ChannelEntity>>
 }
