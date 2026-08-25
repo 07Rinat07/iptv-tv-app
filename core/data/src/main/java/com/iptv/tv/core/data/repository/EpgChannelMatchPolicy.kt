@@ -41,18 +41,17 @@ internal object EpgChannelMatchPolicy {
 
     /**
      * XMLTV catalogues frequently omit display-quality suffixes that are present in M3U names.
-     * Input is already normalized to letters/digits, so strip only well-known suffixes at the end.
-     * The original key is always retained and ambiguity is still handled by uniquePartialChannelId.
+     * Input is already normalized to letters/digits, so strip only one well-known suffix at the
+     * very end. The original key is retained and ambiguity is still handled by the caller.
      */
     internal fun qualityAliases(normalized: String): Set<String> {
         val value = normalized.trim()
         if (value.isBlank()) return emptySet()
         val aliases = linkedSetOf(value)
-        QUALITY_SUFFIXES.forEach { suffix ->
-            if (value.length >= suffix.length + MIN_BASE_KEY_LENGTH && value.endsWith(suffix)) {
-                aliases += value.dropLast(suffix.length)
-            }
+        val suffix = QUALITY_SUFFIXES.firstOrNull { candidate ->
+            value.length >= candidate.length + MIN_BASE_KEY_LENGTH && value.endsWith(candidate)
         }
+        if (suffix != null) aliases += value.dropLast(suffix.length)
         return aliases
     }
 
