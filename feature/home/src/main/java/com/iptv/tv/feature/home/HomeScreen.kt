@@ -35,7 +35,7 @@ fun HomeScreen(
         viewModel.consumeOpenPlaylistRequest()
     }
 
-    HomeReadmeDashboard(
+    HomeResponsiveDashboard(
         state = state,
         onWatchPlaylist = { playlistId -> viewModel.requestOpenPlaylist(playlistId) },
         onWatchChannel = viewModel::requestOpenChannel,
