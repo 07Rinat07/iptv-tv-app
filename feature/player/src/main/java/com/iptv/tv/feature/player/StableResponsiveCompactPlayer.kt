@@ -31,9 +31,21 @@ import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.EpgProgram
 
-private const val MEDIUM_PLAYER_MIN_WIDTH_DP = 760
-private const val MEDIUM_PLAYER_MIN_HEIGHT_DP = 500
+private const val MEDIUM_PLAYER_MIN_WIDTH_DP = 760f
+private const val MEDIUM_PLAYER_MIN_HEIGHT_DP = 500f
 private const val COMPACT_CENTER_MAX_WIDTH_DP = 540
+
+internal enum class StableResponsivePlayerLayout {
+    MEDIUM,
+    COMPACT
+}
+
+internal fun stableResponsivePlayerLayout(widthDp: Float, heightDp: Float): StableResponsivePlayerLayout =
+    if (widthDp >= MEDIUM_PLAYER_MIN_WIDTH_DP && heightDp >= MEDIUM_PLAYER_MIN_HEIGHT_DP) {
+        StableResponsivePlayerLayout.MEDIUM
+    } else {
+        StableResponsivePlayerLayout.COMPACT
+    }
 
 private data class CompactPlayerAction(
     val label: String,
@@ -77,11 +89,9 @@ internal fun StableResponsiveCompactPlayer(
     onSettings: () -> Unit
 ) {
     BoxWithConstraints(modifier = modifier) {
-        val mediumLayout =
-            maxWidth >= MEDIUM_PLAYER_MIN_WIDTH_DP.dp &&
-                maxHeight >= MEDIUM_PLAYER_MIN_HEIGHT_DP.dp
+        val layout = stableResponsivePlayerLayout(maxWidth.value, maxHeight.value)
 
-        if (mediumLayout) {
+        if (layout == StableResponsivePlayerLayout.MEDIUM) {
             Row(
                 modifier = Modifier.fillMaxSize().padding(8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -150,7 +160,7 @@ internal fun StableResponsiveCompactPlayer(
                         modifier = Modifier
                             .fillMaxHeight()
                             .then(
-                                if (maxHeight < MEDIUM_PLAYER_MIN_HEIGHT_DP.dp) {
+                                if (maxHeight.value < MEDIUM_PLAYER_MIN_HEIGHT_DP) {
                                     Modifier.widthIn(max = COMPACT_CENTER_MAX_WIDTH_DP.dp)
                                 } else {
                                     Modifier.fillMaxWidth()
