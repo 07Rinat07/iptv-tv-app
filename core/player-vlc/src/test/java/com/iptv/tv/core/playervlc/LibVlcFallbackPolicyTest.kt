@@ -40,6 +40,16 @@ class LibVlcFallbackPolicyTest {
     }
 
     @Test
+    fun media3IoErrorsFailClosedBeforeCodecMarkers() {
+        val decision = LibVlcFallbackPolicy.evaluate(
+            "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED: source codec metadata unavailable"
+        )
+
+        assertFalse(decision.shouldFallback)
+        assertEquals(LibVlcFallbackReason.NOT_ELIGIBLE, decision.reason)
+    }
+
+    @Test
     fun networkSourceFailureDoesNotRestartTheSameStreamWithLibVlc() {
         val decision = LibVlcFallbackPolicy.evaluate(
             "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED: Source error"
@@ -50,10 +60,34 @@ class LibVlcFallbackPolicyTest {
     }
 
     @Test
-    fun unknownMedia3FailureGetsSingleFallbackChance() {
-        val decision = LibVlcFallbackPolicy.evaluate("Unexpected Media3 playback failure")
+    fun explicitMedia3BackendFailureUsesFallback() {
+        val decision = LibVlcFallbackPolicy.evaluate("ERROR_CODE_AUDIO_TRACK_INIT_FAILED")
 
         assertTrue(decision.shouldFallback)
         assertEquals(LibVlcFallbackReason.MEDIA3_PLAYBACK, decision.reason)
+    }
+
+    @Test
+    fun media3InitializationFailureUsesFallback() {
+        val decision = LibVlcFallbackPolicy.evaluate("Не удалось создать Media3: decoder service unavailable")
+
+        assertTrue(decision.shouldFallback)
+        assertEquals(LibVlcFallbackReason.MEDIA3_PLAYBACK, decision.reason)
+    }
+
+    @Test
+    fun unknownMedia3FailureDoesNotSpeculativelyRestartWithLibVlc() {
+        val decision = LibVlcFallbackPolicy.evaluate("Unexpected Media3 playback failure")
+
+        assertFalse(decision.shouldFallback)
+        assertEquals(LibVlcFallbackReason.NOT_ELIGIBLE, decision.reason)
+    }
+
+    @Test
+    fun blankMedia3FailureDoesNotSpeculativelyRestartWithLibVlc() {
+        val decision = LibVlcFallbackPolicy.evaluate("   ")
+
+        assertFalse(decision.shouldFallback)
+        assertEquals(LibVlcFallbackReason.NOT_ELIGIBLE, decision.reason)
     }
 }
