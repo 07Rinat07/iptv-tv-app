@@ -5,6 +5,7 @@ import android.net.Uri
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.interfaces.IMedia
 
 private const val DEFAULT_NETWORK_CACHING_MS = 1_500
 private const val MIN_CACHING_MS = 500
@@ -26,6 +27,8 @@ interface LibVlcPlaybackListener {
     fun onReady()
     fun onEnded()
     fun onError(message: String)
+
+    fun onCompatibilityEvidence(evidence: LibVlcCompatibilityEvidence) = Unit
 }
 
 /**
@@ -57,12 +60,21 @@ class LibVlcPlaybackController(
     private val hardwareDecodingEnabled = config.enableHardwareDecoding
     private var attachedView: LibVlcVideoView? = null
     private var released = false
+    private var compatibilityEvidenceReported = false
 
     init {
         mediaPlayer.setEventListener(
             MediaPlayer.EventListener { event ->
                 when (event?.type) {
-                    MediaPlayer.Event.Playing -> listener.onReady()
+                    MediaPlayer.Event.Playing -> {
+                        if (!compatibilityEvidenceReported) {
+                            compatibilityEvidenceReported = true
+                            runCatching(::captureCompatibilityEvidence)
+                                .getOrNull()
+                                ?.let(listener::onCompatibilityEvidence)
+                        }
+                        listener.onReady()
+                    }
                     MediaPlayer.Event.EndReached -> listener.onEnded()
                     MediaPlayer.Event.EncounteredError -> listener.onError("LibVLC не смог открыть или декодировать поток")
                 }
@@ -144,5 +156,64 @@ class LibVlcPlaybackController(
         attachedView = null
         runCatching { mediaPlayer.release() }
         runCatching { libVlc.release() }
+    }
+
+    private fun captureCompatibilityEvidence(): LibVlcCompatibilityEvidence {
+        val selectedVideoTrackId = runCatching { mediaPlayer.videoTrack }.getOrDefault(-1)
+        val selectedAudioTrackId = runCatching { mediaPlayer.audioTrack }.getOrDefault(-1)
+        val tracks = mediaPlayer.media?.let { media ->
+            try {
+                (0 until media.trackCount)
+                    .mapNotNull { index -> media.getTrack(index)?.toCompatibilityEvidence() }
+            } finally {
+                runCatching { media.release() }
+            }
+        }.orEmpty()
+
+        return LibVlcCompatibilityEvidence(
+            hardwareDecodingPreferred = hardwareDecodingEnabled,
+            selectedVideoTrack = selectedLibVlcTrackEvidence(
+                selectedTrackId = selectedVideoTrackId,
+                kind = LibVlcTrackKind.VIDEO,
+                tracks = tracks
+            ),
+            selectedAudioTrack = selectedLibVlcTrackEvidence(
+                selectedTrackId = selectedAudioTrackId,
+                kind = LibVlcTrackKind.AUDIO,
+                tracks = tracks
+            )
+        )
+    }
+
+    private fun IMedia.Track.toCompatibilityEvidence(): LibVlcTrackEvidence? = when (this) {
+        is IMedia.VideoTrack -> LibVlcTrackEvidence(
+            kind = LibVlcTrackKind.VIDEO,
+            id = id,
+            codec = codec,
+            originalCodec = originalCodec,
+            profile = profile.takeIf { it >= 0 },
+            level = level.takeIf { it >= 0 },
+            bitrate = bitrate.takeIf { it > 0 },
+            language = language,
+            width = width.takeIf { it > 0 },
+            height = height.takeIf { it > 0 },
+            frameRateNumerator = frameRateNum.takeIf { it > 0 },
+            frameRateDenominator = frameRateDen.takeIf { it > 0 }
+        )
+
+        is IMedia.AudioTrack -> LibVlcTrackEvidence(
+            kind = LibVlcTrackKind.AUDIO,
+            id = id,
+            codec = codec,
+            originalCodec = originalCodec,
+            profile = profile.takeIf { it >= 0 },
+            level = level.takeIf { it >= 0 },
+            bitrate = bitrate.takeIf { it > 0 },
+            language = language,
+            channels = channels.takeIf { it > 0 },
+            sampleRate = rate.takeIf { it > 0 }
+        )
+
+        else -> null
     }
 }
