@@ -89,7 +89,8 @@ internal fun StableResponsiveCompactPlayer(
     onSettings: () -> Unit
 ) {
     BoxWithConstraints(modifier = modifier) {
-        val layout = stableResponsivePlayerLayout(maxWidth.value, maxHeight.value)
+        val availableHeightDp = maxHeight.value
+        val layout = stableResponsivePlayerLayout(maxWidth.value, availableHeightDp)
 
         if (layout == StableResponsivePlayerLayout.MEDIUM) {
             Row(
@@ -160,7 +161,7 @@ internal fun StableResponsiveCompactPlayer(
                         modifier = Modifier
                             .fillMaxHeight()
                             .then(
-                                if (maxHeight.value < MEDIUM_PLAYER_MIN_HEIGHT_DP) {
+                                if (availableHeightDp < MEDIUM_PLAYER_MIN_HEIGHT_DP) {
                                     Modifier.widthIn(max = COMPACT_CENTER_MAX_WIDTH_DP.dp)
                                 } else {
                                     Modifier.fillMaxWidth()
