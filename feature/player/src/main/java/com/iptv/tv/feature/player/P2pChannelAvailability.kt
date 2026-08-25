@@ -28,7 +28,7 @@ enum class P2pChannelAvailabilityState {
  * Process-local UI cache of the last observed result for channels the user actually tried.
  *
  * We intentionally do not probe the whole catalog: doing so would create hundreds of concurrent
- * tracker/DHT operations for a 279-channel Torrent TV list. Untouched channels stay UNCHECKED.
+ * tracker/DHT operations for a large Torrent TV list. Untouched channels stay UNCHECKED.
  */
 internal object P2pChannelAvailabilityUiCache {
     val statuses = mutableStateMapOf<Long, P2pChannelAvailability>()
@@ -44,13 +44,17 @@ internal object P2pChannelAvailabilityUiCache {
             .forEach { channelId -> statuses[channelId] = P2pChannelAvailability() }
     }
 
-    fun beginSearch(channelId: Long) {
+    fun beginSearch(
+        channelId: Long,
+        peers: Int = 0,
+        speedKbps: Int = 0
+    ) {
         resetSupersededSearches(activeChannelId = channelId)
         mark(
             channelId = channelId,
-            state = P2pChannelAvailabilityState.SEARCHING,
-            peers = 0,
-            speedKbps = 0
+            state = if (peers > 0) P2pChannelAvailabilityState.PEERS else P2pChannelAvailabilityState.SEARCHING,
+            peers = peers,
+            speedKbps = speedKbps
         )
     }
 
@@ -75,23 +79,39 @@ internal fun p2pChannelAvailabilityLabel(status: P2pChannelAvailability?): Strin
     return when (value.state) {
         P2pChannelAvailabilityState.UNCHECKED -> "P2P · не проверен"
         P2pChannelAvailabilityState.SEARCHING ->
-            if (peers > 0) "P2P · поиск · пиры $peers" else "P2P · поиск пиров…"
+            if (peers > 0) "P2P · поиск · $peers пир." else "P2P · поиск пиров…"
         P2pChannelAvailabilityState.PEERS ->
             buildString {
-                append("P2P · пиры ")
+                append("P2P · ")
                 append(peers)
+                append(if (peers == 1) " пир" else " пира")
+                if (speed > 0) {
+                    append(" · ")
+                    append(speed)
+                    append(" Кбит/с")
+                } else {
+                    append(" · подключение…")
+                }
+            }
+        P2pChannelAvailabilityState.READY ->
+            if (peers > 0) "P2P · поток готов · $peers пир." else "P2P · поток готов"
+        P2pChannelAvailabilityState.PLAYING ->
+            buildString {
+                append("P2P · играет")
+                if (peers > 0) {
+                    append(" · ")
+                    append(peers)
+                    append(" пир.")
+                }
                 if (speed > 0) {
                     append(" · ")
                     append(speed)
                     append(" Кбит/с")
                 }
             }
-        P2pChannelAvailabilityState.READY ->
-            if (peers > 0) "P2P · поток готов · пиры $peers" else "P2P · поток готов"
-        P2pChannelAvailabilityState.PLAYING ->
-            if (peers > 0) "P2P · играет · пиры $peers" else "P2P · играет"
-        P2pChannelAvailabilityState.NO_PEERS -> "P2P · нет пиров"
-        P2pChannelAvailabilityState.ERROR -> "P2P · ошибка"
+        P2pChannelAvailabilityState.NO_PEERS -> "P2P · нет доступных пиров"
+        P2pChannelAvailabilityState.ERROR ->
+            if (peers > 0) "P2P · $peers пир. · нет данных" else "P2P · ошибка"
     }
 }
 
