@@ -108,8 +108,8 @@ internal enum class AceLiveStartupDhtRefillPlan {
  * tracker fast path must therefore remain non-blocking for the first TCP attempts while scheduling
  * bounded DHT diversity work in the background until startup reaches media-ready. A short probe uses
  * the existing seven-second startup-DHT window to collect a small batch of independent alternatives;
- * the existing full expansion remains the wider routing-table path without adding another probe
- * round or widening the time/query budgets.
+ * a second bounded probe may explore an independent routing-table path, and the existing full
+ * expansion remains the wider routing-table path without widening the per-round time/query budgets.
  *
  * A weak DHT fast path (one to three eligible endpoints) uses the same bounded probe/expansion
  * sequence. Raw source counts remain diagnostics and do not classify post-filter startup strength.
@@ -165,7 +165,7 @@ internal fun aceLiveStartupDhtProbeShouldContinue(
 internal const val ACE_LIVE_STARTUP_DHT_RETURN_AFTER_PEERS = 1
 internal const val ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS = 4
 internal const val ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS = 7_000L
-internal const val ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS = 1
+internal const val ACE_LIVE_STARTUP_DHT_PROBE_MAX_ROUNDS = 2
 
 internal const val ACE_LIVE_DHT_MIN_HEAP_HEADROOM_BYTES: Long = 32L * 1024L * 1024L
 
