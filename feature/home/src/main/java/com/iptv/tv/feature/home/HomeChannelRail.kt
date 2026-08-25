@@ -1,5 +1,6 @@
 package com.iptv.tv.feature.home
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,9 +11,9 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -45,9 +46,15 @@ internal fun HomeChannelRail(
 ) {
     val focusIndex = homeChannelRailFocusIndex(channels, selectedChannelId) ?: return
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        tonalElevation = 0.dp
+    ) {
         Column(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
@@ -56,16 +63,17 @@ internal fun HomeChannelRail(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Быстрые каналы", style = MaterialTheme.typography.titleMedium)
+                    Text("Каналы рядом", style = MaterialTheme.typography.titleMedium)
                     Text(
                         playlistName,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
                 Text(
-                    "${channels.size}",
+                    "${channels.size} доступно",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -86,7 +94,7 @@ internal fun HomeChannelRail(
             ) {
                 itemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel ->
                     var modifier = Modifier
-                        .width(190.dp)
+                        .width(172.dp)
                         .tvFocusOutline()
                         .onFocusChanged { focusState ->
                             if (focusState.isFocused) {
