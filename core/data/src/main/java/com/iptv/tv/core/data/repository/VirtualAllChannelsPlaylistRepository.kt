@@ -6,6 +6,7 @@ import com.iptv.tv.core.data.mapper.toModel
 import com.iptv.tv.core.data.settings.SettingsKeys
 import com.iptv.tv.core.data.settings.settingsDataStore
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
+import com.iptv.tv.core.database.dao.ParentalChannelGateRow
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.CatalogOriginKind
@@ -29,8 +30,9 @@ import kotlinx.coroutines.flow.map
 /**
  * Adds the system-owned All channels aggregate on top of the existing virtual Favorites decorator.
  *
- * Concrete channels keep their original Room IDs and playlist provenance. Only the containing
- * playlist is virtual, so canonical catalog navigation and the existing Player route are reused.
+ * Normal Home/playlist observation must not materialize every ChannelEntity just to show the
+ * aggregate count. The full catalog stream is subscribed only when the All-channels catalog (or
+ * its detailed summary) is explicitly requested.
  */
 @Singleton
 class VirtualAllChannelsPlaylistRepository @Inject constructor(
@@ -39,14 +41,27 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
     private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
     private val aggregateScope: VirtualPlaylistAggregateScope
 ) : PlaylistRepository by delegate {
+    private val parentalGate = observeParentalChannelGate()
+        .shareVirtualAggregate(aggregateScope)
+
     private val allChannels = favoriteChannelLookupDao.observeAllChannels()
-        .combine(observeParentalChannelGate()) { rows, parentalGate ->
-            allChannelsForVirtualView(rows, parentalGate)
+        .combine(parentalGate) { rows, gate ->
+            allChannelsForVirtualView(rows, gate)
         }
         .shareVirtualAggregate(aggregateScope)
-    private val allChannelCount = allChannels
-        .map { channels -> channels.size }
-        .distinctUntilChanged()
+
+    private val allChannelCount = combine(
+        favoriteChannelLookupDao.observeVisibleChannelCount(),
+        favoriteChannelLookupDao.observeVisibleParentalGateRows(),
+        parentalGate
+    ) { visibleCount, parentalRows, gate ->
+        virtualAllChannelCount(
+            visibleCount = visibleCount,
+            parentalRows = parentalRows,
+            parentalGate = gate
+        )
+    }.distinctUntilChanged()
+
     private val allChannelsSummary = allChannels
         .map(::virtualAllChannelsSummary)
         .shareVirtualAggregate(aggregateScope)
@@ -138,6 +153,22 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
                 )
             )
         }.distinctUntilChanged()
+    }
+}
+
+internal fun virtualAllChannelCount(
+    visibleCount: Int,
+    parentalRows: List<ParentalChannelGateRow>,
+    parentalGate: ParentalChannelGate
+): Int {
+    if (!parentalGate.blocksChannels) return visibleCount.coerceAtLeast(0)
+    return parentalRows.count { row ->
+        !ParentalChannelFilter.isBlocked(
+            name = row.name,
+            groupName = row.groupName,
+            tvgId = row.tvgId,
+            gate = parentalGate
+        )
     }
 }
 

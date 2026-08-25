@@ -21,15 +21,16 @@ import kotlinx.coroutines.flow.combine
 /**
  * Feature-facing Favorites facade.
  *
- * The durable storage implementation owns logical identity while specialized services own
- * portable backup/share export and explicit source-variant selection. The aggregate row ID stays
- * the persisted compatibility ID even when its preferred playback source changes.
+ * Large catalog invalidations are intentionally represented by a cheap scalar query. The facade
+ * resolves only live rows matching durable favorite logical keys; it must never subscribe to a
+ * full `Flow<List<ChannelEntity>>` over the whole catalog.
  */
 @Singleton
 class FavoritesRepositoryFacade @Inject constructor(
     private val delegate: UnifiedFavoritesRepositoryImpl,
     private val favoriteSnapshotDao: FavoriteSnapshotDao,
     private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
+    private val favoriteLiveChannelResolver: FavoriteLiveChannelResolver,
     private val portableBackupService: FavoritesPortableBackupService,
     private val shareableExportService: FavoritesShareableExportService,
     private val sourceVariantService: FavoriteSourceVariantService
@@ -39,8 +40,11 @@ class FavoritesRepositoryFacade @Inject constructor(
             delegate.observeFavorites(),
             favoriteSnapshotDao.observeFavoriteChannels(),
             favoriteSnapshotDao.observeFavoriteVariants(),
-            favoriteChannelLookupDao.observeAllChannels()
-        ) { _, favorites, persistedVariants, liveChannels ->
+            favoriteChannelLookupDao.observeChannelTableInvalidation()
+        ) { _, favorites, persistedVariants, _ ->
+            val liveChannels = favoriteLiveChannelResolver.findMatchingChannels(
+                favorites.mapTo(hashSetOf(), FavoriteChannelEntity::logicalKey)
+            )
             resolvedFavoriteRepresentatives(
                 favorites = favorites,
                 persistedVariants = persistedVariants,

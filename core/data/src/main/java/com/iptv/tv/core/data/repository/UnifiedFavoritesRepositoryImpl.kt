@@ -1,5 +1,6 @@
 package com.iptv.tv.core.data.repository
 
+import com.iptv.tv.core.database.dao.FavoriteChannelIdentityRow
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
@@ -21,6 +22,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -32,6 +34,11 @@ import kotlinx.coroutines.sync.withLock
  * not yet migrated. The durable source of truth is `favorite_channels` plus
  * `favorite_channel_variants`; both store enough snapshot data to survive deletion of the original
  * playlist/channel rows.
+ *
+ * Large channel catalogs are reconciled through bounded identity pages. Do not reintroduce a
+ * continuously observed `Flow<List<ChannelEntity>>` over the complete `channels` table: the
+ * 2026-08-25 field build exhausted a 256 MB heap while Scanner/import and Favorites invalidations
+ * overlapped.
  */
 @Singleton
 class UnifiedFavoritesRepositoryImpl @Inject constructor(
@@ -41,14 +48,20 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
     private val playlistDao: PlaylistDao
 ) : FavoritesRepository {
     private val legacyMigrationMutex = Mutex()
+
     @Volatile
     private var legacySeedsChecked = false
 
     override fun observeFavorites(): Flow<List<Channel>> {
         return combine(
             favoriteSnapshotDao.observeFavoriteChannels(),
-            favoriteChannelLookupDao.observeAllChannels()
-        ) { favorites, liveChannels ->
+            favoriteChannelLookupDao.observeChannelTableInvalidation()
+        ) { favorites, _ ->
+            favorites
+        }.mapLatest { favorites ->
+            val liveChannels = loadLiveChannels(
+                logicalKeys = favorites.mapTo(hashSetOf(), FavoriteChannelEntity::logicalKey)
+            )
             UnifiedFavoritePersistence.representFavorites(
                 favorites = favorites,
                 liveChannels = liveChannels
@@ -61,12 +74,13 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
     override fun observeFavoriteChannelIds(): Flow<Set<Long>> {
         return combine(
             favoriteSnapshotDao.observeFavoriteChannels(),
-            favoriteChannelLookupDao.observeAllChannels()
-        ) { favorites, liveChannels ->
-            UnifiedFavoritePersistence.favoriteLiveChannelIds(
-                favorites = favorites,
-                liveChannels = liveChannels
-            )
+            favoriteChannelLookupDao.observeChannelTableInvalidation()
+        ) { favorites, _ ->
+            favorites
+        }.mapLatest { favorites ->
+            loadLiveChannelIds(
+                logicalKeys = favorites.mapTo(hashSetOf(), FavoriteChannelEntity::logicalKey)
+            ).toCollection(linkedSetOf())
         }.onStart {
             ensureLegacySeedsMigrated()
         }
@@ -81,8 +95,7 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
             ?: favoriteSnapshotDao.findFavoriteByPreferredChannelId(favoriteChannelId)
             ?: return null
 
-        val liveChannels = favoriteChannelLookupDao.getAllChannels()
-            .filter { channel -> UnifiedFavoritePersistence.logicalKey(channel) == favorite.logicalKey }
+        val liveChannels = loadLiveChannels(setOf(favorite.logicalKey))
         val persistedVariants = favoriteSnapshotDao.getVariants(favorite.logicalKey)
 
         return UnifiedFavoritePersistence.resolvePlaybackContext(
@@ -113,9 +126,7 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
             return
         }
 
-        val allChannels = favoriteChannelLookupDao.getAllChannels()
-        val equivalents = allChannels
-            .filter { UnifiedFavoritePersistence.logicalKey(it) == logicalKey }
+        val equivalents = loadLiveChannels(setOf(logicalKey))
             .ifEmpty { listOf(selected) }
         val playlists = equivalents
             .map(ChannelEntity::playlistId)
@@ -144,11 +155,7 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
     }
 
     private suspend fun removeFavorite(logicalKey: String) {
-        val liveEquivalentIds = favoriteChannelLookupDao.getAllChannels()
-            .asSequence()
-            .filter { UnifiedFavoritePersistence.logicalKey(it) == logicalKey }
-            .map(ChannelEntity::id)
-            .toList()
+        val liveEquivalentIds = loadLiveChannelIds(setOf(logicalKey))
         val persistedVariantIds = favoriteSnapshotDao.getVariants(logicalKey)
             .map(FavoriteChannelVariantEntity::legacyChannelId)
         val legacyIds = (liveEquivalentIds + persistedVariantIds).distinct()
@@ -158,6 +165,47 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
         }
         favoriteSnapshotDao.deleteVariants(logicalKey)
         favoriteSnapshotDao.deleteFavorite(logicalKey)
+    }
+
+    private suspend fun loadLiveChannels(logicalKeys: Set<String>): List<ChannelEntity> {
+        if (logicalKeys.isEmpty()) return emptyList()
+        val channelIds = loadLiveChannelIds(logicalKeys)
+        if (channelIds.isEmpty()) return emptyList()
+
+        return channelIds
+            .chunked(FULL_CHANNEL_BATCH_SIZE)
+            .flatMap { ids -> favoriteChannelLookupDao.findChannelsByIds(ids) }
+            .sortedWith(
+                compareBy<ChannelEntity> { it.playlistId }
+                    .thenBy { it.orderIndex }
+                    .thenBy { it.id }
+            )
+    }
+
+    private suspend fun loadLiveChannelIds(logicalKeys: Set<String>): List<Long> {
+        if (logicalKeys.isEmpty()) return emptyList()
+
+        val matched = linkedSetOf<Long>()
+        var afterId = 0L
+
+        while (true) {
+            val page = favoriteChannelLookupDao.getChannelIdentityPage(
+                afterId = afterId,
+                limit = IDENTITY_PAGE_SIZE
+            )
+            if (page.isEmpty()) break
+
+            FavoriteChannelIdentityReconciliation.collectMatchingIds(
+                rows = page,
+                logicalKeys = logicalKeys,
+                destination = matched
+            )
+
+            afterId = page.last().id
+            if (page.size < IDENTITY_PAGE_SIZE) break
+        }
+
+        return matched.toList()
     }
 
     private suspend fun ensureLegacySeedsMigrated() {
@@ -175,6 +223,31 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
                 favoriteSnapshotDao.clearLegacySeeds()
             }
             legacySeedsChecked = true
+        }
+    }
+
+    private companion object {
+        const val IDENTITY_PAGE_SIZE = 512
+        const val FULL_CHANNEL_BATCH_SIZE = 256
+    }
+}
+
+internal object FavoriteChannelIdentityReconciliation {
+    fun collectMatchingIds(
+        rows: List<FavoriteChannelIdentityRow>,
+        logicalKeys: Set<String>,
+        destination: MutableSet<Long>
+    ) {
+        if (logicalKeys.isEmpty()) return
+        rows.forEach { row ->
+            val logicalKey = ChannelStableIdentity.key(
+                tvgId = row.tvgId,
+                name = row.name,
+                streamUrl = row.streamUrl
+            )
+            if (logicalKey in logicalKeys) {
+                destination += row.id
+            }
         }
     }
 }

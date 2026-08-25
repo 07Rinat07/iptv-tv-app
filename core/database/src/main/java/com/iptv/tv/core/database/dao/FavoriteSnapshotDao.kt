@@ -59,20 +59,57 @@ interface FavoriteSnapshotDao {
     suspend fun clearLegacySeeds(): Int
 }
 
+/** Narrow projection used to reconcile stable favorite identity in bounded pages. */
+data class FavoriteChannelIdentityRow(
+    val id: Long,
+    val tvgId: String?,
+    val name: String,
+    val streamUrl: String
+)
+
+/** Narrow projection used only to calculate the parental-filtered All-channels count. */
+data class ParentalChannelGateRow(
+    val tvgId: String?,
+    val name: String,
+    val groupName: String?
+)
+
 /**
- * Read-only channel observation dedicated to the logical Favorites layer.
+ * Channel lookups shared by Favorites and the system-owned All-channels virtual playlist.
  *
- * A separate DAO avoids expanding the legacy ChannelDao contract while allowing favorite identity
- * to be recomputed whenever imports/re-imports add or remove concrete channel rows.
+ * Favorites must use [observeChannelTableInvalidation], [getChannelIdentityPage] and
+ * [findChannelsByIds]. Full-table calls remain only for explicit one-shot compatibility operations
+ * and the explicit All-channels view; they must not drive normal Home/playlist/favorite hot flows.
  */
 @Dao
 interface FavoriteChannelLookupDao {
-    @Query("SELECT * FROM channels ORDER BY playlistId ASC, orderIndex ASC, id ASC")
-    fun observeAllChannels(): Flow<List<ChannelEntity>>
+    @Query("SELECT COUNT(*) FROM channels")
+    fun observeChannelTableInvalidation(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM channels WHERE isHidden = 0")
+    fun observeVisibleChannelCount(): Flow<Int>
+
+    @Query("SELECT tvgId, name, groupName FROM channels WHERE isHidden = 0")
+    fun observeVisibleParentalGateRows(): Flow<List<ParentalChannelGateRow>>
+
+    @Query(
+        "SELECT id, tvgId, name, streamUrl FROM channels " +
+            "WHERE id > :afterId ORDER BY id ASC LIMIT :limit"
+    )
+    suspend fun getChannelIdentityPage(
+        afterId: Long,
+        limit: Int
+    ): List<FavoriteChannelIdentityRow>
+
+    @Query("SELECT * FROM channels WHERE id IN (:channelIds)")
+    suspend fun findChannelsByIds(channelIds: List<Long>): List<ChannelEntity>
+
+    @Query("SELECT * FROM channels WHERE id = :channelId LIMIT 1")
+    suspend fun findChannelById(channelId: Long): ChannelEntity?
 
     @Query("SELECT * FROM channels ORDER BY playlistId ASC, orderIndex ASC, id ASC")
     suspend fun getAllChannels(): List<ChannelEntity>
 
-    @Query("SELECT * FROM channels WHERE id = :channelId LIMIT 1")
-    suspend fun findChannelById(channelId: Long): ChannelEntity?
+    @Query("SELECT * FROM channels ORDER BY playlistId ASC, orderIndex ASC, id ASC")
+    fun observeAllChannels(): Flow<List<ChannelEntity>>
 }
