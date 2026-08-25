@@ -133,7 +133,7 @@ class Media3CompatibilityEvidenceTest {
         formats: Array<Format>,
         selected: BooleanArray
     ): Tracks.Group = Tracks.Group(
-        TrackGroup(id, formats),
+        TrackGroup(id, *formats),
         false,
         IntArray(formats.size) { C.FORMAT_HANDLED },
         selected
