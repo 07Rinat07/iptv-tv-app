@@ -4,28 +4,31 @@
 
 `core/player-vlc/src/test/resources/playback_compatibility_matrix.tsv`
 
-Матрица не является заявлением о поддержке кодека или устройства сама по себе. Пока строка имеет `evidence_status=NOT_RUN`, она означает только запланированную проверку.
+Матрица не является заявлением о поддержке кодека или устройства сама по себе. Строка с `evidence_status=NOT_RUN` означает только запланированную проверку.
 
 ## Зачем нужен отдельный matrix contract
 
-Playback compatibility зависит от сочетания protocol/container, video/audio codec, профиля, устройства и фактически выбранного backend. Поэтому результат нельзя фиксировать фразами вроде «HEVC работает» без контекста.
+Playback compatibility зависит от сочетания delivery, redirect/header behavior, video/audio codec, profile/level, устройства, sample revision и фактически выбранного backend. Поэтому результат нельзя фиксировать фразами вроде «HEVC работает» без конкретного контекста.
 
 Для каждой строки матрица сохраняет:
 
-- стабильный `sample_id`;
-- protocol и container/delivery;
-- video codec и profile/level;
+- стабильный `sample_id`, который входит в baseline registry contract и не переименовывается после появления evidence;
+- protocol/container, redirect mode и требуемые IPTV request headers;
+- video codec и `PROFILE@LEVEL`;
 - один или несколько audio codecs;
 - resolution/fps;
 - тип источника: ordinary IPTV, VOD/archive или P2P loopback;
 - device gate;
+- evidence status;
+- provenance запуска: `run_id`, `device_model`, `android_api`, `app_build`, `sample_revision`, `evidence_artifact`;
 - фактический backend;
 - hardware/software decoder mode, если это наблюдаемо;
-- startup/first-frame/first-audio evidence;
+- first-frame/first-audio evidence;
 - fallback reason;
-- результат channel switch.
+- результат channel switch;
+- отдельный `multi_audio_result` для обнаружения и переключения нескольких аудиодорожек.
 
-JUnit contract-тест проверяет схему, уникальность sample ID, обязательное покрытие целевых codec/delivery категорий Issue #211 и запрещает незапущенным строкам выглядеть как подтверждённые device results.
+JUnit contract-тест проверяет схему, immutable baseline IDs, обязательное покрытие codec/delivery/redirect/header целей, минимальную ARM64-матрицу, наличие profile+level и fail-closed evidence semantics.
 
 ## Начальный target set
 
@@ -37,9 +40,15 @@ JUnit contract-тест проверяет схему, уникальность 
 - MPEG-TS по HTTP и HTTPS;
 - HLS;
 - progressive MP4, MKV и WebM;
+- HTTP→HTTPS redirect target;
+- типовой IPTV `User-Agent` + `Referer` request-header target;
 - local loopback MPEG-TS от embedded P2P runtime.
 
-AV1 помечен capability-gated: отсутствие decoder capability на конкретном устройстве не должно интерпретироваться как общий regression приложения.
+Минимальный `ARM64_TV_BOX` gate сохраняет отдельные цели, которые вместе покрывают H.264, H.265, MPEG-2 Video и AAC, HE-AAC, AC-3, E-AC-3. AV1 помечен capability-gated: отсутствие decoder capability на конкретном устройстве не интерпретируется как общий regression приложения.
+
+## Profile и level
+
+`profile_level` всегда записывается как `PROFILE@LEVEL`, например `HIGH@L4.1`, `MAIN10@L4.1` или `MAIN@MAIN_LEVEL`. Profile-only значение запрещено contract-тестом, потому что decoder compatibility может различаться между уровнями одного профиля.
 
 ## Device gates
 
@@ -48,19 +57,38 @@ AV1 помечен capability-gated: отсутствие decoder capability н�
 - `ARMV7_OR_WEAK` — слабое или 32-bit устройство, когда доступно.
 - `CAPABILITY_GATED` — запускать только при наличии заявленной device/backend capability.
 
+Device gate — категория цели, а не доказательство поддержки всей категории. Каждая выполненная строка обязана содержать конкретную модель устройства и Android API.
+
 ## Evidence state
 
-Начальное состояние всех строк:
+Разрешённые состояния:
 
-- `evidence_status=NOT_RUN`;
-- `actual_backend=PENDING`;
-- `decoder_mode=PENDING`;
-- `first_frame=PENDING`;
-- `first_audio=PENDING`;
-- `fallback_reason=PENDING`;
-- `channel_switch=PENDING`.
+- `NOT_RUN` — проверка ещё не выполнялась;
+- `PASS` — соответствующий sample успешно прошёл acceptance;
+- `FAIL` — запуск воспроизводимо не прошёл acceptance;
+- `UNSUPPORTED_CAPABILITY` — запуск зафиксировал отсутствие требуемой capability на конкретном устройстве.
 
-Менять эти поля на фактический результат можно только после воспроизводимого запуска соответствующего sample на указанном device gate. Для hardware-dependent утверждений нужен реальный TV Box evidence.
+Для `NOT_RUN` все provenance/result fields обязаны оставаться `PENDING`.
+
+Для любого выполненного состояния (`PASS`, `FAIL`, `UNSUPPORTED_CAPABILITY`) обязательны непустые и не-`PENDING`:
+
+- `run_id`;
+- `device_model`;
+- `android_api`;
+- `app_build`;
+- `sample_revision`;
+- `evidence_artifact`;
+- `actual_backend`;
+- `decoder_mode`;
+- `first_frame`;
+- `first_audio`;
+- `fallback_reason`;
+- `channel_switch`;
+- `multi_audio_result`.
+
+Для `PASS` video+audio target обязан иметь `first_frame=PASS` и `first_audio=PASS`, а backend — `MEDIA3` или `LIBVLC`. Для single-audio executed rows `multi_audio_result=NOT_APPLICABLE`; multi-audio target обязан записать `PASS` или `FAIL` именно для обнаружения и переключения альтернативной дорожки.
+
+`evidence_artifact` должен указывать на воспроизводимый артефакт запуска: CI artifact/run, сохранённый diagnostic log/field report или другой стабильный reference, из которого можно проверить результат. `sample_revision` фиксирует конкретную ревизию fixture/sample, а `app_build` — протестированную сборку приложения.
 
 ## Backend и safety boundary
 
@@ -70,4 +98,4 @@ Media3 остаётся primary backend. LibVLC используется тол�
 
 ## Следующий шаг
 
-После принятия matrix contract следующий bounded increment должен подключить реальные/легально доступные sample assets или воспроизводимые fixture endpoints и начать заполнять результаты без расширения runtime policy. Реальные codec/device claims должны появляться только вместе с записанным evidence.
+После принятия matrix contract следующий bounded increment должен подключить реальные/легально доступные sample assets или воспроизводимые fixture endpoints и начать заполнять результаты без расширения runtime policy. Software decoder additions допускаются отдельными fresh-main PR только после измеряемого пробела в этой матрице, проверки ABI/APK-size и применимых лицензий.
