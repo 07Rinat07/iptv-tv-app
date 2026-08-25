@@ -440,55 +440,41 @@ fun StablePlayerScreen(
                         )
                     }
                 } else {
-                    Column(
-                        modifier = Modifier.fillMaxSize().padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedButton(onClick = { onBack?.invoke() }) { Text("Назад") }
-                            Text(
-                                selectedChannel?.name ?: "Плеер",
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            OutlinedButton(onClick = { showChannelDrawer = true }) { Text("Каналы") }
-                            OutlinedButton(onClick = { panel = StablePlayerPanel.SETTINGS }) { Text("⚙") }
-                        }
-                        StableCenterPaneReplacement(
-                            modifier = Modifier.fillMaxWidth().weight(1f),
-                            compact = true,
-                            session = state.internalSession,
-                            selectedChannel = selectedChannel,
-                            programs = selectedPrograms,
-                            channels = filteredChannels,
-                            favoriteIds = optimisticFavoriteIds,
-                            epgByChannel = state.channelListEpgPrograms,
-                            scale = state.playerVideoScale,
-                            volume = volume,
-                            isStartingPlayback = state.isStartingPlayback,
-                            videoSurfaceContent = videoSurfaceContent,
-                            onVolumeChange = ::setVolume,
-                            onToggleMute = ::toggleMute,
-                            onReady = viewModel::onInternalPlaybackReady,
-                            onP2pBoundaryTelemetry = viewModel::onP2pPlayerBoundaryTelemetry,
-                            onError = { sessionId, message ->
-                                viewModel.onInternalPlaybackError(message, context, sessionId)
-                            },
-                            onPlaySelected = { viewModel.playSelected(context) },
-                            onToggleFullscreen = viewModel::toggleInternalPlayerSize,
-                            onPreviousChannel = { playAdjacent(-1) },
-                            onNextChannel = { playAdjacent(1) },
-                            onSelectChannel = ::playChannel,
-                            onToggleFavorite = ::toggleFavorite,
-                            onOpenChannels = { showChannelDrawer = true }
-                        )
-                    }
+                    StableResponsiveCompactPlayer(
+                        modifier = Modifier.fillMaxSize(),
+                        compactHeight = compactHeight,
+                        session = state.internalSession,
+                        selectedChannel = selectedChannel,
+                        programs = selectedPrograms,
+                        channels = filteredChannels,
+                        favoriteIds = optimisticFavoriteIds,
+                        epgByChannel = state.channelListEpgPrograms,
+                        scale = state.playerVideoScale,
+                        volume = volume,
+                        isStartingPlayback = state.isStartingPlayback,
+                        favoritesOnly = favoritesOnly,
+                        videoSurfaceContent = videoSurfaceContent,
+                        onVolumeChange = ::setVolume,
+                        onToggleMute = ::toggleMute,
+                        onReady = viewModel::onInternalPlaybackReady,
+                        onP2pBoundaryTelemetry = viewModel::onP2pPlayerBoundaryTelemetry,
+                        onError = { sessionId, message ->
+                            viewModel.onInternalPlaybackError(message, context, sessionId)
+                        },
+                        onPlaySelected = { viewModel.playSelected(context) },
+                        onToggleFullscreen = viewModel::toggleInternalPlayerSize,
+                        onPreviousChannel = { playAdjacent(-1) },
+                        onNextChannel = { playAdjacent(1) },
+                        onSelectChannel = ::playChannel,
+                        onToggleFavorite = ::toggleFavorite,
+                        onOpenChannels = { showChannelDrawer = true },
+                        onBack = onBack,
+                        onLive = { favoritesOnly = false },
+                        onPlaylists = { panel = StablePlayerPanel.PLAYLISTS },
+                        onGroups = { panel = StablePlayerPanel.GROUPS },
+                        onFavorites = { favoritesOnly = !favoritesOnly },
+                        onSettings = { panel = StablePlayerPanel.SETTINGS }
+                    )
                 }
             }
         }
