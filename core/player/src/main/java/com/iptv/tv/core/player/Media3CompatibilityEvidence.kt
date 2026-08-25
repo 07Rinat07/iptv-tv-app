@@ -27,6 +27,8 @@ data class Media3TrackEvidence(
 data class Media3CompatibilityEvidence(
     val videoDecoderName: String?,
     val audioDecoderName: String?,
+    val videoTrackPresent: Boolean,
+    val audioTrackPresent: Boolean,
     val selectedVideoTracks: List<Media3TrackEvidence>,
     val selectedAudioTracks: List<Media3TrackEvidence>
 )
@@ -45,11 +47,11 @@ class Media3CompatibilityEvidenceTracker {
     private var tracks: Tracks = Tracks.EMPTY
 
     fun onVideoDecoderInitialized(decoderName: String) {
-        videoDecoderName = decoderName.takeIf(String::isNotBlank)
+        videoDecoderName = decoderName.takeIf { it.isNotBlank() }
     }
 
     fun onAudioDecoderInitialized(decoderName: String) {
-        audioDecoderName = decoderName.takeIf(String::isNotBlank)
+        audioDecoderName = decoderName.takeIf { it.isNotBlank() }
     }
 
     fun onTracksChanged(updatedTracks: Tracks) {
@@ -59,6 +61,8 @@ class Media3CompatibilityEvidenceTracker {
     fun snapshot(): Media3CompatibilityEvidence = Media3CompatibilityEvidence(
         videoDecoderName = videoDecoderName,
         audioDecoderName = audioDecoderName,
+        videoTrackPresent = tracks.containsType(C.TRACK_TYPE_VIDEO),
+        audioTrackPresent = tracks.containsType(C.TRACK_TYPE_AUDIO),
         selectedVideoTracks = selectedMedia3TrackEvidence(tracks, Media3TrackKind.VIDEO),
         selectedAudioTracks = selectedMedia3TrackEvidence(tracks, Media3TrackKind.AUDIO)
     )
@@ -95,6 +99,10 @@ fun Media3CompatibilityEvidence.toDiagnosticMessage(): String = buildString {
     append(audioDecoderName != null)
     append(", audio_decoder=")
     append(audioDecoderName.toDiagnosticToken())
+    append(", video_track_present=")
+    append(videoTrackPresent)
+    append(", audio_track_present=")
+    append(audioTrackPresent)
     appendSelectedTracks("video", selectedVideoTracks)
     appendSelectedTracks("audio", selectedAudioTracks)
 }
