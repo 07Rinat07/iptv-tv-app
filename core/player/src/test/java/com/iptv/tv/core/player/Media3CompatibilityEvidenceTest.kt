@@ -53,6 +53,8 @@ class Media3CompatibilityEvidenceTest {
 
         assertEquals("c2.android.avc.decoder", evidence.videoDecoderName)
         assertEquals("c2.android.eac3.decoder", evidence.audioDecoderName)
+        assertTrue(evidence.videoTrackPresent)
+        assertTrue(evidence.audioTrackPresent)
         assertEquals(2, evidence.selectedVideoTracks.size)
         assertEquals(listOf(1920, 1280), evidence.selectedVideoTracks.mapNotNull { it.width })
         assertEquals(1, evidence.selectedAudioTracks.size)
@@ -77,7 +79,9 @@ class Media3CompatibilityEvidenceTest {
                 selectedGroup("audio", arrayOf(audio), booleanArrayOf(true))
             )
         )
+        val tracker = Media3CompatibilityEvidenceTracker().apply { onTracksChanged(tracks) }
 
+        assertTrue(tracker.snapshot().videoTrackPresent)
         assertTrue(selectedMedia3TrackEvidence(tracks, Media3TrackKind.VIDEO).isEmpty())
         assertEquals(
             MimeTypes.AUDIO_AAC,
@@ -101,6 +105,8 @@ class Media3CompatibilityEvidenceTest {
         val evidence = Media3CompatibilityEvidence(
             videoDecoderName = "c2.vendor.avc.decoder\nsecret=value",
             audioDecoderName = null,
+            videoTrackPresent = false,
+            audioTrackPresent = true,
             selectedVideoTracks = emptyList(),
             selectedAudioTracks = tracks
         )
@@ -110,6 +116,8 @@ class Media3CompatibilityEvidenceTest {
         assertTrue(message.contains("backend=MEDIA3"))
         assertTrue(message.contains("video_decoder_observed=true"))
         assertTrue(message.contains("audio_decoder_observed=false"))
+        assertTrue(message.contains("video_track_present=false"))
+        assertTrue(message.contains("audio_track_present=true"))
         assertTrue(message.contains("audio_selected_count=6"))
         assertTrue(message.contains("audio_selected_reported=4"))
         assertFalse(message.contains('\n'))
