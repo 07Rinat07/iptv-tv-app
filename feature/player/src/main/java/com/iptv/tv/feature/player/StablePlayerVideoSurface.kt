@@ -43,7 +43,9 @@ import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.iptv.tv.core.player.Media3CompatibilityEvidenceTracker
 import com.iptv.tv.core.player.p2pMedia3BufferConfig
+import com.iptv.tv.core.player.toDiagnosticMessage
 import com.iptv.tv.core.player.toLoadControl
 import com.iptv.tv.core.playervlc.LibVlcFallbackPolicy
 import com.iptv.tv.core.utils.FileLogger
@@ -313,6 +315,26 @@ private fun StableMedia3VideoSurface(
     }
 
     DisposableEffect(session.sessionId, player) {
+        val compatibilityEvidenceTracker = Media3CompatibilityEvidenceTracker()
+        var compatibilityEvidenceReported = false
+
+        fun emitMedia3CompatibilityEvidence(event: String, audioOnly: Boolean = false) {
+            if (compatibilityEvidenceReported) return
+            val evidence = compatibilityEvidenceTracker.snapshot()
+            if (audioOnly && evidence.videoTrackPresent) return
+            if (evidence.selectedVideoTracks.isEmpty() && evidence.selectedAudioTracks.isEmpty()) return
+            if (evidence.videoDecoderName == null && evidence.audioDecoderName == null) return
+
+            compatibilityEvidenceReported = true
+            FileLogger.write(
+                context = context,
+                level = "INFO",
+                tag = "PlaybackCompatibility",
+                message = "event=$event, sessionId=${session.sessionId}, " +
+                    evidence.toDiagnosticMessage()
+            )
+        }
+
         fun emitP2pBoundaryTelemetry(telemetry: P2pPlayerBoundaryTelemetry) {
             onP2pBoundaryTelemetry(telemetry)
             if (telemetry.event == P2pPlayerBoundaryEventType.TERMINAL) {
@@ -418,6 +440,24 @@ private fun StableMedia3VideoSurface(
                 }
             }
 
+            override fun onVideoDecoderInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                decoderName: String,
+                initializedTimestampMs: Long,
+                initializationDurationMs: Long
+            ) {
+                compatibilityEvidenceTracker.onVideoDecoderInitialized(decoderName)
+            }
+
+            override fun onAudioDecoderInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                decoderName: String,
+                initializedTimestampMs: Long,
+                initializationDurationMs: Long
+            ) {
+                compatibilityEvidenceTracker.onAudioDecoderInitialized(decoderName)
+            }
+
             override fun onAudioPositionAdvancing(
                 eventTime: AnalyticsListener.EventTime,
                 playoutStartSystemTimeMs: Long
@@ -425,6 +465,7 @@ private fun StableMedia3VideoSurface(
                 p2pBoundaryTelemetryTracker
                     ?.onFirstAudio(System.currentTimeMillis())
                     ?.let(::emitP2pBoundaryTelemetry)
+                emitMedia3CompatibilityEvidence(event = "first_audio", audioOnly = true)
             }
         }
 
@@ -457,6 +498,7 @@ private fun StableMedia3VideoSurface(
             }
 
             override fun onTracksChanged(tracks: Tracks) {
+                compatibilityEvidenceTracker.onTracksChanged(tracks)
                 audioTrackSelected = tracks.isTypeSelected(C.TRACK_TYPE_AUDIO)
                 videoTrackSelected = tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)
                 videoTrackSupported = tracks.isTypeSupported(C.TRACK_TYPE_VIDEO)
@@ -467,6 +509,7 @@ private fun StableMedia3VideoSurface(
                 p2pBoundaryTelemetryTracker
                     ?.onFirstVideoFrame(System.currentTimeMillis())
                     ?.let(::emitP2pBoundaryTelemetry)
+                emitMedia3CompatibilityEvidence(event = "first_video_frame")
                 if (videoWidth > 0 && videoHeight > 0) diagnosticMessage = null
             }
 
@@ -479,6 +522,7 @@ private fun StableMedia3VideoSurface(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                emitMedia3CompatibilityEvidence(event = "player_error")
                 if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                     player.seekToDefaultPosition()
                     player.prepare()
