@@ -78,9 +78,8 @@ data class ParentalChannelGateRow(
  * Channel lookups shared by Favorites and the system-owned All-channels virtual playlist.
  *
  * Favorites must use [observeChannelTableInvalidation], [getChannelIdentityPage] and
- * [findChannelsByIds]. The full [observeAllChannels] stream is retained only for the explicit
- * All-channels catalog view; it must not be used to compute normal playlist/Home counters or
- * favorite reconciliation.
+ * [findChannelsByIds]. Full-table calls remain only for explicit one-shot compatibility operations
+ * and the explicit All-channels view; they must not drive normal Home/playlist/favorite hot flows.
  */
 @Dao
 interface FavoriteChannelLookupDao {
@@ -107,6 +106,9 @@ interface FavoriteChannelLookupDao {
 
     @Query("SELECT * FROM channels WHERE id = :channelId LIMIT 1")
     suspend fun findChannelById(channelId: Long): ChannelEntity?
+
+    @Query("SELECT * FROM channels ORDER BY playlistId ASC, orderIndex ASC, id ASC")
+    suspend fun getAllChannels(): List<ChannelEntity>
 
     @Query("SELECT * FROM channels ORDER BY playlistId ASC, orderIndex ASC, id ASC")
     fun observeAllChannels(): Flow<List<ChannelEntity>>
