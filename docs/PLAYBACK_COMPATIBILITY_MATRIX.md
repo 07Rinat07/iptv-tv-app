@@ -23,6 +23,7 @@ Playback compatibility зависит от сочетания delivery, redirect
 - provenance запуска: `run_id`, `device_model`, `android_api`, `app_build`, `sample_revision`, `evidence_artifact`;
 - фактический backend;
 - hardware/software decoder mode, если это наблюдаемо;
+- отдельный `startup_result`;
 - first-frame/first-audio evidence;
 - fallback reason;
 - результат channel switch;
@@ -40,8 +41,8 @@ JUnit contract-тест проверяет схему, immutable baseline IDs, �
 - MPEG-TS по HTTP и HTTPS;
 - HLS;
 - progressive MP4, MKV и WebM;
-- HTTP→HTTPS redirect target;
-- типовой IPTV `User-Agent` + `Referer` request-header target;
+- точный HTTP→HTTPS redirect target: `protocol=HTTP`, `container=MPEG_TS`, `redirect_mode=HTTP_TO_HTTPS`;
+- точный типовой IPTV header target: `protocol=HTTPS`, `container=MPEG_TS`, `request_headers=USER_AGENT+REFERER`;
 - local loopback MPEG-TS от embedded P2P runtime.
 
 Минимальный `ARM64_TV_BOX` gate сохраняет отдельные цели, которые вместе покрывают H.264, H.265, MPEG-2 Video и AAC, HE-AAC, AC-3, E-AC-3. AV1 помечен capability-gated: отсутствие decoder capability на конкретном устройстве не интерпретируется как общий regression приложения.
@@ -68,27 +69,32 @@ Device gate — категория цели, а не доказательств�
 - `FAIL` — запуск воспроизводимо не прошёл acceptance;
 - `UNSUPPORTED_CAPABILITY` — запуск зафиксировал отсутствие требуемой capability на конкретном устройстве.
 
-Для `NOT_RUN` все provenance/result fields обязаны оставаться `PENDING`.
+Для `NOT_RUN` все provenance/result fields обязаны оставаться `PENDING`, включая `startup_result`.
 
-Для любого выполненного состояния (`PASS`, `FAIL`, `UNSUPPORTED_CAPABILITY`) обязательны непустые и не-`PENDING`:
+Для любого выполненного состояния (`PASS`, `FAIL`, `UNSUPPORTED_CAPABILITY`) обязательны конкретные provenance и result fields:
 
-- `run_id`;
-- `device_model`;
-- `android_api`;
-- `app_build`;
-- `sample_revision`;
-- `evidence_artifact`;
+- `run_id` — namespaced reference вида `github-actions:123456` или `field:2026-08-25:device-a`;
+- `device_model` — конкретная модель устройства, не placeholder;
+- `android_api` — формат `API_<level>`, например `API_35`;
+- `app_build` — точная сборка: `git:<7..40 hex>` или `version:<version>`;
+- `sample_revision` — immutable digest `sha256:<64 hex>`;
+- `evidence_artifact` — стабильная URI-ссылка на evidence, например `https://...`, `artifact://...` или `diagnostic://...`;
 - `actual_backend`;
 - `decoder_mode`;
+- `startup_result`;
 - `first_frame`;
 - `first_audio`;
 - `fallback_reason`;
 - `channel_switch`;
 - `multi_audio_result`.
 
-Для `PASS` video+audio target обязан иметь `first_frame=PASS` и `first_audio=PASS`, а backend — `MEDIA3` или `LIBVLC`. Для single-audio executed rows `multi_audio_result=NOT_APPLICABLE`; multi-audio target обязан записать `PASS` или `FAIL` именно для обнаружения и переключения альтернативной дорожки.
+Значения `PENDING`, `UNKNOWN`, `NOT_APPLICABLE`, `NONE`, `N/A`, `NA`, `TBD`, `UNSPECIFIED`, `NULL` и `-` не считаются конкретной provenance для выполненной строки.
 
-`evidence_artifact` должен указывать на воспроизводимый артефакт запуска: CI artifact/run, сохранённый diagnostic log/field report или другой стабильный reference, из которого можно проверить результат. `sample_revision` фиксирует конкретную ревизию fixture/sample, а `app_build` — протестированную сборку приложения.
+`startup_result` фиксируется отдельно от first-frame/first-audio, чтобы различать ошибку запуска и более поздний decoder/rendering failure. Для общего `PASS` обязательны `startup_result=PASS`, `first_frame=PASS` и `first_audio=PASS`, а backend — `MEDIA3` или `LIBVLC`.
+
+Для single-audio executed rows `multi_audio_result=NOT_APPLICABLE`. Для multi-audio строки общий `PASS` разрешён только при `multi_audio_result=PASS`; если обнаружение или переключение альтернативной дорожки не прошло, общий status не может оставаться `PASS`.
+
+`evidence_artifact` должен указывать на воспроизводимый артефакт запуска: CI artifact/run, сохранённый diagnostic log/field report или другой стабильный reference, из которого можно проверить результат. `sample_revision` фиксирует конкретное содержимое fixture/sample, а `app_build` — протестированную сборку приложения.
 
 ## Backend и safety boundary
 
