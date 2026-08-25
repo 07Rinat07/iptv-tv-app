@@ -86,9 +86,10 @@ data class AceLivePeerRefillCycleResult(
  * keeps selection plus reservation atomic when background refill cycles overlap on different
  * dispatcher threads without giving this policy layer ownership of coroutines or sockets.
  *
- * This coordinator never evicts an active peer. Recovery staleness or authoritative low-buffer
- * pressure may temporarily request extra probe peers up to [AceLivePeerRefillPolicy.maxActivePeers].
- * When both signals are present the larger bounded probe request wins; they are not added together.
+ * Owned pool entries and protocol-qualified peers are deliberately separate. A started socket/job
+ * consumes hard capacity immediately, but it does not satisfy the normal peer target until the
+ * current connection has completed its handshake. This prevents dead or incompatible endpoints
+ * from suppressing alternative tracker/DHT discovery while retaining the existing socket hard cap.
  */
 class AceLivePeerRefillCoordinator(
     val policy: AceLivePeerRefillPolicy = AceLivePeerRefillPolicy()
@@ -123,9 +124,25 @@ class AceLivePeerRefillCoordinator(
     }
 
     /**
+     * Current protocol-qualified peer count among pool-owned ids.
+     *
+     * Runtime peers created by this coordinator carry exact handshake evidence. Unknown active ids
+     * are treated optimistically for compatibility with injected/test callers that do not expose
+     * lifecycle events; production refill-managed peers are never unknown after [beginStart].
+     */
+    fun qualifiedActivePeerCount(activePeerIds: Set<Long>): Int = withStateLock {
+        qualifiedActivePeerCountLocked(activePeerIds)
+    }
+
+    /**
      * Produces and reserves a bounded set of candidates. Selection and reservation occur under the
-     * same lock, so overlapping cycles cannot reserve the same endpoint. Existing reservations and
-     * managed starts that are not yet visible in [activePeerIds] count against the desired capacity.
+     * same lock, so overlapping cycles cannot reserve the same endpoint.
+     *
+     * Qualification demand and ownership capacity are intentionally calculated independently:
+     * unhandshaked active jobs do not satisfy the qualified target, while every active/reserved/
+     * not-yet-visible managed start still consumes the hard [AceLivePeerRefillPolicy.maxActivePeers]
+     * capacity. This allows alternative peers to be tried without ever planning an 11th socket when
+     * the configured hard cap is 10.
      */
     fun planRefill(
         activePeerIds: Set<Long>,
@@ -149,10 +166,16 @@ class AceLivePeerRefillCoordinator(
             .coerceAtMost(policy.maxActivePeers)
         val reservedPending = candidates.values.count { state -> state.startReserved }
         val managedPending = peerIdToEndpointKey.keys.count { peerId -> peerId !in activePeerIds }
-        val committedPeers = activePeerIds.size + reservedPending + managedPending
-        val slots = (desired - committedPeers)
-            .coerceAtLeast(0)
-            .coerceAtMost(policy.maxStartsPerCycle)
+        val qualifiedActivePeers = qualifiedActivePeerCountLocked(activePeerIds)
+        val qualificationCommittedPeers = qualifiedActivePeers + reservedPending + managedPending
+        val ownedCommittedPeers = activePeerIds.size + reservedPending + managedPending
+        val qualificationSlots = (desired - qualificationCommittedPeers).coerceAtLeast(0)
+        val hardCapacitySlots = (policy.maxActivePeers - ownedCommittedPeers).coerceAtLeast(0)
+        val slots = minOf(
+            qualificationSlots,
+            hardCapacitySlots,
+            policy.maxStartsPerCycle
+        )
         if (slots == 0) {
             return@withStateLock AceLivePeerRefillPlan(
                 candidates = emptyList(),
@@ -190,6 +213,7 @@ class AceLivePeerRefillCoordinator(
         require(state.managedPeerId == null) { "Candidate $key is already managed" }
         state.startReserved = false
         state.startInProgress = true
+        state.currentlyQualified = false
         state.managedPeerId = peerId
         peerIdToEndpointKey[peerId] = key
     }
@@ -224,8 +248,9 @@ class AceLivePeerRefillCoordinator(
     }
 
     /**
-     * Pool events update only evidence relevant to refill ranking. Retry-internal failures are not
-     * scored until the TCP pool reports that it has exhausted its own retry loop.
+     * Pool events update only evidence relevant to refill ranking and current qualification.
+     * Retry-internal failures are not scored until the TCP pool exhausts its own retry loop, but a
+     * disconnect/reconnect immediately removes qualification until a new handshake is accepted.
      */
     fun onPoolEvent(event: AceLiveTcpPoolEvent, nowMillis: Long) = withStateLock {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
@@ -233,10 +258,12 @@ class AceLivePeerRefillCoordinator(
         when (event) {
             is AceLiveTcpPoolEvent.TransportConnected -> {
                 state.startInProgress = false
+                state.currentlyQualified = false
             }
 
             is AceLiveTcpPoolEvent.HandshakeAccepted -> {
                 state.startInProgress = false
+                state.currentlyQualified = true
                 state.consecutiveFailures = 0
                 state.retryNotBeforeMillis = 0
                 state.lastHandshakeAtMillis = nowMillis
@@ -249,6 +276,7 @@ class AceLivePeerRefillCoordinator(
             }
 
             is AceLiveTcpPoolEvent.ConnectFailed -> {
+                state.currentlyQualified = false
                 if (!event.retrying) {
                     recordFailureLocked(state, nowMillis)
                     clearManagedPeerLocked(event.peerId, state)
@@ -256,13 +284,16 @@ class AceLivePeerRefillCoordinator(
             }
 
             is AceLiveTcpPoolEvent.Disconnected -> {
+                state.currentlyQualified = false
                 if (!event.retrying) {
                     recordFailureLocked(state, nowMillis)
                     clearManagedPeerLocked(event.peerId, state)
                 }
             }
 
-            is AceLiveTcpPoolEvent.HandshakeRejected -> Unit
+            is AceLiveTcpPoolEvent.HandshakeRejected -> {
+                state.currentlyQualified = false
+            }
         }
     }
 
@@ -273,6 +304,11 @@ class AceLivePeerRefillCoordinator(
     fun snapshots(): List<AceLivePeerRefillSnapshot> = withStateLock {
         candidates.values.map(CandidateState::toSnapshot)
     }
+
+    private fun qualifiedActivePeerCountLocked(activePeerIds: Set<Long>): Int =
+        activePeerIds.count { peerId ->
+            stateForPeerLocked(peerId)?.currentlyQualified ?: true
+        }
 
     private fun syncActivePeerIdsLocked(activePeerIds: Set<Long>) {
         for (peerId in activePeerIds) {
@@ -288,7 +324,10 @@ class AceLivePeerRefillCoordinator(
                 continue
             }
             if (state.startInProgress) continue
-            if (state.managedPeerId == peerId) state.managedPeerId = null
+            if (state.managedPeerId == peerId) {
+                state.managedPeerId = null
+                state.currentlyQualified = false
+            }
             peerIdToEndpointKey.remove(peerId)
         }
     }
@@ -345,6 +384,7 @@ class AceLivePeerRefillCoordinator(
         if (state.managedPeerId == peerId) state.managedPeerId = null
         state.startInProgress = false
         state.startReserved = false
+        state.currentlyQualified = false
         peerIdToEndpointKey.remove(peerId)
     }
 
@@ -377,7 +417,8 @@ class AceLivePeerRefillCoordinator(
         var lastHandshakeAtMillis: Long? = null,
         var managedPeerId: Long? = null,
         var startReserved: Boolean = false,
-        var startInProgress: Boolean = false
+        var startInProgress: Boolean = false,
+        var currentlyQualified: Boolean = false
     ) {
         fun toPublicCandidate(): AceLivePeerRefillCandidate = AceLivePeerRefillCandidate(
             endpoint = endpoint,
@@ -409,8 +450,9 @@ class AceLivePeerRefillCoordinator(
 /**
  * Cancellable background refill loop over injected discovery/pool boundaries.
  *
- * The loop performs discovery only when the pool is below its normal target or recovery reports a
- * stale-but-reachable pool. It does not stop peers when the pool later becomes healthy; connection
+ * Discovery sufficiency is based on currently protocol-qualified peers, not merely owned socket
+ * jobs. Ownership remains the hard-cap signal inside [AceLivePeerRefillCoordinator.planRefill].
+ * The loop still does not stop peers merely because the pool later becomes healthy; connection
  * teardown remains owned by the TCP pool/caller rather than by a scoring heuristic.
  */
 class AceLivePeerRefillLoop(
@@ -454,10 +496,11 @@ class AceLivePeerRefillLoop(
         val adaptiveDesired = (
             coordinator.policy.targetActivePeers + requestedAdaptiveProbePeers
         ).coerceAtMost(coordinator.policy.maxActivePeers)
+        val qualifiedActivePeers = coordinator.qualifiedActivePeerCount(active)
         val needsDiscovery =
-            active.size < coordinator.policy.targetActivePeers ||
+            qualifiedActivePeers < coordinator.policy.targetActivePeers ||
                 recovery.poolStale ||
-                active.size < adaptiveDesired
+                qualifiedActivePeers < adaptiveDesired
         if (!needsDiscovery) {
             return AceLivePeerRefillCycleResult(
                 discoveryAttempted = false,
