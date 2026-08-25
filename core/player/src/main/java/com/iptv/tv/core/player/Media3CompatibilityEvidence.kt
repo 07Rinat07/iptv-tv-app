@@ -24,6 +24,13 @@ data class Media3TrackEvidence(
     val sampleRate: Int? = null
 )
 
+data class Media3TrackSelectionEvidence(
+    val videoTrackPresent: Boolean = false,
+    val audioTrackPresent: Boolean = false,
+    val selectedVideoTracks: List<Media3TrackEvidence> = emptyList(),
+    val selectedAudioTracks: List<Media3TrackEvidence> = emptyList()
+)
+
 data class Media3CompatibilityEvidence(
     val videoDecoderName: String?,
     val audioDecoderName: String?,
@@ -34,7 +41,7 @@ data class Media3CompatibilityEvidence(
 )
 
 /**
- * Keeps the observable Media3 compatibility state separate from the Player UI/session owner.
+ * Keeps observable Media3 compatibility state separate from the Player UI/session owner.
  *
  * Decoder names come from AnalyticsListener decoder-initialized callbacks. Track information comes
  * from Media3's selected track set. Media3 can mark more than one adaptive track as selected, so
@@ -44,7 +51,7 @@ data class Media3CompatibilityEvidence(
 class Media3CompatibilityEvidenceTracker {
     private var videoDecoderName: String? = null
     private var audioDecoderName: String? = null
-    private var tracks: Tracks = Tracks.EMPTY
+    private var trackSelection = Media3TrackSelectionEvidence()
 
     fun onVideoDecoderInitialized(decoderName: String) {
         videoDecoderName = decoderName.takeIf { it.isNotBlank() }
@@ -55,18 +62,30 @@ class Media3CompatibilityEvidenceTracker {
     }
 
     fun onTracksChanged(updatedTracks: Tracks) {
-        tracks = updatedTracks
+        onTrackSelectionChanged(updatedTracks.toCompatibilityTrackSelectionEvidence())
+    }
+
+    internal fun onTrackSelectionChanged(updatedSelection: Media3TrackSelectionEvidence) {
+        trackSelection = updatedSelection
     }
 
     fun snapshot(): Media3CompatibilityEvidence = Media3CompatibilityEvidence(
         videoDecoderName = videoDecoderName,
         audioDecoderName = audioDecoderName,
-        videoTrackPresent = tracks.containsType(C.TRACK_TYPE_VIDEO),
-        audioTrackPresent = tracks.containsType(C.TRACK_TYPE_AUDIO),
-        selectedVideoTracks = selectedMedia3TrackEvidence(tracks, Media3TrackKind.VIDEO),
-        selectedAudioTracks = selectedMedia3TrackEvidence(tracks, Media3TrackKind.AUDIO)
+        videoTrackPresent = trackSelection.videoTrackPresent,
+        audioTrackPresent = trackSelection.audioTrackPresent,
+        selectedVideoTracks = trackSelection.selectedVideoTracks,
+        selectedAudioTracks = trackSelection.selectedAudioTracks
     )
 }
+
+fun Tracks.toCompatibilityTrackSelectionEvidence(): Media3TrackSelectionEvidence =
+    Media3TrackSelectionEvidence(
+        videoTrackPresent = containsType(C.TRACK_TYPE_VIDEO),
+        audioTrackPresent = containsType(C.TRACK_TYPE_AUDIO),
+        selectedVideoTracks = selectedMedia3TrackEvidence(this, Media3TrackKind.VIDEO),
+        selectedAudioTracks = selectedMedia3TrackEvidence(this, Media3TrackKind.AUDIO)
+    )
 
 fun selectedMedia3TrackEvidence(
     tracks: Tracks,
