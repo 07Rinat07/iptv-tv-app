@@ -123,7 +123,7 @@ private fun AppRoot(
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route ?: Routes.HOME
     val activity = LocalContext.current as? ComponentActivity
     val colorScheme = MaterialTheme.colorScheme
-    val isPlayerRoute = currentRoute.startsWith(Routes.PLAYER)
+    val isPlayerRoute = currentRoute.startsWith(Routes.PLAYER) || currentRoute == Routes.HOME
     var showExitConfirm by remember { mutableStateOf(false) }
     var showSectionsMenu by remember { mutableStateOf(false) }
     var playerFullscreen by remember { mutableStateOf(false) }
