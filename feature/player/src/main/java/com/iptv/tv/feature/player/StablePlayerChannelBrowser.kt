@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -114,10 +115,10 @@ internal fun StableNearbyChannelsReplacement(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(channels, key = { it.id }) { channel ->
-                    val current = stableCurrentProgram(
-                        epgByChannel[channel.id].orEmpty(),
-                        System.currentTimeMillis()
-                    )
+                    val nowMs = System.currentTimeMillis()
+                    val programs = epgByChannel[channel.id].orEmpty()
+                    val current = stableCurrentProgram(programs, nowMs)
+                    val next = stableNextProgram(programs, current, nowMs)
                     val p2pStatus = if (PlayerP2pDescriptor.detect(channel.streamUrl) != null) {
                         p2pChannelAvailabilityLabel(P2pChannelAvailabilityUiCache.statuses[channel.id])
                     } else {
@@ -145,14 +146,36 @@ internal fun StableNearbyChannelsReplacement(
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                p2pStatus ?: current?.let {
-                                    "${stableTime(it.startEpochMs)} ${it.title}"
-                                } ?: "EPG нет",
+                                current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
+                                    ?: "Программа не найдена",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            current?.let { program ->
+                                LinearProgressIndicator(
+                                    progress = { stableProgramProgress(program, nowMs) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            Text(
+                                next?.let { "Далее ${stableTime(it.startEpochMs)} · ${it.title}" }
+                                    ?: "Далее · данных нет",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (p2pStatus != null) {
+                                Text(
+                                    p2pStatus,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
@@ -259,10 +282,10 @@ private fun StableChannelListReplacement(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         items(channels, key = { it.id }) { channel ->
-            val current = stableCurrentProgram(
-                epgByChannel[channel.id].orEmpty(),
-                System.currentTimeMillis()
-            )
+            val nowMs = System.currentTimeMillis()
+            val programs = epgByChannel[channel.id].orEmpty()
+            val current = stableCurrentProgram(programs, nowMs)
+            val next = stableNextProgram(programs, current, nowMs)
             val selected = channel.id == selectedChannelId
             val p2pStatus = if (PlayerP2pDescriptor.detect(channel.streamUrl) != null) {
                 p2pChannelAvailabilityLabel(P2pChannelAvailabilityUiCache.statuses[channel.id])
@@ -313,14 +336,36 @@ private fun StableChannelListReplacement(
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
                         )
                         Text(
-                            p2pStatus ?: current?.let {
-                                "${stableTime(it.startEpochMs)}–${stableTime(it.endEpochMs)} ${it.title}"
-                            } ?: "Программа не найдена",
+                            current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
+                                ?: "Программа не найдена",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
+                        current?.let { program ->
+                            LinearProgressIndicator(
+                                progress = { stableProgramProgress(program, nowMs) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        Text(
+                            next?.let { "Далее ${stableTime(it.startEpochMs)} · ${it.title}" }
+                                ?: "Далее · данных нет",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (p2pStatus != null) {
+                            Text(
+                                p2pStatus,
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                     OutlinedButton(
                         onClick = { onToggleFavorite(channel.id) },

@@ -70,6 +70,38 @@ class EpgChannelMatchPolicyTest {
     }
 
     @Test
+    fun qualitySuffixOnPlaylistNameMatchesBaseXmlTvChannel() {
+        val result = EpgChannelMatchPolicy.uniquePartialChannelId(
+            normalizedChannelName = "discoveryhd",
+            channelIdsByTextKey = listOf(
+                "discovery" to "xmltv.discovery",
+                "history" to "xmltv.history"
+            )
+        )
+
+        assertEquals("xmltv.discovery", result)
+    }
+
+    @Test
+    fun qualitySuffixAliasStillFailsClosedWhenBaseIsAmbiguous() {
+        val result = EpgChannelMatchPolicy.uniquePartialChannelId(
+            normalizedChannelName = "discoveryhd",
+            channelIdsByTextKey = listOf(
+                "discovery" to "xmltv.discovery",
+                "discovery4k" to "xmltv.discovery.4k"
+            )
+        )
+
+        assertNull(result)
+    }
+
+    @Test
+    fun shortNamesAreNotDestroyedByQualitySuffixRule() {
+        assertEquals(setOf("hd"), EpgChannelMatchPolicy.qualityAliases("hd"))
+        assertEquals(setOf("uhd"), EpgChannelMatchPolicy.qualityAliases("uhd"))
+    }
+
+    @Test
     fun blankNormalizedNameReturnsNull() {
         assertNull(
             EpgChannelMatchPolicy.uniquePartialChannelId(

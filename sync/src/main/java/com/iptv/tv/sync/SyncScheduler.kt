@@ -3,10 +3,13 @@ package com.iptv.tv.sync
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.iptv.tv.sync.worker.DownloadQueueWorker
+import com.iptv.tv.sync.worker.EpgRefreshWorker
 import com.iptv.tv.sync.worker.PlaylistSyncWorker
 import com.iptv.tv.sync.worker.ProviderSyncWorker
 import com.iptv.tv.sync.worker.RecordingQueueWorker
@@ -35,12 +38,49 @@ object SyncScheduler {
             ExistingPeriodicWorkPolicy.UPDATE,
             request
         )
+        scheduleEpgRefresh(workManager)
+        requestEpgRefresh(workManager)
     }
 
     internal fun normalizeSyncHours(repeatHours: Int): Int {
         val allowed = listOf(6, 12, 24)
         if (repeatHours <= 0) return 12
         return allowed.minBy { allowedValue -> abs(allowedValue - repeatHours) }
+    }
+
+    fun scheduleEpgRefresh(workManager: WorkManager, repeatMinutes: Long = 30L) {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
+            .build()
+        val request = PeriodicWorkRequestBuilder<EpgRefreshWorker>(
+            repeatMinutes.coerceIn(15L, 120L),
+            TimeUnit.MINUTES
+        )
+            .setConstraints(constraints)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
+            .build()
+
+        workManager.enqueueUniquePeriodicWork(
+            EpgRefreshWorker.WORK_NAME,
+            ExistingPeriodicWorkPolicy.UPDATE,
+            request
+        )
+    }
+
+    fun requestEpgRefresh(workManager: WorkManager) {
+        val request = OneTimeWorkRequestBuilder<EpgRefreshWorker>()
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .build()
+        workManager.enqueueUniqueWork(
+            EpgRefreshWorker.IMMEDIATE_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
+            request
+        )
     }
 
     fun scheduleProviderSync(workManager: WorkManager, repeatHours: Int = 12) {
