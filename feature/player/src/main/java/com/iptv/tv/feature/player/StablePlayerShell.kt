@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -43,7 +44,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.util.UnstableApi
-import coil.compose.AsyncImage
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.EpgProgram
@@ -70,14 +70,14 @@ internal fun StablePlayerRailReplacement(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         tonalElevation = 0.dp
     ) {
-        Column(Modifier.fillMaxSize().padding(10.dp)) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 7.dp, vertical = 8.dp)) {
             Row(
-                modifier = Modifier.padding(bottom = 9.dp),
+                modifier = Modifier.padding(bottom = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Surface(
-                    modifier = Modifier.size(36.dp),
+                    modifier = Modifier.size(30.dp),
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primaryContainer,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
@@ -87,13 +87,13 @@ internal fun StablePlayerRailReplacement(
                             "R",
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleMedium
+                            style = MaterialTheme.typography.labelLarge
                         )
                     }
                 }
                 Text(
-                    "Rinat IPTV",
-                    style = MaterialTheme.typography.titleMedium,
+                    "Rinat",
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -101,82 +101,72 @@ internal fun StablePlayerRailReplacement(
             }
 
             Surface(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
                 shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.primaryContainer,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
             ) {
                 Text(
                     "Эфир",
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    style = MaterialTheme.typography.labelLarge
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
 
-            Row(Modifier.weight(1f)) {
-                LazyColumn(
-                    modifier = Modifier.weight(1f).fillMaxHeight().focusGroup(),
-                    state = state,
-                    verticalArrangement = Arrangement.spacedBy(7.dp)
-                ) {
-                    item {
-                        OutlinedButton(
-                            onClick = onLive,
-                            modifier = Modifier.fillMaxWidth().tvFocusOutline()
-                        ) { Text("LIVE TV", maxLines = 1) }
-                    }
-                    item {
-                        OutlinedButton(
-                            onClick = onPlaylists,
-                            modifier = Modifier.fillMaxWidth().tvFocusOutline()
-                        ) { Text("Плейлисты", maxLines = 1) }
-                    }
-                    item {
-                        OutlinedButton(
-                            onClick = onGroups,
-                            modifier = Modifier.fillMaxWidth().tvFocusOutline()
-                        ) { Text("Группы", maxLines = 1) }
-                    }
-                    item {
-                        if (favoritesOnly) {
-                            Button(
-                                onClick = onFavorites,
-                                modifier = Modifier.fillMaxWidth().tvFocusOutline()
-                            ) { Text("★ Избранное", maxLines = 1) }
-                        } else {
-                            OutlinedButton(
-                                onClick = onFavorites,
-                                modifier = Modifier.fillMaxWidth().tvFocusOutline()
-                            ) { Text("☆ Избранное", maxLines = 1) }
-                        }
-                    }
-                    item {
-                        OutlinedButton(
-                            onClick = onSettings,
-                            modifier = Modifier.fillMaxWidth().tvFocusOutline()
-                        ) { Text("Настройки", maxLines = 1) }
-                    }
-                    item {
-                        onBack?.let {
-                            OutlinedButton(
-                                onClick = it,
-                                modifier = Modifier.fillMaxWidth().tvFocusOutline()
-                            ) { Text("Назад", maxLines = 1) }
-                        }
-                    }
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxHeight().focusGroup(),
+                state = state,
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                item { StableRailButton("LIVE TV", onLive) }
+                item { StableRailButton("Плейлисты", onPlaylists) }
+                item { StableRailButton("Группы", onGroups) }
+                item {
+                    StableRailButton(
+                        label = if (favoritesOnly) "★ Избранное" else "☆ Избранное",
+                        onClick = onFavorites,
+                        selected = favoritesOnly
+                    )
                 }
+                item { StableRailButton("Настройки", onSettings) }
+                item { onBack?.let { StableRailButton("Назад", it) } }
             }
+        }
+    }
+}
 
+@Composable
+private fun StableRailButton(
+    label: String,
+    onClick: () -> Unit,
+    selected: Boolean = false
+) {
+    if (selected) {
+        Button(
+            onClick = onClick,
+            modifier = Modifier.fillMaxWidth().tvFocusOutline(),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+        ) {
             Text(
-                "TV • D-pad • Mouse",
-                color = MaterialTheme.colorScheme.outline,
-                style = MaterialTheme.typography.bodySmall
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
+        }
+    } else {
+        OutlinedButton(
+            onClick = onClick,
+            modifier = Modifier.fillMaxWidth().tvFocusOutline(),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+        ) {
             Text(
-                "Media3 • LibVLC • P2P",
-                color = MaterialTheme.colorScheme.outline,
-                style = MaterialTheme.typography.bodySmall
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -248,7 +238,7 @@ internal fun StableCenterPaneReplacement(
                             )
                             Text(
                                 selectedChannel?.name ?: "Выберите канал",
-                                style = MaterialTheme.typography.headlineSmall,
+                                style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -256,9 +246,9 @@ internal fun StableCenterPaneReplacement(
                         }
                         Text(
                             current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
-                                ?: "Сейчас: программа не найдена",
+                                ?: "Программа не найдена",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -266,7 +256,7 @@ internal fun StableCenterPaneReplacement(
                             Text(
                                 "Далее ${stableRange(it)} · ${it.title}",
                                 color = MaterialTheme.colorScheme.outline,
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -275,11 +265,10 @@ internal fun StableCenterPaneReplacement(
                     OutlinedButton(
                         onClick = { selectedChannel?.id?.let(onToggleFavorite) },
                         enabled = selectedChannel != null,
-                        modifier = Modifier.tvFocusOutline()
+                        modifier = Modifier.tvFocusOutline(),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                     ) {
-                        Text(
-                            if (selectedChannel?.id?.let { it in favoriteIds } == true) "★" else "☆"
-                        )
+                        Text(if (selectedChannel?.id?.let { it in favoriteIds } == true) "★" else "☆")
                     }
                 }
             }
@@ -329,19 +318,46 @@ internal fun StableCenterPaneReplacement(
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                            verticalArrangement = Arrangement.spacedBy(9.dp)
                         ) {
                             Text(
                                 selectedChannel?.name ?: "Выберите канал",
                                 color = Color.White,
-                                style = MaterialTheme.typography.titleLarge
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            Button(
-                                onClick = onPlaySelected,
-                                enabled = selectedChannel != null && !isStartingPlayback,
-                                modifier = Modifier.tvFocusOutline()
-                            ) {
-                                Text(if (isStartingPlayback) "Подключение…" else "Смотреть")
+                            if (isStartingPlayback) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(30.dp),
+                                    strokeWidth = 3.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "Подключение…",
+                                    color = Color.White.copy(alpha = 0.88f),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                selectedChannel
+                                    ?.takeIf { PlayerP2pDescriptor.detect(it.streamUrl) != null }
+                                    ?.let { channel ->
+                                        Text(
+                                            p2pChannelAvailabilityLabel(
+                                                P2pChannelAvailabilityUiCache.statuses[channel.id]
+                                            ),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                            } else if (selectedChannel != null) {
+                                Button(
+                                    onClick = onPlaySelected,
+                                    modifier = Modifier.tvFocusOutline()
+                                ) {
+                                    Text("Смотреть")
+                                }
                             }
                         }
                         if (controlsVisible) {
