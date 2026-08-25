@@ -136,8 +136,8 @@ internal fun StableNearbyChannelsReplacement(
                         tonalElevation = 0.dp
                     ) {
                         Column(
-                            Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             Text(
                                 channel.name,
@@ -150,7 +150,7 @@ internal fun StableNearbyChannelsReplacement(
                                     ?: "Программа не найдена",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2,
+                                maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             current?.let { program ->
@@ -159,14 +159,15 @@ internal fun StableNearbyChannelsReplacement(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
-                            Text(
-                                next?.let { "Далее ${stableTime(it.startEpochMs)} · ${it.title}" }
-                                    ?: "Далее · данных нет",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            next?.let {
+                                Text(
+                                    "Далее ${stableTime(it.startEpochMs)} · ${it.title}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             if (p2pStatus != null) {
                                 Text(
                                     p2pStatus,
@@ -205,24 +206,24 @@ internal fun StableChannelBrowserReplacement(
         tonalElevation = 0.dp
     ) {
         Column(
-            Modifier.fillMaxSize().padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            Modifier.fillMaxSize().padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         "Каналы",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
                         "${channels.size} доступно",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.labelSmall
                     )
                 }
                 OutlinedButton(onClick = onOpenGroups, modifier = Modifier.tvFocusOutline()) {
-                    Text("Группы")
+                    Text("Группы", style = MaterialTheme.typography.labelMedium)
                 }
             }
 
@@ -230,8 +231,9 @@ internal fun StableChannelBrowserReplacement(
                 value = query,
                 onValueChange = onQueryChange,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Поиск канала") },
-                singleLine = true
+                label = { Text("Поиск") },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall
             )
 
             StableChannelListReplacement(
@@ -270,113 +272,126 @@ private fun StableChannelListReplacement(
         if (index >= 0) listState.animateScrollToItem(index)
     }
 
-    LazyColumn(
-        modifier = modifier
-            .fillMaxHeight()
-            .focusGroup()
-            .stablePagedListNavigation(
-                state = listState,
-                itemCount = channels.size
-            ),
-        state = listState,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        items(channels, key = { it.id }) { channel ->
-            val nowMs = System.currentTimeMillis()
-            val programs = epgByChannel[channel.id].orEmpty()
-            val current = stableCurrentProgram(programs, nowMs)
-            val next = stableNextProgram(programs, current, nowMs)
-            val selected = channel.id == selectedChannelId
-            val p2pStatus = if (PlayerP2pDescriptor.detect(channel.streamUrl) != null) {
-                p2pChannelAvailabilityLabel(P2pChannelAvailabilityUiCache.statuses[channel.id])
-            } else {
-                null
-            }
-
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .tvFocusOutline()
-                    .stableSelectedFocus(channel.id == focusChannelId)
-                    .clickable { onSelect(channel.id) },
-                color = if (selected) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                },
-                border = BorderStroke(
-                    width = if (selected) 2.dp else 1.dp,
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.outlineVariant
-                    }
+    Row(modifier = modifier.fillMaxHeight()) {
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .focusGroup()
+                .stablePagedListNavigation(
+                    state = listState,
+                    itemCount = channels.size
                 ),
-                tonalElevation = 0.dp,
-                shape = MaterialTheme.shapes.medium
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            items(channels, key = { it.id }) { channel ->
+                val nowMs = System.currentTimeMillis()
+                val programs = epgByChannel[channel.id].orEmpty()
+                val current = stableCurrentProgram(programs, nowMs)
+                val next = stableNextProgram(programs, current, nowMs)
+                val selected = channel.id == selectedChannelId
+                val p2pStatus = if (PlayerP2pDescriptor.detect(channel.streamUrl) != null) {
+                    p2pChannelAvailabilityLabel(P2pChannelAvailabilityUiCache.statuses[channel.id])
+                } else {
+                    null
+                }
+
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .tvFocusOutline()
+                        .stableSelectedFocus(channel.id == focusChannelId)
+                        .clickable { onSelect(channel.id) },
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    border = BorderStroke(
+                        width = if (selected) 2.dp else 1.dp,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.outlineVariant
+                        }
+                    ),
+                    tonalElevation = 0.dp,
+                    shape = MaterialTheme.shapes.medium
                 ) {
-                    AsyncImage(
-                        model = channel.logo,
-                        contentDescription = channel.name,
-                        modifier = Modifier.size(36.dp)
-                    )
-                    Column(
-                        Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 7.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
                     ) {
-                        Text(
-                            channel.name,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                        )
-                        Text(
-                            current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
-                                ?: "Программа не найдена",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        current?.let { program ->
-                            LinearProgressIndicator(
-                                progress = { stableProgramProgress(program, nowMs) },
-                                modifier = Modifier.fillMaxWidth()
+                        if (!channel.logo.isNullOrBlank()) {
+                            AsyncImage(
+                                model = channel.logo,
+                                contentDescription = channel.name,
+                                modifier = Modifier.size(30.dp)
                             )
                         }
-                        Text(
-                            next?.let { "Далее ${stableTime(it.startEpochMs)} · ${it.title}" }
-                                ?: "Далее · данных нет",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        if (p2pStatus != null) {
+                        Column(
+                            Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(1.dp)
+                        ) {
                             Text(
-                                p2pStatus,
-                                color = MaterialTheme.colorScheme.primary,
+                                channel.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold
+                            )
+                            Text(
+                                current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
+                                    ?: "Программа не найдена",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            current?.let { program ->
+                                LinearProgressIndicator(
+                                    progress = { stableProgramProgress(program, nowMs) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            next?.let {
+                                Text(
+                                    "Далее ${stableTime(it.startEpochMs)} · ${it.title}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (p2pStatus != null) {
+                                Text(
+                                    p2pStatus,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
-                    }
-                    OutlinedButton(
-                        onClick = { onToggleFavorite(channel.id) },
-                        modifier = Modifier.size(40.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
-                    ) {
-                        Text(if (channel.id in favoriteIds) "★" else "☆")
+                        OutlinedButton(
+                            onClick = { onToggleFavorite(channel.id) },
+                            modifier = Modifier.size(36.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+                        ) {
+                            Text(if (channel.id in favoriteIds) "★" else "☆")
+                        }
                     }
                 }
             }
         }
+
+        VerticalScrollControls(
+            state = listState,
+            itemCount = channels.size,
+            modifier = Modifier.fillMaxHeight()
+        )
     }
 }
 
