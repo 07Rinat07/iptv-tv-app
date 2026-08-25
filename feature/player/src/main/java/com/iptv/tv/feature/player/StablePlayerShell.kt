@@ -1,6 +1,7 @@
 package com.iptv.tv.feature.player
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -11,23 +12,26 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -43,6 +47,9 @@ import coil.compose.AsyncImage
 import com.iptv.tv.core.designsystem.theme.tvFocusOutline
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.EpgProgram
+import kotlinx.coroutines.delay
+
+private const val PLAYER_CONTROLS_AUTO_HIDE_MS = 5_000L
 
 @Composable
 internal fun StablePlayerRailReplacement(
@@ -56,35 +63,121 @@ internal fun StablePlayerRailReplacement(
     onSettings: () -> Unit
 ) {
     val state = rememberLazyListState()
-    Card(modifier = modifier.tvFocusOutline()) {
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        tonalElevation = 0.dp
+    ) {
         Column(Modifier.fillMaxSize().padding(10.dp)) {
-            Text(
-                "Rinat IPTV",
-                modifier = Modifier.padding(bottom = 8.dp),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            Row(
+                modifier = Modifier.padding(bottom = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    modifier = Modifier.size(36.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            "R",
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                }
+                Text(
+                    "Rinat IPTV",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+            ) {
+                Text(
+                    "Эфир",
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+
             Row(Modifier.weight(1f)) {
                 LazyColumn(
                     modifier = Modifier.weight(1f).fillMaxHeight().focusGroup(),
                     state = state,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    item { Button(onClick = onLive, modifier = Modifier.fillMaxWidth()) { Text("Эфир") } }
-                    item { OutlinedButton(onClick = onPlaylists, modifier = Modifier.fillMaxWidth()) { Text("Плейлисты") } }
-                    item { OutlinedButton(onClick = onGroups, modifier = Modifier.fillMaxWidth()) { Text("Группы") } }
+                    item {
+                        OutlinedButton(
+                            onClick = onLive,
+                            modifier = Modifier.fillMaxWidth().tvFocusOutline()
+                        ) { Text("LIVE TV", maxLines = 1) }
+                    }
+                    item {
+                        OutlinedButton(
+                            onClick = onPlaylists,
+                            modifier = Modifier.fillMaxWidth().tvFocusOutline()
+                        ) { Text("Плейлисты", maxLines = 1) }
+                    }
+                    item {
+                        OutlinedButton(
+                            onClick = onGroups,
+                            modifier = Modifier.fillMaxWidth().tvFocusOutline()
+                        ) { Text("Группы", maxLines = 1) }
+                    }
                     item {
                         if (favoritesOnly) {
-                            Button(onClick = onFavorites, modifier = Modifier.fillMaxWidth()) { Text("★ Избранное") }
+                            Button(
+                                onClick = onFavorites,
+                                modifier = Modifier.fillMaxWidth().tvFocusOutline()
+                            ) { Text("★ Избранное", maxLines = 1) }
                         } else {
-                            OutlinedButton(onClick = onFavorites, modifier = Modifier.fillMaxWidth()) { Text("☆ Избранное") }
+                            OutlinedButton(
+                                onClick = onFavorites,
+                                modifier = Modifier.fillMaxWidth().tvFocusOutline()
+                            ) { Text("☆ Избранное", maxLines = 1) }
                         }
                     }
-                    item { OutlinedButton(onClick = onSettings, modifier = Modifier.fillMaxWidth()) { Text("Настройки") } }
-                    item { onBack?.let { OutlinedButton(onClick = it, modifier = Modifier.fillMaxWidth()) { Text("Назад") } } }
+                    item {
+                        OutlinedButton(
+                            onClick = onSettings,
+                            modifier = Modifier.fillMaxWidth().tvFocusOutline()
+                        ) { Text("Настройки", maxLines = 1) }
+                    }
+                    item {
+                        onBack?.let {
+                            OutlinedButton(
+                                onClick = it,
+                                modifier = Modifier.fillMaxWidth().tvFocusOutline()
+                            ) { Text("Назад", maxLines = 1) }
+                        }
+                    }
                 }
-                VerticalScrollControls(state = state, itemCount = 6)
             }
+
+            Text(
+                "TV • D-pad • Mouse",
+                color = MaterialTheme.colorScheme.outline,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "Media3 • LibVLC • P2P",
+                color = MaterialTheme.colorScheme.outline,
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }
@@ -119,16 +212,88 @@ internal fun StableCenterPaneReplacement(
     onOpenChannels: () -> Unit
 ) {
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 10.dp)) {
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val targetVideoHeight = (maxWidth * 9f / 16f)
-                .coerceAtMost(if (compact) 320.dp else 480.dp)
-                .coerceAtLeast(180.dp)
-            Card(
+
+    LaunchedEffect(controlsVisible, session?.sessionId) {
+        if (!controlsVisible || session == null) return@LaunchedEffect
+        delay(PLAYER_CONTROLS_AUTO_HIDE_MS)
+        controlsVisible = false
+    }
+
+    BoxWithConstraints(modifier = modifier) {
+        val widePane = maxWidth >= 560.dp
+        val nowMs = System.currentTimeMillis()
+        val current = stableCurrentProgram(programs, nowMs)
+        val next = stableNextProgram(programs, current, nowMs)
+
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 9.dp)
+        ) {
+            if (widePane) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                "LIVE",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                            Text(
+                                selectedChannel?.name ?: "Выберите канал",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Text(
+                            current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
+                                ?: "Сейчас: программа не найдена",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        next?.let {
+                            Text(
+                                "Далее ${stableRange(it)} · ${it.title}",
+                                color = MaterialTheme.colorScheme.outline,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = { selectedChannel?.id?.let(onToggleFavorite) },
+                        enabled = selectedChannel != null,
+                        modifier = Modifier.tvFocusOutline()
+                    ) {
+                        Text(
+                            if (selectedChannel?.id?.let { it in favoriteIds } == true) "★" else "☆"
+                        )
+                    }
+                }
+            }
+
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(targetVideoHeight)
-                    .tvFocusOutline()
+                    .weight(1f)
+                    .heightIn(min = if (widePane) 250.dp else 180.dp)
+                    .tvFocusOutline(),
+                shape = MaterialTheme.shapes.large,
+                color = Color.Black,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                tonalElevation = 0.dp
             ) {
                 if (session != null) {
                     videoSurfaceContent(
@@ -162,12 +327,19 @@ internal fun StableCenterPaneReplacement(
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(selectedChannel?.name ?: "Выберите канал", color = Color.White)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                selectedChannel?.name ?: "Выберите канал",
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleLarge
+                            )
                             Button(
                                 onClick = onPlaySelected,
                                 enabled = selectedChannel != null && !isStartingPlayback,
-                                modifier = Modifier.padding(top = 8.dp)
+                                modifier = Modifier.tvFocusOutline()
                             ) {
                                 Text(if (isStartingPlayback) "Подключение…" else "Смотреть")
                             }
@@ -182,41 +354,92 @@ internal fun StableCenterPaneReplacement(
                     }
                 }
             }
+
+            if (widePane) {
+                StableDashboardTransportBar(
+                    volume = volume,
+                    onVolumeChange = onVolumeChange,
+                    onToggleMute = onToggleMute,
+                    onPrevious = onPreviousChannel,
+                    onNext = onNextChannel,
+                    onOpenChannels = onOpenChannels,
+                    onToggleFullscreen = onToggleFullscreen
+                )
+                StableNearbyChannelsReplacement(
+                    channels = channels,
+                    epgByChannel = epgByChannel,
+                    onSelectChannel = onSelectChannel,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 104.dp, max = if (compact) 132.dp else 158.dp)
+                )
+            } else {
+                StableCompactControlsReplacement(
+                    channel = selectedChannel,
+                    programs = programs,
+                    isFavorite = selectedChannel?.id?.let { it in favoriteIds } == true,
+                    volume = volume,
+                    onVolumeChange = onVolumeChange,
+                    onToggleMute = onToggleMute,
+                    onToggleFavorite = { selectedChannel?.id?.let(onToggleFavorite) },
+                    onPrevious = onPreviousChannel,
+                    onNext = onNextChannel,
+                    onOpenChannels = onOpenChannels
+                )
+            }
         }
+    }
+}
 
-        if (compact) {
-            StableCompactControlsReplacement(
-                channel = selectedChannel,
-                programs = programs,
-                isFavorite = selectedChannel?.id?.let { it in favoriteIds } == true,
-                volume = volume,
-                onVolumeChange = onVolumeChange,
-                onToggleMute = onToggleMute,
-                onToggleFavorite = { selectedChannel?.id?.let(onToggleFavorite) },
-                onPrevious = onPreviousChannel,
-                onNext = onNextChannel,
-                onOpenChannels = onOpenChannels
+@Composable
+private fun StableDashboardTransportBar(
+    volume: Float,
+    onVolumeChange: (Float) -> Unit,
+    onToggleMute: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onOpenChannels: () -> Unit,
+    onToggleFullscreen: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 9.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            OutlinedButton(onClick = onPrevious, modifier = Modifier.tvFocusOutline()) { Text("◀") }
+            OutlinedButton(onClick = onNext, modifier = Modifier.tvFocusOutline()) { Text("▶") }
+            OutlinedButton(onClick = onToggleMute, modifier = Modifier.tvFocusOutline()) {
+                Text(if (volume <= 0f) "🔇" else "🔊")
+            }
+            OutlinedButton(
+                onClick = { onVolumeChange(volume - VOLUME_STEP) },
+                modifier = Modifier.tvFocusOutline()
+            ) { Text("−") }
+            Text(
+                "${(volume * 100).toInt()}%",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
             )
-        } else {
-            StableNowNextCardReplacement(
-                channel = selectedChannel,
-                programs = programs,
-                isFavorite = selectedChannel?.id?.let { it in favoriteIds } == true,
-                volume = volume,
-                onVolumeChange = onVolumeChange,
-                onToggleMute = onToggleMute,
-                onToggleFavorite = { selectedChannel?.id?.let(onToggleFavorite) },
-                onPrevious = onPreviousChannel,
-                onNext = onNextChannel,
-                onOpenChannels = onOpenChannels
-            )
-
-            StableNearbyChannelsReplacement(
-                channels = channels,
-                epgByChannel = epgByChannel,
-                onSelectChannel = onSelectChannel,
-                modifier = Modifier.fillMaxWidth().weight(1f)
-            )
+            OutlinedButton(
+                onClick = { onVolumeChange(volume + VOLUME_STEP) },
+                modifier = Modifier.tvFocusOutline()
+            ) { Text("+") }
+            Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = onOpenChannels, modifier = Modifier.tvFocusOutline()) {
+                Text("Каналы")
+            }
+            OutlinedButton(onClick = onToggleFullscreen, modifier = Modifier.tvFocusOutline()) {
+                Text("⛶")
+            }
         }
     }
 }
@@ -235,7 +458,13 @@ private fun StableCompactControlsReplacement(
     onOpenChannels: () -> Unit
 ) {
     val current = stableCurrentProgram(programs, System.currentTimeMillis())
-    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().tvFocusOutline(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        tonalElevation = 0.dp
+    ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -283,65 +512,6 @@ private fun StableCompactControlsReplacement(
     }
 }
 
-@Composable
-private fun StableNowNextCardReplacement(
-    channel: Channel?,
-    programs: List<EpgProgram>,
-    isFavorite: Boolean,
-    volume: Float,
-    onVolumeChange: (Float) -> Unit,
-    onToggleMute: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit,
-    onOpenChannels: () -> Unit
-) {
-    val nowMs = System.currentTimeMillis()
-    val current = stableCurrentProgram(programs, nowMs)
-    val next = stableNextProgram(programs, current, nowMs)
-    Card(modifier = Modifier.fillMaxWidth().tvFocusOutline()) {
-        Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AsyncImage(model = channel?.logo, contentDescription = channel?.name, modifier = Modifier.size(42.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        channel?.name ?: "Канал не выбран",
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(channel?.group ?: "Без группы", style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                }
-                OutlinedButton(onClick = onToggleFavorite, enabled = channel != null) {
-                    Text(if (isFavorite) "★" else "☆")
-                }
-            }
-            Text(
-                current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
-                    ?: "Сейчас: программа не найдена",
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                next?.let { "Далее ${stableRange(it)} · ${it.title}" } ?: "Далее: данных нет",
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            VolumeControl(
-                volume = volume,
-                onVolumeChange = onVolumeChange,
-                onToggleMute = onToggleMute
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onPrevious) { Text("◀ Канал") }
-                OutlinedButton(onClick = onNext) { Text("Канал ▶") }
-                OutlinedButton(onClick = onOpenChannels) { Text("Список") }
-            }
-        }
-    }
-}
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 @UnstableApi
@@ -364,6 +534,13 @@ internal fun StableFullscreenPlayerReplacement(
     onStop: () -> Unit
 ) {
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
+
+    LaunchedEffect(controlsVisible, session?.sessionId) {
+        if (!controlsVisible || session == null) return@LaunchedEffect
+        delay(PLAYER_CONTROLS_AUTO_HIDE_MS)
+        controlsVisible = false
+    }
+
     BackHandler(onBack = onToggleFullscreen)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         if (session != null) {
