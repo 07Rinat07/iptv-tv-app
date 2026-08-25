@@ -321,7 +321,7 @@ private fun StableMedia3VideoSurface(
         fun emitMedia3CompatibilityEvidence(event: String, audioOnly: Boolean = false) {
             if (compatibilityEvidenceReported) return
             val evidence = compatibilityEvidenceTracker.snapshot()
-            if (audioOnly && evidence.selectedVideoTracks.isNotEmpty()) return
+            if (audioOnly && evidence.videoTrackPresent) return
             if (evidence.selectedVideoTracks.isEmpty() && evidence.selectedAudioTracks.isEmpty()) return
             if (evidence.videoDecoderName == null && evidence.audioDecoderName == null) return
 
