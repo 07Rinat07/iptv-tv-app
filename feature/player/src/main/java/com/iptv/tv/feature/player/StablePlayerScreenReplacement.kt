@@ -128,7 +128,7 @@ internal fun stableRemoteActionForKey(
     KeyEvent.KEYCODE_MUTE -> StableRemoteAction.TOGGLE_MUTE
 
     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-    KeyEvent.KEYCODE_HEADSETHOOK -> StableRemoteAction.TOGGLE_PLAYBACK
+    KeyEvent.KEYCODE_HEADSEETHOOK -> StableRemoteAction.TOGGLE_PLAYBACK
 
     else -> StableRemoteAction.NONE
 }
@@ -203,6 +203,8 @@ fun StablePlayerScreen(
 
         val activeSession = state.internalSession?.takeIf { it.channelId == channel.id }
         val previous = P2pChannelAvailabilityUiCache.statuses[channel.id]
+        val observedPeers = state.enginePeers.coerceAtLeast(0)
+        val observedSpeed = state.engineSpeedKbps.coerceAtLeast(0)
         val p2pFailure = state.lastError?.takeIf { message ->
             message.contains("Torrent TV", ignoreCase = true) ||
                 message.contains("P2P", ignoreCase = true) ||
@@ -211,24 +213,29 @@ fun StablePlayerScreen(
         val availability = when {
             activeSession != null && !state.isStartingPlayback -> P2pChannelAvailabilityState.PLAYING
             activeSession != null -> P2pChannelAvailabilityState.READY
+            state.isStartingPlayback && observedPeers > 0 -> P2pChannelAvailabilityState.PEERS
             state.isStartingPlayback -> P2pChannelAvailabilityState.SEARCHING
             p2pFailure != null -> p2pAvailabilityFromResolveError(p2pFailure)
             state.resolvedStreamUrl != null -> P2pChannelAvailabilityState.READY
             else -> previous?.state ?: P2pChannelAvailabilityState.UNCHECKED
         }
-        val peers = when (availability) {
-            P2pChannelAvailabilityState.SEARCHING,
-            P2pChannelAvailabilityState.NO_PEERS,
-            P2pChannelAvailabilityState.ERROR -> 0
-            else -> state.enginePeers.coerceAtLeast(0)
-        }
-        val speed = if (availability == P2pChannelAvailabilityState.PLAYING) {
-            state.engineSpeedKbps.coerceAtLeast(0)
-        } else {
+        val peers = if (availability == P2pChannelAvailabilityState.NO_PEERS) {
             0
+        } else {
+            observedPeers
+        }
+        val speed = when (availability) {
+            P2pChannelAvailabilityState.PEERS,
+            P2pChannelAvailabilityState.READY,
+            P2pChannelAvailabilityState.PLAYING -> observedSpeed
+            else -> 0
         }
         if (availability == P2pChannelAvailabilityState.SEARCHING) {
-            P2pChannelAvailabilityUiCache.beginSearch(channel.id)
+            P2pChannelAvailabilityUiCache.beginSearch(
+                channelId = channel.id,
+                peers = peers,
+                speedKbps = speed
+            )
         } else {
             P2pChannelAvailabilityUiCache.mark(
                 channelId = channel.id,
