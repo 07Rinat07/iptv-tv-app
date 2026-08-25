@@ -19,11 +19,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.iptv.tv.core.playervlc.LibVlcCompatibilityEvidence
 import com.iptv.tv.core.playervlc.LibVlcPlaybackConfig
 import com.iptv.tv.core.playervlc.LibVlcPlaybackController
 import com.iptv.tv.core.playervlc.LibVlcPlaybackListener
 import com.iptv.tv.core.playervlc.LibVlcVideoScale
 import com.iptv.tv.core.playervlc.LibVlcVideoView
+import com.iptv.tv.core.playervlc.toDiagnosticMessage
+import com.iptv.tv.core.utils.FileLogger
 
 @Composable
 internal fun StableLibVlcVideoSurface(
@@ -71,6 +74,16 @@ internal fun StableLibVlcVideoSurface(
                     }
 
                     override fun onError(message: String) = currentOnError(message)
+
+                    override fun onCompatibilityEvidence(evidence: LibVlcCompatibilityEvidence) {
+                        FileLogger.write(
+                            context = context,
+                            level = "INFO",
+                            tag = "PlaybackCompatibility",
+                            message = "event=ready, sessionId=${session.sessionId}, " +
+                                evidence.toDiagnosticMessage()
+                        )
+                    }
                 }
             )
         }
