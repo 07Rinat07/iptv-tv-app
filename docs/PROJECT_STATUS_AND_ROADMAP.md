@@ -1,117 +1,113 @@
 # Project status and roadmap
 
-_Last updated: 2026-08-26 after PR #249 and #250 merged; PR #251 is the final EPG integration candidate before the next TV Box field run._
+_Last updated: 2026-08-26 after merge of PR #251/#252/#253 and the following TV Box field retest._
 
-This is the canonical current-state document. For continuation details read [`CURRENT_DEVELOPMENT_HANDOFF.md`](CURRENT_DEVELOPMENT_HANDOFF.md). Historical dated reports remain evidence but do not override these two documents.
+This is the canonical current-state document. For immediate continuation use [`CURRENT_DEVELOPMENT_HANDOFF.md`](CURRENT_DEVELOPMENT_HANDOFF.md). Historical dated reports remain evidence but do not override these documents.
 
-## Current baseline
+## Current integration baseline
 
-The application can browse a large IPTV catalog, enter the TV-first Player, render ordinary IPTV across multiple codecs/resolutions and remain within the captured device heap. The primary release blocker remains embedded Torrent TV peer acquisition/qualification; EPG quality is the active product-quality recovery track being integrated in bounded increments.
+Current `main` field baseline:
 
-Current merged baseline:
+- `a1b3e5e086c0470d8c21e75f8a288610c61b986a` — `feat(player): add programme guide and nearby channel logos`;
+- PR #251 merged — timezone correction + bounded 6/12/24h EPG refresh policy;
+- PR #252 merged — bounded large-XMLTV transport envelope raised from 64 MiB to 128 MiB after field evidence of an 88,578,547-byte legitimate source;
+- PR #253 merged — Player `Программа` action/dialog and nearby-channel logos using existing EPG state.
 
-- PR #249 merged to `main` as `f2cb6e02c8725e49032038942521232438e18f38` — diversified bounded Mainline DHT bootstrap roots without widening startup/runtime safety budgets;
-- PR #250 merged to `main` as `1d4c86569537a525661525dfb949c0aa6754b284` — conservative EPG matching recovery and invalid/placeholder programme filtering.
+Important: #252 is **not** a persistent XMLTV disk cache. It changes only the bounded streaming transport envelope. Persistent L2 cache remains a separate planned increment.
 
-PR #251 (`feat/epg-time-refresh-r1`) may merge only after it is cleanly based on this `main` and its exact head passes Database Unit CI, Player Refactor Guard and Android CI. The next development session must verify the actual `main` SHA/PR status before assuming #251 is present in the field APK.
+## Release blockers and current field evidence
 
-## #229 — memory/import OOM
+### #232 — embedded Torrent TV peer/handshake gap
 
-The original immediate field OOM was not reproduced after replacing hot full-table Favorites materialization with bounded identity paging/full-row lookup only for matched favorites. Keep the deterministic large-catalog regression and real-device soak as release gates. Do not raise heap limits to hide regressions.
+Still the primary release blocker. The latest field run shows mixed results rather than one universal failure:
 
-## #230 — Home root integration
+- some embedded P2P sessions reach first audio + first video frame and play normally;
+- one failure class is weak acquisition/connect: tracker may yield only one candidate, that candidate fails TCP connection, and bounded DHT probes return zero useful peers;
+- a separate failure class reaches a large loopback transfer / Media3 load but still reports no first audio or first video frame.
 
-Field-recovered. The TV-first Home/root layout is visible without the previously blocking legacy shell. Reopen only on a new reproduction.
+Keep these as separate investigations:
 
-## #231 — production Player UX
+`discovered -> connected -> handshaked/qualified -> producing -> TS -> Media3 tracks/first frame`
 
-Field-recovered for the original clipping/legacy-looking regression. Ordinary IPTV reaches first frame. Continue programme/nearby-channel UX as separate bounded EPG/Player increments; preserve one playback/P2P session across dashboard/fullscreen.
+Do not widen global startup timeout, player buffer, request depth, peer caps or heap as a substitute for identifying the first missing stage.
 
-## #232 — embedded Torrent TV peer/handshake gap
+### EPG — current active defect
 
-**Still open and the primary release blocker.** Previous field evidence showed weak peer diversity and many failed KRPC queries. PR #249 adds bootstrap diversity but is not field-proven until the next TV Box run.
+The old 64 MiB input guard is no longer the first blocker. The same field source that previously reported 88,578,547 bytes now reaches the XML parser, where repeated channel requests fail with:
 
-Analyse each supplied session through:
+`Invalid XMLTV format: unterminated entity ref (position:TEXT @1:48 ...)`
 
-`discovered -> connected -> handshaked/qualified -> producing -> first media/player ready`
+The Player UI itself is no longer the primary EPG problem:
 
-Fix the first missing stage in this order:
+- `Программа` button/dialog is visible and opens;
+- nearby logos appear where channel metadata contains a logo;
+- programme text remains `Программа не найдена` because the upstream XMLTV load fails before usable EPG data is produced.
 
-1. DHT/tracker acquisition, bootstrap/routing diversity, failed-query causes;
-2. candidate retention/deduplication/backoff;
-3. TCP connect lifecycle;
-4. BitTorrent/Ace Live handshake qualification;
-5. metadata/live-window;
-6. request scheduling/sent/chunk/piece/authentication;
-7. TS output;
-8. Player boundary only after upstream media production is proven.
+Active branch:
 
-Do not compensate for missing protocol progress by increasing global startup timeout, player buffering, request depth or peer caps.
+`fix/epg-source-format-classification-r1`
 
-## #233 — rapid playback request churn
+Current increment:
 
-Keep as a reproducibility item until a field run proves that focus movement, rather than explicit rapid selection, triggers heavy playback requests. Focus alone must not start each intermediate channel.
+1. bounded prefix classification before XML parsing;
+2. distinguish XMLTV-looking input from HTML/error response, raw gzip, other XML, text and binary/unknown input;
+3. never log raw payload or credential-bearing URL;
+4. push inspected bytes back into the stream so the existing 128 MiB byte guard still counts the body once;
+5. no global `&` replacement or speculative XML sanitizer.
 
-## EPG recovery state
+If the field error remains `unterminated entity ref` after this gate, that becomes evidence that the body is XMLTV-looking but internally malformed. Only then consider a separate narrowly tested compatibility repair based on actual payload evidence.
 
-PR #250 is merged and supplies the base matching/display recovery.
+## EPG infrastructure already integrated
 
-PR #251, when merged after a green exact-head run, supplies:
+The merged EPG baseline now includes:
 
+- conservative channel matching and invalid/placeholder programme filtering;
 - device-local timezone as default display behavior;
-- bounded manual EPG correction in 30-minute steps;
+- bounded manual correction in 30-minute steps;
 - one corrected timeline for Guide, Player and RecordingSchedule;
 - 6/12/24h refresh cadence, default 24h;
 - stale-on-start gating;
-- removal of the old 30-minute periodic refresh;
-- sequential/serialized XMLTV refresh;
-- exclusion of virtual aggregate playlists from source-refresh accounting;
-- freshness gating to avoid duplicate startup/periodic downloads.
+- sequential/serialized refresh;
+- virtual aggregate exclusion from EPG refresh accounting;
+- freshness re-check to avoid duplicate startup/periodic downloads;
+- Player programme dialog and nearby-channel logos.
 
-Persistent XMLTV disk cache is intentionally **not** part of #251.
-
-## Planned EPG infrastructure follow-up
+## Planned persistent XMLTV disk cache
 
 Canonical design: [`EPG_DISK_CACHE_PLAN.md`](EPG_DISK_CACHE_PLAN.md).
 
-Next separate branch: `feat/epg-disk-cache-r1`.
+Planned branch remains:
 
-Required properties:
+`feat/epg-disk-cache-r1`
 
-- small parsed L1 memory cache + app-private raw XMLTV L2 disk cache;
-- no full re-download after a simple process restart while source remains network-fresh;
-- per-source freshness and conditional HTTP (`ETag`, `Last-Modified`, `304`);
-- <=64 MiB per snapshot, <=128 MiB total, <=4 entries, deterministic LRU;
-- hard stale age <=96h and failure-kind-aware stale fallback;
-- atomic temp-write/validation/checksum/rename;
-- no credential-bearing URL data in filenames/diagnostics;
-- existing streaming parser and heap guards reused on disk reads;
-- corruption, low-storage, restart, 304/200, eviction and concurrent-load tests;
-- exact-head CI plus real TV Box restart/disk-hit validation.
+It is queued **after source/parser correctness is understood**. The plan must use the same current transport envelope as production: a single valid snapshot may be up to the current `EpgInputSafetyPolicy.MAX_INPUT_BYTES` (128 MiB), while the aggregate disk budget remains separately bounded. The observed 88.6 MB source must not be made permanently non-cacheable by an obsolete 64 MiB snapshot cap.
 
-## Current execution order
+## Memory/catalog stability
 
-1. Finish #251 only if its clean exact head is green; then verify `main` CI.
-2. Build a fresh APK from that exact `main` and perform the normal TV Box field run.
-3. Export diagnostics and screenshots.
-4. Analyse Torrent TV by first missing lifecycle stage and EPG by source -> match -> validity -> time -> UI.
-5. Choose the next focused change from that evidence.
-6. `feat/epg-disk-cache-r1` is the queued EPG infrastructure follow-up; later EPG/Player UX adds programme list/action and `Сейчас/Далее`/logos for nearby channels.
-7. Re-run large-library memory/longer device soak before release readiness.
+The current field failure does not justify increasing heap. Keep the existing bounded parser, retained programme/channel limits, sequential EPG work and large-catalog regressions. Persistent cache, when implemented, must store raw bounded snapshots rather than a materialized Room EPG graph.
 
-## Development loop
+## Execution order
+
+1. Complete `fix/epg-source-format-classification-r1` with deterministic tests and exact-head CI.
+2. Field-test that exact integrated build and classify the EPG source from the new failure/success signature.
+3. If XMLTV-looking malformed input is proven, fix only the demonstrated XML compatibility defect; otherwise fix the actual source format path (for example raw gzip) in its own bounded change.
+4. Return to #232 and keep discovery/connect and TS->Media3 no-first-frame failures as separate focused P2P increments.
+5. Implement `feat/epg-disk-cache-r1` after EPG source correctness is stable; do not mix it into parser recovery or P2P.
+6. Re-run large-catalog memory and longer TV Box soak before release readiness.
+
+## Development discipline
 
 For each focused change:
 
-1. start from current `main`;
-2. one thematic branch/PR;
+1. branch from current `main`;
+2. one thematic PR;
 3. deterministic regression where possible;
-4. minimal diff;
-5. relevant unit/lint/Room/guard/build tests;
+4. minimal bounded diff;
+5. relevant unit/lint/guard/build tests;
 6. exact-head CI;
-7. merge only green exact head;
-8. verify `main` after merge;
-9. field-test the exact integrated build when behavior depends on device/network conditions;
-10. update `CURRENT_DEVELOPMENT_HANDOFF.md`, this file and `ROADMAP.md` when the actual state changes.
+7. merge only a green exact head;
+8. verify integrated `main`;
+9. field-test device/network behavior on the exact integrated build;
+10. update handoff/status/roadmap when actual state changes.
 
-CI is a regression gate, not field proof. A field failure must be classified from evidence rather than masked by broader bounds or unrelated rewrites.
+CI is a regression gate, not field proof. New field evidence selects the next change; broader limits or unrelated rewrites do not.
