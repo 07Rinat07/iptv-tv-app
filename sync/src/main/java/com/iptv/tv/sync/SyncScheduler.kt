@@ -8,14 +8,16 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
+import com.iptv.tv.core.model.EpgSettingsPolicy
 import com.iptv.tv.sync.worker.DownloadQueueWorker
 import com.iptv.tv.sync.worker.EpgRefreshWorker
 import com.iptv.tv.sync.worker.PlaylistSyncWorker
 import com.iptv.tv.sync.worker.ProviderSyncWorker
 import com.iptv.tv.sync.worker.RecordingQueueWorker
 import com.iptv.tv.sync.worker.TvHomePublishWorker
-import kotlin.math.abs
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 
 object SyncScheduler {
     fun schedulePlaylistSync(workManager: WorkManager, repeatHours: Int) {
@@ -38,8 +40,6 @@ object SyncScheduler {
             ExistingPeriodicWorkPolicy.UPDATE,
             request
         )
-        scheduleEpgRefresh(workManager)
-        requestEpgRefresh(workManager)
     }
 
     internal fun normalizeSyncHours(repeatHours: Int): Int {
@@ -48,14 +48,18 @@ object SyncScheduler {
         return allowed.minBy { allowedValue -> abs(allowedValue - repeatHours) }
     }
 
-    fun scheduleEpgRefresh(workManager: WorkManager, repeatMinutes: Long = 30L) {
+    fun scheduleEpgRefresh(
+        workManager: WorkManager,
+        repeatHours: Int = EpgSettingsPolicy.DEFAULT_REFRESH_INTERVAL_HOURS
+    ) {
+        val normalizedHours = EpgSettingsPolicy.normalizeRefreshIntervalHours(repeatHours)
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .setRequiresBatteryNotLow(true)
             .build()
         val request = PeriodicWorkRequestBuilder<EpgRefreshWorker>(
-            repeatMinutes.coerceIn(15L, 120L),
-            TimeUnit.MINUTES
+            normalizedHours.toLong(),
+            TimeUnit.HOURS
         )
             .setConstraints(constraints)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
@@ -68,13 +72,24 @@ object SyncScheduler {
         )
     }
 
-    fun requestEpgRefresh(workManager: WorkManager) {
+    fun cancelEpgRefresh(workManager: WorkManager) {
+        workManager.cancelUniqueWork(EpgRefreshWorker.WORK_NAME)
+    }
+
+    /**
+     * Startup refreshes are freshness-gated again inside the worker so a periodic run winning the
+     * race does not cause a second large XMLTV pass. A future explicit user action should set
+     * [force] to true so "Обновить EPG" always performs the requested refresh.
+     */
+    fun requestEpgRefresh(workManager: WorkManager, force: Boolean = false) {
         val request = OneTimeWorkRequestBuilder<EpgRefreshWorker>()
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
                     .build()
             )
+            .setInputData(workDataOf(EpgRefreshWorker.KEY_FORCE_REFRESH to force))
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
             .build()
         workManager.enqueueUniqueWork(
             EpgRefreshWorker.IMMEDIATE_WORK_NAME,

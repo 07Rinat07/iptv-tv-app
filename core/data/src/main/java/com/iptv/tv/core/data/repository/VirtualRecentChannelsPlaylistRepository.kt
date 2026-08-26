@@ -1,13 +1,16 @@
 package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
+import com.iptv.tv.core.domain.repository.EpgSettingsRepository
 import com.iptv.tv.core.domain.repository.HistoryRepository
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.ChannelEpgInfo
 import com.iptv.tv.core.model.ChannelStableIdentity
 import com.iptv.tv.core.model.EpgProgram
+import com.iptv.tv.core.model.EpgTimeCorrection
 import com.iptv.tv.core.model.ParentalControlSettings
 import com.iptv.tv.core.model.PlaybackHistoryItem
 import com.iptv.tv.core.model.Playlist
@@ -33,12 +36,17 @@ import kotlinx.coroutines.flow.map
  * durable Favorites representatives before applying the current parental policy. The returned
  * [Channel] keeps the selected source playlist ID and stream provenance for the existing Player
  * route; no physical playlist row is created.
+ *
+ * This is also the outermost [PlaylistRepository] decorator. User-requested EPG clock correction
+ * is intentionally applied here so guide, Player and recording callers observe one consistent
+ * corrected timeline while the underlying XMLTV cache remains source-accurate.
  */
 @Singleton
 class VirtualRecentChannelsPlaylistRepository @Inject constructor(
     private val delegate: VirtualAllChannelsPlaylistRepository,
     private val historyRepository: HistoryRepository,
     private val settingsRepository: SettingsRepository,
+    private val epgSettingsRepository: EpgSettingsRepository,
     private val aggregateScope: VirtualPlaylistAggregateScope
 ) : PlaylistRepository by delegate {
     private val recentChannels by lazy {
@@ -136,10 +144,86 @@ class VirtualRecentChannelsPlaylistRepository @Inject constructor(
         endEpochMs: Long,
         query: String?
     ): AppResult<Map<Long, List<EpgProgram>>> {
-        return if (playlistId == VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID) {
-            AppResult.Success(emptyMap())
-        } else {
-            delegate.getPlaylistEpgWindow(playlistId, startEpochMs, endEpochMs, query)
+        if (playlistId == VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID) {
+            return AppResult.Success(emptyMap())
+        }
+        if (endEpochMs < startEpochMs) {
+            return AppResult.Error("EPG window end must not precede start")
+        }
+
+        val manualOffsetMinutes = epgSettingsRepository.currentSettings().manualOffsetMinutes
+        if (manualOffsetMinutes == 0) {
+            return delegate.getPlaylistEpgWindow(playlistId, startEpochMs, endEpochMs, query)
+        }
+
+        val (sourceStartMs, sourceEndMs) = EpgTimeCorrection.sourceWindowForDisplayWindow(
+            displayStartEpochMs = startEpochMs,
+            displayEndEpochMs = endEpochMs,
+            manualOffsetMinutes = manualOffsetMinutes
+        )
+        return when (
+            val result = delegate.getPlaylistEpgWindow(
+                playlistId = playlistId,
+                startEpochMs = sourceStartMs,
+                endEpochMs = sourceEndMs,
+                query = query
+            )
+        ) {
+            is AppResult.Success -> AppResult.Success(
+                result.data.mapValues { (_, programs) ->
+                    EpgTimeCorrection.apply(programs, manualOffsetMinutes)
+                        .filter { program ->
+                            program.endEpochMs > startEpochMs && program.startEpochMs < endEpochMs
+                        }
+                }.filterValues(List<EpgProgram>::isNotEmpty)
+            )
+            is AppResult.Error -> result
+            AppResult.Loading -> AppResult.Loading
+        }
+    }
+
+    override suspend fun getChannelEpgNowNext(channelId: Long): AppResult<ChannelEpgInfo> {
+        val settings = epgSettingsRepository.currentSettings()
+        if (settings.manualOffsetMinutes == 0) {
+            return delegate.getChannelEpgNowNext(channelId)
+        }
+
+        val baseInfo = when (val result = delegate.getChannelEpgNowNext(channelId)) {
+            is AppResult.Success -> result.data
+            is AppResult.Error -> return result
+            AppResult.Loading -> return AppResult.Loading
+        }
+        val channel = when (val result = delegate.getChannelById(channelId)) {
+            is AppResult.Success -> result.data
+            is AppResult.Error -> return result
+            AppResult.Loading -> return AppResult.Loading
+        }
+
+        val nowMs = System.currentTimeMillis()
+        return when (
+            val result = getPlaylistEpgWindow(
+                playlistId = channel.playlistId,
+                startEpochMs = nowMs - EPG_NOW_NEXT_LOOKBACK_MS,
+                endEpochMs = nowMs + EPG_NOW_NEXT_LOOKAHEAD_MS,
+                query = null
+            )
+        ) {
+            is AppResult.Success -> {
+                val correctedPrograms = result.data[channelId].orEmpty()
+                AppResult.Success(
+                    baseInfo.copy(
+                        now = EpgTimeCorrection.current(correctedPrograms, nowMs),
+                        next = EpgTimeCorrection.next(correctedPrograms, nowMs),
+                        upcoming = correctedPrograms
+                            .asSequence()
+                            .filter { program -> program.endEpochMs > nowMs }
+                            .take(12)
+                            .toList()
+                    )
+                )
+            }
+            is AppResult.Error -> result
+            AppResult.Loading -> AppResult.Loading
         }
     }
 }
@@ -228,5 +312,7 @@ private fun ParentalControlSettings.toParentalChannelGate(): ParentalChannelGate
     )
 }
 
+private const val EPG_NOW_NEXT_LOOKBACK_MS = 6L * 60L * 60L * 1_000L
+private const val EPG_NOW_NEXT_LOOKAHEAD_MS = 18L * 60L * 60L * 1_000L
 internal const val RECENT_HISTORY_LOOKBACK_LIMIT = 250
 internal const val MAX_RECENT_CHANNELS = 100
