@@ -131,7 +131,7 @@ internal fun StableNearbyChannelsReplacement(
 
                     Surface(
                         modifier = Modifier
-                            .width(176.dp)
+                            .width(220.dp)
                             .tvFocusOutline()
                             .clickable { onSelectChannel(channel.id) },
                         shape = MaterialTheme.shapes.medium,
@@ -139,47 +139,60 @@ internal fun StableNearbyChannelsReplacement(
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                         tonalElevation = 0.dp
                     ) {
-                        Column(
-                            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        Row(
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top
                         ) {
-                            Text(
-                                channel.name,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
-                                    ?: "Программа не найдена",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            current?.let { program ->
-                                LinearProgressIndicator(
-                                    progress = { stableProgramProgress(program, nowMs) },
-                                    modifier = Modifier.fillMaxWidth()
+                            if (!channel.logo.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = channel.logo,
+                                    contentDescription = channel.name,
+                                    modifier = Modifier.size(34.dp)
                                 )
                             }
-                            next?.let {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
                                 Text(
-                                    "Далее ${stableTime(it.startEpochMs)} · ${it.title}",
+                                    channel.name,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    current?.let { "Сейчас ${stableRange(it)} · ${it.title}" }
+                                        ?: "Программа не найдена",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.bodySmall,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                            }
-                            if (p2pStatus != null) {
-                                Text(
-                                    p2pStatus,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                current?.let { program ->
+                                    LinearProgressIndicator(
+                                        progress = { stableProgramProgress(program, nowMs) },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                                next?.let {
+                                    Text(
+                                        "Далее ${stableTime(it.startEpochMs)} · ${it.title}",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                if (p2pStatus != null) {
+                                    Text(
+                                        p2pStatus,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
