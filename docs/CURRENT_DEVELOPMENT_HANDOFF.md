@@ -1,200 +1,122 @@
 # Текущий handoff разработки
 
-_Актуализирован: 26 августа 2026 после merge PR #249 и #250 и перед финальной проверкой PR #251._
+_Актуализирован: 26 августа 2026 после merge PR #251/#252/#253 и нового TV Box field retest._
 
-Этот документ — точка входа для следующей сессии разработки. Перед любыми изменениями сначала сверить фактические `main`, open PR, branch head и CI в GitHub: сохранённые SHA фиксируют состояние на момент handoff, но не заменяют проверку текущего репозитория.
+Перед продолжением всегда сверять фактические `main`, branch head, open PR и CI в GitHub. Этот файл фиксирует направление работы, но не заменяет проверку exact SHA.
 
-## Что читать сначала
+## Текущий baseline
 
-1. `docs/CURRENT_DEVELOPMENT_HANDOFF.md` — ближайший порядок действий.
-2. `docs/PROJECT_STATUS_AND_ROADMAP.md` — канонический статус и release gates.
-3. `docs/ROADMAP.md` — технический порядок разработки.
-4. `docs/EPG_DISK_CACHE_PLAN.md` — следующий отдельный XMLTV cache increment.
-5. `docs/FIELD_VALIDATION_2026-08-25.md` — исходный recovery field evidence.
-6. Issue #232 — P0 Torrent TV peer discovery/handshake blocker.
+Field build основан на `main`:
 
-Исторические датированные документы используются как evidence, но не переопределяют этот handoff и `PROJECT_STATUS_AND_ROADMAP.md`.
+`a1b3e5e086c0470d8c21e75f8a288610c61b986a`
 
-## Зафиксированный integration baseline
+В baseline уже вошли:
 
-На момент этого handoff в `main` уже последовательно вошли:
+- #249 — bounded DHT bootstrap diversity;
+- #250 — EPG matching + invalid/placeholder filtering;
+- #251 — timezone correction + bounded 6/12/24h refresh policy;
+- #252 — XMLTV transport envelope 128 MiB;
+- #253 — Player `Программа` dialog + nearby logos.
 
-- PR #249 `fix(p2p): diversify DHT bootstrap roots after field retest` — squash commit `f2cb6e02c8725e49032038942521232438e18f38`;
-- PR #250 `fix(epg): recover field matching and invalid programme handling` — squash commit `1d4c86569537a525661525dfb949c0aa6754b284`.
+#252 **не является disk cache**. Persistent raw XMLTV L2 cache остаётся отдельным планом в `EPG_DISK_CACHE_PLAN.md`.
 
-PR #251 `feat(epg): add timezone correction and low-load refresh policy` должен попасть в `main` только после чистого переноса поверх указанного baseline и зелёного exact-head Database Unit CI + Player Refactor Guard + Android CI. В следующей сессии первым действием проверить, был ли #251 фактически merged; не предполагать наличие его кода в APK только по этому документу.
+## Активная ветка
 
-## Что уже содержит P2P baseline
+`fix/epg-source-format-classification-r1`
 
-PR #249 расширяет bounded production bootstrap diversity дополнительными независимыми Mainline DHT roots. Он не увеличивает:
+Она создана от точного field baseline `a1b3e5e...` и не должна содержать P2P fixes.
 
-- количество startup DHT probe rounds;
-- 7-секундный budget каждого probe;
-- query caps/branching;
-- player buffers;
-- global content preparation timeout.
+## Текущий EPG evidence
 
-Его pre-merge exact-head Android CI #1043 и Player Refactor Guard #179 были зелёными. Реальным доказательством улучшения остаётся новый TV Box run: нужно сравнить стадии `discovered -> connected -> handshaked/qualified -> producing` с предыдущим failure signature.
+До #252 источник EPG отклонялся по старому 64 MiB лимиту; field diagnostics показал фактический `Content-Length` 88,578,547 байт.
 
-## Что уже содержит EPG recovery baseline
+После #252 источник проходит transport guard, но повторно падает внутри XML parser:
 
-PR #250:
+`Invalid XMLTV format: unterminated entity ref (position:TEXT @1:48 ...)`
 
-- отбрасывает zero/negative-duration programme entries;
-- отбрасывает известные schedule placeholders;
-- расширяет консервативную нормализацию названий каналов для resolution/status decorations;
-- сохраняет fail-closed поведение при неоднозначном match;
-- содержит regression tests для matching/display policy.
+Ошибка воспроизводится на нескольких каналах одного playlist. Следовательно, текущая первая подтверждённая точка отказа:
 
-Его Database Unit CI #160, Player Refactor Guard #180 и Android CI #1044 были зелёными до merge.
+`HTTP/body -> source-format classification -> XML parser`
 
-## Scope PR #251, если он присутствует в тестируемом `main`
+а не Player dialog или channel matching.
 
-- device-local timezone остаётся default display behavior;
-- ручная коррекция EPG ограничена `-12h...+12h` с шагом 30 минут;
-- correction применяется на внешнем `PlaylistRepository` boundary, чтобы Guide, Player now/next и RecordingSchedule использовали одну timeline;
-- EPG cadence ограничен 6/12/24h, default 24h;
-- stale-on-start выполняется только если данные действительно устарели;
-- старый агрессивный 30-минутный periodic EPG refresh удалён;
-- XMLTV refresh выполняется последовательно и serialized;
-- системные virtual playlists не считаются реальными EPG sources;
-- freshness gate внутри worker предотвращает двойной sequential download при race periodic/startup;
-- будущая явная команда `Обновить EPG` использует forced refresh.
+## Что делает текущий increment
 
-Persistent XMLTV disk cache и Player programme UI не относятся к #251.
+В `EpgStreamingSafety` добавляется bounded source-format preflight:
 
-## Когда получены новые diagnostics и скриншоты
+- inspect максимум 8 KiB;
+- вернуть inspected bytes обратно через `PushbackInputStream`;
+- пропускать только XMLTV-looking root после BOM/XML declaration/comment/DOCTYPE;
+- отдельно классифицировать HTML, raw gzip, другой XML, text, binary/unknown и empty;
+- не читать весь 88+ MB body в память;
+- не логировать payload/source URL/token;
+- сохранить существующий 128 MiB streaming hard limit и heap/program/channel bounds.
 
-Новые diagnostics/logs/скриншоты — основной field evidence. Сначала установить, какая точная сборка тестировалась: commit/build metadata должны соответствовать фактическому `main`. Если build SHA не подтверждён, не приписывать тесту изменения из draft/open PR.
+Никакой глобальной замены `&` в этом PR нет. Если XMLTV-looking source всё равно падает на entity ref, нужен следующий отдельный compatibility increment только после подтверждения реального malformed XML pattern.
 
-### Torrent TV
+## Acceptance текущей ветки
 
-Для каждого реально протестированного P2P запуска восстановить:
+До merge нужны:
 
-`discovered -> connected -> handshaked/qualified -> producing -> first media/player ready`
+1. deterministic tests на XMLTV preambles, HTML, gzip, generic XML, text/binary и сохранение prefix bytes;
+2. существующие `EpgStreamingSafety` / input-limit tests без регрессии;
+3. relevant `core:data` unit tests;
+4. Android CI / guards на exact head;
+5. draft PR до получения зелёного exact-head CI;
+6. затем TV Box field run exact integrated build.
 
-Зафиксировать первую отсутствующую стадию и время до ключевых стадий, если поля есть в diagnostics.
+Field acceptance:
 
-Порядок решения #232:
+- либо EPG начинает парситься и появляются programmes;
+- либо diagnostics меняется на конкретный `format=...` для не-XMLTV body;
+- либо остаётся XML parser `unterminated entity ref`, что после fail-closed prefix gate подтверждает XMLTV-looking malformed payload и определяет следующий узкий шаг.
 
-1. tracker/DHT peer-set acquisition, bootstrap/routing diversity и причины failed KRPC queries;
-2. candidate retention/deduplication/backoff;
-3. TCP connect lifecycle;
-4. BitTorrent/Ace Live handshake qualification;
-5. metadata/live-window;
-6. request selection/sent -> chunk ingress -> piece completion/authentication;
-7. TS resync/output;
-8. Player boundary только после доказанного upstream media production.
+## P2P — не смешивать с EPG веткой
 
-Если `discovered` слабый — не менять Player/request scheduler/media buffer. Если peers найдены, но `connected=0` — идти в TCP. Если TCP есть, но `handshaked=0` — handshake. Если qualified peer есть, но `producing=0` — producer stages.
+Последний field run показывает два независимых P2P failure class:
 
-Запрещено маскировать protocol gap увеличением global timeout, startup failure bound, player buffer, request depth, peer caps или другими абсолютными bounds без конкретного evidence.
+1. слабый discovery/connect: tracker даёт мало peers, connect failure, bounded DHT не находит замену;
+2. upstream data уже поступает в loopback/Media3 большим объёмом, но отдельная сессия не достигает first audio / first video frame.
 
-### EPG
+При этом другие P2P сессии успешно достигают first audio + first video frame. Поэтому после EPG classification pass возвращаться к #232 двумя отдельными расследованиями:
 
-Для каждого проблемного канала классифицировать причину:
+`discovered -> connected -> handshaked/qualified -> producing`
 
-1. EPG source не найден/не загрузился;
-2. source загрузился, channel не matched;
-3. match есть, programmes отсутствуют/invalid/placeholders;
-4. programme есть, но время неверно;
-5. данные корректны, но UI их не показывает.
+и
 
-Проверять `tvg-id`, XMLTV channel id, display-name, HD/FHD/UHD/4K, `(720p)/(1080p)`, `[Geo-blocked]`, `[Not 24/7]` и подобные decorations. Не расширять fuzzy matching так, чтобы похожий канал получал чужую программу; ambiguity остаётся fail-closed.
+`clean TS/loopback -> Media3 tracks -> first audio/video frame`.
 
-XMLTV timestamp с явным timezone offset трактуется как absolute instant. Отображение по умолчанию использует timezone TV Box. Manual correction — отдельная поправка для некорректного feed и должна одинаково влиять на Guide, Player и RecordingSchedule.
+Не повышать global startup timeout, player buffers, request depth, peer caps или heap.
 
-### Player/UI screenshots
+## Persistent XMLTV disk cache
 
-Проверить минимум:
+План: `feat/epg-disk-cache-r1`, но только после source/parser correctness.
 
-- видео и выбранный канал остаются главным visual focus;
-- D-pad focus видим и не запускает playback только от перемещения;
-- nearby/quick channels должны получить logo + компактный `Сейчас/Далее`, когда EPG существует;
-- в Player нужна отдельная action `Программа`;
-- programme panel должен показывать передачи выбранного канала, время, current progress и description при наличии;
-- 1280x720 layout не обрезается;
-- dashboard/fullscreen используют одну playback session и один P2P runtime.
+Field source 88,578,547 байт доказал, что старый snapshot cap 64 MiB устарел. Disk plan должен использовать:
 
-### Память и фоновые задачи
+- per-snapshot hard cap = current `EpgInputSafetyPolicy.MAX_INPUT_BYTES` (128 MiB);
+- aggregate disk budget <=128 MiB;
+- <=4 entries with deterministic LRU;
+- если один большой snapshot занимает большую часть бюджета, eviction освобождает место; per-entry cap не означает резервирование 128 MiB на каждый entry;
+- conditional HTTP, atomic write/checksum, stale policy, secret-safe key, low-storage skip и process-restart tests остаются обязательными.
 
-На большом field run проверить:
+## Следующий порядок действий
 
-- OOM/process death/low-memory;
-- устойчивый рост heap после переключений и EPG;
-- параллельные XMLTV refresh;
-- лишнее повторное скачивание EPG source;
-- large-catalog hot flows;
-- stale P2P runtimes после переключений.
+1. завершить source-format tests/docs в текущей ветке;
+2. создать draft PR;
+3. проверить exact-head CI;
+4. исправлять только compile/test review findings;
+5. merge — только после зелёного exact head;
+6. собрать exact merged `main` и выполнить TV Box EPG retest;
+7. по результату выбрать malformed-XML compatibility либо конкретный source-format support;
+8. затем вернуться к #232 P2P blockers;
+9. disk cache — отдельный последующий EPG infrastructure PR.
 
-Не повышать heap как исправление.
+## Branch discipline
 
-## Следующий отдельный EPG infrastructure increment
-
-После подтверждённого integration baseline следующий инфраструктурный PR:
-
-`feat/epg-disk-cache-r1`
-
-Полный контракт: `docs/EPG_DISK_CACHE_PLAN.md`.
-
-Invariants:
-
-- L1 — маленький parsed memory cache;
-- L2 — app-private raw XMLTV snapshots;
-- cold process restart внутри refresh interval не вызывает полный повторный download;
-- conditional HTTP `ETag` / `Last-Modified` / `304`;
-- snapshot <=64 MiB;
-- total disk budget <=128 MiB;
-- <=4 entries;
-- deterministic LRU;
-- hard stale age <=96h;
-- atomic temp-write -> size/checksum validation -> rename;
-- corrupt/truncated snapshot удаляется без crash;
-- URL credentials/tokens не попадают в filename/diagnostics;
-- disk read проходит через существующий bounded streaming parser и heap guards;
-- low storage означает skip disk write, а не failure EPG;
-- concurrent same-source callers не создают несколько downloads.
-
-Disk cache остаётся отдельным PR, а не расширением time/refresh или Player UI.
-
-## Порядок EPG/Player после cache boundary
-
-1. EPG settings UI: manual offset, 6/12/24h, refresh-on-start-if-stale, manual `Обновить`;
-2. отдельная `Программа` action в Player;
-3. список передач выбранного канала с `Сейчас`, `Далее`, временем, progress и description;
-4. channel logo + `Сейчас/Далее` у nearby/quick channels;
-5. TV Box validation: timezone, matching, refresh, disk hit, RAM, D-pad;
-6. archive/catch-up polish после подтверждения базовых EPG flows.
-
-## Merge и branch discipline
-
-- каждый новый head требует собственного exact-head CI; старый зелёный run не доказывает новый SHA;
-- P2P, EPG data/cache и Player UI не смешивать в один PR;
-- stacked EPG history после squash-merge родителей необходимо очищать/переносить поверх актуального `main` до merge;
-- merge только зелёный exact head;
-- после merge проверить CI самого `main`;
-- временные branches удалять только после проверки, что нужные commits присутствуют в `main`.
-
-## Следующая field-сборка
-
-После финального integration merge:
-
-1. `git fetch --prune origin`;
-2. перейти на `main` и выполнить fast-forward update;
-3. проверить последний commit;
-4. собрать свежий APK без локальных незакоммиченных изменений;
-5. установить именно эту сборку на TV Box;
-6. обычным способом проверить IPTV, несколько Torrent TV каналов, EPG, переключения, Player overlays и restart приложения;
-7. экспортировать diagnostics и сохранить скриншоты проблем/успешных состояний;
-8. следующую разработку начинать с этого документа и анализа нового field evidence.
-
-## Минимальный результат следующего разбора
-
-Нужно явно ответить:
-
-1. Какая точная сборка/commit тестировалась?
-2. Где первая отсутствующая стадия Torrent TV в проблемных сессиях?
-3. Почему конкретные EPG-каналы не показывают правильную программу: source, matching, validity, time или UI?
-4. Какой один focused increment следует из evidence и какие tests являются его acceptance gate?
-
-После этого продолжать соответствующую ветку без повторного восстановления всей истории проекта.
+- один дефектный boundary — один PR;
+- P2P, EPG parser/source, disk cache и Player UI не объединять;
+- старый зелёный CI не подтверждает новый SHA;
+- CI не заменяет field proof;
+- изменение абсолютных bounds требует отдельного evidence;
+- после merge проверить integrated `main`, затем field-test именно эту сборку.
