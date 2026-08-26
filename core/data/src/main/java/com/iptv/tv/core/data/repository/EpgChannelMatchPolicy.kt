@@ -15,11 +15,11 @@ internal object EpgChannelMatchPolicy {
     ): String? {
         if (normalizedChannelName.isBlank()) return null
 
-        val channelAliases = qualityAliases(normalizedChannelName)
+        val channelAliases = presentationAliases(normalizedChannelName)
         var candidate: String? = null
         for ((channelKey, channelId) in channelIdsByTextKey) {
             if (channelKey.isBlank()) continue
-            val keyAliases = qualityAliases(channelKey)
+            val keyAliases = presentationAliases(channelKey)
             val matches = channelAliases.any { channelAlias ->
                 keyAliases.any { keyAlias ->
                     channelAlias == keyAlias ||
@@ -40,21 +40,59 @@ internal object EpgChannelMatchPolicy {
     }
 
     /**
-     * XMLTV catalogues frequently omit display-quality suffixes that are present in M3U names.
-     * Input is already normalized to letters/digits, so strip only one well-known suffix at the
-     * very end. The original key is retained and ambiguity is still handled by the caller.
+     * IPTV catalogues commonly append transport/presentation metadata to the human channel name,
+     * while XMLTV keeps the base station name. Input is already normalized to letters/digits.
+     * Strip only well-known *trailing* decorations and retain every intermediate alias so ambiguity
+     * checks still fail closed instead of broadening arbitrary substring matching.
      */
-    internal fun qualityAliases(normalized: String): Set<String> {
+    internal fun presentationAliases(normalized: String): Set<String> {
         val value = normalized.trim()
         if (value.isBlank()) return emptySet()
+
         val aliases = linkedSetOf(value)
-        val suffix = QUALITY_SUFFIXES.firstOrNull { candidate ->
-            value.length >= candidate.length + MIN_BASE_KEY_LENGTH && value.endsWith(candidate)
-        }
-        if (suffix != null) aliases += value.dropLast(suffix.length)
+        var current = value
+        var changed: Boolean
+        do {
+            changed = false
+            val suffix = PRESENTATION_SUFFIXES.firstOrNull { candidate ->
+                current.length >= candidate.length + MIN_BASE_KEY_LENGTH && current.endsWith(candidate)
+            }
+            if (suffix != null) {
+                current = current.dropLast(suffix.length)
+                aliases += current
+                changed = true
+            }
+        } while (changed)
         return aliases
     }
 
+    /** Compatibility alias kept for focused regression tests and older callers. */
+    internal fun qualityAliases(normalized: String): Set<String> = presentationAliases(normalized)
+
     private const val MIN_BASE_KEY_LENGTH = 4
-    private val QUALITY_SUFFIXES = listOf("fullhd", "fhd", "uhd", "4k", "hd", "sd")
+
+    // Order longest/editorial tags first so e.g. "...1080pgeoblocked" becomes base channel name
+    // through deterministic, bounded suffix peeling.
+    private val PRESENTATION_SUFFIXES = listOf(
+        "geoblocked",
+        "notavailable",
+        "not247",
+        "not24x7",
+        "2160p",
+        "1440p",
+        "1080p",
+        "900p",
+        "720p",
+        "576p",
+        "540p",
+        "480p",
+        "360p",
+        "240p",
+        "fullhd",
+        "fhd",
+        "uhd",
+        "4k",
+        "hd",
+        "sd"
+    )
 }
