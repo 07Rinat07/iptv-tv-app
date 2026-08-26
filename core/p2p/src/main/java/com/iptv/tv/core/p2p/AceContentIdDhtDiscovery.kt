@@ -7,7 +7,7 @@ import kotlinx.coroutines.Dispatchers
 class AceContentIdDhtDiscoveryRequest(
     val contentId: AceContentIdDhtKey,
     bootstrapNodes: List<AceLiveDhtBootstrapNode>,
-    val localNodeId: AceLiveDhtNodeId = AceLiveDhtNodeId.random()
+    val localNodeId: AceLiveDhtNodeId = AceLiveDhtClientIdentity.current()
 ) {
     val bootstrapNodes: List<AceLiveDhtBootstrapNode> = bootstrapNodes.toList()
 
