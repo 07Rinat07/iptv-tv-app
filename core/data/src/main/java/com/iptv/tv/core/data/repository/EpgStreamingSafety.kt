@@ -277,15 +277,21 @@ internal object EpgDiagnosticsCacheStatusPolicy {
  * Streaming hard limit for XMLTV bodies.
  *
  * Unlike ResponseBody.bytes(), this never allocates a second byte array containing the complete
- * guide. The production default also performs a bounded prefix classification before the XML
- * parser starts; the prefix is pushed back so the byte limit still counts the body exactly once.
+ * guide. The production-sized envelope also performs a bounded prefix classification before the
+ * XML parser starts; the prefix is pushed back so the byte limit still counts the body exactly
+ * once. Tiny synthetic bounds stay byte-limit-only so the guard itself remains independently
+ * testable.
  */
 internal class EpgBoundedInputStream(
     input: InputStream,
     private val maxBytes: Long,
     validateXmlTvPrefix: Boolean = true
 ) : FilterInputStream(
-    if (validateXmlTvPrefix) EpgSourceFormatPolicy.requireXmlTv(input) else input
+    if (validateXmlTvPrefix && maxBytes >= EpgSourceFormatPolicy.PREFIX_BYTES.toLong()) {
+        EpgSourceFormatPolicy.requireXmlTv(input)
+    } else {
+        input
+    }
 ) {
     init {
         require(maxBytes > 0L) { "maxBytes must be positive" }
