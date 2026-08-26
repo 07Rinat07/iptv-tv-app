@@ -83,12 +83,51 @@ class EpgChannelMatchPolicyTest {
     }
 
     @Test
+    fun resolutionAndAvailabilityDecorationsMatchBaseXmlTvChannel() {
+        val result = EpgChannelMatchPolicy.uniquePartialChannelId(
+            normalizedChannelName = "brtv720pgeoblocked",
+            channelIdsByTextKey = listOf(
+                "brtv" to "xmltv.brtv",
+                "birtv" to "xmltv.birtv"
+            )
+        )
+
+        assertEquals("xmltv.brtv", result)
+    }
+
+    @Test
+    fun not24x7DecorationAndResolutionMatchBaseXmlTvChannel() {
+        val result = EpgChannelMatchPolicy.uniquePartialChannelId(
+            normalizedChannelName = "etvmanisa1080pnot247",
+            channelIdsByTextKey = listOf(
+                "etvmanisa" to "xmltv.etv-manisa",
+                "etvkayseri" to "xmltv.etv-kayseri"
+            )
+        )
+
+        assertEquals("xmltv.etv-manisa", result)
+    }
+
+    @Test
     fun qualitySuffixAliasStillFailsClosedWhenBaseIsAmbiguous() {
         val result = EpgChannelMatchPolicy.uniquePartialChannelId(
             normalizedChannelName = "discoveryhd",
             channelIdsByTextKey = listOf(
                 "discovery" to "xmltv.discovery",
                 "discovery4k" to "xmltv.discovery.4k"
+            )
+        )
+
+        assertNull(result)
+    }
+
+    @Test
+    fun decoratedAliasStillFailsClosedWhenBaseIsAmbiguous() {
+        val result = EpgChannelMatchPolicy.uniquePartialChannelId(
+            normalizedChannelName = "news720pgeoblocked",
+            channelIdsByTextKey = listOf(
+                "news" to "xmltv.news",
+                "newshd" to "xmltv.news-hd"
             )
         )
 
