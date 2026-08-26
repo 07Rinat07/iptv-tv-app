@@ -5,6 +5,8 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.PushbackInputStream
 import java.util.LinkedHashMap
+import java.util.zip.GZIPInputStream
+import java.util.zip.ZipException
 
 internal class EpgInputLimitExceededException(
     val maxBytes: Long,
@@ -58,14 +60,17 @@ internal enum class EpgSourceFormat {
     EMPTY
 }
 
+internal data class EpgPreparedSource(
+    val input: InputStream,
+    val sourceFormat: EpgSourceFormat
+)
+
 /**
  * Small fail-closed preflight for the response body that is about to enter the XMLTV parser.
  *
- * The field failure after the 128 MiB transport fix is an XmlPullParser error at the very start of
- * the response. Do not repair arbitrary '&' characters or buffer the full guide: classify a small
- * prefix, return those bytes to the stream, and let the existing bounded streaming parser own the
- * complete body. This also makes HTML/error pages and raw gzip payloads distinguishable from
- * malformed XMLTV without logging body contents or credential-bearing source URLs.
+ * Raw XMLTV is passed through unchanged. Raw gzip is supported because the TV Box field run proved
+ * that a production EPG source is delivered as a gzip payload without HTTP content decoding. Both
+ * paths remain streaming: only an 8 KiB prefix is inspected and pushed back before parsing.
  */
 internal object EpgSourceFormatPolicy {
     const val PREFIX_BYTES = 8 * 1024
@@ -106,7 +111,51 @@ internal object EpgSourceFormatPolicy {
         }
     }
 
+    fun prepareXmlTv(input: InputStream, sourceMaxBytes: Long): EpgPreparedSource {
+        require(sourceMaxBytes > 0L) { "sourceMaxBytes must be positive" }
+        val boundedSource = EpgByteLimitInputStream(input, sourceMaxBytes)
+        val raw = inspectAndReplay(boundedSource)
+        return when (raw.format) {
+            EpgSourceFormat.XMLTV -> EpgPreparedSource(raw.input, EpgSourceFormat.XMLTV)
+            EpgSourceFormat.GZIP -> prepareGzipXmlTv(raw.input)
+            else -> throw EpgMalformedXmlException("EPG source is not XMLTV: format=${raw.format}")
+        }
+    }
+
     fun requireXmlTv(input: InputStream): InputStream {
+        val inspected = inspectAndReplay(input)
+        if (inspected.format != EpgSourceFormat.XMLTV) {
+            throw EpgMalformedXmlException("EPG source is not XMLTV: format=${inspected.format}")
+        }
+        return inspected.input
+    }
+
+    private fun prepareGzipXmlTv(input: InputStream): EpgPreparedSource {
+        val gzip = try {
+            GZIPInputStream(input, 32 * 1024)
+        } catch (failure: ZipException) {
+            throw EpgMalformedXmlException("EPG gzip source has an invalid header", failure)
+        }
+
+        val decoded = try {
+            inspectAndReplay(gzip)
+        } catch (failure: ZipException) {
+            throw EpgMalformedXmlException("EPG gzip source cannot be decoded", failure)
+        }
+        if (decoded.format != EpgSourceFormat.XMLTV) {
+            throw EpgMalformedXmlException(
+                "EPG gzip payload is not XMLTV: format=${decoded.format}"
+            )
+        }
+        return EpgPreparedSource(decoded.input, EpgSourceFormat.GZIP)
+    }
+
+    private data class Inspection(
+        val input: InputStream,
+        val format: EpgSourceFormat
+    )
+
+    private fun inspectAndReplay(input: InputStream): Inspection {
         val pushback = PushbackInputStream(input, PREFIX_BYTES)
         val prefix = ByteArray(PREFIX_BYTES)
         var total = 0
@@ -116,12 +165,10 @@ internal object EpgSourceFormatPolicy {
             total += read
         }
         if (total > 0) pushback.unread(prefix, 0, total)
-
-        val format = classify(prefix, total)
-        if (format != EpgSourceFormat.XMLTV) {
-            throw EpgMalformedXmlException("EPG source is not XMLTV: format=$format")
-        }
-        return pushback
+        return Inspection(
+            input = pushback,
+            format = classify(prefix, total)
+        )
     }
 
     private fun containsBinaryControl(bytes: ByteArray, length: Int): Boolean {
@@ -276,23 +323,50 @@ internal object EpgDiagnosticsCacheStatusPolicy {
 /**
  * Streaming hard limit for XMLTV bodies.
  *
- * Unlike ResponseBody.bytes(), this never allocates a second byte array containing the complete
- * guide. The production-sized envelope also performs a bounded prefix classification before the
- * XML parser starts; the prefix is pushed back so the byte limit still counts the body exactly
- * once. Tiny synthetic bounds stay byte-limit-only so the guard itself remains independently
- * testable.
+ * Raw XMLTV keeps the caller-provided source limit. Raw gzip is first bounded by that same source
+ * limit, decoded streaming, then bounded again by [EpgInputSafetyPolicy.MAX_DECODED_XMLTV_BYTES].
+ * This preserves the existing network envelope while preventing unbounded gzip expansion.
  */
 internal class EpgBoundedInputStream(
     input: InputStream,
-    private val maxBytes: Long,
-    validateXmlTvPrefix: Boolean = true
-) : FilterInputStream(
-    if (validateXmlTvPrefix && maxBytes >= EpgSourceFormatPolicy.PREFIX_BYTES.toLong()) {
-        EpgSourceFormatPolicy.requireXmlTv(input)
-    } else {
-        input
+    maxBytes: Long,
+    validateXmlTvPrefix: Boolean = true,
+    maxDecodedBytes: Long = EpgInputSafetyPolicy.MAX_DECODED_XMLTV_BYTES
+) : InputStream() {
+    init {
+        require(maxBytes > 0L) { "maxBytes must be positive" }
+        require(maxDecodedBytes > 0L) { "maxDecodedBytes must be positive" }
     }
-) {
+
+    private val prepared = if (
+        validateXmlTvPrefix && maxBytes >= EpgSourceFormatPolicy.PREFIX_BYTES.toLong()
+    ) {
+        EpgSourceFormatPolicy.prepareXmlTv(input, maxBytes)
+    } else {
+        EpgPreparedSource(input, EpgSourceFormat.XMLTV)
+    }
+
+    private val delegate = EpgByteLimitInputStream(
+        prepared.input,
+        if (prepared.sourceFormat == EpgSourceFormat.GZIP) maxDecodedBytes else maxBytes
+    )
+
+    override fun read(): Int = delegate.read()
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+        delegate.read(buffer, offset, length)
+
+    override fun skip(byteCount: Long): Long = delegate.skip(byteCount)
+
+    override fun available(): Int = delegate.available()
+
+    override fun close() = delegate.close()
+}
+
+private class EpgByteLimitInputStream(
+    input: InputStream,
+    private val maxBytes: Long
+) : FilterInputStream(input) {
     init {
         require(maxBytes > 0L) { "maxBytes must be positive" }
     }
