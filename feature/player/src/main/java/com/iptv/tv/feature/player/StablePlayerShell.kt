@@ -202,6 +202,7 @@ internal fun StableCenterPaneReplacement(
     onOpenChannels: () -> Unit
 ) {
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
+    var programmeVisible by rememberSaveable(selectedChannel?.id) { mutableStateOf(false) }
 
     LaunchedEffect(controlsVisible, session?.sessionId) {
         if (!controlsVisible || session == null) return@LaunchedEffect
@@ -378,10 +379,11 @@ internal fun StableCenterPaneReplacement(
                     onToggleMute = onToggleMute,
                     onPrevious = onPreviousChannel,
                     onNext = onNextChannel,
+                    onOpenProgramme = { programmeVisible = true },
                     onOpenChannels = onOpenChannels,
                     onToggleFullscreen = onToggleFullscreen
                 )
-                StableNearbyChannelsReplacement(
+                StableNearbyChannelsWithLogos(
                     channels = channels,
                     epgByChannel = epgByChannel,
                     onSelectChannel = onSelectChannel,
@@ -400,10 +402,19 @@ internal fun StableCenterPaneReplacement(
                     onToggleFavorite = { selectedChannel?.id?.let(onToggleFavorite) },
                     onPrevious = onPreviousChannel,
                     onNext = onNextChannel,
+                    onOpenProgramme = { programmeVisible = true },
                     onOpenChannels = onOpenChannels
                 )
             }
         }
+    }
+
+    if (programmeVisible) {
+        StableProgrammeDialog(
+            channel = selectedChannel,
+            programs = programs,
+            onDismiss = { programmeVisible = false }
+        )
     }
 }
 
@@ -414,6 +425,7 @@ private fun StableDashboardTransportBar(
     onToggleMute: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onOpenProgramme: () -> Unit,
     onOpenChannels: () -> Unit,
     onToggleFullscreen: () -> Unit
 ) {
@@ -450,6 +462,9 @@ private fun StableDashboardTransportBar(
                 modifier = Modifier.tvFocusOutline()
             ) { Text("+") }
             Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = onOpenProgramme, modifier = Modifier.tvFocusOutline()) {
+                Text("Программа")
+            }
             OutlinedButton(onClick = onOpenChannels, modifier = Modifier.tvFocusOutline()) {
                 Text("Каналы")
             }
@@ -471,6 +486,7 @@ private fun StableCompactControlsReplacement(
     onToggleFavorite: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onOpenProgramme: () -> Unit,
     onOpenChannels: () -> Unit
 ) {
     val current = stableCurrentProgram(programs, System.currentTimeMillis())
@@ -520,9 +536,14 @@ private fun StableCompactControlsReplacement(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                OutlinedButton(onClick = onPrevious, modifier = Modifier.weight(1f)) { Text("◀") }
-                OutlinedButton(onClick = onOpenChannels, modifier = Modifier.weight(1.4f)) { Text("Каналы") }
-                OutlinedButton(onClick = onNext, modifier = Modifier.weight(1f)) { Text("▶") }
+                OutlinedButton(onClick = onPrevious, modifier = Modifier.weight(0.8f)) { Text("◀") }
+                OutlinedButton(onClick = onOpenProgramme, modifier = Modifier.weight(1.5f)) {
+                    Text("Программа")
+                }
+                OutlinedButton(onClick = onOpenChannels, modifier = Modifier.weight(1.3f)) {
+                    Text("Каналы")
+                }
+                OutlinedButton(onClick = onNext, modifier = Modifier.weight(0.8f)) { Text("▶") }
             }
         }
     }
@@ -550,6 +571,7 @@ internal fun StableFullscreenPlayerReplacement(
     onStop: () -> Unit
 ) {
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
+    var programmeVisible by rememberSaveable(channel?.id) { mutableStateOf(false) }
 
     LaunchedEffect(controlsVisible, session?.sessionId) {
         if (!controlsVisible || session == null) return@LaunchedEffect
@@ -624,6 +646,7 @@ internal fun StableFullscreenPlayerReplacement(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    OutlinedButton(onClick = { programmeVisible = true }) { Text("Программа") }
                     OutlinedButton(onClick = onStop) { Text("■") }
                     OutlinedButton(onClick = onNextChannel) { Text("▶") }
                     StableFullscreenButton(expanded = true, onClick = onToggleFullscreen)
@@ -647,5 +670,13 @@ internal fun StableFullscreenPlayerReplacement(
                     .padding(16.dp)
             )
         }
+    }
+
+    if (programmeVisible) {
+        StableProgrammeDialog(
+            channel = channel,
+            programs = programs,
+            onDismiss = { programmeVisible = false }
+        )
     }
 }
