@@ -7,10 +7,21 @@ import java.net.ServerSocket
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal object AceLiveNetworkDefaults {
+    /**
+     * Independent public Mainline DHT routers used only to enter the distributed routing table.
+     *
+     * Keep more than one operator in this bounded list: field diagnostics showed cold/startup
+     * lookups spending roughly half their KRPC requests on failed nodes while returning zero or one
+     * swarm peer. The iterative walker already caps DNS resolutions, concurrent queries, total
+     * queries and wall-clock time, so adding independent bootstrap roots improves the chance of
+     * entering healthy routing-table regions without widening any startup budget.
+     */
     val dhtBootstrapNodes = listOf(
         AceLiveDhtBootstrapNode("router.bittorrent.com", 6881),
         AceLiveDhtBootstrapNode("router.utorrent.com", 6881),
-        AceLiveDhtBootstrapNode("dht.transmissionbt.com", 6881)
+        AceLiveDhtBootstrapNode("dht.transmissionbt.com", 6881),
+        AceLiveDhtBootstrapNode("dht.aelitis.com", 6881),
+        AceLiveDhtBootstrapNode("dht.libtorrent.org", 25401)
     )
     const val publicTracker = "udp://t1.torrentstream.org:2710/announce"
 }
