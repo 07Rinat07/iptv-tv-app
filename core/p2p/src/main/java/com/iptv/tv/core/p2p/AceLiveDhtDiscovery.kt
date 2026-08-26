@@ -58,7 +58,7 @@ data class AceLiveDhtPolicy(
 class AceLiveDhtDiscoveryRequest(
     val swarmKey: AceLiveSwarmKey,
     bootstrapNodes: List<AceLiveDhtBootstrapNode>,
-    val localNodeId: AceLiveDhtNodeId = AceLiveDhtNodeId.random()
+    val localNodeId: AceLiveDhtNodeId = AceLiveDhtClientIdentity.current()
 ) {
     val bootstrapNodes: List<AceLiveDhtBootstrapNode> = bootstrapNodes.toList()
 
