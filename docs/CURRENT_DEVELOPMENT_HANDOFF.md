@@ -1,122 +1,153 @@
 # Текущий handoff разработки
 
-_Актуализирован: 26 августа 2026 после merge PR #251/#252/#253 и нового TV Box field retest._
+_Актуализирован: 26 августа 2026 после merge PR #254 и TV Box retest на `main@40ac556621cb4002a5457b41c909344f90c75e89`._
 
 Перед продолжением всегда сверять фактические `main`, branch head, open PR и CI в GitHub. Этот файл фиксирует направление работы, но не заменяет проверку exact SHA.
 
 ## Текущий baseline
 
-Field build основан на `main`:
+Field build основан на:
 
-`a1b3e5e086c0470d8c21e75f8a288610c61b986a`
+`main@40ac556621cb4002a5457b41c909344f90c75e89`
 
 В baseline уже вошли:
 
 - #249 — bounded DHT bootstrap diversity;
 - #250 — EPG matching + invalid/placeholder filtering;
 - #251 — timezone correction + bounded 6/12/24h refresh policy;
-- #252 — XMLTV transport envelope 128 MiB;
-- #253 — Player `Программа` dialog + nearby logos.
+- #252 — XMLTV source/network envelope 128 MiB;
+- #253 — Player `Программа` dialog + nearby logos;
+- #254 — bounded source-format classifier before XML parsing.
 
-#252 **не является disk cache**. Persistent raw XMLTV L2 cache остаётся отдельным планом в `EPG_DISK_CACHE_PLAN.md`.
+#252/#254 **не являются persistent disk cache**. Persistent raw XMLTV L2 cache остаётся отдельным планом в `EPG_DISK_CACHE_PLAN.md`.
 
 ## Активная ветка
 
-`fix/epg-source-format-classification-r1`
+`fix/epg-gzip-source-r1`
 
-Она создана от точного field baseline `a1b3e5e...` и не должна содержать P2P fixes.
+Она создана от exact field baseline `40ac556...` и не должна содержать P2P behaviour changes.
 
 ## Текущий EPG evidence
 
-До #252 источник EPG отклонялся по старому 64 MiB лимиту; field diagnostics показал фактический `Content-Length` 88,578,547 байт.
+Последний TV Box field run дал окончательную source-format классификацию:
 
-После #252 источник проходит transport guard, но повторно падает внутри XML parser:
+`EPG source is not XMLTV: format=GZIP`
 
-`Invalid XMLTV format: unterminated entity ref (position:TEXT @1:48 ...)`
+Следовательно старый `unterminated entity ref` больше не является основанием для XML text sanitizer. Первая подтверждённая EPG точка отказа теперь:
 
-Ошибка воспроизводится на нескольких каналах одного playlist. Следовательно, текущая первая подтверждённая точка отказа:
+`raw GZIP source -> decode -> XMLTV parser -> matching -> Player/Guide`
 
-`HTTP/body -> source-format classification -> XML parser`
-
-а не Player dialog или channel matching.
+Следующий increment обязан декодировать raw gzip streaming перед существующим XMLTV parser.
 
 ## Что делает текущий increment
 
-В `EpgStreamingSafety` добавляется bounded source-format preflight:
+`fix/epg-gzip-source-r1`:
 
-- inspect максимум 8 KiB;
-- вернуть inspected bytes обратно через `PushbackInputStream`;
-- пропускать только XMLTV-looking root после BOM/XML declaration/comment/DOCTYPE;
-- отдельно классифицировать HTML, raw gzip, другой XML, text, binary/unknown и empty;
-- не читать весь 88+ MB body в память;
-- не логировать payload/source URL/token;
-- сохранить существующий 128 MiB streaming hard limit и heap/program/channel bounds.
+- сохраняет 128 MiB hard envelope на исходный HTTP/raw-gzip payload;
+- распаковывает raw gzip через streaming `GZIPInputStream`;
+- повторно классифицирует распакованный prefix и пропускает только XMLTV;
+- устанавливает отдельный bounded decoded-XMLTV envelope 256 MiB;
+- не использует `body.bytes()`, `readBytes()` или строковую материализацию полного guide в production path;
+- сохраняет существующие heap/program/channel limits;
+- не логирует тело EPG и credential-bearing URL;
+- не делает глобальную замену `&` или другое speculative XML rewriting.
 
-Никакой глобальной замены `&` в этом PR нет. Если XMLTV-looking source всё равно падает на entity ref, нужен следующий отдельный compatibility increment только после подтверждения реального malformed XML pattern.
+Если field source после decode превышает 256 MiB, следующий лог должен показать decoded byte-limit failure. Увеличивать этот bound без такого evidence нельзя.
 
 ## Acceptance текущей ветки
 
-До merge нужны:
+До merge:
 
-1. deterministic tests на XMLTV preambles, HTML, gzip, generic XML, text/binary и сохранение prefix bytes;
-2. существующие `EpgStreamingSafety` / input-limit tests без регрессии;
-3. relevant `core:data` unit tests;
-4. Android CI / guards на exact head;
-5. draft PR до получения зелёного exact-head CI;
-6. затем TV Box field run exact integrated build.
+1. raw gzip XMLTV декодируется и сохраняет исходные XML bytes;
+2. gzip HTML/non-XMLTV fail-closed после decode;
+3. decoded expansion hard-limit покрыт тестом;
+4. исходный 128 MiB source envelope сохраняется;
+5. existing EPG/source-format/input-limit tests не регрессируют;
+6. Database Unit CI + Android CI + relevant guards зелёные на exact head;
+7. PR остаётся draft до зелёного exact-head CI.
 
-Field acceptance:
+После merge нужен TV Box retest exact integrated build. Возможные следующие evidence-классы:
 
-- либо EPG начинает парситься и появляются programmes;
-- либо diagnostics меняется на конкретный `format=...` для не-XMLTV body;
-- либо остаётся XML parser `unterminated entity ref`, что после fail-closed prefix gate подтверждает XMLTV-looking malformed payload и определяет следующий узкий шаг.
+- XMLTV parser/matching работает и появляются programmes;
+- decoded XMLTV превышает 256 MiB;
+- parser получает XMLTV, но падает на конкретной malformed XML конструкции;
+- parser работает, но channel matching остаётся слабым.
 
-## P2P — не смешивать с EPG веткой
+Только фактический следующий boundary определяет следующий EPG PR.
 
-Последний field run показывает два независимых P2P failure class:
+## P2P evidence — отдельный P0
 
-1. слабый discovery/connect: tracker даёт мало peers, connect failure, bounded DHT не находит замену;
-2. upstream data уже поступает в loopback/Media3 большим объёмом, но отдельная сессия не достигает first audio / first video frame.
+Последний field run снова показывает и успешный, и неуспешный embedded P2P путь.
 
-При этом другие P2P сессии успешно достигают first audio + first video frame. Поэтому после EPG classification pass возвращаться к #232 двумя отдельными расследованиями:
+Успешный путь достигает:
 
-`discovered -> connected -> handshaked/qualified -> producing`
+`discovered -> connected -> handshaked -> useful window -> producing -> clean TS -> loopback -> Media3 -> first frame/audio`.
 
-и
+Есть сессии с несколькими producing peers, десятками мегабайт чистого MPEG-TS, `sync_losses=0`, `transport_errors=0`, PAT/PMT/video/audio PID и быстрым first frame.
 
-`clean TS/loopback -> Media3 tracks -> first audio/video frame`.
+Но failure path всё ещё воспроизводится:
 
-Не повышать global startup timeout, player buffers, request depth, peer caps или heap.
+`tracker=1 -> connect_failed -> bounded DHT probes -> 0 replacement peers`.
+
+Поэтому после EPG gzip increment возвращаться к issue #232 именно в discovery/connect qualification. Не повышать global startup timeout, heap или player buffers для маскировки отсутствующего swarm.
+
+Producer/Media3 boundary чинить отдельно только для сессий, которые уже доказанно прошли discovery/handshake/producer stages.
+
+## Player `Программа` UX
+
+Текущий centered modal функционально подключён, но field screenshots показывают, что он закрывает слишком большую часть видео, особенно когда EPG пуст.
+
+После восстановления реальных EPG данных нужен отдельный `feat/player-programme-panel-r2`:
+
+- video остаётся основной видимой поверхностью;
+- программа открывается как компактная правая/частичная панель, а не большой centered modal;
+- текущая/следующая передача + короткий upcoming list из уже загруженного Player EPG state;
+- без второго сетевого EPG fetch;
+- пустой EPG показывает компактное неблокирующее состояние;
+- D-pad focus и Back/Close детерминированы.
+
+Не смешивать этот UX change с gzip parser или P2P fixes.
+
+## Field evidence
+
+Текущий подробный прогон:
+
+`docs/FIELD_VALIDATION_2026-08-26_2029.md`
 
 ## Persistent XMLTV disk cache
 
-План: `feat/epg-disk-cache-r1`, но только после source/parser correctness.
+План: `feat/epg-disk-cache-r1`, только после source/parser correctness.
 
-Field source 88,578,547 байт доказал, что старый snapshot cap 64 MiB устарел. Disk plan должен использовать:
+Raw gzip field source имеет reported size 88,578,547 bytes. Disk-cache implementation должен явно определить, хранится ли compressed raw payload или decoded XMLTV; предпочтительно хранить source bytes в том виде, который пришёл по сети, а decode выполнять streaming при чтении, чтобы не раздувать storage write path.
 
-- per-snapshot hard cap = current `EpgInputSafetyPolicy.MAX_INPUT_BYTES` (128 MiB);
-- aggregate disk budget <=128 MiB;
-- <=4 entries with deterministic LRU;
-- если один большой snapshot занимает большую часть бюджета, eviction освобождает место; per-entry cap не означает резервирование 128 MiB на каждый entry;
-- conditional HTTP, atomic write/checksum, stale policy, secret-safe key, low-storage skip и process-restart tests остаются обязательными.
+Обязательные свойства остаются:
+
+- bounded per-source snapshot;
+- aggregate disk budget;
+- deterministic LRU;
+- conditional HTTP;
+- atomic write/checksum;
+- stale policy;
+- secret-safe key;
+- low-storage skip;
+- process-restart tests.
 
 ## Следующий порядок действий
 
-1. завершить source-format tests/docs в текущей ветке;
-2. создать draft PR;
-3. проверить exact-head CI;
-4. исправлять только compile/test review findings;
-5. merge — только после зелёного exact head;
-6. собрать exact merged `main` и выполнить TV Box EPG retest;
-7. по результату выбрать malformed-XML compatibility либо конкретный source-format support;
-8. затем вернуться к #232 P2P blockers;
-9. disk cache — отдельный последующий EPG infrastructure PR.
+1. завершить `fix/epg-gzip-source-r1` + exact-head CI;
+2. merge только после зелёного exact head;
+3. проверить post-merge CI `main`;
+4. собрать exact merged build и повторить EPG TV Box test;
+5. по новому evidence закрыть parser/matching boundary;
+6. затем вернуться к #232 P2P discovery/connect;
+7. после EPG correctness — `feat/player-programme-panel-r2`;
+8. persistent disk cache — отдельный infrastructure PR.
 
 ## Branch discipline
 
-- один дефектный boundary — один PR;
-- P2P, EPG parser/source, disk cache и Player UI не объединять;
+- один defect boundary — один PR;
+- P2P, EPG source/parser, disk cache и Player UX не объединять;
 - старый зелёный CI не подтверждает новый SHA;
 - CI не заменяет field proof;
-- изменение абсолютных bounds требует отдельного evidence;
-- после merge проверить integrated `main`, затем field-test именно эту сборку.
+- absolute bounds меняются только по evidence;
+- после merge всегда проверять integrated `main` и тестировать именно эту сборку.
