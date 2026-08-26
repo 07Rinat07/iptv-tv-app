@@ -1,6 +1,6 @@
 # Project status and roadmap
 
-_Last updated: 2026-08-25 after the post-fix manual device retest and exported diagnostics._
+_Last updated: 2026-08-26 after PR #247 merged and the next manual-test handoff was confirmed._
 
 This is the canonical current-state document. Historical dated reports remain evidence, but they do not override this page.
 
@@ -45,9 +45,9 @@ Latest exported diagnostics show a representative startup in which:
 - that candidate also failed initially;
 - a connection was finally observed at about 15.96 seconds from startup.
 
-The code already describes two independent bounded DHT startup probe rounds, but the configured maximum was one. The first follow-up change is therefore to execute two bounded probe rounds while preserving the existing 7-second per-round budget and four-peer target. This increases routing-path diversity without delaying the initial tracker candidate or widening the global preparation timeout.
+PR #247 completed the first follow-up: the runtime now executes up to two bounded startup DHT probe rounds while preserving the existing 7-second per-round budget, four-peer target and global preparation timeout. Exact-head Android CI, core P2P tests, Player Refactor Guard and the real Torrent TV smoke without an external Ace Engine were green before merge to `main` as `ee4c30d06de055b9527c1e197eafae69e2fcb29d`.
 
-After that change, revalidate the same fixed A/B channel matrix and compare discovered -> connected -> handshaked/qualified -> producing, plus time to first qualified peer and first media.
+The next field gate is user-owned: build a fresh local APK from merged `main`, test it through the user's normal manual workflow, and export the resulting diagnostics. The project does not require an agent-driven ADB run or a separately prescribed fixed A/B matrix for this handoff. When the user supplies logs, analyse the actual tested sessions through `discovered -> connected -> handshaked/qualified -> producing`, including time to first qualified peer and first media when those fields are present.
 
 If two bounded probe rounds still return only one unusable candidate, continue #232 in this order:
 1. DHT routing/bootstrap diversity and failed-query causes;
@@ -74,17 +74,17 @@ EPG matching is also incomplete for several channel names in the export. Keep EP
 
 ## Current execution order
 
-1. #232 execute and validate two bounded independent startup DHT probe rounds.
-2. #232 use the resulting field diagnostics to fix the first missing stage: discovery diversity -> TCP -> handshake -> producer.
+1. User builds a fresh local APK from merged `main`, performs the usual manual device test and exports diagnostics.
+2. #232 analyse the supplied logs and fix the first missing stage: discovery diversity -> TCP -> handshake -> producer.
 3. #233 reproduce focus/playback request churn before changing behavior.
 4. Re-run the large-library memory fixture and a real-device large-catalog soak as a release gate.
 5. Resume EPG/archive/polish after the Torrent TV blocker is materially improved.
 
 ## Recovery development loop
 
-For each focused change: create a temporary branch -> add/adjust a deterministic regression -> run the full relevant CI/build gate -> fix and rerun failures -> merge only the green exact head to `main` -> continue with the next item in this document.
+For each focused change: create a temporary branch -> add/adjust a deterministic regression -> run the full relevant CI/build gate -> fix and rerun failures -> merge only the green exact head to `main` -> delete the temporary branch -> let the user build/test merged `main` locally and provide logs -> continue only from that evidence.
 
-A transient CI/job failure should be rerun. A deterministic failure should be fixed on the same branch and retested. Do not merge a red or untested head, and do not start an unrelated subsystem while the current blocker still has a concrete next step.
+A transient CI/job failure should be rerun. A deterministic failure should be fixed on the same branch and retested. Do not merge a red or untested head, prescribe a separate device-test workflow without the user's request, or start an unrelated subsystem while the current blocker still has a concrete next step.
 
 ## Acceptance policy
 
@@ -92,10 +92,10 @@ CI is a regression gate, not field proof.
 
 For every P0:
 - merge only green exact-head code;
-- build fresh `main`;
-- manually reproduce the previously failing scenario;
+- the user builds fresh merged `main` locally;
+- the user manually exercises the relevant scenario through the normal test workflow;
 - capture screenshot/video where relevant;
 - export diagnostics;
-- for Torrent TV, use fixed same-device A/B channels.
+- for Torrent TV, analyse the actual supplied sessions; comparative A/B evidence is optional unless the user explicitly chooses that test.
 
 No telemetry-only, architecture-only or cosmetic increments should run ahead of this sequence.
