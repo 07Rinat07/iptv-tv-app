@@ -351,16 +351,28 @@ internal class EpgBoundedInputStream(
         if (prepared.sourceFormat == EpgSourceFormat.GZIP) maxDecodedBytes else maxBytes
     )
 
-    override fun read(): Int = delegate.read()
+    override fun read(): Int = mapGzipFailure { delegate.read() }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
-        delegate.read(buffer, offset, length)
+        mapGzipFailure { delegate.read(buffer, offset, length) }
 
-    override fun skip(byteCount: Long): Long = delegate.skip(byteCount)
+    override fun skip(byteCount: Long): Long =
+        mapGzipFailure { delegate.skip(byteCount) }
 
-    override fun available(): Int = delegate.available()
+    override fun available(): Int = mapGzipFailure { delegate.available() }
 
     override fun close() = delegate.close()
+
+    private fun <T> mapGzipFailure(block: () -> T): T {
+        return try {
+            block()
+        } catch (failure: ZipException) {
+            if (prepared.sourceFormat == EpgSourceFormat.GZIP) {
+                throw EpgMalformedXmlException("EPG gzip source cannot be decoded", failure)
+            }
+            throw failure
+        }
+    }
 }
 
 private class EpgByteLimitInputStream(
@@ -396,6 +408,20 @@ private class EpgByteLimitInputStream(
         val read = super.read(buffer, offset, allowed)
         if (read > 0) consumedBytes += read.toLong()
         return read
+    }
+
+    override fun skip(byteCount: Long): Long {
+        if (byteCount <= 0L) return 0L
+        if (consumedBytes >= maxBytes) {
+            val extra = super.read()
+            if (extra == -1) return 0L
+            throw EpgInputLimitExceededException(maxBytes)
+        }
+        val remaining = maxBytes - consumedBytes
+        val allowed = minOf(byteCount, remaining)
+        val skipped = super.skip(allowed)
+        if (skipped > 0L) consumedBytes += skipped
+        return skipped
     }
 }
 
@@ -434,7 +460,7 @@ internal class EpgFailureBackoffCache(
         for (entry in entries.entries) {
             if (entry.key != url) continue
             val failure = entry.value
-            return failure.takeIf { nowMs() - it.failedAtMs < it.retryAfterMs }
+            return failure.takeIf { nowMs() - failure.failedAtMs < failure.retryAfterMs }
         }
         return null
     }
