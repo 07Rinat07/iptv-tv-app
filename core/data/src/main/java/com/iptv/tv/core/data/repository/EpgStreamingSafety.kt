@@ -3,6 +3,7 @@ package com.iptv.tv.core.data.repository
 import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.PushbackInputStream
 import java.util.LinkedHashMap
 
 internal class EpgInputLimitExceededException(
@@ -45,6 +46,120 @@ internal enum class EpgCacheFreshness {
     FRESH,
     STALE_FALLBACK,
     EXPIRED
+}
+
+internal enum class EpgSourceFormat {
+    XMLTV,
+    HTML,
+    GZIP,
+    XML_OTHER,
+    TEXT_OTHER,
+    BINARY_OR_UNKNOWN,
+    EMPTY
+}
+
+/**
+ * Small fail-closed preflight for the response body that is about to enter the XMLTV parser.
+ *
+ * The field failure after the 128 MiB transport fix is an XmlPullParser error at the very start of
+ * the response. Do not repair arbitrary '&' characters or buffer the full guide: classify a small
+ * prefix, return those bytes to the stream, and let the existing bounded streaming parser own the
+ * complete body. This also makes HTML/error pages and raw gzip payloads distinguishable from
+ * malformed XMLTV without logging body contents or credential-bearing source URLs.
+ */
+internal object EpgSourceFormatPolicy {
+    const val PREFIX_BYTES = 8 * 1024
+
+    fun classify(prefix: ByteArray, length: Int = prefix.size): EpgSourceFormat {
+        val boundedLength = length.coerceIn(0, prefix.size)
+        if (boundedLength == 0) return EpgSourceFormat.EMPTY
+
+        if (
+            boundedLength >= 2 &&
+            prefix[0].toInt() and 0xFF == 0x1F &&
+            prefix[1].toInt() and 0xFF == 0x8B
+        ) {
+            return EpgSourceFormat.GZIP
+        }
+
+        if (containsBinaryControl(prefix, boundedLength)) {
+            return EpgSourceFormat.BINARY_OR_UNKNOWN
+        }
+
+        var text = prefix.copyOfRange(0, boundedLength)
+            .toString(Charsets.UTF_8)
+            .removePrefix("\uFEFF")
+            .trimStart()
+        if (text.isEmpty()) return EpgSourceFormat.EMPTY
+
+        text = stripXmlPreamble(text)
+        val lowered = text.lowercase()
+        return when {
+            isXmlTvRoot(text) -> EpgSourceFormat.XMLTV
+            lowered.startsWith("<!doctype html") ||
+                lowered.startsWith("<html") ||
+                lowered.startsWith("<head") ||
+                lowered.startsWith("<body") -> EpgSourceFormat.HTML
+            text.startsWith('<') -> EpgSourceFormat.XML_OTHER
+            text.any { it.isLetterOrDigit() } -> EpgSourceFormat.TEXT_OTHER
+            else -> EpgSourceFormat.BINARY_OR_UNKNOWN
+        }
+    }
+
+    fun requireXmlTv(input: InputStream): InputStream {
+        val pushback = PushbackInputStream(input, PREFIX_BYTES)
+        val prefix = ByteArray(PREFIX_BYTES)
+        var total = 0
+        while (total < prefix.size) {
+            val read = pushback.read(prefix, total, prefix.size - total)
+            if (read <= 0) break
+            total += read
+        }
+        if (total > 0) pushback.unread(prefix, 0, total)
+
+        val format = classify(prefix, total)
+        if (format != EpgSourceFormat.XMLTV) {
+            throw EpgMalformedXmlException("EPG source is not XMLTV: format=$format")
+        }
+        return pushback
+    }
+
+    private fun containsBinaryControl(bytes: ByteArray, length: Int): Boolean {
+        for (index in 0 until length) {
+            val value = bytes[index].toInt() and 0xFF
+            if (value == 0 || value in 1..8 || value in 11..12 || value in 14..31) return true
+        }
+        return false
+    }
+
+    private fun stripXmlPreamble(raw: String): String {
+        var text = raw.trimStart()
+        if (text.startsWith("<?xml", ignoreCase = true)) {
+            val end = text.indexOf("?>")
+            if (end >= 0) text = text.substring(end + 2).trimStart()
+        }
+        while (text.startsWith("<!--")) {
+            val end = text.indexOf("-->")
+            if (end < 0) return text
+            text = text.substring(end + 3).trimStart()
+        }
+        if (text.startsWith("<!DOCTYPE", ignoreCase = true)) {
+            val end = text.indexOf('>')
+            if (end >= 0) text = text.substring(end + 1).trimStart()
+        }
+        while (text.startsWith("<!--")) {
+            val end = text.indexOf("-->")
+            if (end < 0) return text
+            text = text.substring(end + 3).trimStart()
+        }
+        return text
+    }
+
+    private fun isXmlTvRoot(text: String): Boolean {
+        if (!text.startsWith("<tv", ignoreCase = true)) return false
+        val next = text.getOrNull(3) ?: return false
+        return next == '>' || next == '/' || next.isWhitespace()
+    }
 }
 
 internal object EpgStaleFallbackPolicy {
@@ -162,13 +277,16 @@ internal object EpgDiagnosticsCacheStatusPolicy {
  * Streaming hard limit for XMLTV bodies.
  *
  * Unlike ResponseBody.bytes(), this never allocates a second byte array containing the complete
- * guide. If the server does not provide Content-Length, the limit is still enforced while the XML
- * parser consumes the response.
+ * guide. The production default also performs a bounded prefix classification before the XML
+ * parser starts; the prefix is pushed back so the byte limit still counts the body exactly once.
  */
 internal class EpgBoundedInputStream(
     input: InputStream,
-    private val maxBytes: Long
-) : FilterInputStream(input) {
+    private val maxBytes: Long,
+    validateXmlTvPrefix: Boolean = true
+) : FilterInputStream(
+    if (validateXmlTvPrefix) EpgSourceFormatPolicy.requireXmlTv(input) else input
+) {
     init {
         require(maxBytes > 0L) { "maxBytes must be positive" }
     }
