@@ -7,6 +7,7 @@ import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.domain.repository.RecordingRepository
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.EpgProgram
+import com.iptv.tv.core.model.EpgProgramDisplayPolicy
 import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.RecordingRepeatMode
 import com.iptv.tv.core.model.RecordingSchedule
@@ -125,6 +126,7 @@ class EpgGuideViewModel @Inject constructor(
     }
 
     fun selectProgram(row: EpgChannelRow, program: EpgProgram) {
+        if (!EpgProgramDisplayPolicy.isUsable(program)) return
         _uiState.update { it.copy(selectedProgram = SelectedEpgProgram(row, program)) }
     }
 
@@ -138,6 +140,10 @@ class EpgGuideViewModel @Inject constructor(
     }
 
     fun scheduleRecording(row: EpgChannelRow, program: EpgProgram) {
+        if (!EpgProgramDisplayPolicy.isUsable(program)) {
+            _uiState.update { it.copy(error = "Некорректная запись EPG не может быть запланирована") }
+            return
+        }
         val now = System.currentTimeMillis()
         if (program.endEpochMs <= now) {
             _uiState.update { it.copy(error = "Передача уже закончилась: ${program.title}") }
@@ -239,7 +245,9 @@ class EpgGuideViewModel @Inject constructor(
                 is AppResult.Success -> {
                     val rows = channelsByPlaylist
                         .mapNotNull { channel ->
-                            val programs = result.data[channel.id].orEmpty()
+                            val programs = EpgProgramDisplayPolicy.visiblePrograms(
+                                result.data[channel.id].orEmpty()
+                            )
                             if (programs.isEmpty()) null else EpgChannelRow(channel, programs)
                         }
                     loadedRows = rows
