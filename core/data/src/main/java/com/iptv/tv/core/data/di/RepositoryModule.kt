@@ -6,6 +6,7 @@ import com.iptv.tv.core.data.repository.ChannelMetadataRepositoryImpl
 import com.iptv.tv.core.data.repository.CoalescingEngineRepository
 import com.iptv.tv.core.data.repository.DiagnosticsRepositoryImpl
 import com.iptv.tv.core.data.repository.DownloadRepositoryImpl
+import com.iptv.tv.core.data.repository.EpgSettingsRepositoryImpl
 import com.iptv.tv.core.data.repository.FavoritesRepositoryFacade
 import com.iptv.tv.core.data.repository.HistoryRepositoryImpl
 import com.iptv.tv.core.data.repository.PlaylistEditorRepositoryImpl
@@ -19,6 +20,7 @@ import com.iptv.tv.core.domain.repository.ChannelMetadataRepository
 import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.DownloadRepository
 import com.iptv.tv.core.domain.repository.EngineRepository
+import com.iptv.tv.core.domain.repository.EpgSettingsRepository
 import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.HistoryRepository
 import com.iptv.tv.core.domain.repository.PlaylistEditorRepository
@@ -78,6 +80,10 @@ abstract class RepositoryBindings {
     @Binds
     @Singleton
     abstract fun bindSettingsRepository(impl: SettingsRepositoryImpl): SettingsRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindEpgSettingsRepository(impl: EpgSettingsRepositoryImpl): EpgSettingsRepository
 
     @Binds
     @Singleton

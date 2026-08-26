@@ -1,101 +1,117 @@
 # Project status and roadmap
 
-_Last updated: 2026-08-26 after PR #247 merged and the next manual-test handoff was confirmed._
+_Last updated: 2026-08-26 after PR #249 and #250 merged; PR #251 is the final EPG integration candidate before the next TV Box field run._
 
-This is the canonical current-state document. Historical dated reports remain evidence, but they do not override this page.
+This is the canonical current-state document. For continuation details read [`CURRENT_DEVELOPMENT_HANDOFF.md`](CURRENT_DEVELOPMENT_HANDOFF.md). Historical dated reports remain evidence but do not override these two documents.
 
 ## Current baseline
 
-The latest `main` recovery line was manually retested on a real Android device with a large public IPTV catalog and the production TV/player UI.
+The application can browse a large IPTV catalog, enter the TV-first Player, render ordinary IPTV across multiple codecs/resolutions and remain within the captured device heap. The primary release blocker remains embedded Torrent TV peer acquisition/qualification; EPG quality is the active product-quality recovery track being integrated in bounded increments.
 
-Result: **ordinary IPTV and the corrected TV UI are usable; embedded Torrent TV peer acquisition remains the primary release blocker**.
+Current merged baseline:
 
-The retest confirms that the application can browse the large catalog, enter the player, render video, switch ordinary IPTV channels and remain within the device heap during the captured session. The remaining field weakness is concentrated in the embedded Ace Live/Torrent TV discovery and peer-qualification path rather than the Media3 player boundary.
+- PR #249 merged to `main` as `f2cb6e02c8725e49032038942521232438e18f38` — diversified bounded Mainline DHT bootstrap roots without widening startup/runtime safety budgets;
+- PR #250 merged to `main` as `1d4c86569537a525661525dfb949c0aa6754b284` — conservative EPG matching recovery and invalid/placeholder programme filtering.
 
-The original recovery baseline remains documented in [`FIELD_VALIDATION_2026-08-25.md`](FIELD_VALIDATION_2026-08-25.md).
+PR #251 (`feat/epg-time-refresh-r1`) may merge only after it is cleanly based on this `main` and its exact head passes Database Unit CI, Player Refactor Guard and Android CI. The next development session must verify the actual `main` SHA/PR status before assuming #251 is present in the field APK.
 
-## Field retest status
+## #229 — memory/import OOM
 
-### #229 — P0 memory/import OOM
+The original immediate field OOM was not reproduced after replacing hot full-table Favorites materialization with bounded identity paging/full-row lookup only for matched favorites. Keep the deterministic large-catalog regression and real-device soak as release gates. Do not raise heap limits to hide regressions.
 
-The original process-death defect was fixed by replacing hot full-table Favorites materialization with bounded identity paging/full-row lookup only for matched favorites.
+## #230 — Home root integration
 
-Post-fix field evidence is positive: the device session browsed an approximately 1800-channel provider list and the exported diagnostics ended at about 36 MB used from a 256 MB process heap after roughly 17 minutes of process uptime.
+Field-recovered. The TV-first Home/root layout is visible without the previously blocking legacy shell. Reopen only on a new reproduction.
 
-Keep the deterministic 2500-channel regression gate. Do not treat this one device run as a substitute for the existing large-fixture gate, but the original immediate field OOM was not reproduced.
+## #231 — production Player UX
 
-### #230 — P0 Home root integration
+Field-recovered for the original clipping/legacy-looking regression. Ordinary IPTV reaches first frame. Continue programme/nearby-channel UX as separate bounded EPG/Player increments; preserve one playback/P2P session across dashboard/fullscreen.
 
-The post-fix screenshot retest shows the intended TV-first Home/root layout without the previously blocking opaque legacy shell surface. Treat the visible Home regression as field-recovered unless a new reproduction is supplied.
+## #232 — embedded Torrent TV peer/handshake gap
 
-### #231 — P0 production new Player UX
+**Still open and the primary release blocker.** Previous field evidence showed weak peer diversity and many failed KRPC queries. PR #249 adds bootstrap diversity but is not field-proven until the next TV Box run.
 
-The post-fix player retest shows the TV player surface, channel rail and overlay controls rendered within the screen bounds. Ordinary IPTV video reaches first frame across multiple codecs/resolutions in the exported diagnostics.
+Analyse each supplied session through:
 
-Treat the previously reported clipping/legacy-looking production Player regression as field-recovered unless a new reproduction is supplied.
+`discovered -> connected -> handshaked/qualified -> producing -> first media/player ready`
 
-### #232 — P0 embedded Torrent TV peer/handshake gap
+Fix the first missing stage in this order:
 
-**Still open and now the first engineering priority.** Same-device behavior remains materially weaker than the Ace Stream benchmark because the embedded runtime often has too little peer diversity before TCP/Ace qualification.
-
-Latest exported diagnostics show a representative startup in which:
-- the initial tracker fast path returned only one peer;
-- that peer failed to connect;
-- the startup DHT probe consumed its full 7-second bounded window, issued 34 queries with 15 failed queries, but still returned only one peer;
-- that candidate also failed initially;
-- a connection was finally observed at about 15.96 seconds from startup.
-
-PR #247 completed the first follow-up: the runtime now executes up to two bounded startup DHT probe rounds while preserving the existing 7-second per-round budget, four-peer target and global preparation timeout. Exact-head Android CI, core P2P tests, Player Refactor Guard and the real Torrent TV smoke without an external Ace Engine were green before merge to `main` as `ee4c30d06de055b9527c1e197eafae69e2fcb29d`.
-
-The next field gate is user-owned: build a fresh local APK from merged `main`, test it through the user's normal manual workflow, and export the resulting diagnostics. The project does not require an agent-driven ADB run or a separately prescribed fixed A/B matrix for this handoff. When the user supplies logs, analyse the actual tested sessions through `discovered -> connected -> handshaked/qualified -> producing`, including time to first qualified peer and first media when those fields are present.
-
-If two bounded probe rounds still return only one unusable candidate, continue #232 in this order:
-1. DHT routing/bootstrap diversity and failed-query causes;
-2. candidate retention/deduplication/backoff interaction;
+1. DHT/tracker acquisition, bootstrap/routing diversity, failed-query causes;
+2. candidate retention/deduplication/backoff;
 3. TCP connect lifecycle;
-4. Ace Live handshake qualification;
-5. metadata/live-window transition;
-6. request scheduling and authenticated piece production;
-7. TS output only after upstream production is proven.
+4. BitTorrent/Ace Live handshake qualification;
+5. metadata/live-window;
+6. request scheduling/sent/chunk/piece/authentication;
+7. TS output;
+8. Player boundary only after upstream media production is proven.
 
-Do not compensate for missing peers by increasing player buffering or absolute startup failure bounds.
+Do not compensate for missing protocol progress by increasing global startup timeout, player buffering, request depth or peer caps.
 
-### #233 — P1 rapid playback request churn
+## #233 — rapid playback request churn
 
-The diagnostics still contain bursts of closely spaced `player_play_request` events. The manual retest did not establish that this is an autonomous focus-trigger bug rather than intentional rapid channel selection, so keep it as a reproducibility item instead of changing playback behavior speculatively.
+Keep as a reproducibility item until a field run proves that focus movement, rather than explicit rapid selection, triggers heavy playback requests. Focus alone must not start each intermediate channel.
 
-## Confirmed working baseline
+## EPG recovery state
 
-Ordinary IPTV must not be rewritten wholesale.
+PR #250 is merged and supplies the base matching/display recovery.
 
-The retest contains repeated Media3 first-video-frame events for H.264/AAC, H.264/MP2 and MPEG-2/MP2, including HD and SD streams. Most captured playback-boundary sessions reached READY with zero rebuffers; one captured session had six rebuffers totaling about 8.9 seconds, so buffering/stream quality remains observable but is not the primary blocker while the P2P discovery gap is unresolved.
+PR #251, when merged after a green exact-head run, supplies:
 
-EPG matching is also incomplete for several channel names in the export. Keep EPG normalization/matching as post-#232 product-quality work unless it blocks a required archive/guide flow.
+- device-local timezone as default display behavior;
+- bounded manual EPG correction in 30-minute steps;
+- one corrected timeline for Guide, Player and RecordingSchedule;
+- 6/12/24h refresh cadence, default 24h;
+- stale-on-start gating;
+- removal of the old 30-minute periodic refresh;
+- sequential/serialized XMLTV refresh;
+- exclusion of virtual aggregate playlists from source-refresh accounting;
+- freshness gating to avoid duplicate startup/periodic downloads.
+
+Persistent XMLTV disk cache is intentionally **not** part of #251.
+
+## Planned EPG infrastructure follow-up
+
+Canonical design: [`EPG_DISK_CACHE_PLAN.md`](EPG_DISK_CACHE_PLAN.md).
+
+Next separate branch: `feat/epg-disk-cache-r1`.
+
+Required properties:
+
+- small parsed L1 memory cache + app-private raw XMLTV L2 disk cache;
+- no full re-download after a simple process restart while source remains network-fresh;
+- per-source freshness and conditional HTTP (`ETag`, `Last-Modified`, `304`);
+- <=64 MiB per snapshot, <=128 MiB total, <=4 entries, deterministic LRU;
+- hard stale age <=96h and failure-kind-aware stale fallback;
+- atomic temp-write/validation/checksum/rename;
+- no credential-bearing URL data in filenames/diagnostics;
+- existing streaming parser and heap guards reused on disk reads;
+- corruption, low-storage, restart, 304/200, eviction and concurrent-load tests;
+- exact-head CI plus real TV Box restart/disk-hit validation.
 
 ## Current execution order
 
-1. User builds a fresh local APK from merged `main`, performs the usual manual device test and exports diagnostics.
-2. #232 analyse the supplied logs and fix the first missing stage: discovery diversity -> TCP -> handshake -> producer.
-3. #233 reproduce focus/playback request churn before changing behavior.
-4. Re-run the large-library memory fixture and a real-device large-catalog soak as a release gate.
-5. Resume EPG/archive/polish after the Torrent TV blocker is materially improved.
+1. Finish #251 only if its clean exact head is green; then verify `main` CI.
+2. Build a fresh APK from that exact `main` and perform the normal TV Box field run.
+3. Export diagnostics and screenshots.
+4. Analyse Torrent TV by first missing lifecycle stage and EPG by source -> match -> validity -> time -> UI.
+5. Choose the next focused change from that evidence.
+6. `feat/epg-disk-cache-r1` is the queued EPG infrastructure follow-up; later EPG/Player UX adds programme list/action and `Сейчас/Далее`/logos for nearby channels.
+7. Re-run large-library memory/longer device soak before release readiness.
 
-## Recovery development loop
+## Development loop
 
-For each focused change: create a temporary branch -> add/adjust a deterministic regression -> run the full relevant CI/build gate -> fix and rerun failures -> merge only the green exact head to `main` -> delete the temporary branch -> let the user build/test merged `main` locally and provide logs -> continue only from that evidence.
+For each focused change:
 
-A transient CI/job failure should be rerun. A deterministic failure should be fixed on the same branch and retested. Do not merge a red or untested head, prescribe a separate device-test workflow without the user's request, or start an unrelated subsystem while the current blocker still has a concrete next step.
+1. start from current `main`;
+2. one thematic branch/PR;
+3. deterministic regression where possible;
+4. minimal diff;
+5. relevant unit/lint/Room/guard/build tests;
+6. exact-head CI;
+7. merge only green exact head;
+8. verify `main` after merge;
+9. field-test the exact integrated build when behavior depends on device/network conditions;
+10. update `CURRENT_DEVELOPMENT_HANDOFF.md`, this file and `ROADMAP.md` when the actual state changes.
 
-## Acceptance policy
-
-CI is a regression gate, not field proof.
-
-For every P0:
-- merge only green exact-head code;
-- the user builds fresh merged `main` locally;
-- the user manually exercises the relevant scenario through the normal test workflow;
-- capture screenshot/video where relevant;
-- export diagnostics;
-- for Torrent TV, analyse the actual supplied sessions; comparative A/B evidence is optional unless the user explicitly chooses that test.
-
-No telemetry-only, architecture-only or cosmetic increments should run ahead of this sequence.
+CI is a regression gate, not field proof. A field failure must be classified from evidence rather than masked by broader bounds or unrelated rewrites.

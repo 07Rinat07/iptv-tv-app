@@ -11,11 +11,14 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.iptv.tv.core.domain.repository.DiagnosticsRepository
+import com.iptv.tv.core.domain.repository.EpgSettingsRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
-import com.iptv.tv.sync.SyncScheduler
+import com.iptv.tv.core.model.EpgSettingsPolicy
 import com.iptv.tv.core.utils.FileLogger
+import com.iptv.tv.sync.SyncScheduler
 import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
+import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -28,7 +31,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
-import javax.inject.Inject
 
 @HiltAndroidApp
 class IptvApp : Application(), Configuration.Provider {
@@ -40,6 +42,9 @@ class IptvApp : Application(), Configuration.Provider {
 
     @Inject
     lateinit var settingsRepository: Lazy<SettingsRepository>
+
+    @Inject
+    lateinit var epgSettingsRepository: Lazy<EpgSettingsRepository>
 
     @Inject
     lateinit var diagnosticsRepository: Lazy<DiagnosticsRepository>
@@ -120,19 +125,49 @@ class IptvApp : Application(), Configuration.Provider {
             SyncScheduler.scheduleDownloadQueue(workManager, repeatMinutes = 15)
             SyncScheduler.scheduleRecordingQueue(workManager, repeatMinutes = 15)
             SyncScheduler.scheduleTvHomePublish(workManager, repeatHours = 6)
+
             val settings = settingsRepository.get()
-            settings.observeProviderAutoSyncEnabled()
-                .combine(settings.observeProviderAutoSyncIntervalHours()) { enabled, hours ->
-                    enabled to hours
-                }
-                .distinctUntilChanged()
-                .collect { (enabled, hours) ->
-                    if (enabled) {
-                        SyncScheduler.scheduleProviderSync(workManager, repeatHours = hours)
-                    } else {
-                        SyncScheduler.cancelProviderSync(workManager)
+            launch {
+                settings.observeProviderAutoSyncEnabled()
+                    .combine(settings.observeProviderAutoSyncIntervalHours()) { enabled, hours ->
+                        enabled to hours
                     }
-                }
+                    .distinctUntilChanged()
+                    .collect { (enabled, hours) ->
+                        if (enabled) {
+                            SyncScheduler.scheduleProviderSync(workManager, repeatHours = hours)
+                        } else {
+                            SyncScheduler.cancelProviderSync(workManager)
+                        }
+                    }
+            }
+
+            val epgSettings = epgSettingsRepository.get()
+            launch {
+                var firstSettingsEmission = true
+                epgSettings.observeSettings()
+                    .distinctUntilChanged()
+                    .collect { current ->
+                        if (current.periodicRefreshEnabled) {
+                            SyncScheduler.scheduleEpgRefresh(
+                                workManager = workManager,
+                                repeatHours = current.refreshIntervalHours
+                            )
+                        } else {
+                            SyncScheduler.cancelEpgRefresh(workManager)
+                        }
+
+                        if (firstSettingsEmission) {
+                            firstSettingsEmission = false
+                            if (
+                                current.refreshOnStartIfStale &&
+                                EpgSettingsPolicy.isRefreshStale(current)
+                            ) {
+                                SyncScheduler.requestEpgRefresh(workManager)
+                            }
+                        }
+                    }
+            }
         }
     }
 

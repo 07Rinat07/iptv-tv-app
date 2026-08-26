@@ -82,6 +82,7 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
             delegate = delegate,
             historyRepository = historyRepository,
             settingsRepository = settingsRepository,
+            epgSettingsRepository = mockk(relaxed = true),
             aggregateScope = VirtualPlaylistAggregateScope.forTest(aggregateTestScope)
         )
 
@@ -271,6 +272,7 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
             delegate = delegate,
             historyRepository = mockk<HistoryRepository>(),
             settingsRepository = mockk<SettingsRepository>(),
+            epgSettingsRepository = mockk(relaxed = true),
             aggregateScope = VirtualPlaylistAggregateScope.forTest(backgroundScope)
         )
 

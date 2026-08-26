@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 
@@ -23,6 +24,11 @@ object SettingsKeys {
     val allowInsecureUrls: Preferences.Key<Boolean> = booleanPreferencesKey("allow_insecure_urls")
     val providerAutoSyncEnabled: Preferences.Key<Boolean> = booleanPreferencesKey("provider_auto_sync_enabled")
     val providerAutoSyncIntervalHours: Preferences.Key<Int> = intPreferencesKey("provider_auto_sync_interval_hours")
+    val epgManualOffsetMinutes: Preferences.Key<Int> = intPreferencesKey("epg_manual_offset_minutes")
+    val epgPeriodicRefreshEnabled: Preferences.Key<Boolean> = booleanPreferencesKey("epg_periodic_refresh_enabled")
+    val epgRefreshOnStartIfStale: Preferences.Key<Boolean> = booleanPreferencesKey("epg_refresh_on_start_if_stale")
+    val epgRefreshIntervalHours: Preferences.Key<Int> = intPreferencesKey("epg_refresh_interval_hours")
+    val epgLastSuccessfulRefreshAtMs: Preferences.Key<Long> = longPreferencesKey("epg_last_successful_refresh_at_ms")
     val downloadsWifiOnly: Preferences.Key<Boolean> = booleanPreferencesKey("downloads_wifi_only")
     val maxParallelDownloads: Preferences.Key<Int> = intPreferencesKey("downloads_max_parallel")
     val recordingStorageLocation: Preferences.Key<String> = stringPreferencesKey("recording_storage_location")
