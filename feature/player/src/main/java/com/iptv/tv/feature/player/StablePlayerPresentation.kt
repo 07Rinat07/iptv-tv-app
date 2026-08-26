@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.EpgProgram
+import com.iptv.tv.core.model.EpgProgramDisplayPolicy
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -241,7 +242,9 @@ internal fun VerticalScrollControls(
 }
 
 internal fun stableCurrentProgram(programs: List<EpgProgram>, nowMs: Long): EpgProgram? =
-    programs.firstOrNull { nowMs >= it.startEpochMs && nowMs < it.endEpochMs }
+    programs.firstOrNull {
+        EpgProgramDisplayPolicy.isUsable(it) && nowMs >= it.startEpochMs && nowMs < it.endEpochMs
+    }
 
 internal fun stableNextProgram(
     programs: List<EpgProgram>,
@@ -249,7 +252,11 @@ internal fun stableNextProgram(
     nowMs: Long
 ): EpgProgram? {
     val threshold = current?.endEpochMs ?: nowMs
-    return programs.filter { it.startEpochMs >= threshold }.minByOrNull { it.startEpochMs }
+    return programs
+        .asSequence()
+        .filter(EpgProgramDisplayPolicy::isUsable)
+        .filter { it.startEpochMs >= threshold }
+        .minByOrNull { it.startEpochMs }
 }
 
 internal fun stableProgramProgress(program: EpgProgram, nowMs: Long): Float {
