@@ -45,7 +45,7 @@ import com.iptv.tv.core.model.EpgProgram
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun StableNearbyChannelsReplacement(
+internal fun StableNearbyChannelsWithLogos(
     channels: List<Channel>,
     epgByChannel: Map<Long, List<EpgProgram>>,
     onSelectChannel: (Long) -> Unit,
