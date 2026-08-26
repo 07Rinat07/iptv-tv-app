@@ -2305,7 +2305,7 @@ class PlaylistRepositoryImpl @Inject constructor(
         const val MAX_EPG_CACHE_ENTRIES = 1
         const val MAX_EPG_FAILURE_CACHE_ENTRIES = 12
         const val MIB = 1024L * 1024L
-        const val MAX_EPG_INPUT_BYTES = 64L * MIB
+        const val MAX_EPG_INPUT_BYTES = EpgInputSafetyPolicy.MAX_INPUT_BYTES
         const val EPG_MIN_START_HEADROOM_BYTES = 48L * MIB
         const val EPG_MIN_PARSE_HEADROOM_BYTES = 24L * MIB
         const val EPG_LOW_MEMORY_BACKOFF_MS = 30 * 1000L
