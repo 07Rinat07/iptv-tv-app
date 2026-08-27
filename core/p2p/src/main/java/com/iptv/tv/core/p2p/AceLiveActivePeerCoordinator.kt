@@ -126,8 +126,7 @@ class AceLiveActivePeerCoordinator(
     maxInFlightPerPeer: Int,
     private val maxOutstandingChunksPerPiece: Int = DEFAULT_MAX_OUTSTANDING_CHUNKS_PER_PIECE,
     recoveryPolicy: AceLiveRecoveryPolicy = AceLiveRecoveryPolicy(),
-    val maxReassemblerAheadPieces: Long = DEFAULT_MAX_REASSEMBLER_AHEAD_PIECES,
-    private val chunkRequestRetryMillis: Long = DEFAULT_CHUNK_REQUEST_RETRY_MILLIS
+    val maxReassemblerAheadPieces: Long = DEFAULT_MAX_REASSEMBLER_AHEAD_PIECES
 ) {
     private val recovery = AceLiveRecoveryCoordinator(
         maxInFlightPerPeer = maxInFlightPerPeer,
@@ -144,9 +143,6 @@ class AceLiveActivePeerCoordinator(
         }
         require(maxOutstandingChunksPerPiece > 0) {
             "maxOutstandingChunksPerPiece must be positive"
-        }
-        require(chunkRequestRetryMillis > 0L) {
-            "chunkRequestRetryMillis must be positive"
         }
     }
 
@@ -200,7 +196,7 @@ class AceLiveActivePeerCoordinator(
         }
 
         return requestedPieces.entries.flatMap { (piece, state) ->
-            refillChunkRequests(piece = piece, state = state, nowMillis = nowMillis)
+            refillChunkRequests(piece = piece, state = state)
         }
     }
 
@@ -278,7 +274,6 @@ class AceLiveActivePeerCoordinator(
         if (!state.receivedChunks.add(chunk.chunkIndex)) {
             return result(AceLiveChunkDisposition.DUPLICATE)
         }
-        state.lastRequestedAtMillis.remove(chunk.chunkIndex)
 
         if (state.receivedChunks.size == geometry.chunksPerPiece) {
             recovery.complete(chunk.piece)
@@ -294,44 +289,18 @@ class AceLiveActivePeerCoordinator(
 
     private fun refillChunkRequests(
         piece: Long,
-        state: RequestedPiece,
-        nowMillis: Long
+        state: RequestedPiece
     ): List<AceLiveChunkRequest> {
         val outstanding = state.requestedChunks.size - state.receivedChunks.size
-
-        // A chunk request used to become "spent" forever after one wire send. On a lossy or
-        // slow live peer that meant one missing chunk could pin the entire piece until the much
-        // coarser piece-level recovery timeout. Retry only still-missing chunks after a short
-        // bounded interval; this does not increase outstanding ownership and therefore preserves
-        // the existing per-piece backpressure.
-        val retryIndices = state.requestedChunks
-            .asSequence()
-            .filterNot(state.receivedChunks::contains)
-            .filter { chunkIndex ->
-                val lastRequestedAt = state.lastRequestedAtMillis[chunkIndex] ?: Long.MIN_VALUE
-                elapsedSince(lastRequestedAt, nowMillis) >= chunkRequestRetryMillis
-            }
-            .take(maxOutstandingChunksPerPiece)
-            .toList()
-
         val capacity = (maxOutstandingChunksPerPiece - outstanding).coerceAtLeast(0)
-        val newIndices = if (capacity == 0) {
-            emptyList()
-        } else {
-            (0 until geometry.chunksPerPiece)
-                .asSequence()
-                .filterNot(state.requestedChunks::contains)
-                .take(capacity)
-                .toList()
-        }
+        if (capacity == 0) return emptyList()
 
-        val chunkIndices = (retryIndices + newIndices).distinct()
-        if (chunkIndices.isEmpty()) return emptyList()
-
-        state.requestedChunks += newIndices
-        chunkIndices.forEach { chunkIndex ->
-            state.lastRequestedAtMillis[chunkIndex] = nowMillis
-        }
+        val chunkIndices = (0 until geometry.chunksPerPiece)
+            .asSequence()
+            .filterNot(state.requestedChunks::contains)
+            .take(capacity)
+            .toList()
+        state.requestedChunks += chunkIndices
 
         return chunkIndices.map { chunkIndex ->
             val begin = chunkIndex.toLong() * geometry.chunkLengthBytes.toLong()
@@ -353,13 +322,6 @@ class AceLiveActivePeerCoordinator(
 
     private fun isOutsideReassemblyHorizon(piece: Long, nextNeeded: Long): Boolean =
         piece >= saturatingAdd(nextNeeded, maxReassemblerAheadPieces)
-
-    private fun elapsedSince(startMillis: Long, nowMillis: Long): Long =
-        if (startMillis == Long.MIN_VALUE) {
-            Long.MAX_VALUE
-        } else {
-            (nowMillis - startMillis).coerceAtLeast(0L)
-        }
 
     private fun forgetPieces(pieces: Iterable<Long>) {
         pieces.forEach { piece -> requestedPieces.remove(piece) }
@@ -395,13 +357,11 @@ class AceLiveActivePeerCoordinator(
         val peerId: Long,
         var pieceHeader: ByteArray? = null,
         val requestedChunks: MutableSet<Int> = mutableSetOf(),
-        val receivedChunks: MutableSet<Int> = mutableSetOf(),
-        val lastRequestedAtMillis: MutableMap<Int, Long> = mutableMapOf()
+        val receivedChunks: MutableSet<Int> = mutableSetOf()
     )
 
     companion object {
         const val DEFAULT_MAX_REASSEMBLER_AHEAD_PIECES: Long = 512L
         const val DEFAULT_MAX_OUTSTANDING_CHUNKS_PER_PIECE: Int = 24
-        const val DEFAULT_CHUNK_REQUEST_RETRY_MILLIS: Long = 1_000L
     }
 }
