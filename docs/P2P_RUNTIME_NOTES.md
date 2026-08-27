@@ -2,77 +2,101 @@
 
 ## Project boundary
 
-Torrent TV/Ace Live playback is owned by the in-process runtime. An installed external Ace Stream Engine is not the normal backend, fallback or release requirement for Torrent TV. External products are useful only as behavioral benchmarks when the same source and device are compared during testing.
+Torrent TV / Ace Live playback принадлежит in-process runtime приложения. Установленный внешний Ace Stream Engine не является normal backend, автоматическим fallback или release requirement. Внешний движок допустим как same-device A/B benchmark и как явно ограниченный compatibility path для поддерживаемых descriptor cases, но не должен скрывать отказ embedded runtime.
 
-The runtime must improve by better peer selection, scheduling, buffering and recovery rather than by extending already bounded failure timeouts.
+## Stage model
 
-## Stale preparation and direct playback
+Peer и playback progress всегда трактуются как последовательность независимых стадий:
 
-A magnet/torrent metadata resolve may remain inside native libtorrent work for several seconds. Player actions invalidate each P2P request with a monotonically increasing epoch.
+`discovered -> connected -> handshaked -> windowUseful -> unchoked -> producing -> TS -> loopback -> Media3 -> first frame/audio`
 
-When no embedded stream has been published yet, `stopTorrentStream()` and `releaseTorrentStream()` must not wait for the repository stream mutex held by that obsolete preparation. They invalidate its epoch and let direct IPTV continue immediately. If the stale preparation later succeeds, the epoch check closes the newly created embedded stream before it can be returned to the player.
+Значения не взаимозаменяемы:
 
-When an embedded stream is already active, stop still performs synchronous cleanup so its loopback server and torrent handle are released before playback continues.
+- `discovered` — endpoint получен tracker/DHT;
+- `connected` — установлен TCP transport;
+- `handshaked` — принят protocol handshake;
+- `windowUseful` — advertised live window покрывает authoritative playback cursor;
+- `unchoked` — peer разрешает запросы;
+- `producing` — peer дал media contribution, прошедший authentication/resync и принятый output buffer.
 
-Playback ownership is additionally protected above the repository by separate monotonic request and decoder-session identities. A delayed retry from an older channel may not resolve, publish an error or start a decoder after a newer request owns the player.
+Высокий discovered count не является доказательством usable swarm. Аналогично успешный loopback transfer не доказывает, что Media3 уже получил валидные tracks/first frame.
 
-## Ace Live startup discovery and timeout budgets
+## Discovery and routing
 
-The initial Ace Live discovery may return as soon as one tracker peer is available so TCP probing can begin without waiting for Mainline DHT. If that fast path yields only a small candidate set, startup performs bounded DHT probe batches and may expand discovery while media scheduling already runs.
+Tracker fast path может начать TCP probing до завершения DHT, но малый или неqualifying tracker candidate set не должен навсегда подавлять bounded alternative discovery.
 
-The shared clean-room BEP-5 walker uses bounded concurrency, per-request timeouts, an absolute walk budget and a query cap. Cancellation closes outstanding UDP sockets. A successful same-swarm/bootstrap result may be reused briefly, but an empty result is never cached as proof that the distributed swarm is empty.
+Mainline DHT walker обязан сохранять:
 
-The narrow 30-second no-connected-peer guard and 60-second absolute startup budget remain failure bounds, not performance targets. Adaptive-streaming work must not make a slow/dead channel appear more reliable merely by increasing these values.
+- bounded concurrency;
+- finite per-query timeout;
+- absolute walk/query budgets;
+- cancellation закрывает outstanding sockets;
+- verified routing memory может использоваться повторно, но empty result не кэшируется как доказательство пустого swarm;
+- bootstrap DNS, warm routing contacts и live queries остаются отдельными наблюдаемыми границами.
 
-## Ace Live peer meaning
+Изменение DHT branching/query limits/bootstrap set допускается только по evidence конкретного discovery failure.
 
-`discovered peers` are only network endpoints returned by tracker/DHT. They are not proof that the channel is playable. Runtime quality is represented as a staged state rather than one ambiguous counter:
+## Playback ownership and cancellation
 
-`discovered → connected → handshaked → windowUseful → unchoked → producing`.
+Каждый новый playback request/generation инвалидирует ownership более старой подготовки. Поздний callback, retry, metadata result, loopback server или decoder session старой generation не может:
 
-PR #108 introduced the production accounting foundation. `AceLivePeerProductionTracker` records connected/handshaked lifecycle, fresh contiguous media contribution and aggregate EWMA delivery rate; the TCP pool feeds it from actual transport/handshake/disconnect/media-ingress events. A field log may therefore legitimately contain several discovered endpoints while zero peers are producing media.
+- опубликовать READY/error поверх новой generation;
+- вернуть старый localhost URL;
+- закрыть runtime, принадлежащий новой generation;
+- запустить decoder после смены канала.
 
-The V2b increment tightens requestability semantics. `windowUseful` means the peer's advertised `[minPiece..maxPiece]` contains the authoritative `nextNeededPiece()`. `unchoked` is the actual peer-wire state. Fresh media counts as `producing` only while both are true. The pool refreshes these stages when metadata changes, contiguous output advances the cursor, a choke/unchoke frame arrives, or recovery explicitly advances the cursor.
+При переключении старый active stream должен освобождать loopback server, peer pool и transport ownership детерминированно. Если obsolete preparation ещё не опубликовала stream, cancellation не должна блокировать новый ordinary IPTV/P2P request ненужным ожиданием старого mutex/network work.
 
-This quality snapshot is still an observation layer, not scheduler policy. Before scheduler feedback it must be persisted in structured diagnostics and the media-contribution boundary must be hardened to confirmed post-authenticated/post-output bytes.
+## Scheduler, recovery and buffer
 
-## Ace Live adaptive startup buffering
+Authoritative progress — фактически принятый contiguous media cursor, а не requested frontier. Scheduler обязан:
 
-The output ring remains bounded at 16 MiB by default. Startup readiness is now time-based but driven by **actual media delivery after the first media bytes arrive**:
+- назначать work только requestable peers;
+- ограничивать in-flight ownership и reassembly window;
+- requeue unfinished work при timeout/drop/window loss;
+- не перескакивать evicted gap неявно;
+- выполнять recovery jump только через отдельное bounded policy decision;
+- отличать stale-but-reachable pool от transport failure;
+- не считать ingress bytes media progress до завершения required validation/output stages.
 
-- AUTO target duration: 4 seconds;
-- AUTO minimum startup reserve: 1 MiB;
-- AUTO maximum startup reserve: 6 MiB;
-- throughput uses an EWMA of real retained-media growth;
-- discovery/handshake latency is excluded from the throughput clock;
-- the old 512-KiB startup floor is no longer sufficient;
-- AUTO forced-start begins from first media, not runtime start, and requires at least 2 MiB by default;
-- MANUAL mode keeps its explicit threshold and is never bypassed by AUTO forced-start.
+Buffer pressure измеряется относительно authoritative consumer cursor. Retained storage bytes сами по себе не равны playable headroom конкретного Media3 reader. Любая адаптация request depth/refill/replacement должна оставаться bounded и не отменять уже выданную ownership без явной причины.
 
-This fixes a concrete field-log failure mode in the old policy. Previously, if discovery consumed 15–20 seconds before media arrived, `retainedBytes / runtimeAge` made a healthy stream look artificially slow. AUTO could collapse toward the minimum threshold and expose HD playback with too little reserve.
+## Loopback / player boundary
 
-Adaptive startup V1 is merged and accepted by exact-head CI/real Torrent TV smoke. It does **not** by itself claim accepted sustained playback. The next controller must track buffer seconds after playback begins, producer/consumer rates and critical/low/target/high watermarks.
+Pipeline:
 
-## Ace Live scheduling and retry
+`Ace peers -> scheduler/reassembly -> media validation -> MPEG-TS resync -> bounded media buffer -> localhost HTTP -> Media3`
 
-The runtime currently targets a bounded active peer pool, caps concurrent peers, keeps a bounded reassembly window and uses finite request/stale/media-stall recovery. The current request depth is still conservative and largely static.
+P2P acquisition и Media3 demux/rendering — разные failure domains. Если upstream уже доказанно выдаёт чистый TS, отсутствие first frame исследуется на TS/Media3 boundary, а не лечится увеличением peer/timeouts. Если producing/TS отсутствуют, Player fallback/buffer change не исправляет upstream swarm.
 
-Player retry releases the old local stream and prepares a new P2P session. Retrying the same stopped loopback URL is not a valid recovery path. Network/source failures also do not trigger LibVLC because a decoder change cannot repair a dead upstream.
+Dashboard/fullscreen UI обязаны использовать одну playback session и не создавать второй P2P runtime.
 
-The next scheduling hardening must use buffer pressure and producing-peer quality to adjust request depth/refill. A healthy, already-buffered stream should avoid discovery churn; a falling buffer should increase useful work and replace stale/non-producing peers within explicit bounds. The V2/V2b quality snapshot is intentionally prepared before this policy change so scheduler tuning is driven by measured useful peers rather than raw discovery counts.
+## Diagnostics contract
 
-## Loopback/player boundary
+Для failed runtime фиксируется первая отсутствующая стадия и correlation fields (`startup/session/runtime/generation` в доступной реализации). Полезные диагностические классы:
 
-The current pipeline is:
+- discovery/bootstrap/DHT result;
+- peer lifecycle and qualification;
+- request selection/send/timeout;
+- chunk/piece validation and media append;
+- MPEG-TS sync/PAT/PMT/random-access evidence;
+- loopback reader lifecycle/delivery;
+- Media3 load/READY/first audio/first video/rebuffer.
 
-`Ace peers → live scheduler/reassembly → MPEG-TS resync → AceLiveMediaBuffer → 127.0.0.1/live.ts → Media3`.
+Diagnostics не должна изменять scheduler, retry, timeout, buffer или ownership semantics. Raw content id, credential-bearing URL, token и payload не должны попадать в обычные логи/экспорт.
 
-The P2P buffer and Media3 LoadControl are currently separate feedback systems. Field logs show some resolved Ace streams spending roughly 66 seconds between `player_start` and `player_ready`, while other streams reach READY in well under a second. Codec absence therefore cannot explain the whole class of failures.
+## Safety invariants
 
-V4a/PR #121 captures the missing boundary timings without changing buffering policy: first localhost HTTP open/read plus Media3 BUFFERING/READY, first rendered frame and rebuffer count/duration for P2P sessions. Existing V3 diagnostics continue to provide producer/consumer rate and playable headroom.
+Не использовать как универсальный workaround:
 
-V4b now isolates a P2P-only Media3 LoadControl policy for the localhost live stream. It keeps generic IPTV settings untouched, caps duplicate Media3 read-ahead at 30 seconds / 32 MiB, keeps startup at or below 2 seconds and uses a 4-second post-rebuffer floor bounded by the effective min buffer. These are conservative initial bounds; field tuning remains driven by V4a telemetry rather than by widening upstream discovery or recovery timeouts.
+- увеличение global startup/no-peer/stall timeout;
+- увеличение DHT query/branching budget;
+- увеличение active peer/request-depth limits;
+- увеличение player/P2P buffers или heap;
+- автоматический внешний Ace Engine fallback.
 
-## Acceptance rule
+Лимит меняется только когда exact failure evidence показывает, что корректный поток упирается именно в этот лимит.
 
-A runtime change that affects P2P playback requires exact-head full Android CI and the real Torrent TV smoke without external Ace Engine. PR #108 met this gate in Android CI #495 before merge. Every following V2b/V3 runtime increment must repeat the same exact-head gate; a previous green run is not transferable to a new head. Hardware acceptance additionally uses a fixed TV Box matrix, rapid channel switching, weak-network/peer-loss cases and long-run soak tests.
+## Acceptance
+
+Runtime-changing PR требует deterministic unit/regression coverage там, где это возможно, exact-head relevant CI и integrated-main verification. Discovery/peer/network behavior считается принятым только после fixed TV Box field matrix на exact integrated build. CI подтверждает regression safety, но не доказывает доступность реального swarm.

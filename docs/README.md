@@ -15,18 +15,17 @@
 
 ## Playback / P2P
 
-- [`P2P_RUNTIME_NOTES.md`](P2P_RUNTIME_NOTES.md) — runtime invariants, lifecycle, timeout ownership и acceptance rules.
-- [`P2P_CONTENT_TRANSPORT.md`](P2P_CONTENT_TRANSPORT.md) — границы `content_id`, BitTorrent transport и Ace Live.
-- [`ACE_LIVE_ADAPTIVE_STREAMING_CORE.md`](ACE_LIVE_ADAPTIVE_STREAMING_CORE.md) — media-producing peers, scheduler, buffering и player boundary.
-- [`ACE_LIVE_STARTUP_TIMELINE.md`](ACE_LIVE_STARTUP_TIMELINE.md) — диагностические startup milestones.
+- [`P2P_RUNTIME_NOTES.md`](P2P_RUNTIME_NOTES.md) — runtime invariants, lifecycle, scheduling, ownership и acceptance rules.
+- [`P2P_CONTENT_TRANSPORT.md`](P2P_CONTENT_TRANSPORT.md) — границы `content_id`, BitTorrent transport, Ace Live и compatibility routing.
+- [`ACE_LIVE_STARTUP_TIMELINE.md`](ACE_LIVE_STARTUP_TIMELINE.md) — канонические диагностические startup milestones и их интерпретация.
 - [`PLAYBACK_COMPATIBILITY_MATRIX.md`](PLAYBACK_COMPATIBILITY_MATRIX.md) — проверяемая совместимость контейнеров, кодеков и playback backends.
 - [`integrations/acestream.md`](integrations/acestream.md) — compatibility-интеграция Ace Stream.
 - [`ACE_LIVE_EXTERNAL_STREAMING_REFERENCES_2026-08-16.md`](ACE_LIVE_EXTERNAL_STREAMING_REFERENCES_2026-08-16.md) — сохранённые clean-room/reference findings; это справочный материал, а не текущий статус проекта.
 
 ## EPG / archive
 
-- [`features/EPG_SOURCE_INTEGRATION_PLAN.md`](features/EPG_SOURCE_INTEGRATION_PLAN.md) — источники EPG, matching и адаптеры форматов.
-- [`EPG_DISK_CACHE_PLAN.md`](EPG_DISK_CACHE_PLAN.md) — bounded persistent EPG cache contract.
+- [`features/EPG_SOURCE_INTEGRATION_PLAN.md`](features/EPG_SOURCE_INTEGRATION_PLAN.md) — reference catalog источников, matching и адаптеры форматов; доступность внешних endpoints проверяется runtime.
+- [`EPG_DISK_CACHE_PLAN.md`](EPG_DISK_CACHE_PLAN.md) — bounded persistent EPG cache contract для plain XMLTV и raw GZIP XMLTV.
 - [`CATCHUP_ARCHIVE_CONTRACT.md`](CATCHUP_ARCHIVE_CONTRACT.md) — правила реального catch-up/archive playback.
 
 ## Feature, testing и release docs
@@ -44,4 +43,4 @@
 
 ## Правило для новых документов
 
-Не добавлять в `docs/` одноразовые handoff/status/field-report файлы с точным SHA, датой прогона или активной веткой. Field evidence прикладывать к соответствующему Issue/PR либо сохранять как Actions artifact; в документации оставлять только повторяемый контракт, процедуру или архитектурное решение.
+Не добавлять в `docs/` одноразовые handoff/status/field-report файлы с точным SHA, датой прогона или активной веткой. Field evidence прикладывать к соответствующему Issue/PR либо сохранять как Actions artifact; в документации оставлять только повторяемый контракт, процедуру, справочный каталог или архитектурное решение.
