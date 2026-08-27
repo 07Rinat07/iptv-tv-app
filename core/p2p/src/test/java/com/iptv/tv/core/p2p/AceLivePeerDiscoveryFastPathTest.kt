@@ -1,21 +1,30 @@
 package com.iptv.tv.core.p2p
 
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AceLivePeerDiscoveryFastPathTest {
+    @After
+    fun cleanupBackgroundDht() {
+        AceLiveBackgroundDhtAcquisitionRegistry.resetForTests()
+    }
+
     @Test
     fun `tracker fast path starts immediately and schedules background dht diversity`() = runBlocking {
         val swarm = swarm(21)
-        var dhtCalled = false
+        val dhtStarted = CompletableDeferred<Unit>()
+        val releaseDht = CompletableDeferred<Unit>()
         val trackerPeers = listOf(
             AceLiveTcpPeerEndpoint("1.1.1.1", 8101),
             AceLiveTcpPeerEndpoint("8.8.8.8", 8102),
@@ -24,18 +33,20 @@ class AceLivePeerDiscoveryFastPathTest {
         )
         val orchestrator = AceLivePeerDiscoveryOrchestrator(
             dhtDiscover = {
-                dhtCalled = true
+                dhtStarted.complete(Unit)
+                releaseDht.await()
                 AceLiveDhtDiscoveryResult(emptyList(), 0, 0, 0)
             },
             trackerDiscover = {
+                withTimeout(1_000L) { dhtStarted.await() }
                 AceLiveUdpTrackerDiscoveryResult(trackerPeers, 1, 0, 0)
             },
             dhtHeadroomAvailable = { true }
         )
 
-        val result = orchestrator.discover(request(swarm))
+        val result = withTimeout(1_000L) { orchestrator.discover(request(swarm)) }
 
-        assertFalse(dhtCalled)
+        assertTrue(dhtStarted.isCompleted)
         assertEquals(trackerPeers, result.tcpEndpoints())
         assertEquals(AceLivePeerDiscoverySourceStatus.NOT_REQUESTED, result.dht.status)
         assertEquals(AceLivePeerDiscoverySourceStatus.SUCCEEDED, result.tracker.status)
@@ -44,28 +55,32 @@ class AceLivePeerDiscoveryFastPathTest {
             AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND,
             aceLiveStartupDhtRefillPlan(result)
         )
+        releaseDht.complete(Unit)
     }
 
     @Test
     fun `startup threshold accepts one tracker peer without waiting for dht`() = runBlocking {
         val swarm = swarm(26)
-        var dhtCalled = false
+        val dhtStarted = CompletableDeferred<Unit>()
+        val releaseDht = CompletableDeferred<Unit>()
         val trackerPeer = AceLiveTcpPeerEndpoint("1.1.1.1", 8601)
         val orchestrator = AceLivePeerDiscoveryOrchestrator(
             dhtDiscover = {
-                dhtCalled = true
+                dhtStarted.complete(Unit)
+                releaseDht.await()
                 AceLiveDhtDiscoveryResult(emptyList(), 0, 0, 0)
             },
             trackerDiscover = {
+                withTimeout(1_000L) { dhtStarted.await() }
                 AceLiveUdpTrackerDiscoveryResult(listOf(trackerPeer), 1, 0, 0)
             },
             policy = AceLivePeerDiscoveryOrchestrationPolicy(trackerFastPathMinPeers = 1),
             dhtHeadroomAvailable = { true }
         )
 
-        val result = orchestrator.discover(request(swarm))
+        val result = withTimeout(1_000L) { orchestrator.discover(request(swarm)) }
 
-        assertFalse(dhtCalled)
+        assertTrue(dhtStarted.isCompleted)
         assertEquals(listOf(trackerPeer), result.tcpEndpoints())
         assertEquals(AceLivePeerDiscoverySourceStatus.NOT_REQUESTED, result.dht.status)
         assertEquals(AceLivePeerDiscoverySourceStatus.SUCCEEDED, result.tracker.status)
@@ -74,6 +89,7 @@ class AceLivePeerDiscoveryFastPathTest {
             AceLiveStartupDhtRefillPlan.PROBE_BATCHES_THEN_EXPAND,
             aceLiveStartupDhtRefillPlan(result)
         )
+        releaseDht.complete(Unit)
     }
 
     @Test
