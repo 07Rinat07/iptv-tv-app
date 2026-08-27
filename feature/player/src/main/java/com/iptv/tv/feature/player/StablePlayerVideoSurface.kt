@@ -41,6 +41,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.iptv.tv.core.player.Media3CompatibilityEvidenceTracker
@@ -57,12 +58,36 @@ import kotlinx.coroutines.isActive
 private const val STABLE_IPTV_USER_AGENT = "Rinat-IPTV/1.0 (Android TV; Media3)"
 private const val FIRST_VIDEO_FRAME_TIMEOUT_MS = 8_000L
 private const val VIDEO_RECOVERY_TIMEOUT_MS = 6_000L
+private const val MAX_LOAD_ERROR_DIAGNOSTIC_CHARS = 220
 
 internal fun stablePictureConfirmed(
     firstFrameRendered: Boolean,
     videoWidth: Int,
     videoHeight: Int
 ): Boolean = firstFrameRendered && videoWidth > 0 && videoHeight > 0
+
+internal fun stableMedia3LoadErrorDiagnostic(error: IOException): String {
+    val type = error.javaClass.name.ifBlank { error.javaClass.simpleName }
+    val message = error.message
+        ?.replace('\n', ' ')
+        ?.replace('\r', ' ')
+        ?.trim()
+        .orEmpty()
+    val cause = error.cause?.let { value ->
+        val causeType = value.javaClass.name.ifBlank { value.javaClass.simpleName }
+        val causeMessage = value.message
+            ?.replace('\n', ' ')
+            ?.replace('\r', ' ')
+            ?.trim()
+            .orEmpty()
+        if (causeMessage.isBlank()) causeType else "$causeType:$causeMessage"
+    }
+    return buildString {
+        append(type)
+        if (message.isNotBlank()) append(':').append(message)
+        if (!cause.isNullOrBlank()) append(" <- ").append(cause)
+    }.take(MAX_LOAD_ERROR_DIAGNOSTIC_CHARS)
+}
 
 private enum class StablePlaybackBackend {
     MEDIA3,
@@ -155,7 +180,6 @@ internal fun StableVideoSurface(
             }
         }
     }
-
 }
 
 @Composable
@@ -186,10 +210,20 @@ private fun StableMedia3VideoSurface(
             session.bufferConfig
         }
     }
-    // Keep the expensive Media3/MediaCodec stack alive while zapping between ordinary IPTV
-    // channels. P2P gets its own bounded localhost LoadControl, so crossing IPTV <-> P2P is also
-    // a buffering-policy boundary and must rebuild the Media3 stack.
-    val playerResult = remember(session.requestHeaders, media3BufferConfig, session.isP2pPlayback) {
+    val playerLifecycleKey = StableP2pMedia3RecoveryPolicy.playerLifecycleKey(
+        isP2pPlayback = session.isP2pPlayback,
+        sessionId = session.sessionId
+    )
+
+    // Ordinary IPTV keeps the expensive Media3/MediaCodec stack across zaps. A localhost P2P URL,
+    // however, belongs to exactly one prepared embedded runtime. A re-prepared P2P session must not
+    // inherit a loader/codec stack that still owns callbacks for the previous localhost server.
+    val playerResult = remember(
+        session.requestHeaders,
+        media3BufferConfig,
+        session.isP2pPlayback,
+        playerLifecycleKey
+    ) {
         runCatching {
             val requestHeaders = session.requestHeaders
                 .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
@@ -205,6 +239,17 @@ private fun StableMedia3VideoSurface(
                 .setUserAgent(userAgent)
                 .setDefaultRequestProperties(requestHeaders)
             val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
+            val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory).apply {
+                if (session.isP2pPlayback) {
+                    // The embedded runtime owns recovery. Retrying a closed 127.0.0.1 URL only
+                    // reopens a dead generation and was observed immediately before process exits.
+                    setLoadErrorHandlingPolicy(
+                        DefaultLoadErrorHandlingPolicy(
+                            StableP2pMedia3RecoveryPolicy.MIN_LOADABLE_RETRY_COUNT
+                        )
+                    )
+                }
+            }
             val renderersFactory = DefaultRenderersFactory(context)
                 .setEnableDecoderFallback(true)
                 .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
@@ -212,10 +257,6 @@ private fun StableMedia3VideoSurface(
             val trackSelector = DefaultTrackSelector(context).apply {
                 val parameters = buildUponParameters()
                     .setAllowVideoMixedMimeTypeAdaptiveness(true)
-                    // The heap limit is not a decoder capability signal. Capping a 256 MB TV box
-                    // at 720p made Media3 discard otherwise supported 1080p video tracks and play
-                    // audio only. MediaCodec owns its native buffers, so keep the primary player
-                    // eligible for the source resolution and let renderer capability checks decide.
                     .setExceedVideoConstraintsIfNecessary(true)
                     .setTunnelingEnabled(false)
                 setParameters(parameters)
@@ -224,7 +265,7 @@ private fun StableMedia3VideoSurface(
             ExoPlayer.Builder(context, renderersFactory)
                 .setTrackSelector(trackSelector)
                 .setLoadControl(media3BufferConfig.toLoadControl())
-                .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+                .setMediaSourceFactory(mediaSourceFactory)
                 .build()
                 .apply {
                     setAudioAttributes(
@@ -284,7 +325,20 @@ private fun StableMedia3VideoSurface(
     var videoTrackSupported by remember(session.sessionId) { mutableStateOf(true) }
     var videoRecoveryStartedAt by remember(session.sessionId) { mutableLongStateOf(0L) }
     var videoFailureReported by remember(session.sessionId) { mutableStateOf(false) }
+    var terminalFailureReported by remember(session.sessionId) { mutableStateOf(false) }
     var diagnosticMessage by remember(session.sessionId) { mutableStateOf<String?>(null) }
+
+    fun reportTerminalFailure(message: String) {
+        if (terminalFailureReported) return
+        terminalFailureReported = true
+        bufferingSinceMs = 0L
+        runCatching {
+            player.playWhenReady = false
+            player.stop()
+        }
+        onError(message)
+    }
+
     val p2pBoundaryTelemetryTracker = remember(
         session.sessionId,
         session.playbackStartedAtMillis,
@@ -380,7 +434,7 @@ private fun StableMedia3VideoSurface(
             lengthBytes = loadEventInfo.dataSpec.length.takeIf { it >= 0L },
             bytesLoaded = loadEventInfo.bytesLoaded.coerceAtLeast(0L),
             wasCanceled = wasCanceled,
-            errorType = errorType?.take(80)
+            errorType = errorType?.take(MAX_LOAD_ERROR_DIAGNOSTIC_CHARS)
         )
 
         val analyticsListener = object : AnalyticsListener {
@@ -418,10 +472,11 @@ private fun StableMedia3VideoSurface(
             ) {
                 val tracker = p2pBoundaryTelemetryTracker ?: return
                 val now = System.currentTimeMillis()
+                val diagnostic = stableMedia3LoadErrorDiagnostic(error)
                 val evidence = loadEvidence(
                     loadEventInfo = loadEventInfo,
                     wasCanceled = wasCanceled,
-                    errorType = error.javaClass.simpleName
+                    errorType = diagnostic
                 )
                 tracker.onLoadError(
                     nowMillis = now,
@@ -429,9 +484,18 @@ private fun StableMedia3VideoSurface(
                     evidence = evidence
                 ).let(::emitP2pBoundaryTelemetry)
 
-                // The P2P localhost .ts source is a progressive Media3 period. In Media3 1.5.1
-                // wasCanceled=false means its load-error policy selected a retry action. Record
-                // that decision without changing the policy or scheduling another retry ourselves.
+                FileLogger.write(
+                    context = context,
+                    level = "WARN",
+                    tag = "P2pBoundaryLoadError",
+                    message = "sessionId=${session.sessionId}, requestId=${session.requestId}, " +
+                        "task=${loadEventInfo.loadTaskId}, canceled=$wasCanceled, error=$diagnostic"
+                )
+
+                // Keep telemetry honest if Media3 itself still reports a retry decision. The P2P
+                // media-source policy above has zero retry budget, so a non-cancelled retry here is
+                // diagnostic evidence of an unexpected policy path rather than permission to call
+                // prepare() again ourselves.
                 if (!wasCanceled) {
                     tracker.onLoadRetry(
                         nowMillis = now,
@@ -523,12 +587,23 @@ private fun StableMedia3VideoSurface(
 
             override fun onPlayerError(error: PlaybackException) {
                 emitMedia3CompatibilityEvidence(event = "player_error")
-                if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+                val diagnostic = "${error.errorCodeName}: ${error.message ?: "ошибка воспроизведения"}"
+                FileLogger.write(
+                    context = context,
+                    level = "WARN",
+                    tag = "P2pPlayerError",
+                    message = "sessionId=${session.sessionId}, requestId=${session.requestId}, " +
+                        "p2p=${session.isP2pPlayback}, error=$diagnostic"
+                )
+                if (
+                    error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW &&
+                    StableP2pMedia3RecoveryPolicy.shouldReprepareSameSource(session.isP2pPlayback)
+                ) {
                     player.seekToDefaultPosition()
                     player.prepare()
                     player.playWhenReady = true
                 } else {
-                    onError("${error.errorCodeName}: ${error.message ?: "ошибка воспроизведения"}")
+                    reportTerminalFailure(diagnostic)
                 }
             }
         }
@@ -546,7 +621,7 @@ private fun StableMedia3VideoSurface(
             player.setMediaItem(mediaItem)
             player.prepare()
             player.playWhenReady = true
-        }.onFailure { onError(it.message ?: it.javaClass.simpleName) }
+        }.onFailure { reportTerminalFailure(it.message ?: it.javaClass.simpleName) }
 
         onDispose {
             p2pBoundaryTelemetryTracker
@@ -563,21 +638,37 @@ private fun StableMedia3VideoSurface(
             val now = System.currentTimeMillis()
 
             val bufferingStarted = bufferingSinceMs
-            if (bufferingStarted > 0L) {
+            if (bufferingStarted > 0L && !terminalFailureReported) {
                 val elapsed = now - bufferingStarted
                 val firstRecoveryAt = (session.bufferConfig.bufferForPlaybackAfterRebufferMs * 4L)
                     .coerceIn(10_000L, 24_000L)
                 if (elapsed >= firstRecoveryAt && softRecoveryCount < 2) {
                     softRecoveryCount += 1
                     bufferingSinceMs = now
-                    runCatching {
-                        if (player.isCurrentMediaItemLive) player.seekToDefaultPosition()
-                        player.prepare()
-                        player.playWhenReady = true
+                    if (
+                        StableP2pMedia3RecoveryPolicy.shouldReprepareSameSource(
+                            session.isP2pPlayback
+                        )
+                    ) {
+                        runCatching {
+                            if (player.isCurrentMediaItemLive) player.seekToDefaultPosition()
+                            player.prepare()
+                            player.playWhenReady = true
+                        }
+                    } else {
+                        FileLogger.write(
+                            context = context,
+                            level = "WARN",
+                            tag = "P2pStaleSourceRecoveryBlocked",
+                            message = "sessionId=${session.sessionId}, requestId=${session.requestId}, " +
+                                "buffering_ms=$elapsed; escalating_to_p2p_reprepare=true"
+                        )
+                        reportTerminalFailure(
+                            "P2P localhost-поток перестал отдавать данные; требуется новая P2P-сессия"
+                        )
                     }
                 } else if (elapsed >= 45_000L && softRecoveryCount >= 2) {
-                    onError("Поток не отвечает после автоматического восстановления буфера")
-                    bufferingSinceMs = 0L
+                    reportTerminalFailure("Поток не отвечает после автоматического восстановления буфера")
                 }
             }
 
@@ -592,19 +683,21 @@ private fun StableMedia3VideoSurface(
                 !pictureConfirmed &&
                 now - readyStarted >= FIRST_VIDEO_FRAME_TIMEOUT_MS
 
-            if (!audioWithoutPicture || videoFailureReported) continue
+            if (!audioWithoutPicture || videoFailureReported || terminalFailureReported) continue
 
             when {
                 !videoTrackSelected && !videoTrackSupported -> {
                     diagnosticMessage = "Звук получен, но видеокодек не поддерживается этим устройством"
                     videoFailureReported = true
-                    onError("Видеодорожка найдена, но устройство не поддерживает её кодек или профиль")
+                    reportTerminalFailure(
+                        "Видеодорожка найдена, но устройство не поддерживает её кодек или профиль"
+                    )
                 }
 
                 !videoTrackSelected -> {
                     diagnosticMessage = "В потоке выбрана аудиодорожка, но видеодорожка отсутствует"
                     videoFailureReported = true
-                    onError("Поток передал звук без доступной видеодорожки")
+                    reportTerminalFailure("Поток передал звук без доступной видеодорожки")
                 }
 
                 videoRecoveryStartedAt == 0L -> {
@@ -621,7 +714,7 @@ private fun StableMedia3VideoSurface(
                 now - videoRecoveryStartedAt >= VIDEO_RECOVERY_TIMEOUT_MS -> {
                     diagnosticMessage = "Media3 не подтвердил изображение ${videoWidth}×${videoHeight}; переход на LibVLC"
                     videoFailureReported = true
-                    onError(
+                    reportTerminalFailure(
                         "Звук воспроизводится, но Media3 не вывел подтверждённое изображение " +
                             "после перезапуска (video=${videoWidth}x${videoHeight})"
                     )
