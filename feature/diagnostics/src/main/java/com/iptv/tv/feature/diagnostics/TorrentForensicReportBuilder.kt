@@ -27,14 +27,22 @@ internal object TorrentForensicReportBuilder {
 
         val attempts = when {
             startIndexes.isNotEmpty() -> startIndexes.mapIndexed { position, startIndex ->
-                val endExclusive = startIndexes.getOrNull(position + 1) ?: ordered.size
+                val nextStartupIndex = startIndexes.getOrNull(position + 1)
+                val nextPlayerRequestIndex = ordered.indices.firstOrNull { index ->
+                    index > startIndex && ordered[index].status == "player_play_request"
+                }
+                val endExclusive = listOfNotNull(nextStartupIndex, nextPlayerRequestIndex)
+                    .minOrNull()
+                    ?: ordered.size
                 AttemptWindow(
-                    logs = ordered.subList(startIndex, endExclusive),
+                    logs = ordered
+                        .subList(startIndex, endExclusive)
+                        .filter { it.isTorrentRelevant() },
                     playerRequest = ordered
                         .subList(0, startIndex)
                         .lastOrNull { candidate ->
                             candidate.status == "player_play_request" &&
-                                ordered[startIndex].createdAt - candidate.createdAt in 0..PLAYER_CONTEXT_WINDOW_MS
+                                ordered[startIndex].createdAt - candidate.createdAt in 0L..PLAYER_CONTEXT_WINDOW_MS
                         }
                 )
             }
