@@ -2,6 +2,7 @@ package com.iptv.tv.feature.player
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StablePlaybackFeedbackTest {
@@ -42,5 +43,10 @@ class StablePlaybackFeedbackTest {
                 isStartingPlayback = false
             )
         )
+    }
+
+    @Test
+    fun `feedback banner keeps a dedicated lane below the programme header`() {
+        assertTrue(STABLE_PLAYBACK_FEEDBACK_TOP_PADDING_DP >= 64)
     }
 }
