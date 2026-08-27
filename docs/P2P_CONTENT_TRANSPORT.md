@@ -1,21 +1,60 @@
 # P2P content transport boundary
 
-Torrent-TV `acestream://content_id` is not treated as a BitTorrent infohash.
+## Identity classification
 
-The playback path first tries a content id as the Ace peer-wire swarm key used by current public live channels, without reclassifying it as BitTorrent. If needed, the autonomous signed catalog/metadata-swarm providers resolve a descriptor for the embedded Ace Live runtime. Only a proven non-live BitTorrent transport enters the embedded libtorrent backend. Torrent TV content-id and live-infohash failures are returned as embedded-runtime errors; they do not automatically launch an installed Ace Engine.
+Torrent TV `acestream://content_id` не является BitTorrent infohash и не должен автоматически передаваться в libtorrent как BTIH.
 
-The legacy compatibility resolver still understands the Android bound-service path and an explicitly allowed loopback probe for descriptor types outside the autonomous Torrent TV route. It is not a success criterion for content-id or live-infohash playback and must not be used to mask embedded-runtime failures.
+Transport classification сохраняет разные identity domains:
 
-For the compatibility playback path, the current Ace Engine contract is treated as a two-step control/media flow. The app sends `GET /ace/getstream` with `format=json`, a player/session id, `_idx`, `stream_id` and exactly one normalized transport descriptor (`content_id`, `magnet` or `url`). A 40-character Ace `content_id` remains hexadecimal; it is not converted to a decimal integer. The control response must contain `response.playback_url`, and only that local media URL is passed to Media3/LibVLC. The `/ace/getstream` JSON endpoint itself is never returned as a media URL.
+- Ace `content_id`;
+- Ace Live transport/live identity;
+- ordinary BitTorrent `infohash`/magnet/`.torrent`;
+- transport descriptor URL/file;
+- explicit compatibility descriptor.
 
-Android package visibility for compatibility engines includes the service intent plus known Ace packages, including `org.acestream.live` and `org.acestream.node`. The actual HTTP port is obtained from the bound AIDL service when available; `6878` remains only the explicit compatibility probe, not the primary hard-coded runtime port.
+Переход между domains разрешён только после явного validated descriptor evidence. Совпадение длины или hex-представления не является доказательством эквивалентности identity.
 
-The embedded parser also accepts the official Ace descriptor forms `acestream:?infohash=...`, `acestream:?magnet=...`, `acestream:?url=...`, `acestream:?data=...` and `acestream:?content_id=...`. Only descriptors that explicitly prove ordinary BitTorrent metadata (`infohash`, `magnet`, or a `.torrent` URL/local file) are routed to the embedded libtorrent backend. `content_id` remains a separate Ace identity and `.acelive` is never reinterpreted as standard BitTorrent.
+## Embedded routing
 
-For non-live BitTorrent metadata, the resolver can use the official `transport_file_data` payload when no direct infohash is available. The payload is size-limited, Base64-decoded into the app cache as a deterministic local `.torrent`, and then validated by the existing libtorrent metadata path before streaming. Invalid, oversized, live or explicitly non-BitTorrent payloads are rejected or kept on an explicit legacy compatibility path. This avoids a second DHT metadata fetch when the transport file is already available.
+Torrent TV / Ace Live обрабатывается embedded Ace runtime. Его failure возвращается как failure этого runtime и не должен автоматически запускать установленный Ace Engine.
 
-The autonomous provider preserves the distinction between `content_id`, BitTorrent `infohash`, transport-file data and Ace Live descriptors. Ace Live uses its own signed handshake, live window and piece/chunk semantics, so a 40-character content id is never handed to libtorrent as a BTIH. Directly published content-id swarms and bare legacy Ace `infohash` streams use the observed 512 KiB / 16 KiB live geometry; descriptor-backed streams use their validated advertised geometry and RSA public key.
+Ordinary BitTorrent попадает в embedded libtorrent path только когда transport доказан как обычный torrent metadata source: валидный infohash, magnet или validated `.torrent` descriptor/file.
 
-The current live runtime uses bounded peer concurrency, at most two in-flight requests per peer, a 4 MiB startup threshold inside a 16 MiB sliding output buffer, request/stale timeouts and a 20-second media-stall watchdog. These are implementation safeguards, not proof of sufficient buffering on every source. Device tests currently show long/failed channel switches and insufficient sustained buffer lead on some Torrent TV streams; the next increment must measure buffer fill/consumption and tune scheduling from evidence.
+`.acelive` и live-specific transport не переинтерпретируются как standard BitTorrent.
 
-Regression acceptance remains hardware-driven: real `acestream://content_id` samples must play without an installed Ace Engine; ordinary magnet/infohash/.torrent playback must remain unchanged; live transport must never be routed to standard libtorrent; repeated switching must cancel the old session; and the buffer must continue filling while playback consumes it. See `PLAYBACK_STATUS.md` for the current evidence and unresolved gates.
+## Descriptor handling
+
+Поддерживаемые Ace descriptor forms нормализуются до одного явного transport kind. Parser должен fail closed на неоднозначном или malformed descriptor и не угадывать transport по одному URL suffix/content-id shape.
+
+Если descriptor содержит transport-file payload:
+
+- payload имеет hard size limit;
+- decode/write выполняется bounded;
+- локальный файл валидируется существующим metadata path;
+- live/non-BitTorrent descriptor не перенаправляется в libtorrent;
+- временный файл и metadata lifecycle принадлежат текущей playback generation.
+
+## External compatibility path
+
+Compatibility resolver может использовать явно поддерживаемый bound-service/loopback Ace Engine contract для descriptor cases, где это предусмотрено продуктом. Такой path:
+
+- не является success criterion embedded Torrent TV;
+- не включается скрыто после embedded failure;
+- возвращает Media3/LibVLC только validated playback media URL, а не JSON/control endpoint;
+- не должен хранить или логировать credential-bearing query/content identity.
+
+## Live transport invariants
+
+Ace Live runtime владеет собственными handshake, live-window, piece/chunk, recovery и media-output semantics. Geometry и cryptographic/public-key metadata используются только из validated source/descriptor contract; speculative constants не должны становиться универсальной классификацией произвольного `content_id`.
+
+Peer discovery, transport connection, protocol qualification и media production остаются отдельными стадиями. См. [`P2P_RUNTIME_NOTES.md`](P2P_RUNTIME_NOTES.md) и [`ACE_LIVE_STARTUP_TIMELINE.md`](ACE_LIVE_STARTUP_TIMELINE.md).
+
+## Player boundary
+
+Успешный P2P transport публикует bounded localhost media endpoint. Player не должен знать tracker/DHT/request scheduler internals и не должен компенсировать upstream discovery/handshake failure изменением decoder fallback policy.
+
+При channel switch obsolete generation теряет ownership transport/loopback/session. Старый URL или delayed resolve не может победить более новую generation.
+
+## Acceptance
+
+Для изменения transport classification нужны regression tests на все соседние domains: `content_id`, Ace Live descriptor, ordinary magnet/infohash/`.torrent`, malformed/ambiguous input и explicit compatibility route. Device-dependent Torrent TV acceptance выполняется отдельно на реальных источниках без обязательного внешнего Ace Engine.

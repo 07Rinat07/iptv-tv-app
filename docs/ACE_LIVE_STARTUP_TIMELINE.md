@@ -1,76 +1,90 @@
-# Ace Live startup timeline — V4d
+# Ace Live startup timeline
 
-V4d closes the startup/zap latency blocker with field evidence before changing transport or buffering behaviour. The timeline is monotonic from one playback preparation request and uses first-write-wins milestones so speculative direct/metadata paths, retries, peer reconnects and HTTP reopens cannot rewrite the original startup evidence.
+## Purpose
+
+Startup timeline — observational contract для определения первой отсутствующей стадии Torrent TV playback. Она не управляет timeout, retry, scheduler, buffer или playback ownership.
 
 ## Canonical milestones
 
-`transport_selection → direct_attempt / metadata_attempt → discovery_completed → first_candidate → connected → handshake → useful_window → first_media → buffer_ready → http_reader_open → http_first_read → media3_ready → first_frame`
+Основная последовательность:
 
-Each exported core milestone carries `elapsed_ms` relative to the same Ace Live preparation origin. Missing milestones remain missing rather than receiving synthetic timestamps. `discovery_completed` is intentionally separate from `first_candidate`: an empty or failed discovery round is timing evidence, but it is not peer availability evidence.
+`transport_selection -> direct/metadata attempt -> discovery_completed -> first_candidate -> connected -> handshake -> useful_window -> first_media -> buffer_ready -> http_reader_open -> http_first_delivery -> media3_load -> media3_ready -> first_audio/first_frame`
 
-## Runtime diagnostics bridge
+Milestone записывается только по фактическому событию. Отсутствующая стадия остаётся отсутствующей; synthetic timestamp запрещён.
 
-`AceLiveStartupTimelineDiagnostics` is the observational bridge used by core runtime hook points. A first occurrence emits the stable status `embedded_ace_live_startup_timeline` with `phase=<milestone>, elapsed_ms=<value>`. Reconnects, repeated discovery/refill rounds and reader reopens cannot re-emit the canonical milestone because the underlying timeline is first-write-wins.
+`discovery_completed` и `first_candidate` различаются: завершённый пустой discovery round является timing evidence, но не peer evidence. Аналогично TCP `connected` не означает protocol `handshake`, а media ingress не означает accepted/producing output.
 
-The bridge deliberately catches diagnostics-sink failures after recording the milestone. Diagnostics therefore cannot change startup ownership, scheduler decisions, retry behaviour, buffer state or failure bounds.
+## First-write-wins semantics
 
-PR #128 wired the bridge to authoritative existing events and passed exact-head Android CI #549 before merge to `main` as `dea23c65a2b6c0865f91870806a4db53e5b0d0f3`:
+Для одной playback preparation canonical milestone фиксирует первое валидное наступление события. Повторные discovery/refill rounds, reconnect, HTTP reopen или Media3 retry могут иметь собственные diagnostics, но не переписывают исходный startup timestamp.
 
-- one timeline is created at each Ace Live playback preparation origin; the same timeline is shared by speculative direct and metadata branches of a `content_id` race;
-- transport selection, speculative direct start and metadata-resolution start map only to their explicit phases;
-- completion of the first real peer-discovery orchestration marks `discovery_completed`; `first_candidate` is emitted only when that result actually contains at least one endpoint;
-- TCP `TransportConnected` and accepted peer handshake remain separate milestones;
-- `useful_window` is emitted from existing peer-production/requestability evidence;
-- first authenticated, MPEG-TS-resynchronized bytes accepted by `AceLiveMediaBuffer` mark `first_media`;
-- the existing startup-buffer policy decision separately marks `buffer_ready` immediately before startup completion;
-- a real live-loopback consumer open marks `http_reader_open`, while the first positive loopback delivery marks `http_first_read`.
+Speculative direct/metadata branches одной подготовки должны коррелироваться с общей generation/session ownership, чтобы проигравшая branch не создавала второй независимый «успешный» timeline.
 
-## Player boundary contract
+## Clock ownership
 
-The V4d player boundary is intentionally split into a contract PR and a wiring PR so Media3 instrumentation cannot silently change playback behaviour. PR #129 passed Android CI #551 plus P2P player smoke #4 and was merged as `aa27a73cdd4740af3e70fa903df6c7cd1f3dcb00`.
+Core preparation timeline и Player elapsed-time telemetry могут иметь разные origins. Они должны связываться correlation identifiers, но не смешиваться в одну шкалу времени без явного преобразования.
 
-`P2pPlayerBoundaryTelemetryTracker` already owns P2P-only `BUFFERING`, `READY`, first-frame and rebuffer accounting. The contract is extended with:
+Runtime policy clock, используемый timeout/buffer guards, не заменяется diagnostics clock.
 
-- `load_started` — first Media3 P2P load start only;
-- `load_completed` — first successful Media3 P2P load completion only;
-- `load_error` — sparse failure evidence with an explicit load-duration value and cumulative count;
-- `load_retry` — explicit recovery/retry evidence with a cumulative count.
+## Player load boundary
 
-Repeated successful live-chunk load starts/completions do not each emit a record, preventing the same bounded-diagnostics flood previously seen with volatile peer-quality events. Internal counters still advance so a later error/retry record can show how much load activity preceded it. This contract owns no retry, seek, timeout, LoadControl or P2P policy.
+Для P2P Media3 полезно различать:
 
-The current wiring increment connects this contract to the actual Media3 P2P session. Media3 1.5.1 load start/completion/error callbacks emit the bounded `player_p2p_boundary` event while task id, requested byte position/length, bytes loaded and duration are retained in the persistent `P2pBoundaryLoad` detail; a progressive localhost load error that Media3 keeps for retry is recorded as `load_retry` without scheduling any retry itself. `first_audio` is emitted once when the Media3 audio position first advances. Existing `READY`, rebuffer and first-frame evidence stays unchanged.
+- first load started;
+- first successful load completion;
+- load error;
+- retry/recovery event;
+- `BUFFERING` / `READY`;
+- first audio progress;
+- first rendered video frame;
+- rebuffer count/duration.
 
-The live localhost boundary now records GET method, raw `Range`, parsed requested start, the actual retained-floor offset used by the reader, live-edge offset, close reason, total delivered bytes and reader lifetime. These fields are observation only: the server still returns its existing live response and does **not** seek/resume to the requested Range in this increment. Reopen events therefore expose whether requested and actual offsets diverge before any resume behaviour is introduced. Player `elapsed_ms` remains relative to the existing player-start timestamp and must not be misrepresented as the core preparation-origin clock; session/request ids provide cross-layer correlation.
+Load telemetry должна быть bounded: обычные повторяющиеся chunk loads не должны вытеснять из diagnostics более важные lifecycle/startup события.
 
-## Field update — 16 августа 2026
+## Loopback boundary
 
-The second TV Box export confirms that V4d is not only a cold-start problem. During roughly 75 seconds of retained steady-state diagnostics, four endpoints were discovered but only one peer remained handshaked. The authoritative loopback reader stayed at exactly `458656` playable bytes and about one second of headroom while `windowUseful/producing` repeatedly flipped. User-visible behaviour matched that starvation pattern: long starts, choppy audio, frozen/missing video and 60-second preparation failures.
+Local HTTP telemetry различает:
 
-The same export also exposed an observability problem: volatile `windowUseful/producing` transitions generated 107 of the retained 120 rows, so useful startup evidence was pushed out of the bounded history. `AceLivePeerDiagnosticsReporter` therefore treats only `discovered/connected/handshaked` changes as immediate lifecycle events; volatile live-edge quality remains available in periodic full snapshots.
+- reader open;
+- requested Range/start, если есть;
+- фактический retained offset;
+- first positive socket delivery;
+- total delivered bytes;
+- reader close/reopen reason;
+- reader lifetime.
 
-For weak tracker fast-path startup, a single endpoint is still not evidence of a useful producer. Startup DHT probes now return after the first valid DHT endpoint so TCP validation of an alternative can begin immediately. The existing 7-second probe budget, two bounded rounds, full background expansion and all absolute failure bounds remain unchanged.
+Сам факт `GET`/open не является media delivery. Аналогично большой delivered byte count не является first-frame доказательством: после loopback остаются TS/extractor/decoder/rendering stages.
 
-Detailed evidence is recorded in [`ACE_LIVE_FIELD_VALIDATION_2026-08-16.md`](ACE_LIVE_FIELD_VALIDATION_2026-08-16.md).
+## Failure interpretation
 
-## Remaining V4d sequence
+Примеры первой отсутствующей стадии:
 
-1. ✅ Canonical core runtime timeline: PR #128, exact-head Android CI #549, merged to `main`.
-2. ✅ P2P player load telemetry contract: PR #129, Android CI #551 + P2P player smoke #4, merged to `main`.
-3. 🚧 Wire the contract to real Media3 load/audio callbacks and localhost request/reader lifecycle evidence, including requested-vs-actual offsets and close/reopen reason, without changing generic IPTV behaviour.
-4. Use the resulting TV Box logs to decide whether bounded logical-offset HTTP reopen/resume is required; do not implement resume before that evidence.
-5. Add a bounded forward playback reserve around the authoritative consumer cursor if the field timeline still shows the player living near the live edge.
-6. Correct pre-READY pressure authority so parser/read bursts cannot masquerade as playback bitrate; preserve post-READY authoritative reader semantics.
-7. If the producer set still remains at one handshaked peer with insufficient headroom, add bounded competitive/fresh-candidate diversity based on connected/handshaked/useful evidence rather than discovered-count alone.
-8. Add decoder-safe startup warmup using the existing TS sync/PAT/PMT/random-access evidence only after the preceding boundaries are measured.
-9. Only then proceed to the fixed same-device A/B matrix, 20 rapid switches, weak network, peer loss, and 2h/8h ARM soak.
+- `first_candidate` отсутствует — discovery/bootstrap/routing boundary;
+- candidate есть, `connected` отсутствует — TCP/connect boundary;
+- connected есть, `handshake` отсутствует — protocol qualification boundary;
+- handshake есть, `useful_window` отсутствует — live-window/requestability boundary;
+- useful peer есть, `first_media` отсутствует — scheduler/request/peer production boundary;
+- media есть, `buffer_ready` отсутствует — output/headroom boundary;
+- buffer ready есть, HTTP delivery отсутствует — loopback ownership/server boundary;
+- HTTP delivery есть, Media3 READY/tracks/frame отсутствуют — TS/Media3 boundary.
+
+Изменение production behavior должно целиться в первую доказанно отсутствующую стадию, а не в последний UI symptom.
+
+## Diagnostics safety
+
+Timeline collection должна:
+
+- переживать failure diagnostics sink без влияния на playback;
+- не логировать raw content ids, tokens или credential-bearing URLs;
+- сохранять bounded number of records;
+- различать lifecycle и volatile quality samples;
+- позволять сопоставить startup/runtime/generation/session там, где эти identifiers доступны.
 
 ## Invariants
 
-- Timeline collection is observational only. It must not change startup/no-peer/stall bounds, request depth, refill/replacement budgets, recovery jumps or TS discontinuity handling.
-- The runtime's existing startup clock used by buffer policy and guards is not replaced by the canonical preparation timeline; the new clock is diagnostics-only.
-- Generic IPTV player policy remains unchanged; P2P-specific Media3 policy stays isolated at the existing player boundary.
-- Repeated peer callbacks, discovery/refill rounds and reader reopens may add their existing diagnostics, but the canonical startup milestone keeps its first timestamp.
-- A discovered endpoint is not treated as connected, handshaked, useful or producing evidence.
-- A metadata/window update is not considered useful until current peer-quality state confirms requestability against the authoritative cursor.
-- Startup peer-diversity work must reduce time-to-alternative-candidate without increasing the absolute discovery/startup/no-peer bounds.
-- The direct 8-second soft window must not be shortened or bypassed before the canonical field timeline proves that metadata is actionable earlier.
+- discovered endpoint не считается connected/handshaked/useful/producing;
+- repeated callback не изменяет canonical first milestone;
+- diagnostics не меняет absolute failure bounds;
+- generic IPTV telemetry/policy не меняется ради P2P timeline;
+- stale generation не может публиковать milestones как текущая session;
+- field acceptance опирается на exact integrated build и полный stage trace, а не только на READY/error UI.

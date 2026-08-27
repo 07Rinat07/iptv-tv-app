@@ -1,206 +1,163 @@
-# План bounded XMLTV disk cache
+# Bounded EPG disk cache contract
 
-_Актуализирован: 26 августа 2026 после field evidence большого XMLTV source и merge PR #252._
+## Goal
 
-## Статус
+Persistent EPG cache должен уменьшать повторные network downloads и повторную работу после process restart, не увеличивая heap и не скрывая malformed/unsupported source.
 
-Persistent XMLTV disk cache **ещё не реализован**. PR #252 увеличил только streaming transport envelope до 128 MiB; это не L2 cache.
+Cache остаётся отдельным storage layer вокруг существующего streaming source pipeline:
 
-Планируемая отдельная ветка:
+`network/source bytes -> bounded source classifier/decoder -> bounded XMLTV parser -> matching -> parsed L1 state`
 
-`feat/epg-disk-cache-r1`
+## Source representation
 
-Начинать её после того, как текущий `fix/epg-source-format-classification-r1` закроет source/parser correctness. Disk cache не должен скрывать malformed source и не должен смешиваться с P2P или Player UI.
+L2 snapshot хранит source bytes в сетевом представлении, которое уже прошло bounded transport write:
 
-## Field constraint, изменивший план
+- plain XMLTV сохраняется как XMLTV source bytes;
+- raw GZIP XMLTV сохраняется compressed, а decompression выполняется streaming при чтении;
+- HTML/error/binary/unsupported source не публикуется как valid EPG snapshot.
 
-На TV Box был зафиксирован реальный EPG response размером **88,578,547 байт**. Старый transport cap 64 MiB блокировал этот источник; #252 перевёл production envelope на bounded 128 MiB.
+Это сохраняет raw transport envelope и не заставляет disk layer материализовать потенциально более крупный decoded XMLTV body.
 
-Следствие: прежний disk snapshot cap 64 MiB устарел. Если оставить его, реально используемый 88.6 MB source никогда не сможет пережить process restart через L2 cache.
+При чтении snapshot проходит тот же production pipeline, что network source: format classification, поддерживаемый decoder, повторная decoded-prefix classification, XMLTV parser и heap/program/channel guards.
 
-Новый contract:
+## Bounds
 
-- per-snapshot hard cap = `EpgInputSafetyPolicy.MAX_INPUT_BYTES`, сейчас **128 MiB**;
-- aggregate disk budget остаётся **<=128 MiB**;
-- максимум entries остаётся **4**;
-- один большой snapshot может занять большую часть aggregate budget и вытеснить старые entries; per-entry cap не означает резервирование 128 MiB на каждый source;
-- эти bounds можно уменьшать по field telemetry, но не увеличивать без отдельного storage/network evidence.
+Baseline storage contract:
 
-## Зачем нужен increment
-
-Текущий hot path хранит parsed EPG в process memory. После process death/restart уже загруженный XMLTV теряется и может скачиваться/парситься снова.
-
-Цель L2 — app-private bounded raw XMLTV snapshot, который:
-
-- переживает process restart;
-- не требует materialize всего EPG graph в Room;
-- не увеличивает heap;
-- не допускает unlimited files/bytes;
-- использует тот же streaming parser, input envelope и heap/program/channel guards.
-
-## Архитектура
-
-### L1 — parsed memory cache
-
-Сохранить маленький существующий parsed cache:
-
-- короткий hot TTL;
-- bounded entry count;
-- no full-table persistence;
-- OOM/low-headroom по-прежнему очищает L1 и включает backoff.
-
-### L2 — raw XMLTV snapshot
-
-App-private store, например `cacheDir/epg/xmltv/`.
-
-Узкие ответственности:
-
-- `EpgSnapshotStore` — read/write/delete/evict contract;
-- `FileEpgSnapshotStore` — file implementation;
-- `EpgSnapshotMetadata` — `loadedAtMs`, `lastAccessAtMs`, size, `etag`, `lastModified`, checksum, format version;
-- `EpgCacheKey` — SHA-256 от source identity, чтобы credential-bearing URL не попадал в filename/diagnostics.
-
-Хранить raw decoded XMLTV bytes, не `XmlTvData`. На чтении snapshot снова проходит source-format gate, `EpgBoundedInputStream`, streaming XML parser и heap guards. Запрещены full-buffer `readBytes()`, `body.string()` и аналогичные операции на большом feed.
-
-## Bounds и storage policy
-
-Production baseline:
-
-- snapshot <= **128 MiB**;
-- total cache <= **128 MiB**;
+- raw/source snapshot <= **128 MiB**;
+- aggregate published cache <= **128 MiB**;
 - entries <= **4**;
+- decoded XMLTV stream <= **256 MiB**;
 - deterministic LRU по `lastAccessAtMs`, fallback `loadedAtMs`;
-- перед записью eviction освобождает aggregate budget;
-- после eviction должен оставаться free-space safety reserve не меньше `snapshotSize + 64 MiB`;
-- если reserve обеспечить нельзя — `write_skipped_low_storage`, но live EPG path продолжает работу;
-- cleanup lazy/opportunistic, без частого отдельного WorkManager job.
+- temporary write не считается published cache entry, но должен учитывать free-space reserve;
+- low storage -> skip cache write, а не failure live EPG load.
 
-Если `Content-Length` отсутствует, размер всё равно ограничивается streaming byte counter. Snapshot, превысивший current input envelope, не публикуется.
+Один крупный snapshot может занять почти весь aggregate budget и вытеснить старые entries. Ни один лимит не является резервированием объёма на каждый source.
 
-## Freshness policy
+Bounds меняются только по измеренному field/storage evidence.
 
-Разделять:
+## L1 and L2 ownership
 
-1. L1 parsed-memory freshness;
-2. L2/network freshness;
-3. stale fallback lifetime.
+### L1 parsed memory
 
-Для L2:
+- маленький bounded parsed cache;
+- короткий hot TTL;
+- no full-guide database materialization только ради cache;
+- low-memory/OOM headroom policy может очистить L1 независимо от L2.
 
-- network freshness учитывает выбранный cadence 6/12/24h и per-source `loadedAtMs`;
-- глобальный `lastSuccessfulRefreshAtMs` остаётся scheduler signal, но не заменяет per-source metadata;
-- после expiration использовать conditional HTTP;
-- `ETag` -> `If-None-Match`;
-- `Last-Modified` -> `If-Modified-Since`;
-- `304` обновляет metadata без body download;
-- `200` atomically заменяет snapshot;
-- transient network failure может использовать stale snapshot только по `EpgStaleFallbackPolicy`;
-- malformed/permanent source не удерживается как бесконечный stale success;
-- hard stale age <= **96h**.
+### L2 source snapshot
 
-## Read path
+Narrow storage abstraction, например:
+
+- `EpgSnapshotStore` — read/write/delete/evict;
+- file-backed app-private implementation;
+- metadata: loaded/access time, size, checksum, format version, conditional HTTP validators;
+- cache key — secret-safe digest source identity, не raw URL/credentials.
+
+## Read / refresh flow
 
 1. fresh L1 -> return;
-2. eligible L2 -> source-format preflight + streaming parse -> bounded L1;
+2. eligible L2 -> validate metadata/checksum -> production source/decode/parse pipeline -> L1;
 3. expired/revalidation-required L2 -> conditional HTTP;
-4. `304` -> validate existing file/checksum, update metadata, parse snapshot;
-5. `200` -> bounded temp file -> validate size/checksum/format -> atomic publish -> parse;
-6. transient failure -> allowed stale L1/L2 fallback;
-7. malformed/corrupt/permanent failure -> fail closed / drop invalid snapshot according to policy.
+4. `304` -> refresh metadata and reuse validated snapshot;
+5. `200` -> bounded temp write -> classify/validate -> atomic publish -> parse;
+6. transient network failure -> stale snapshot только в пределах stale policy;
+7. corrupt/malformed/permanent failure -> fail closed and drop/invalidate bad snapshot according to policy.
 
-Один source не должен одновременно скачиваться несколькими callers. Existing EPG serialization остаётся owner refresh path.
+Concurrent callers одного source должны сходиться в один owner load/refresh, а не параллельно скачивать один feed.
 
-## Atomicity
+## Freshness
 
-- temp file в том же directory;
-- streaming byte count <= current 128 MiB envelope;
-- checksum во время write;
+Различать:
+
+- L1 memory freshness;
+- L2/network freshness;
+- stale fallback lifetime.
+
+Conditional HTTP использует `ETag`/`If-None-Match` и/или `Last-Modified`/`If-Modified-Since` при наличии. Hard stale lifetime должен оставаться bounded; baseline ceiling — **96h**.
+
+Malformed/permanent source failure не превращается в бесконечный stale success.
+
+## Atomic write and corruption safety
+
+- temp file в том же app-private storage domain;
+- streaming byte count во время write;
+- checksum считается без второго full-body read;
+- validate source format before publish;
 - flush + best-effort fsync;
-- atomic rename payload;
-- metadata publish только после payload commit;
-- old valid snapshot не удаляется до успешной замены;
-- orphan temp cleanup lazy;
-- checksum/size/version mismatch -> `corrupt_drop`, не crash.
+- atomic rename/publish;
+- metadata публикуется после payload commit;
+- старый valid snapshot сохраняется до успешной замены;
+- orphan temp cleanup opportunistic;
+- size/checksum/version mismatch -> bounded corrupt drop, не crash.
 
-## Source-format correctness
+## GZIP safety
 
-Disk cache не должен кэшировать произвольный HTML/error/binary response как XMLTV.
+Raw gzip source использует два независимых envelopes:
 
-Перед publish применить тот же bounded source-format contract, что и network parser path:
+- compressed/raw source bound — 128 MiB;
+- decoded XMLTV bound — 256 MiB.
 
-- XMLTV-looking -> eligible;
-- HTML/raw gzip/other XML/text/binary/empty -> fail closed до snapshot publish, если соответствующий формат явно не поддержан отдельным tested decoder;
-- raw payload и URL secrets не логировать;
-- никакой глобальной замены `&`.
+Cache read не может обходить raw accounting через `skip()` или другой uncounted path. GZIP corruption/truncation классифицируется как malformed source, а не как generic transient network failure.
 
-Если provider реально отдаёт raw gzip, поддержка decompression должна быть отдельным bounded decoder layer с тестами; cache plan не предполагает её автоматически.
+После decode разрешён только XMLTV-looking payload; gzip HTML/other text/binary fail closed.
 
 ## Security / privacy
 
-- app-private directory;
-- filename/key не содержит raw URL, username, password, token/query secrets;
-- diagnostics использует key prefix/source index, не payload;
-- snapshot не входит автоматически в diagnostics export/backup;
-- clear-app-data очищает cache штатно.
+- app-private storage;
+- filenames и metadata не содержат username/password/token/query secret;
+- raw source URL не попадает в diagnostics;
+- snapshot не экспортируется автоматически в diagnostics/backup;
+- clear app data штатно удаляет cache;
+- XML/source payload не логируется.
 
 ## Diagnostics
 
-Bounded events:
+Bounded events могут различать:
 
-- `epg_cache_memory_hit`;
-- `epg_cache_disk_hit`;
-- `epg_cache_network_200`;
-- `epg_cache_network_304`;
-- `epg_cache_stale_fallback`;
-- `epg_cache_evicted`;
-- `epg_cache_corrupt_drop`;
-- `epg_cache_write_skipped_low_storage`.
+- memory hit;
+- disk hit;
+- network `200`;
+- network `304`;
+- stale fallback;
+- eviction;
+- corrupt drop;
+- write skipped due low storage.
 
-Поля: ageMs, sizeBytes, freshness, failure kind, elapsed parse/load. Без URL secrets/XML payload.
+Полезные поля: age, source/raw size, decoded size where observed, freshness, failure class и elapsed load/parse. Без credential-bearing source identity и body.
 
-## Tests
+## Required tests
 
-Обязательные gates:
-
-- fresh process + valid disk snapshot -> no network;
+- fresh process + valid snapshot -> no network;
 - process restart -> snapshot reusable;
-- 88.6 MB-class valid fixture policy is not rejected by obsolete 64 MiB snapshot bound;
-- >128 MiB snapshot -> rejected without OOM;
-- aggregate >128 MiB / >4 entries -> deterministic LRU eviction;
-- expired + `304` -> no body download;
+- plain XMLTV snapshot read;
+- raw gzip XMLTV snapshot read/decode;
+- gzip non-XMLTV -> fail closed;
+- corrupt/truncated gzip -> malformed failure;
+- >128 MiB raw snapshot -> rejected without OOM;
+- decoded expansion >256 MiB -> rejected without OOM;
+- aggregate budget / entry-count deterministic LRU;
+- expired + `304` -> no body replacement;
 - expired + `200` -> atomic replacement;
 - transient + allowed stale -> fallback;
-- malformed/permanent -> fail closed;
-- HTML/error body not published as XMLTV snapshot;
-- checksum mismatch/truncated file -> drop without crash;
+- malformed/permanent -> no stale-success loop;
+- checksum mismatch/truncation -> drop without crash;
 - low storage -> skip write, live path survives;
-- concurrent same-source callers -> one network load;
-- filenames do not expose secrets;
-- disk parse reuses source-format, streaming byte and heap guards;
-- exact-head `core:data` + Android/guard CI.
+- concurrent same-source callers -> one load;
+- cache key/filenames do not expose secrets;
+- disk parser path reuses production classifier/decoder/input/heap guards.
 
-Large fixtures should be generated/streamed in tests where possible rather than committed as giant repository blobs.
+## Device acceptance
 
-## TV Box field acceptance
+На exact integrated build:
 
-1. successful EPG load from a real source, including the observed ~88.6 MB class;
-2. process restart;
-3. reopen same EPG inside freshness interval;
-4. diagnostics shows `disk_hit`, no full re-download;
-5. later revalidation shows `304` or one bounded `200`;
-6. offline/transient failure respects stale policy;
-7. total cache <=128 MiB;
-8. heap profile does not regress relative to current streaming baseline.
+1. загрузить реальный большой EPG source;
+2. дождаться successful parse/matching;
+3. перезапустить process;
+4. повторно открыть тот же EPG внутри freshness interval;
+5. подтвердить disk hit без полного повторного download;
+6. проверить conditional `304` либо один bounded `200` после expiration;
+7. проверить transient/offline stale behavior;
+8. подтвердить aggregate cache <=128 MiB и отсутствие heap regression.
 
-## Definition of Done
-
-- L2 isolated behind narrow abstraction;
-- no unbounded reads/files/entries;
-- valid current large source can be cached within aggregate budget;
-- no process-restart full re-download while network-fresh;
-- conditional HTTP works;
-- writes are atomic/corruption-safe;
-- source-format gate prevents caching non-XMLTV garbage;
-- secrets stay out of filenames/diagnostics;
-- exact-head CI green;
-- TV Box restart/disk-hit field gate passed.
+CI подтверждает storage/parser regressions, но реальный network/provider behavior требует field validation.
