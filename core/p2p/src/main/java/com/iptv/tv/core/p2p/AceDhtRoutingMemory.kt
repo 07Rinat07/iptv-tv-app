@@ -97,9 +97,10 @@ class AceDhtRoutingMemory internal constructor(
 
     /** Flushes only when routing state changed; safe to call at the end of every bounded lookup. */
     internal fun flush() {
+        val persistenceTarget = persistence ?: return
         val snapshot = synchronized(lock) {
             pruneExpiredLocked(clockNanos(), wallClockMillis())
-            if (!dirty || persistence == null) return@synchronized null
+            if (!dirty) return@synchronized null
             contacts.values.map { remembered ->
                 AceDhtPersistedContact(
                     contact = remembered.contact,
@@ -108,7 +109,7 @@ class AceDhtRoutingMemory internal constructor(
             }.also { dirty = false }
         } ?: return
 
-        runCatching { persistence.save(snapshot) }
+        runCatching { persistenceTarget.save(snapshot) }
             .onFailure {
                 synchronized(lock) { dirty = true }
             }
