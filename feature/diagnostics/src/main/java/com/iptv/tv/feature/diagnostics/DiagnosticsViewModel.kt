@@ -642,7 +642,7 @@ class DiagnosticsViewModel @Inject constructor(
 
     private fun observeLogs() {
         viewModelScope.launch {
-            diagnosticsRepository.observeLogs(limit = 120).collect { logs ->
+            diagnosticsRepository.observeLogs(limit = DIAGNOSTICS_LOG_LIMIT).collect { logs ->
                 val activeLogs = activeDiagnosticsLogs(logs, _uiState.value.logResetAt)
                 val readyStartupSamples = activeLogs
                     .filter { it.status == "player_ready" }
@@ -708,8 +708,16 @@ class DiagnosticsViewModel @Inject constructor(
     }
 
     private fun buildLogsText(logs: List<SyncLog>, persistentLog: String): String {
+        val forensicReport = TorrentForensicReportBuilder.build(logs)
         return buildString {
-            append("=== Structured diagnostics (latest 120 rows) ===\n")
+            if (forensicReport.isNotBlank()) {
+                append(forensicReport)
+                if (lastOrNull() != '\n') append('\n')
+                append('\n')
+            }
+            append("=== Structured diagnostics (latest ")
+            append(DIAGNOSTICS_LOG_LIMIT)
+            append(" rows) ===\n")
             logs.forEach { log ->
                 append(log.createdAt)
                 append(" | ")
@@ -755,5 +763,6 @@ class DiagnosticsViewModel @Inject constructor(
         const val MB = 1024L * 1024L
         const val DIAGNOSTICS_PREFS = "diagnostics_view"
         const val KEY_LOG_RESET_AT = "log_reset_at"
+        const val DIAGNOSTICS_LOG_LIMIT = 600
     }
 }
