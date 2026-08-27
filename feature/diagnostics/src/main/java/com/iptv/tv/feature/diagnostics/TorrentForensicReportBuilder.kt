@@ -38,9 +38,9 @@ internal object TorrentForensicReportBuilder {
                         }
                 )
             }
-            ordered.any(SyncLog::isTorrentRelevant) -> listOf(
+            ordered.any { it.isTorrentRelevant() } -> listOf(
                 AttemptWindow(
-                    logs = ordered.filter(SyncLog::isTorrentRelevant),
+                    logs = ordered.filter { it.isTorrentRelevant() },
                     playerRequest = ordered.lastOrNull { it.status == "player_play_request" }
                 )
             )
