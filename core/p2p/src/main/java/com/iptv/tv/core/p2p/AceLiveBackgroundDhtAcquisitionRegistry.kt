@@ -9,15 +9,21 @@ import kotlinx.coroutines.async
 /**
  * Process-wide speculative DHT acquisition used only to overlap tracker startup with DHT discovery.
  *
- * The registry owns at most one bounded DHT job. A new swarm cancels the previous speculative job so
- * rapid channel switching cannot leave an obsolete walk occupying the process-wide DHT gate. The
- * same swarm may reuse one in-flight or just-completed acquisition for a short period; this retention
- * is a result-reuse lifetime, not a network timeout and does not widen any discovery budget.
+ * The latest swarm may reuse one in-flight or just-completed acquisition for a short period. A
+ * different swarm replaces only the reuse slot: it must not blindly cancel the previous Deferred,
+ * because that acquisition may already have become the synchronous weak-tracker fallback in another
+ * orchestrator. All memory-heavy network work remains serialized by the existing process-wide DHT
+ * execution mutex. Cross-swarm cancellation belongs to the runtime/generation owner that can prove a
+ * lookup is obsolete, not to this process-global reuse registry.
+ *
+ * The retention lifetime below is result reuse only. It is not a network timeout and does not widen
+ * any DHT discovery budget.
  */
 internal object AceLiveBackgroundDhtAcquisitionRegistry {
     private const val RETENTION_MILLIS = 20_000L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Any()
+    private val activeLeases = linkedSetOf<Lease>()
     private var current: Lease? = null
 
     fun startOrReuse(
@@ -31,15 +37,27 @@ internal object AceLiveBackgroundDhtAcquisitionRegistry {
             if (existing.swarmKeyHex == key && !isExpired(existing, nowMillis)) {
                 return@synchronized existing
             }
-            existing.deferred.cancel()
+            if (isExpired(existing, nowMillis)) {
+                existing.deferred.cancel()
+            }
+            // A different non-expired swarm only supersedes result reuse. Do not cancel the job:
+            // another discovery call may already be awaiting it as its required DHT fallback.
             current = null
         }
 
-        val lease = Lease(
+        lateinit var lease: Lease
+        val deferred = scope.async { runner() }
+        lease = Lease(
             swarmKeyHex = key,
             startedAtMillis = nowMillis,
-            deferred = scope.async { runner() }
+            deferred = deferred
         )
+        activeLeases += lease
+        deferred.invokeOnCompletion {
+            synchronized(lock) {
+                activeLeases.remove(lease)
+            }
+        }
         current = lease
         lease
     }
@@ -64,6 +82,8 @@ internal object AceLiveBackgroundDhtAcquisitionRegistry {
     }
 
     fun resetForTests() = synchronized(lock) {
+        activeLeases.toList().forEach { lease -> lease.deferred.cancel() }
+        activeLeases.clear()
         current?.deferred?.cancel()
         current = null
     }
