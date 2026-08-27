@@ -138,20 +138,26 @@ class AceLiveDhtDiscovery(
         } else {
             delegateFor(policy.copy(returnAfterPeers = effectiveEarlyReturn))
         }
-        val outcome = discoveryDelegate.discover(
-            AceDhtLookupRequest(
-                targetBytes = swarmBytes,
-                bootstrapNodes = request.bootstrapNodes,
-                localNodeId = request.localNodeId,
-                encodeGetPeersQuery = { transactionId, nodeId ->
-                    AceLiveDhtCodec.encodeGetPeersQuery(
-                        transactionId = transactionId,
-                        nodeId = nodeId,
-                        swarmKey = request.swarmKey
-                    )
-                }
+        val outcome = try {
+            discoveryDelegate.discover(
+                AceDhtLookupRequest(
+                    targetBytes = swarmBytes,
+                    bootstrapNodes = request.bootstrapNodes,
+                    localNodeId = request.localNodeId,
+                    encodeGetPeersQuery = { transactionId, nodeId ->
+                        AceLiveDhtCodec.encodeGetPeersQuery(
+                            transactionId = transactionId,
+                            nodeId = nodeId,
+                            swarmKey = request.swarmKey
+                        )
+                    }
+                )
             )
-        )
+        } finally {
+            // The walker mutates only verified routing contacts. Persist them even when a rapid-zap
+            // cancellation ends the current lookup after useful KRPC responses were already seen.
+            routingMemory?.flush()
+        }
         val result = AceLiveDhtDiscoveryResult(
             peers = outcome.peers,
             queriesSent = outcome.queriesSent,
