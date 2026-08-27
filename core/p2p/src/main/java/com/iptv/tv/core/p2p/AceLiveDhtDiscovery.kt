@@ -19,16 +19,18 @@ data class AceLiveDhtBootstrapNode(
 /**
  * Local resource and network-safety bounds for BEP-5 discovery.
  *
- * [searchBranching] bounds concurrent KRPC requests. A small value still prevents one dead DHT
- * node from serializing the whole lookup, while the query, packet, peer, and absolute-time caps
- * keep the fan-out suitable for memory-constrained TV devices. [returnAfterPeers] optionally turns
- * the walker into a startup fast path: it still obeys [maxTotalPeers], but cancels remaining branches
- * after the requested number of valid peers has been collected.
+ * [searchBranching] bounds concurrent KRPC requests. Startup field evidence on TV hardware showed
+ * that four branches were too easy to occupy with silent/dead routing contacts, turning a healthy
+ * lookup into repeated multi-second waves. Eight branches still stay inside the existing query,
+ * packet, peer, heap-gate and absolute-time caps while giving the shared warm routing table enough
+ * parallel lanes to compete with Ace Engine-style fast channel switching. [returnAfterPeers]
+ * optionally turns the walker into a startup fast path: it still obeys [maxTotalPeers], but cancels
+ * remaining branches after the requested number of valid peers has been collected.
  */
 data class AceLiveDhtPolicy(
     val requestTimeoutMillis: Int = 2_000,
     val discoveryBudgetMillis: Long = 15_000,
-    val searchBranching: Int = 4,
+    val searchBranching: Int = 8,
     val maxPacketBytes: Int = AceLiveDhtCodec.DEFAULT_MAX_PACKET_BYTES,
     val maxBootstrapNodes: Int = 8,
     val maxResolvedAddressesPerBootstrap: Int = 4,
@@ -85,12 +87,12 @@ data class AceLiveDhtDiscoveryResult(
  * Production callers may opt into a short process-wide positive-result reuse window. The global DHT
  * execution gate still owns serialization and heap safety; reuse only prevents the direct live path
  * and the concurrent metadata/refill paths from immediately repeating the same successful DHT walk
- * for the same swarm/bootstrap set. A cached batch is bypassed when any endpoint is currently inside
- * the existing swarm-scoped TCP-connect failure backoff, because filtering a stale cache hit must not
- * suppress a fresh bounded lookup for alternatives. While such failures are active, a startup DHT
- * fast path raises only its early peer-count threshold by the number of remembered failed endpoints.
- * That guarantees enough raw candidates can remain after eligibility filtering without changing the
- * discovery time, query, branching or total-peer caps. Empty results are never reused. Tests and
+ * for the same swarm/bootstrap set. Cached peers currently inside the swarm-scoped TCP-connect
+ * failure backoff are filtered individually. A still-useful eligible remainder may be reused instead
+ * of discarding the entire batch because one endpoint failed; when filtering would leave too little
+ * diversity for the caller's requested batch, discovery falls through to a fresh bounded walk.
+ * While failures are active, a fresh startup DHT fast path still raises only its early peer-count
+ * threshold by the number of remembered failed endpoints. Empty results are never reused. Tests and
  * custom callers remain uncached unless they opt in explicitly.
  */
 class AceLiveDhtDiscovery(
@@ -111,11 +113,15 @@ class AceLiveDhtDiscovery(
         val swarmBytes = request.swarmKey.toByteArray()
         if (reuseRecentResults) {
             recentDhtResult(cacheKey, clockMillis())?.let { cached ->
-                val entireCachedBatchStillEligible = cached.peers.all { endpoint ->
+                val eligibleCachedPeers = cached.peers.filter { endpoint ->
                     connectFailureMemory.isEligible(swarmBytes, endpoint)
                 }
-                if (entireCachedBatchStillEligible) {
+                val cacheReuseFloor = policy.returnAfterPeers ?: DEFAULT_PARTIAL_CACHE_REUSE_FLOOR
+                val fullBatchStillEligible = eligibleCachedPeers.size == cached.peers.size
+                val usefulPartialBatch = eligibleCachedPeers.size >= cacheReuseFloor
+                if (eligibleCachedPeers.isNotEmpty() && (fullBatchStillEligible || usefulPartialBatch)) {
                     return cached.copy(
+                        peers = eligibleCachedPeers,
                         queriesSent = 0,
                         failedQueries = 0,
                         rejectedEndpoints = 0,
@@ -189,6 +195,7 @@ class AceLiveDhtDiscovery(
     private companion object {
         const val RECENT_RESULT_TTL_MILLIS = 20_000L
         const val MAX_RECENT_RESULTS = 16
+        const val DEFAULT_PARTIAL_CACHE_REUSE_FLOOR = 2
         val recentResultLock = Any()
         val recentResults = LinkedHashMap<String, CachedDhtResult>()
 
