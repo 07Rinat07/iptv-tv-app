@@ -161,7 +161,7 @@ internal class FileAceLivePeerReputationStore(
                 entries.remove(eldest)
             }
             entries[peerKey] = entry
-            entries.values.map(Entry::copy)
+            entries.values.map { item -> item.copy() }
         }
         persist(snapshot)
     }
@@ -193,13 +193,12 @@ internal class FileAceLivePeerReputationStore(
         val temp = File(parent, "${file.name}.tmp")
         runCatching {
             FileOutputStream(temp, false).use { output ->
-                output.bufferedWriter(Charsets.UTF_8).use { writer ->
-                    snapshot
-                        .sortedByDescending(Entry::updatedAtMillis)
-                        .take(maxEntries)
-                        .forEach { entry -> writer.append(encodeLine(entry)).append('\n') }
-                    writer.flush()
-                }
+                val writer = output.bufferedWriter(Charsets.UTF_8)
+                snapshot
+                    .sortedByDescending(Entry::updatedAtMillis)
+                    .take(maxEntries)
+                    .forEach { entry -> writer.append(encodeLine(entry)).append('\n') }
+                writer.flush()
                 output.fd.sync()
             }
             if (file.exists() && !file.delete()) {
@@ -252,10 +251,12 @@ internal class FileAceLivePeerReputationStore(
         if (line.isBlank() || line.length > MAX_LINE_CHARS) return null
         val fields = line.split('\t')
         if (fields.size != 8) return null
-        val swarm = fields[0].takeIf { it.length == AceLivePeerHandshakeCodec.SWARM_KEY_BYTES * 2 && it.all(Char::isHexDigit) }
-            ?: return null
+        val swarm = fields[0].takeIf { value ->
+            value.length == AceLivePeerHandshakeCodec.SWARM_KEY_BYTES * 2 &&
+                value.all { char -> char.isHexDigit() }
+        } ?: return null
         val host = fields[1].takeIf {
-            it.isNotBlank() && it.length <= MAX_HOST_CHARS && '\n' !in it && '\r' !in it
+            it.isNotBlank() && it.length <= MAX_HOST_CHARS && '\t' !in it && '\n' !in it && '\r' !in it
         } ?: return null
         val port = fields[2].toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
         val updatedAt = fields[3].toLongOrNull()?.takeIf { it >= 0L } ?: return null
