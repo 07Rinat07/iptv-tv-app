@@ -3,7 +3,7 @@ package com.iptv.tv.core.p2p
 import java.io.File
 import java.io.FileOutputStream
 
-internal data class AceLivePeerReputationSnapshot(
+data class AceLivePeerReputationSnapshot(
     val lastHandshakeAtMillis: Long?,
     val lastProducedAtMillis: Long?,
     val consecutiveFailures: Int,
@@ -54,7 +54,7 @@ internal data class AceLivePeerReputationSnapshot(
 }
 
 /** Swarm-scoped cross-runtime peer evidence. It never turns a peer into a permanent allow/deny. */
-internal interface AceLivePeerReputationStore {
+interface AceLivePeerReputationStore {
     fun snapshot(
         swarmKey: ByteArray,
         endpoint: AceLiveTcpPeerEndpoint,
