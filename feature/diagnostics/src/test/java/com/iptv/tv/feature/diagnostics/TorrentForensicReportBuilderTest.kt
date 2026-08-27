@@ -80,6 +80,32 @@ class TorrentForensicReportBuilderTest {
     }
 
     @Test
+    fun laterDirectPlaybackDoesNotCompletePreviousTorrentAttempt() {
+        val phases = listOf(
+            "transport_selection",
+            "discovery_completed",
+            "first_candidate",
+            "connected",
+            "handshake",
+            "useful_window",
+            "first_media",
+            "buffer_ready",
+            "http_reader_open",
+            "http_first_read"
+        )
+        val logs = phases.mapIndexed { index, phase ->
+            log(index.toLong() + 1, "embedded_ace_live_startup_timeline", "phase=$phase, elapsed_ms=${index * 100}")
+        }.toMutableList()
+        logs += log(20, "player_play_request", "channelId=22, playlistId=10, requestedPlayer=INTERNAL, forceAce=false")
+        logs += log(21, "player_ready", "Internal ready, startupMs=50, sessionId=100")
+
+        val report = TorrentForensicReportBuilder.build(logs)
+
+        assertTrue(report.contains("first_missing_stage: media3_load_started"))
+        assertFalse(report.contains("first_missing_stage: first_frame_or_audio"))
+    }
+
+    @Test
     fun redactsSensitiveTorrentIdentifiersFromFailureSummary() {
         val report = TorrentForensicReportBuilder.build(
             listOf(
