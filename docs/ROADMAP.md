@@ -1,153 +1,84 @@
 # План проекта
 
-_Актуализирован: 26 августа 2026 после merge PR #251/#252/#253 и нового TV Box field retest._
-
-Канонический handoff: [`CURRENT_DEVELOPMENT_HANDOFF.md`](CURRENT_DEVELOPMENT_HANDOFF.md). Статус: [`PROJECT_STATUS_AND_ROADMAP.md`](PROJECT_STATUS_AND_ROADMAP.md). Persistent EPG cache plan: [`EPG_DISK_CACHE_PLAN.md`](EPG_DISK_CACHE_PLAN.md).
+`ROADMAP.md` хранит устойчивые технические приоритеты и release gates. Текущий SHA, активные ветки, CI и field evidence проверяются непосредственно в GitHub Issues, Pull Requests и Actions и не копируются сюда как быстро устаревающий snapshot.
 
 ## Цель
 
 Стабильное Android TV / TV Box приложение, которое:
 
-- работает с большими IPTV/Torrent TV каталогами без OOM/UI freeze;
-- использует TV-first Home/Player и корректный D-pad focus;
-- воспроизводит ordinary IPTV через Media3 с bounded fallback;
-- воспроизводит Torrent TV через собственный embedded P2P/Ace Live runtime без обязательного внешнего Ace Engine;
-- показывает EPG в локальном времени TV Box с bounded manual correction;
-- обновляет EPG без повторных лишних загрузок и без full-body heap buffering;
-- сохраняет bounded cache/provenance и не маскирует protocol/data defects увеличением абсолютных лимитов.
+- работает с большими IPTV/Torrent TV каталогами без OOM и UI freeze;
+- имеет TV-first Home/Player с предсказуемым D-pad и mouse/touchpad управлением;
+- воспроизводит ordinary IPTV через Media3 с bounded LibVLC fallback;
+- воспроизводит Torrent TV через собственный embedded P2P/Ace Live runtime без обязательной зависимости от внешнего Ace Engine;
+- загружает и сопоставляет EPG потоково и с контролируемыми memory/network/storage bounds;
+- показывает archive/catch-up только при реальной поддержке источником;
+- сохраняет диагностику по первой отсутствующей стадии вместо маскировки дефектов увеличением timeout/buffer/heap лимитов.
 
-## Integration baseline
+## Приоритеты
 
-Текущий field baseline `main`:
+### P0 — embedded Torrent TV
 
-`a1b3e5e086c0470d8c21e75f8a288610c61b986a`
+Основная P2P задача ведётся в Issue #232.
 
-Merged:
+Диагностика и исправления должны сохранять явную лестницу:
 
-- #249 — P2P DHT bootstrap diversity;
-- #250 — EPG field matching/invalid programme recovery;
-- #251 — EPG timezone correction + low-load refresh;
-- #252 — bounded 128 MiB XMLTV transport envelope;
-- #253 — Player programme dialog + nearby logos.
+`discovered -> connected -> handshaked/qualified -> producing -> TS -> Media3 tracks -> first frame/audio`
 
-#252 не реализует persistent disk cache.
+Discovery/connect, protocol/producer и P2P-to-Media3 boundary — отдельные defect boundaries. Не расширять глобальные startup timeout, request depth, peer caps, buffers или heap без измеренного evidence конкретного лимита.
 
-## Release gates
+### EPG и archive
 
-### P0 — memory/catalog stability (#229)
+Функциональный scope ведётся в Issue #47. Источник должен пройти последовательность:
 
-- bounded paging/projections;
-- no OOM/process death on large catalog;
-- no heap inflation as workaround;
-- deterministic large fixture + TV Box soak.
+`source -> decode/classify -> XMLTV parse -> channel matching -> programme state -> Player/EPG UI`
 
-### P0 — Home/Player integration (#230/#231)
+Persistent EPG cache реализуется отдельно по [`EPG_DISK_CACHE_PLAN.md`](EPG_DISK_CACHE_PLAN.md): bounded storage, conditional HTTP, atomic writes, stale policy и безопасные cache keys. Parser/source compatibility меняется только по воспроизводимому входному evidence.
 
-Original field regressions recovered. Reopen only on new evidence. Programme/nearby UI now exists; EPG data failure is upstream.
+Archive/catch-up подчиняется [`CATCHUP_ARCHIVE_CONTRACT.md`](CATCHUP_ARCHIVE_CONTRACT.md): приложение не должно фабриковать archive capability для live-only источников.
 
-### P0 — embedded Torrent TV parity (#232)
+### TV-first Home / Player
 
-Primary release blocker. Latest field run proves mixed behavior:
+Долговременный UX scope ведётся в Issue #210. Home и Player должны оставаться одной адаптивной TV-first design family, сохранять видимый focus и не создавать лишние playback/P2P runtimes.
 
-- some P2P sessions play successfully;
-- some fail at discovery/connect;
-- a separate class transfers substantial loopback/Media3 data but never reaches first audio/video frame.
+Dashboard/fullscreen/overlay изменения обязаны сохранять ownership одной playback session. EPG-панели, channel rails, search и transient controls не должны запускать канал только из-за перемещения focus.
 
-Keep diagnosis staged:
+### Catalog / Favorites
 
-`discovery -> connect -> handshake/qualification -> producer -> TS -> Media3 tracks -> first frame`
+Каноническая иерархия и единое избранное ведутся в Issue #45:
 
-Do not increase global timeout/buffer/request-depth/peer-cap bounds without evidence.
+`source/catalog -> subcatalog -> playlist/list -> group/subgroup -> channel`
 
-### P1 — unintended playback churn (#233)
+Агрегированные представления не должны терять source provenance или физически дублировать исходные данные без необходимости.
 
-Keep as reproducibility item. Focus movement alone must not start intermediate channels.
+### Help / navigation
 
-## EPG sequence
+Контекстные подсказки и пользовательская помощь ведутся в Issue #43. Непреднамеренный playback churn при browsing остаётся отдельной проверяемой задачей #233.
 
-### Integrated
+## Постоянные release gates
 
-- #250: fail-closed matching + invalid programme filtering;
-- #251: TV Box timezone, manual correction, 6/12/24h refresh, serialized work;
-- #252: valid large XMLTV sources up to current 128 MiB transport envelope;
-- #253: `Программа` dialog and nearby logos.
+Для production change:
 
-### Active: source-format/parser recovery
+1. начать от актуального `main`;
+2. один defect/feature boundary — одна тематическая ветка и PR;
+3. добавить deterministic regression test, если поведение допускает воспроизводимую проверку;
+4. выполнить релевантные unit/lint/guard/build проверки;
+5. проверить CI именно на exact PR head;
+6. review findings исправлять до merge, не расширяя scope без необходимости;
+7. squash merge только после прохождения требуемых gates;
+8. проверить integrated `main` после merge;
+9. device/network-dependent behavior считать принятым только после field validation exact integrated build.
 
-Branch:
+CI является regression gate, но не заменяет TV Box/network field proof для P2P, реальных EPG источников, focus/layout и hardware playback compatibility.
 
-`fix/epg-source-format-classification-r1`
+## Архитектурная дисциплина
 
-Field signature:
+- P2P, EPG source/parser/cache, Player UI и catalog changes не смешивать в один PR.
+- Не материализовать большие playlist/EPG bodies целиком в heap в production path.
+- Absolute safety bounds менять только по измеренному evidence.
+- Stale generation/session не может получить ownership после более новой playback generation.
+- Логи не должны содержать credential-bearing URL, токены, content IDs или полный пользовательский payload без явной безопасной необходимости.
+- Compatibility fallback не должен скрывать первичный failure stage.
 
-`Invalid XMLTV format: unterminated entity ref (position:TEXT @1:48 ...)`
+## Документация и evidence
 
-Work:
-
-- bounded 8 KiB prefix inspection;
-- XMLTV / HTML / raw gzip / other XML / text / binary classification;
-- `PushbackInputStream` so inspected bytes are not lost and the body is counted once;
-- preserve 128 MiB byte limit + heap/program/channel limits;
-- fail closed, no payload/secret logging;
-- no speculative global ampersand sanitizer.
-
-Acceptance is deterministic unit coverage + exact-head CI + TV Box retest. If the parser error remains after XMLTV classification, the next increment targets only the demonstrated malformed XML pattern.
-
-### Planned: persistent XMLTV disk cache
-
-Branch:
-
-`feat/epg-disk-cache-r1`
-
-Start only after source/parser correctness is understood. Required properties:
-
-- L1 parsed memory + L2 app-private raw snapshot;
-- process restart inside network-fresh interval without full re-download;
-- `ETag`/`Last-Modified`/`304`;
-- per-snapshot cap equals current 128 MiB XMLTV input envelope;
-- aggregate disk budget <=128 MiB;
-- <=4 entries, deterministic LRU;
-- stale <=96h and failure-kind aware;
-- atomic temp write/checksum/rename;
-- secret-safe cache key;
-- low storage -> skip write, not EPG failure;
-- disk reads reuse streaming parser/headroom guards;
-- restart/disk-hit/304/200/corruption/eviction/concurrency tests.
-
-The observed 88,578,547-byte field source must fit the snapshot contract; the obsolete 64 MiB snapshot cap is removed.
-
-## Current execution order
-
-1. Complete `fix/epg-source-format-classification-r1`.
-2. Exact-head CI, then merge only if green.
-3. TV Box retest of exact integrated build.
-4. If needed, one evidence-specific XML compatibility/source-format increment.
-5. Return to #232 and split discovery/connect from TS->Media3 no-first-frame work.
-6. Implement `feat/epg-disk-cache-r1` separately after EPG source correctness is stable.
-7. Long large-catalog / memory / runtime soak before release readiness.
-
-## Field gate
-
-For every field build record the exact commit. Check:
-
-- ordinary IPTV first frame and switching;
-- several Torrent TV channels, including previously failing sessions;
-- EPG load, programme dialog, timezone/correction and channel matching;
-- logos/nearby list/D-pad/layout at TV resolution;
-- process restart and heap/runtime cleanup;
-- diagnostics export with the first missing stage, not only the final UI symptom.
-
-## Workflow
-
-1. current `main`;
-2. one thematic branch;
-3. deterministic regression where possible;
-4. minimal bounded diff;
-5. relevant unit/lint/guard/build gates;
-6. exact-head CI;
-7. squash merge only green exact head;
-8. verify integrated `main`;
-9. field-test device/network behavior on that exact build;
-10. sync handoff/status/roadmap.
-
-CI is a regression gate, not field proof. P2P, EPG source/parser, EPG disk cache and Player UI stay in separate PRs.
+`docs/` содержит повторяемые контракты и инструкции. Exact SHA, активная ветка, результаты единичного field run и временный handoff должны жить в соответствующем GitHub Issue/PR/Actions artifact. При изменении устойчивого пользовательского или архитектурного контракта обновляются профильные документы, а не создаётся новый датированный status-файл.
