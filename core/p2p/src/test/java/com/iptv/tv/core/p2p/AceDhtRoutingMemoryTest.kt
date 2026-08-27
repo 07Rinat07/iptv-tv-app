@@ -47,8 +47,89 @@ class AceDhtRoutingMemoryTest {
         )
     }
 
+    @Test
+    fun `recent persisted contacts restore without refreshing their age`() {
+        var nowEpochMillis = 10_000L
+        var nowNanos = 5_000_000_000L
+        val recent = contact("8.8.4.4", 6881, 0x44)
+        val expired = contact("1.0.0.1", 6881, 0x55)
+        val persistence = FakePersistence(
+            loaded = listOf(
+                AceDhtPersistedContact(recent, lastSeenEpochMillis = 9_950L),
+                AceDhtPersistedContact(expired, lastSeenEpochMillis = 9_899L)
+            )
+        )
+
+        val memory = AceDhtRoutingMemory(
+            maxNodes = 8,
+            ttlMillis = 100,
+            clockNanos = { nowNanos },
+            wallClockMillis = { nowEpochMillis },
+            persistence = persistence
+        )
+
+        assertEquals(listOf(recent), memory.recentContacts(limit = 8))
+
+        nowEpochMillis = 10_051L
+        nowNanos += 51_000_000L
+        assertEquals(emptyList<AceLiveDhtNodeContact>(), memory.recentContacts(limit = 8))
+    }
+
+    @Test
+    fun `flush persists changed routing set and forget removes failed warm contact`() {
+        var nowEpochMillis = 20_000L
+        var nowNanos = 1_000_000_000L
+        val persistence = FakePersistence()
+        val memory = AceDhtRoutingMemory(
+            maxNodes = 8,
+            ttlMillis = 1_000,
+            clockNanos = { nowNanos },
+            wallClockMillis = { nowEpochMillis },
+            persistence = persistence
+        )
+        val contact = contact("9.9.9.9", 6881, 0x66)
+
+        memory.remember(contact)
+        memory.flush()
+        assertEquals(listOf(contact), persistence.saved.map(AceDhtPersistedContact::contact))
+        assertEquals(listOf(20_000L), persistence.saved.map(AceDhtPersistedContact::lastSeenEpochMillis))
+
+        nowEpochMillis += 10L
+        nowNanos += 10_000_000L
+        memory.forget(contact)
+        memory.flush()
+        assertEquals(emptyList<AceDhtPersistedContact>(), persistence.saved)
+    }
+
     private fun contact(host: String, port: Int, nodeByte: Int) = AceLiveDhtNodeContact(
         nodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { nodeByte.toByte() }),
         endpoint = AceLiveTcpPeerEndpoint(host, port)
     )
+
+    private class FakePersistence(
+        private val loaded: List<AceDhtPersistedContact> = emptyList()
+    ) : AceDhtRoutingPersistence {
+        var saved: List<AceDhtPersistedContact> = emptyList()
+            private set
+
+        override fun load(): List<AceDhtPersistedContact> = loaded.map { item ->
+            item.copy(
+                contact = AceLiveDhtNodeContact(
+                    nodeId = AceLiveDhtNodeId.fromBytes(item.contact.nodeId.toByteArray()),
+                    endpoint = item.contact.endpoint.copy()
+                )
+            )
+        }
+
+        override fun save(contacts: List<AceDhtPersistedContact>) {
+            saved = contacts.map { item ->
+                item.copy(
+                    contact = AceLiveDhtNodeContact(
+                        nodeId = AceLiveDhtNodeId.fromBytes(item.contact.nodeId.toByteArray()),
+                        endpoint = item.contact.endpoint.copy()
+                    )
+                )
+            }
+        }
+    }
 }
