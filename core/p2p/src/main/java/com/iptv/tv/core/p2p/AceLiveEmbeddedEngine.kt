@@ -2,6 +2,7 @@ package com.iptv.tv.core.p2p
 
 import android.util.Log
 import java.io.Closeable
+import java.io.File
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -126,13 +127,26 @@ class AceLiveEmbeddedEngine(
     okHttpClient: OkHttpClient,
     private val catalogResolver: AceContentCatalogResolver = AceContentCatalogResolver(okHttpClient),
     metadataPeerResolver: AceContentMetadataPeerResolver? = null,
+    stateDirectory: File? = null,
     private val bufferSettings: AceLiveBufferSettings = AceLiveBufferSettings(),
     private val eventObserver: (AceLiveTcpPoolEvent) -> Unit = {},
     private val diagnosticsObserver: (status: String, message: String) -> Unit = { _, _ -> }
 ) {
     private val operationMutex = Mutex()
     private val generation = AtomicLong(0L)
-    private val dhtRoutingMemory = AceDhtRoutingMemory()
+    private val dhtRoutingPersistence = stateDirectory?.let { directory ->
+        runCatching {
+            FileAceDhtRoutingPersistence(File(directory, DHT_ROUTING_STATE_FILE))
+        }.getOrNull()
+    }
+    private val peerReputationStore: AceLivePeerReputationStore? = stateDirectory?.let { directory ->
+        runCatching {
+            ThrottledAceLivePeerReputationStore(
+                FileAceLivePeerReputationStore(File(directory, PEER_REPUTATION_STATE_FILE))
+            )
+        }.getOrNull()
+    }
+    private val dhtRoutingMemory = AceDhtRoutingMemory(persistence = dhtRoutingPersistence)
     private val metadataPeerResolver = metadataPeerResolver ?: AceContentMetadataPeerResolver(
         routingMemory = dhtRoutingMemory
     )
@@ -364,6 +378,7 @@ class AceLiveEmbeddedEngine(
                     diagnosticsObserver = diagnosticsObserver,
                     startupTimelineDiagnostics = startupTimeline,
                     dhtRoutingMemory = dhtRoutingMemory,
+                    peerReputationStore = peerReputationStore,
                     startupId = startupId,
                     generationToken = token,
                     runtimePath = runtimePath
@@ -458,6 +473,7 @@ class AceLiveEmbeddedEngine(
         private val diagnosticsObserver: (status: String, message: String) -> Unit,
         private val startupTimelineDiagnostics: AceLiveStartupTimelineDiagnostics,
         private val dhtRoutingMemory: AceDhtRoutingMemory,
+        private val peerReputationStore: AceLivePeerReputationStore?,
         startupId: Long,
         generationToken: Long,
         runtimePath: AceLiveRuntimePath
@@ -549,13 +565,15 @@ class AceLiveEmbeddedEngine(
             context = runtimeDiagnosticsContext
         )
         private val refillCoordinator = AceLivePeerRefillCoordinator(
-            AceLivePeerRefillPolicy(
+            policy = AceLivePeerRefillPolicy(
                 targetActivePeers = TARGET_ACTIVE_PEERS,
                 maxActivePeers = MAX_ACTIVE_PEERS,
                 staleProbePeers = STALE_PROBE_PEERS,
                 maxStartsPerCycle = MAX_PEER_STARTS_PER_CYCLE,
                 refreshIntervalMillis = PEER_REFRESH_INTERVAL_MILLIS
-            )
+            ),
+            swarmKey = peerReputationStore?.let { transport.swarmKey.toByteArray() },
+            reputationStore = peerReputationStore
         )
         private val refillLoop = AceLivePeerRefillLoop(
             coordinator = refillCoordinator,
@@ -1124,6 +1142,10 @@ class AceLiveEmbeddedEngine(
                                     mediaBytes = attributableBytes.toLong(),
                                     nowMillis = now
                                 )
+                                refillCoordinator.markMediaProduced(
+                                    peerId = piece.sourcePeerId,
+                                    nowMillis = now
+                                )
                                 lastMediaAppendAt.set(now)
                                 if (!startup.isCompleted) {
                                     val decision = startupBufferPolicy.evaluate(
@@ -1171,6 +1193,8 @@ class AceLiveEmbeddedEngine(
     private companion object {
         val DEFAULT_DHT_BOOTSTRAP_NODES = AceLiveNetworkDefaults.dhtBootstrapNodes
         const val DEFAULT_ACE_TRACKER = AceLiveNetworkDefaults.publicTracker
+        const val DHT_ROUTING_STATE_FILE = "dht-routing.tsv"
+        const val PEER_REPUTATION_STATE_FILE = "peer-reputation.tsv"
         const val DEFAULT_DIRECT_PIECE_BYTES = 512 * 1024
         const val DEFAULT_DIRECT_CHUNK_BYTES = 16 * 1024
         const val CONTENT_PREPARATION_TIMEOUT_MILLIS = 60_000L
