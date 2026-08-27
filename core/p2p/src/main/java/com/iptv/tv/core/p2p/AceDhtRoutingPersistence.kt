@@ -68,12 +68,11 @@ internal class FileAceDhtRoutingPersistence(
         val temp = File(parent, "${file.name}.tmp")
         runCatching {
             FileOutputStream(temp, false).use { output ->
-                output.bufferedWriter(Charsets.UTF_8).use { writer ->
-                    bounded.forEach { item ->
-                        writer.append(encodeLine(item)).append('\n')
-                    }
-                    writer.flush()
+                val writer = output.bufferedWriter(Charsets.UTF_8)
+                bounded.forEach { item ->
+                    writer.append(encodeLine(item)).append('\n')
                 }
+                writer.flush()
                 output.fd.sync()
             }
             if (file.exists() && !file.delete()) {
