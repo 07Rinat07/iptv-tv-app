@@ -20,13 +20,12 @@
 - [`ACE_LIVE_STARTUP_TIMELINE.md`](ACE_LIVE_STARTUP_TIMELINE.md) — канонические диагностические startup milestones и их интерпретация.
 - [`PLAYBACK_COMPATIBILITY_MATRIX.md`](PLAYBACK_COMPATIBILITY_MATRIX.md) — проверяемая совместимость контейнеров, кодеков и playback backends.
 - [`integrations/acestream.md`](integrations/acestream.md) — compatibility-интеграция Ace Stream.
-- [`ACE_LIVE_EXTERNAL_STREAMING_REFERENCES_2026-08-16.md`](ACE_LIVE_EXTERNAL_STREAMING_REFERENCES_2026-08-16.md) — сохранённые clean-room/reference findings; это справочный материал, а не текущий статус проекта.
 
 ## EPG / archive
 
-- [`features/EPG_SOURCE_INTEGRATION_PLAN.md`](features/EPG_SOURCE_INTEGRATION_PLAN.md) — reference catalog источников, matching и адаптеры форматов; доступность внешних endpoints проверяется runtime.
 - [`EPG_DISK_CACHE_PLAN.md`](EPG_DISK_CACHE_PLAN.md) — bounded persistent EPG cache contract для plain XMLTV и raw GZIP XMLTV.
 - [`CATCHUP_ARCHIVE_CONTRACT.md`](CATCHUP_ARCHIVE_CONTRACT.md) — правила реального catch-up/archive playback.
+- Актуальный функциональный EPG/catch-up scope ведётся в GitHub Issue #47, а не в отдельном датированном source-plan файле.
 
 ## Feature, testing и release docs
 
@@ -34,8 +33,8 @@
 - [`features/scanner-import-editor.md`](features/scanner-import-editor.md) — Scanner, импорт и редактор.
 - [`features/diagnostics.md`](features/diagnostics.md) — diagnostics/export/reset.
 - [`testing/device-acceptance.md`](testing/device-acceptance.md) — real-device acceptance.
-- [`testing/p2p-channel-availability.md`](testing/p2p-channel-availability.md) — проверка доступности P2P-каналов.
-- [`testing/playback-latency-baseline.md`](testing/playback-latency-baseline.md) — воспроизводимый latency baseline.
+- [`testing/p2p-channel-availability.md`](testing/p2p-channel-availability.md) — правила отображения P2P availability.
+- [`testing/playback-latency-baseline.md`](testing/playback-latency-baseline.md) — инструкция к воспроизводимому latency analyzer.
 - [`release/release-process.md`](release/release-process.md) — release workflow.
 - [`release/device-acceptance-report-template.md`](release/device-acceptance-report-template.md) — шаблон device acceptance.
 - [`development/ai-tools.md`](development/ai-tools.md) — вспомогательные инструменты разработки.
@@ -43,4 +42,4 @@
 
 ## Правило для новых документов
 
-Не добавлять в `docs/` одноразовые handoff/status/field-report файлы с точным SHA, датой прогона или активной веткой. Field evidence прикладывать к соответствующему Issue/PR либо сохранять как Actions artifact; в документации оставлять только повторяемый контракт, процедуру, справочный каталог или архитектурное решение.
+Не добавлять в `docs/` одноразовые handoff/status/field-report файлы с точным SHA, датой прогона или активной веткой. Field evidence прикладывать к соответствующему Issue/PR либо сохранять как Actions artifact; в документации оставлять только повторяемый контракт, процедуру или архитектурное решение.
