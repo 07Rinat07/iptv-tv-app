@@ -16,6 +16,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+internal const val STABLE_PLAYBACK_FEEDBACK_TOP_PADDING_DP = 68
+
 internal data class StablePlaybackFeedback(
     val message: String,
     val isError: Boolean
@@ -62,7 +64,7 @@ internal fun StablePlaybackFeedbackBanner(
 
     Surface(
         modifier = modifier
-            .padding(top = 12.dp)
+            .padding(top = STABLE_PLAYBACK_FEEDBACK_TOP_PADDING_DP.dp)
             .fillMaxWidth(0.56f)
             .widthIn(max = 620.dp)
             .semantics {
