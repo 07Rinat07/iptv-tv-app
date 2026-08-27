@@ -2,22 +2,9 @@
 
 **Rinat IPTV** — приложение для Android TV / TV Box для просмотра IPTV и Torrent TV с интерфейсом, рассчитанным на телевизор, пульт, мышь и тачпад.
 
-Проект активно развивается. Текущий полевой статус и recovery-план находятся в [`docs/PROJECT_STATUS_AND_ROADMAP.md`](docs/PROJECT_STATUS_AND_ROADMAP.md) и [`docs/FIELD_VALIDATION_2026-08-25.md`](docs/FIELD_VALIDATION_2026-08-25.md).
-
 <p align="center">
   <img src="docs/images/rinat-iptv-player-preview.png" alt="Rinat IPTV — интерфейс плеера" width="900">
 </p>
-
-## Текущий статус
-
-Сборка `main` от 25.08.2026 прошла ручной тест, но **не принята как стабильная**. Подтверждены P0-блокеры:
-
-- OOM/торможение при больших Scanner/import каталогах;
-- новая Home пока не является настоящим full-screen root экраном;
-- production Player формально использует `StablePlayerScreen`, но пользовательский новый TV-first UX ещё не принят;
-- встроенный Torrent TV runtime существенно уступает same-device Televizo + Ace Stream Engine по peer/handshake/start success.
-
-Обычный IPTV через Media3 и реальные случаи LibVLC fallback подтверждены рабочими на тестовом устройстве, поэтому playback stack не переписывается целиком — исправления идут по конкретным подтверждённым дефектам.
 
 ## Возможности
 
