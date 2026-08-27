@@ -203,13 +203,16 @@ internal fun aceLiveDhtHasHeapHeadroom(
 /**
  * Aggregates independent Ace Live discovery sources before the TCP connection pool.
  *
- * For live startup, a healthy UDP tracker is intentionally the fast path. If it already returns a
- * useful first batch of peers, Mainline DHT is not started in that same discovery call, avoiding the
- * old 15-second DHT gate before TCP startup. Startup policy separately schedules bounded DHT-only
- * diversity probes in the background because tracker count alone does not prove peer qualification.
- * If the tracker is weak or fails, DHT remains the synchronous fallback. DHT is also suppressed under
- * critical JVM heap pressure so peer discovery fails/refills cleanly instead of turning a low-memory
- * condition into a process-killing coroutine OOM.
+ * Tracker and Mainline DHT acquisition are started independently on the tracker-fast-path. DHT is
+ * launched before waiting for the tracker, but a tracker batch that already satisfies the fast-path
+ * threshold is returned immediately and never waits for DHT. The bounded DHT acquisition remains
+ * available for the next DHT-only startup refill. If the tracker is weak or fails, that same already-
+ * running acquisition becomes the synchronous fallback instead of starting a duplicate DHT walk.
+ *
+ * The speculative DHT registry owns at most one process-wide acquisition. A new swarm cancels an
+ * older speculative walk so rapid channel switching does not leave obsolete work occupying the DHT
+ * execution gate. Same-swarm refill may reuse the in-flight or just-completed result for a short
+ * bounded lifetime. No network timeout, DHT query budget, peer cap or player buffer is widened.
  *
  * A final pre-handshake TCP connect failure is temporarily ineligible for the same swarm for exactly
  * the coordinator's existing first-failure backoff. Eligibility is snapshotted once per source result
@@ -217,10 +220,8 @@ internal fun aceLiveDhtHasHeapHeadroom(
  * list. Raw source summaries still report unfiltered discovery counts for diagnostics.
  *
  * Multiple orchestrator instances may be active while content-id startup races metadata resolution.
- * Their DHT fallbacks are process-wide serialized and re-check heap headroom after acquiring the
- * gate, preventing two expensive DHT walks from racing each other on low-memory TV devices. Default
- * production DHT discovery also reuses a just-completed result for the same swarm for a few seconds,
- * so the direct and metadata paths do not immediately repeat the identical serialized network walk.
+ * Their DHT work remains process-wide serialized and re-checks heap headroom after acquiring the
+ * gate, preventing two expensive DHT walks from racing each other on low-memory TV devices.
  *
  * When the tracker fast path is disabled, DHT and tracker discovery retain the original concurrent
  * supervisor behavior. Coroutine cancellation is never converted into a source failure.
@@ -253,6 +254,13 @@ class AceLivePeerDiscoveryOrchestrator(
         val dhtPermitted = dhtRequest != null && dhtHeadroomAvailable()
 
         if (policy.preferTrackerFastPath && trackerRequest != null) {
+            val backgroundDht = dhtRequest
+                ?.takeIf { dhtPermitted }
+                ?.let { sourceRequest ->
+                    AceLiveBackgroundDhtAcquisitionRegistry.startOrReuse(swarmKey) {
+                        runDhtSource(sourceRequest).toBackgroundOutcome()
+                    }
+                }
             val trackerExecution = captureSource { trackerDiscover(trackerRequest) }
             val eligibleTrackerPeers = when (trackerExecution) {
                 is SourceExecution.Success -> eligiblePeers(
@@ -272,8 +280,8 @@ class AceLivePeerDiscoveryOrchestrator(
                 )
             }
 
-            val dhtExecution = dhtRequest?.let { sourceRequest ->
-                runDhtSource(sourceRequest)
+            val dhtExecution = backgroundDht?.let { lease ->
+                awaitBackgroundDht(lease)
             } ?: SourceExecution.NotRequested
             return@supervisorScope buildResult(
                 dhtExecution = dhtExecution,
@@ -283,11 +291,24 @@ class AceLivePeerDiscoveryOrchestrator(
             )
         }
 
-        val dhtDeferred = dhtRequest
-            ?.takeIf { dhtPermitted }
-            ?.let { sourceRequest ->
-                async { runDhtSource(sourceRequest) }
+        val reusableBackgroundDht = if (
+            policy.preferTrackerFastPath &&
+            trackerRequest == null &&
+            dhtRequest != null
+        ) {
+            AceLiveBackgroundDhtAcquisitionRegistry.acquire(swarmKey)
+        } else {
+            null
+        }
+        val dhtDeferred = when {
+            reusableBackgroundDht != null -> async {
+                awaitBackgroundDht(reusableBackgroundDht)
             }
+            dhtRequest != null && dhtPermitted -> async {
+                runDhtSource(dhtRequest)
+            }
+            else -> null
+        }
         val trackerDeferred = trackerRequest?.let { sourceRequest ->
             async { captureSource { trackerDiscover(sourceRequest) } }
         }
@@ -295,6 +316,18 @@ class AceLivePeerDiscoveryOrchestrator(
         val dhtExecution = dhtDeferred?.await() ?: SourceExecution.NotRequested
         val trackerExecution = trackerDeferred?.await() ?: SourceExecution.NotRequested
         buildResult(dhtExecution, trackerExecution, swarmBytes)
+    }
+
+    private suspend fun awaitBackgroundDht(
+        lease: AceLiveBackgroundDhtAcquisitionRegistry.Lease
+    ): SourceExecution<AceLiveDhtDiscoveryResult> {
+        return try {
+            lease.deferred.await().toSourceExecution()
+        } finally {
+            if (lease.deferred.isCompleted) {
+                AceLiveBackgroundDhtAcquisitionRegistry.release(lease)
+            }
+        }
     }
 
     private suspend fun runDhtSource(
@@ -389,6 +422,20 @@ class AceLivePeerDiscoveryOrchestrator(
         throw cancelled
     } catch (_: Exception) {
         SourceExecution.Failed
+    }
+
+    private fun SourceExecution<AceLiveDhtDiscoveryResult>.toBackgroundOutcome():
+        AceLiveBackgroundDhtAcquisitionRegistry.Outcome = when (this) {
+        SourceExecution.NotRequested -> AceLiveBackgroundDhtAcquisitionRegistry.Outcome.NotRequested
+        SourceExecution.Failed -> AceLiveBackgroundDhtAcquisitionRegistry.Outcome.Failed
+        is SourceExecution.Success -> AceLiveBackgroundDhtAcquisitionRegistry.Outcome.Success(value)
+    }
+
+    private fun AceLiveBackgroundDhtAcquisitionRegistry.Outcome.toSourceExecution():
+        SourceExecution<AceLiveDhtDiscoveryResult> = when (this) {
+        AceLiveBackgroundDhtAcquisitionRegistry.Outcome.NotRequested -> SourceExecution.NotRequested
+        AceLiveBackgroundDhtAcquisitionRegistry.Outcome.Failed -> SourceExecution.Failed
+        is AceLiveBackgroundDhtAcquisitionRegistry.Outcome.Success -> SourceExecution.Success(value)
     }
 
     private fun <T> summarize(
