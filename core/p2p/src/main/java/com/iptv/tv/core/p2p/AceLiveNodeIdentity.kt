@@ -28,18 +28,24 @@ internal class AceLiveNodeIdentity private constructor(
 
         return signedExtendedHandshake(
             livePosition = livePosition(minPiece, maxPiece),
-            timestamp = timestamp
+            timestamp = timestamp,
+            includePeerExchange = true
         )
     }
 
     fun signedMetadataExtendedHandshake(timestamp: Long): ByteArray {
         require(timestamp >= 0) { "timestamp must be non-negative" }
-        return signedExtendedHandshake(livePosition = null, timestamp = timestamp)
+        return signedExtendedHandshake(
+            livePosition = null,
+            timestamp = timestamp,
+            includePeerExchange = false
+        )
     }
 
     private fun signedExtendedHandshake(
         livePosition: AceBencodeValue.Dictionary?,
-        timestamp: Long
+        timestamp: Long,
+        includePeerExchange: Boolean
     ): ByteArray {
         val fields = linkedMapOf<String, AceBencodeValue>()
         fields["ace_metadata_version"] = AceBencodeValue.Integer(1)
@@ -48,7 +54,12 @@ internal class AceLiveNodeIdentity private constructor(
         fields["geoip_country"] = AceBencodeValue.Bytes(byteArrayOf())
         fields["lsp"] = AceBencodeValue.Integer(-1)
         fields["m"] = AceBencodeValue.Dictionary(
-            mapOf("ut_metadata" to AceBencodeValue.Integer(2))
+            buildMap {
+                put("ut_metadata", AceBencodeValue.Integer(2))
+                if (includePeerExchange) {
+                    put("ut_pex", AceBencodeValue.Integer(ACE_LIVE_LOCAL_UT_PEX_MESSAGE_ID.toLong()))
+                }
+            }
         )
         livePosition?.let { fields["mi"] = it }
         fields["node_id"] = AceBencodeValue.Bytes(nodeId)

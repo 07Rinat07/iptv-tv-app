@@ -42,7 +42,8 @@ data class AceLivePeerRefillCandidate(
     val sources: Set<AceLivePeerDiscoverySource>,
     val advertisedWindow: AceLivePeerAdvertisedWindow?,
     val consecutiveFailures: Int,
-    val hasSuccessfulHandshake: Boolean
+    val hasSuccessfulHandshake: Boolean,
+    val peerExchangeSourceCount: Int = 0
 )
 
 data class AceLivePeerRefillPlan(
@@ -62,7 +63,8 @@ data class AceLivePeerRefillSnapshot(
     val lastHandshakeAtMillis: Long?,
     val managedPeerId: Long?,
     val startReserved: Boolean,
-    val startInProgress: Boolean
+    val startInProgress: Boolean,
+    val peerExchangeSourceCount: Int = 0
 )
 
 data class AceLivePeerRefillCycleResult(
@@ -205,12 +207,12 @@ class AceLivePeerRefillCoordinator(
             .filter { state -> !state.startReserved && !state.startInProgress }
             .filter { state -> nowMillis >= state.retryNotBeforeMillis }
             .sortedWith(candidateComparator(nextNeededPiece, nowMillis))
-            .take(slots)
             .toList()
+        val selected = selectPlanCandidatesLocked(ranked, slots)
 
-        ranked.forEach { state -> state.startReserved = true }
+        selected.forEach { state -> state.startReserved = true }
         AceLivePeerRefillPlan(
-            candidates = ranked.map(CandidateState::toPublicCandidate),
+            candidates = selected.map(CandidateState::toPublicCandidate),
             activePeers = activePeerIds.size,
             desiredActivePeers = desired,
             staleProbe = poolStale
@@ -269,6 +271,13 @@ class AceLivePeerRefillCoordinator(
     fun onPoolEvent(event: AceLiveTcpPoolEvent, nowMillis: Long) {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
         val evidence = withStateLock {
+            if (event is AceLiveTcpPoolEvent.Ingress && event.result.peerExchangePeers.isNotEmpty()) {
+                ingestPeerExchangeLocked(
+                    sourcePeerId = event.peerId,
+                    peers = event.result.peerExchangePeers,
+                    nowMillis = nowMillis
+                )
+            }
             val state = stateForPeerLocked(event.peerId) ?: return@withStateLock null
             when (event) {
                 is AceLiveTcpPoolEvent.TransportConnected -> {
@@ -400,11 +409,67 @@ class AceLivePeerRefillCoordinator(
             { state -> persistentReputationRank(state.endpoint, nowMillis) },
             { state -> state.consecutiveFailures },
             { state -> if (state.lastHandshakeAtMillis != null) 0 else 1 },
-            { state -> -state.sources.size },
+            { state -> -state.discoverySourceCount() },
             { state -> -state.lastDiscoveredAtMillis },
             { state -> state.endpoint.host },
             { state -> state.endpoint.port }
         )
+    }
+
+    private fun selectPlanCandidatesLocked(
+        ranked: List<CandidateState>,
+        slots: Int
+    ): List<CandidateState> {
+        if (slots <= 0) return emptyList()
+        val usedSinglePexSources = candidates.values
+            .asSequence()
+            .filter { state -> state.managedPeerId != null && state.sources.isEmpty() }
+            .flatMap { state -> state.peerExchangeSourcePeerIds.asSequence() }
+            .toMutableSet()
+        val pexSourceFrequency = ranked
+            .asSequence()
+            .filter { state -> state.sources.isEmpty() }
+            .flatMap { state -> state.peerExchangeSourcePeerIds.asSequence() }
+            .groupingBy { sourcePeerId -> sourcePeerId }
+            .eachCount()
+        val selected = ArrayList<CandidateState>(slots)
+        for (state in ranked) {
+            if (selected.size >= slots) break
+            if (state.sources.isEmpty() && state.peerExchangeSourcePeerIds.isNotEmpty()) {
+                val independentSource = state.peerExchangeSourcePeerIds
+                    .asSequence()
+                    .filter { sourcePeerId -> sourcePeerId !in usedSinglePexSources }
+                    .minByOrNull { sourcePeerId -> pexSourceFrequency[sourcePeerId] ?: Int.MAX_VALUE }
+                    ?: continue
+                usedSinglePexSources += independentSource
+            }
+            selected += state
+        }
+        return selected
+    }
+
+    private fun ingestPeerExchangeLocked(
+        sourcePeerId: Long,
+        peers: List<AceLiveTcpPeerEndpoint>,
+        nowMillis: Long
+    ) {
+        pruneExpiredCandidatesLocked(nowMillis)
+        val sourceEndpoint = stateForPeerLocked(sourcePeerId)?.endpoint
+        for (endpoint in peers.take(MAX_PEX_PEERS_PER_INGRESS)) {
+            if (sourceEndpoint != null && endpoint.host == sourceEndpoint.host) continue
+            val key = endpointKey(endpoint)
+            var state = candidates[key]
+            if (state == null) {
+                val pexOnlyCount = candidates.values.count { candidate ->
+                    candidate.sources.isEmpty() && candidate.peerExchangeSourcePeerIds.isNotEmpty()
+                }
+                if (pexOnlyCount >= MAX_PEX_ONLY_CANDIDATES) continue
+                state = CandidateState(endpoint = endpoint)
+                candidates[key] = state
+            }
+            state.peerExchangeSourcePeerIds += sourcePeerId
+            state.lastDiscoveredAtMillis = nowMillis
+        }
     }
 
     private fun persistentReputationRank(
@@ -482,6 +547,7 @@ class AceLivePeerRefillCoordinator(
     private data class CandidateState(
         val endpoint: AceLiveTcpPeerEndpoint,
         val sources: MutableSet<AceLivePeerDiscoverySource> = linkedSetOf(),
+        val peerExchangeSourcePeerIds: MutableSet<Long> = linkedSetOf(),
         var advertisedWindow: AceLivePeerAdvertisedWindow? = null,
         var consecutiveFailures: Int = 0,
         var retryNotBeforeMillis: Long = 0,
@@ -497,7 +563,8 @@ class AceLivePeerRefillCoordinator(
             sources = sources.toSet(),
             advertisedWindow = advertisedWindow,
             consecutiveFailures = consecutiveFailures,
-            hasSuccessfulHandshake = lastHandshakeAtMillis != null
+            hasSuccessfulHandshake = lastHandshakeAtMillis != null,
+            peerExchangeSourceCount = peerExchangeSourcePeerIds.size
         )
 
         fun toSnapshot(): AceLivePeerRefillSnapshot = AceLivePeerRefillSnapshot(
@@ -510,8 +577,12 @@ class AceLivePeerRefillCoordinator(
             lastHandshakeAtMillis = lastHandshakeAtMillis,
             managedPeerId = managedPeerId,
             startReserved = startReserved,
-            startInProgress = startInProgress
+            startInProgress = startInProgress,
+            peerExchangeSourceCount = peerExchangeSourcePeerIds.size
         )
+
+        fun discoverySourceCount(): Int =
+            sources.size + if (peerExchangeSourcePeerIds.isEmpty()) 0 else 1
     }
 
     private data class ReputationEvidence(
@@ -527,6 +598,8 @@ class AceLivePeerRefillCoordinator(
     private companion object {
         const val MAX_FAILURE_EXPONENT: Int = 20
         const val NEUTRAL_REPUTATION_RANK: Int = 2
+        const val MAX_PEX_PEERS_PER_INGRESS: Int = AceLivePeerExchangeCodec.MAX_ADDED_IPV4_PEERS
+        const val MAX_PEX_ONLY_CANDIDATES: Int = 128
     }
 }
 

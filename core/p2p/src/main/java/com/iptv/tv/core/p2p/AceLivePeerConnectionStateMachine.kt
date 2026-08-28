@@ -17,6 +17,10 @@ data class AceLivePeerIngressResult(
     val reassemblyDispositions: List<AceLiveReassemblyDisposition> = emptyList(),
     val unknownMessageIds: List<Int> = emptyList(),
     val unknownMessages: List<AceLiveUnknownMessageObservation> = emptyList(),
+    val peerExchangeHandshakeObserved: Boolean = false,
+    val peerExchangeEnabledUpdate: Boolean? = null,
+    val peerExchangeMessageId: Int? = null,
+    val peerExchangePeers: List<AceLiveTcpPeerEndpoint> = emptyList(),
     val requeuedPieces: List<Long> = emptyList(),
     val emittedPieces: List<AceLiveReassembledPiece> = emptyList(),
     val disconnectRecommended: Boolean = false
@@ -54,6 +58,7 @@ class AceLivePeerConnectionStateMachine(
     private var receiveBuffer: ByteArray = byteArrayOf()
     private var protocolBlocked: Boolean = false
     private var applicationHandshakeSent: Boolean = false
+    private var remoteUtPexMessageId: Int? = null
 
     init {
         require(peerId >= 0) { "peerId must be non-negative" }
@@ -85,6 +90,7 @@ class AceLivePeerConnectionStateMachine(
         receiveBuffer = byteArrayOf()
         protocolBlocked = false
         applicationHandshakeSent = false
+        remoteUtPexMessageId = null
     }
 
     /**
@@ -134,6 +140,7 @@ class AceLivePeerConnectionStateMachine(
         receiveBuffer = byteArrayOf()
         protocolBlocked = false
         applicationHandshakeSent = false
+        remoteUtPexMessageId = null
         return requeued
     }
 
@@ -164,6 +171,10 @@ class AceLivePeerConnectionStateMachine(
         val reassemblyDispositions = mutableListOf<AceLiveReassemblyDisposition>()
         val unknownMessageIds = mutableListOf<Int>()
         val unknownMessages = mutableListOf<AceLiveUnknownMessageObservation>()
+        var peerExchangeHandshakeObserved = false
+        var peerExchangeEnabledUpdate: Boolean? = null
+        var peerExchangeMessageId: Int? = null
+        val peerExchangePeers = mutableListOf<AceLiveTcpPeerEndpoint>()
         val requeuedPieces = mutableListOf<Long>()
         val emittedPieces = mutableListOf<AceLiveReassembledPiece>()
 
@@ -187,6 +198,11 @@ class AceLivePeerConnectionStateMachine(
                             activeChunkDispositions = activeChunkDispositions,
                             reassemblyDispositions = reassemblyDispositions,
                             unknownMessageIds = unknownMessageIds,
+                            unknownMessages = unknownMessages,
+                            peerExchangeHandshakeObserved = peerExchangeHandshakeObserved,
+                            peerExchangeEnabledUpdate = peerExchangeEnabledUpdate,
+                            peerExchangeMessageId = peerExchangeMessageId,
+                            peerExchangePeers = peerExchangePeers,
                             requeuedPieces = requeuedPieces,
                             emittedPieces = emittedPieces,
                             disconnectRecommended = true
@@ -206,6 +222,11 @@ class AceLivePeerConnectionStateMachine(
                         activeChunkDispositions = activeChunkDispositions,
                         reassemblyDispositions = reassemblyDispositions,
                         unknownMessageIds = unknownMessageIds,
+                        unknownMessages = unknownMessages,
+                        peerExchangeHandshakeObserved = peerExchangeHandshakeObserved,
+                        peerExchangeEnabledUpdate = peerExchangeEnabledUpdate,
+                        peerExchangeMessageId = peerExchangeMessageId,
+                        peerExchangePeers = peerExchangePeers,
                         requeuedPieces = requeuedPieces,
                         emittedPieces = emittedPieces,
                         disconnectRecommended = true
@@ -255,32 +276,62 @@ class AceLivePeerConnectionStateMachine(
                         }
 
                         is AceLivePeerWireMessage.Unknown -> {
-                            when (val metadata = metadataRecognizer.recognize(message.payload)) {
-                                AceLivePeerMetadataRecognition.NotRecognized -> {
-                                    unknownMessageIds += message.id
-                                    unknownMessages += AceLiveUnknownMessageObservation(
-                                        id = message.id,
-                                        payloadBytes = message.payload.size,
-                                        payloadPrefixHex = message.payload
-                                            .take(MAX_UNKNOWN_PREFIX_BYTES)
-                                            .joinToString(separator = "") { byte ->
-                                                (byte.toInt() and 0xff).toString(16).padStart(2, '0')
-                                            },
-                                        bencodeSummary = summarizeUnknownBencode(message.payload)
-                                    )
-                                    session.onPeerMessage(peerId, message, nowMillis)
+                            var extensionHandshakeHandled = false
+                            var peerExchangeHandled = false
+                            if (
+                                message.id == ACE_LIVE_EXTENDED_MESSAGE_ID &&
+                                message.payload.isNotEmpty()
+                            ) {
+                                val extensionId = message.payload[0].toInt() and 0xff
+                                val extensionPayload = message.payload.copyOfRange(1, message.payload.size)
+                                if (extensionId == ACE_LIVE_EXTENDED_HANDSHAKE_ID) {
+                                    AceLivePeerExchangeCodec.decodeExtensionHandshake(extensionPayload)?.let { update ->
+                                        extensionHandshakeHandled = true
+                                        peerExchangeHandshakeObserved = true
+                                        if (update.utPexPresent) {
+                                            remoteUtPexMessageId = update.utPexMessageId
+                                            peerExchangeEnabledUpdate = update.utPexMessageId != null
+                                            peerExchangeMessageId = update.utPexMessageId
+                                        }
+                                    }
+                                } else if (extensionId == remoteUtPexMessageId) {
+                                    AceLivePeerExchangeCodec.decodePeerExchange(extensionPayload)?.let { exchange ->
+                                        peerExchangeHandled = true
+                                        peerExchangePeers += exchange.added
+                                    }
                                 }
+                            }
 
-                                is AceLivePeerMetadataRecognition.Rejected -> {
-                                    metadataRejections += metadata.reason
-                                }
+                            if (!peerExchangeHandled) {
+                                when (val metadata = metadataRecognizer.recognize(message.payload)) {
+                                    AceLivePeerMetadataRecognition.NotRecognized -> {
+                                        if (!extensionHandshakeHandled) {
+                                            unknownMessageIds += message.id
+                                            unknownMessages += AceLiveUnknownMessageObservation(
+                                                id = message.id,
+                                                payloadBytes = message.payload.size,
+                                                payloadPrefixHex = message.payload
+                                                    .take(MAX_UNKNOWN_PREFIX_BYTES)
+                                                    .joinToString(separator = "") { byte ->
+                                                        (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+                                                    },
+                                                bencodeSummary = summarizeUnknownBencode(message.payload)
+                                            )
+                                            session.onPeerMessage(peerId, message, nowMillis)
+                                        }
+                                    }
 
-                                is AceLivePeerMetadataRecognition.Recognized -> {
-                                    applyAdvertisedWindow(
-                                        metadata.window,
-                                        metadataUpdates,
-                                        requeuedPieces
-                                    )
+                                    is AceLivePeerMetadataRecognition.Rejected -> {
+                                        metadataRejections += metadata.reason
+                                    }
+
+                                    is AceLivePeerMetadataRecognition.Recognized -> {
+                                        applyAdvertisedWindow(
+                                            metadata.window,
+                                            metadataUpdates,
+                                            requeuedPieces
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -304,6 +355,10 @@ class AceLivePeerConnectionStateMachine(
             reassemblyDispositions = reassemblyDispositions,
             unknownMessageIds = unknownMessageIds,
             unknownMessages = unknownMessages,
+            peerExchangeHandshakeObserved = peerExchangeHandshakeObserved,
+            peerExchangeEnabledUpdate = peerExchangeEnabledUpdate,
+            peerExchangeMessageId = peerExchangeMessageId,
+            peerExchangePeers = peerExchangePeers,
             requeuedPieces = requeuedPieces,
             emittedPieces = emittedPieces
         )
