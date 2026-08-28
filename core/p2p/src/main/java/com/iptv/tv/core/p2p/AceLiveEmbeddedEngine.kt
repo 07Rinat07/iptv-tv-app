@@ -3,6 +3,7 @@ package com.iptv.tv.core.p2p
 import android.util.Log
 import java.io.Closeable
 import java.io.File
+import java.net.Socket
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -535,7 +536,6 @@ class AceLiveEmbeddedEngine(
         private val authenticator = AceLiveMediaAuthenticator(transport.publicKeyDer)
         private val resynchronizer = AceLiveMpegTsResynchronizer()
         private val discontinuityGate = AceLiveTsDiscontinuityGate()
-        private val announceLease = AceLiveAnnouncePortLease()
         private val localPeerId = AceLiveNodeIdentity.peerId()
         private val session = AceLivePeerSessionCoordinator(
             geometry = transport.geometry,
@@ -550,16 +550,23 @@ class AceLiveEmbeddedEngine(
             maxBufferedBytes = MAX_REASSEMBLY_BYTES,
             producerBoundaryDiagnostics = producerBoundaryDiagnostics
         )
+        private val tcpConnectionPolicy = AceLiveTcpConnectionPolicy(
+            // Preserve the existing outbound capacity; inbound peers are a separate bounded bonus.
+            maxConcurrentPeers = MAX_ACTIVE_PEERS,
+            maxConcurrentInboundPeers = MAX_INBOUND_PEERS
+        )
         private val pool = AceLiveTcpConnectionPool(
             scope = scope,
             session = session,
-            policy = AceLiveTcpConnectionPolicy(maxConcurrentPeers = MAX_ACTIVE_PEERS),
+            policy = tcpConnectionPolicy,
             recoveryDiagnostics = AceLiveRecoveryDiagnosticsReporter(
                 observer = diagnosticsObserver,
                 context = runtimeDiagnosticsContext
             ),
             onEvent = ::onPoolEvent
         )
+        private val pendingInboundRegistrations = AtomicInteger(0)
+        private val announceLease = AceLiveAnnouncePortLease(::acceptInboundSocket)
         private val peerDiagnosticsReporter = AceLivePeerDiagnosticsReporter(
             observer = diagnosticsObserver,
             context = runtimeDiagnosticsContext
@@ -578,7 +585,7 @@ class AceLiveEmbeddedEngine(
         private val refillLoop = AceLivePeerRefillLoop(
             coordinator = refillCoordinator,
             discover = { discoverPeers() },
-            activePeerIds = { pool.activePeerIds() },
+            activePeerIds = { pool.outboundPeerIds() },
             evaluateRecovery = { pool.evaluateRecovery() },
             nextNeededPiece = { pool.nextNeededPiece() },
             allocatePeerId = { peerIds.getAndIncrement() },
@@ -630,6 +637,70 @@ class AceLiveEmbeddedEngine(
             }
         )
         private var runner: Job? = null
+
+        private fun acceptInboundSocket(socket: Socket): Boolean {
+            if (closed.get() || !scope.isActive) return false
+            val pending = pendingInboundRegistrations.incrementAndGet()
+            if (pending > MAX_PENDING_INBOUND_REGISTRATIONS) {
+                pendingInboundRegistrations.decrementAndGet()
+                runCatching {
+                    diagnosticsObserver(
+                        "embedded_ace_live_inbound_peer",
+                        "phase=dropped, reason=pending_cap, pending=$pending"
+                    )
+                }
+                return false
+            }
+
+            val endpoint = runCatching {
+                AceLiveTcpPeerEndpoint(
+                    host = socket.inetAddress.hostAddress,
+                    port = socket.port
+                )
+            }.getOrElse {
+                pendingInboundRegistrations.decrementAndGet()
+                return false
+            }
+            val inboundTransport = runCatching {
+                adoptAceLiveAcceptedSocket(socket, tcpConnectionPolicy)
+            }.getOrElse {
+                pendingInboundRegistrations.decrementAndGet()
+                return false
+            }
+
+            val transferredToPool = AtomicBoolean(false)
+            val registration = scope.launch {
+                val peerId = peerIds.getAndIncrement()
+                val accepted = runCatching {
+                    pool.startInboundPeer(
+                        peerId = peerId,
+                        endpoint = endpoint,
+                        transport = inboundTransport,
+                        swarmKey = transport.swarmKey.toByteArray(),
+                        localPeerId = localPeerId
+                    )
+                }.getOrDefault(false)
+                if (accepted) {
+                    transferredToPool.set(true)
+                    firstPeerStartAtMillis.compareAndSet(0L, System.currentTimeMillis())
+                }
+                runCatching {
+                    diagnosticsObserver(
+                        "embedded_ace_live_inbound_peer",
+                        "phase=${if (accepted) "registered" else "dropped"}, " +
+                            "reason=${if (accepted) "peer_listener" else "pool_capacity"}, " +
+                            "peer=$peerId"
+                    )
+                }
+            }
+            registration.invokeOnCompletion {
+                pendingInboundRegistrations.decrementAndGet()
+                if (!transferredToPool.get()) {
+                    runCatching { socket.close() }
+                }
+            }
+            return true
+        }
 
         fun hasCurrentQualificationProgress(
             nowMillis: Long = System.currentTimeMillis()
@@ -1228,6 +1299,8 @@ class AceLiveEmbeddedEngine(
         const val NO_CONNECTED_PEER_TIMEOUT_MILLIS = 30_000L
         const val TARGET_ACTIVE_PEERS = 6
         const val MAX_ACTIVE_PEERS = 10
+        const val MAX_INBOUND_PEERS = 4
+        const val MAX_PENDING_INBOUND_REGISTRATIONS = 4
         const val STALE_PROBE_PEERS = 2
         const val MAX_PEER_STARTS_PER_CYCLE = 4
         const val BASELINE_IN_FLIGHT_PER_PEER = 2

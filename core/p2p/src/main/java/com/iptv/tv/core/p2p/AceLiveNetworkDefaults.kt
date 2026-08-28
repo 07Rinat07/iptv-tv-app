@@ -4,6 +4,7 @@ import java.io.Closeable
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal object AceLiveNetworkDefaults {
@@ -26,12 +27,21 @@ internal object AceLiveNetworkDefaults {
     const val publicTracker = "udp://t1.torrentstream.org:2710/announce"
 }
 
-/** Owns the real TCP port advertised to UDP trackers for the lifetime of one discovery session. */
-internal class AceLiveAnnouncePortLease : Closeable {
+/**
+ * Owns the real TCP port advertised to trackers for the lifetime of one live runtime.
+ *
+ * Accepted sockets are offered to the runtime instead of being closed immediately. Returning
+ * `true` transfers socket ownership to the callback; `false` (or an exception) closes the socket
+ * here. The small kernel backlog is only a burst buffer: the TCP pool applies its own stricter
+ * active/inbound caps before an accepted connection can participate in the swarm.
+ */
+internal class AceLiveAnnouncePortLease(
+    private val onAcceptedSocket: (Socket) -> Boolean = { false }
+) : Closeable {
     private val closed = AtomicBoolean(false)
     private val socket = ServerSocket().apply {
         reuseAddress = true
-        bind(InetSocketAddress(InetAddress.getByName("0.0.0.0"), 0), 4)
+        bind(InetSocketAddress(InetAddress.getByName("0.0.0.0"), 0), ACCEPT_BACKLOG)
     }
     private val acceptThread = Thread(::acceptLoop, "ace-live-announce-port").apply {
         isDaemon = true
@@ -47,11 +57,18 @@ internal class AceLiveAnnouncePortLease : Closeable {
 
     private fun acceptLoop() {
         while (!closed.get()) {
-            try {
-                socket.accept().use { }
+            val accepted = try {
+                socket.accept()
             } catch (_: Throwable) {
                 if (closed.get()) return
+                continue
             }
+            val transferred = runCatching { onAcceptedSocket(accepted) }.getOrDefault(false)
+            if (!transferred) runCatching { accepted.close() }
         }
+    }
+
+    private companion object {
+        const val ACCEPT_BACKLOG = 4
     }
 }
