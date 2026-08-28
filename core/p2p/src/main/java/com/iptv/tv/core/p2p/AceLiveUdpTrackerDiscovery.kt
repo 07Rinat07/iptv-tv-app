@@ -34,6 +34,59 @@ private data class AceLiveIpv4Cidr(
     val prefixBits: Int
 )
 
+private class AceLiveStartupFastPathClaimKey(
+    val swarmKey: AceLiveSwarmKey,
+    val announcePort: Int
+) {
+    override fun equals(other: Any?): Boolean =
+        other is AceLiveStartupFastPathClaimKey &&
+            swarmKey === other.swarmKey &&
+            announcePort == other.announcePort
+
+    override fun hashCode(): Int =
+        31 * System.identityHashCode(swarmKey) + announcePort
+}
+
+/**
+ * Remembers that one concrete runtime already surfaced its startup-node fast path.
+ *
+ * Identity comparison is deliberate: every refill for one runtime reuses the exact transport
+ * [AceLiveSwarmKey] object, while a new preparation creates a new key object even for the same hash.
+ * That lets later refills continue into metatracker/HTTP/UDP without making rapid reopen of the same
+ * channel inherit stale fast-path state. The TTL/cap only bound references if a runtime disappears.
+ */
+private object AceLiveStartupFastPathMemory {
+    private const val CLAIM_TTL_MILLIS = 5 * 60_000L
+    private const val MAX_CLAIMS = 64
+    private val lock = Any()
+    private val claims = LinkedHashMap<AceLiveStartupFastPathClaimKey, Long>()
+
+    fun claim(
+        swarmKey: AceLiveSwarmKey,
+        announcePort: Int,
+        nowMillis: Long = System.currentTimeMillis()
+    ): Boolean = synchronized(lock) {
+        prune(nowMillis)
+        val key = AceLiveStartupFastPathClaimKey(swarmKey, announcePort)
+        if (claims.containsKey(key)) return@synchronized false
+        while (claims.size >= MAX_CLAIMS) {
+            val eldest = claims.keys.firstOrNull() ?: break
+            claims.remove(eldest)
+        }
+        claims[key] = nowMillis
+        true
+    }
+
+    private fun prune(nowMillis: Long) {
+        val iterator = claims.entries.iterator()
+        while (iterator.hasNext()) {
+            val storedAtMillis = iterator.next().value
+            val age = if (nowMillis >= storedAtMillis) nowMillis - storedAtMillis else Long.MAX_VALUE
+            if (age > CLAIM_TTL_MILLIS) iterator.remove()
+        }
+    }
+}
+
 /** Local safety bounds for descriptor-provided tracker/startup discovery. */
 data class AceLiveUdpTrackerPolicy(
     val requestTimeoutMillis: Int = 2_000,
@@ -108,6 +161,11 @@ internal data class AceLiveUdpTrackerEndpoint(
  * normal TCP connection, Ace handshake, reputation and producer qualification path; no source is
  * trusted merely because it appeared in transport metadata.
  *
+ * A runtime's first eligible startup node is returned immediately so TCP/Ace qualification can begin
+ * while the orchestrator's already-started DHT walk continues. Later refills for that same runtime
+ * keep processing metatracker and normal tracker sources, preventing the fast path from starving the
+ * wider candidate pool.
+ *
  * DHT/LSD, peer scoring, inbound listening and NAT mapping remain separate concerns.
  */
 class AceLiveUdpTrackerDiscovery(
@@ -115,7 +173,9 @@ class AceLiveUdpTrackerDiscovery(
     private val policy: AceLiveUdpTrackerPolicy = AceLiveUdpTrackerPolicy(),
     private val randomInt: () -> Int = DEFAULT_RANDOM_INT,
     private val addressResolver: (String) -> List<Inet4Address> = DEFAULT_ADDRESS_RESOLVER,
-    private val httpClient: OkHttpClient = DEFAULT_HTTP_CLIENT
+    private val httpClient: OkHttpClient = DEFAULT_HTTP_CLIENT,
+    private val startupFastPathClaim: (AceLiveSwarmKey, Int) -> Boolean =
+        AceLiveStartupFastPathMemory::claim
 ) {
     suspend fun discover(request: AceLiveUdpTrackerDiscoveryRequest): AceLiveUdpTrackerDiscoveryResult =
         withContext(ioDispatcher) {
@@ -157,6 +217,17 @@ class AceLiveUdpTrackerDiscovery(
                     attempted += 1
                     if (isAllowedPeerEndpoint(startupNode)) {
                         peers.putIfAbsent(endpointKey(startupNode), startupNode)
+                        if (
+                            startupFastPathClaim(request.swarmKey, request.announcePort) &&
+                            peers.isNotEmpty()
+                        ) {
+                            return@withContext AceLiveUdpTrackerDiscoveryResult(
+                                peers = peers.values.toList(),
+                                attemptedTrackers = attempted,
+                                failedTrackers = failed,
+                                rejectedTrackers = rejected
+                            )
+                        }
                     } else {
                         rejected += 1
                     }
@@ -187,8 +258,11 @@ class AceLiveUdpTrackerDiscovery(
                         failed += 1
                         continue
                     }
-                    for (node in snapshot.startupNodes) {
-                        AceLiveDiscoveryHttpProtocol.encodeStartupHint(node)?.let(pending::addLast)
+                    // A metatracker-provided startup node has the same bootstrap priority as one
+                    // carried directly by transport metadata. Preserve response order while placing
+                    // those candidates ahead of slower tracker announces.
+                    snapshot.startupNodes.asReversed().forEach { node ->
+                        AceLiveDiscoveryHttpProtocol.encodeStartupHint(node)?.let(pending::addFirst)
                     }
                     for (tracker in snapshot.trackers) {
                         if (tracker.length <= policy.maxTrackerUrlLength) pending.addLast(tracker)
