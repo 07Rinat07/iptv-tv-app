@@ -20,20 +20,8 @@ class AceLiveUdpTrackerStartupFastPathTest {
                     }
                 }
             )
-            val request = AceLiveUdpTrackerDiscoveryRequest(
-                swarmKey = AceLiveSwarmKey.parseHex(SWARM_HEX)!!,
-                trackers = listOf(
-                    "ace-startup:8.8.8.8:8621",
-                    "ace-startup:1.1.1.1:8632",
-                    "not-a-valid-discovery-source"
-                ),
-                peerId = ByteArray(AceLiveUdpTrackerCodec.PEER_ID_BYTES) { index -> index.toByte() },
-                announcePort = 8621
-            )
-            val expectedStartupPeers = listOf(
-                AceLiveTcpPeerEndpoint("8.8.8.8", 8621),
-                AceLiveTcpPeerEndpoint("1.1.1.1", 8632)
-            )
+            val request = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
+            val expectedStartupPeers = startupPeers()
 
             val first = discovery.discover(request)
 
@@ -50,6 +38,37 @@ class AceLiveUdpTrackerStartupFastPathTest {
             assertEquals(0, supplemental.failedTrackers)
             assertEquals(1, supplemental.rejectedTrackers)
         }
+
+    @Test
+    fun `new swarm key instance can fast path the same content again`() = runBlocking {
+        val discovery = AceLiveUdpTrackerDiscovery()
+        val firstRuntime = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
+        val reopenedRuntime = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
+
+        val first = discovery.discover(firstRuntime)
+        val reopened = discovery.discover(reopenedRuntime)
+
+        assertEquals(startupPeers(), first.peers)
+        assertEquals(0, first.rejectedTrackers)
+        assertEquals(startupPeers(), reopened.peers)
+        assertEquals(0, reopened.rejectedTrackers)
+    }
+
+    private fun request(swarmKey: AceLiveSwarmKey) = AceLiveUdpTrackerDiscoveryRequest(
+        swarmKey = swarmKey,
+        trackers = listOf(
+            "ace-startup:8.8.8.8:8621",
+            "ace-startup:1.1.1.1:8632",
+            "not-a-valid-discovery-source"
+        ),
+        peerId = ByteArray(AceLiveUdpTrackerCodec.PEER_ID_BYTES) { index -> index.toByte() },
+        announcePort = 8621
+    )
+
+    private fun startupPeers() = listOf(
+        AceLiveTcpPeerEndpoint("8.8.8.8", 8621),
+        AceLiveTcpPeerEndpoint("1.1.1.1", 8632)
+    )
 
     private companion object {
         const val SWARM_HEX = "00112233445566778899aabbccddeeff00112233"
