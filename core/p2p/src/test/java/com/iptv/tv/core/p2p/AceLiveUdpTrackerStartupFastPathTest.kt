@@ -20,7 +20,7 @@ class AceLiveUdpTrackerStartupFastPathTest {
                     }
                 }
             )
-            val request = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
+            val request = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!, announcePort = 8621)
             val expectedStartupPeers = startupPeers()
 
             val first = discovery.discover(request)
@@ -42,12 +42,18 @@ class AceLiveUdpTrackerStartupFastPathTest {
     @Test
     fun `default fast path is one shot per runtime and resets for reopened content`() = runBlocking {
         val discovery = AceLiveUdpTrackerDiscovery()
-        val sameRuntimeRequest = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
+        val sameRuntimeRequest = request(
+            swarmKey = AceLiveSwarmKey.parseHex(REOPEN_SWARM_HEX)!!,
+            announcePort = 18621
+        )
 
         val first = discovery.discover(sameRuntimeRequest)
         val sameRuntimeRefill = discovery.discover(sameRuntimeRequest)
         val reopenedRuntime = discovery.discover(
-            request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
+            request(
+                swarmKey = AceLiveSwarmKey.parseHex(REOPEN_SWARM_HEX)!!,
+                announcePort = 18621
+            )
         )
 
         assertEquals(startupPeers(), first.peers)
@@ -58,7 +64,10 @@ class AceLiveUdpTrackerStartupFastPathTest {
         assertEquals(0, reopenedRuntime.rejectedTrackers)
     }
 
-    private fun request(swarmKey: AceLiveSwarmKey) = AceLiveUdpTrackerDiscoveryRequest(
+    private fun request(
+        swarmKey: AceLiveSwarmKey,
+        announcePort: Int
+    ) = AceLiveUdpTrackerDiscoveryRequest(
         swarmKey = swarmKey,
         trackers = listOf(
             "ace-startup:8.8.8.8:8621",
@@ -66,7 +75,7 @@ class AceLiveUdpTrackerStartupFastPathTest {
             "not-a-valid-discovery-source"
         ),
         peerId = ByteArray(AceLiveUdpTrackerCodec.PEER_ID_BYTES) { index -> index.toByte() },
-        announcePort = 8621
+        announcePort = announcePort
     )
 
     private fun startupPeers() = listOf(
@@ -76,5 +85,6 @@ class AceLiveUdpTrackerStartupFastPathTest {
 
     private companion object {
         const val SWARM_HEX = "00112233445566778899aabbccddeeff00112233"
+        const val REOPEN_SWARM_HEX = "ffeeddccbbaa99887766554433221100ffeeddcc"
     }
 }
