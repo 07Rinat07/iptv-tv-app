@@ -75,6 +75,64 @@ class AceLiveStartupCandidateRacingTest {
     }
 
     @Test
+    fun `first connected transport releases an already waiting startup candidate`() {
+        runBlocking {
+            val firstConnectStarted = CompletableDeferred<Unit>()
+            val secondConnectStarted = CompletableDeferred<Unit>()
+            val releaseFirstConnect = CompletableDeferred<Unit>()
+            val factory = object : AceLiveTcpTransportFactory {
+                override suspend fun connect(
+                    endpoint: AceLiveTcpPeerEndpoint,
+                    policy: AceLiveTcpConnectionPolicy
+                ): AceLiveTcpTransport = when (endpoint.port) {
+                    9_150 -> {
+                        firstConnectStarted.complete(Unit)
+                        releaseFirstConnect.await()
+                        HangingTransport()
+                    }
+
+                    9_151 -> {
+                        secondConnectStarted.complete(Unit)
+                        HangingTransport()
+                    }
+
+                    else -> error("unexpected endpoint $endpoint")
+                }
+            }
+            val pool = pool(
+                factory = factory,
+                startupCandidateStaggerMillis = 5_000L
+            )
+
+            try {
+                pool.startPeer(
+                    peerId = 5L,
+                    endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9_150),
+                    swarmKey = swarmKey,
+                    localPeerId = localPeerId
+                )
+                withTimeout(500L) { firstConnectStarted.await() }
+
+                pool.startPeer(
+                    peerId = 6L,
+                    endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9_151),
+                    swarmKey = swarmKey,
+                    localPeerId = localPeerId
+                )
+
+                delay(50L)
+                assertFalse(secondConnectStarted.isCompleted)
+                releaseFirstConnect.complete(Unit)
+
+                withTimeout(500L) { secondConnectStarted.await() }
+                assertTrue(secondConnectStarted.isCompleted)
+            } finally {
+                pool.close()
+            }
+        }
+    }
+
+    @Test
     fun `later refill candidate starts immediately after any transport has connected`() {
         runBlocking {
             val firstConnectStarted = CompletableDeferred<Unit>()

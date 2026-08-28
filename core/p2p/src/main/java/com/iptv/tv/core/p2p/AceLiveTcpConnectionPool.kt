@@ -3,6 +3,7 @@ package com.iptv.tv.core.p2p
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -111,6 +112,7 @@ class AceLiveTcpConnectionPool(
     private val productionTracker = AceLivePeerProductionTracker()
     private val closed = AtomicBoolean(false)
     private val transportConnectedAtLeastOnce = AtomicBoolean(false)
+    private val firstTransportConnected = CompletableDeferred<Unit>()
     private val startupCandidateOrdinal = AtomicInteger(0)
 
     init {
@@ -378,7 +380,9 @@ class AceLiveTcpConnectionPool(
         var reconnectAttempt = 0
         try {
             if (runtime.initialConnectDelayMillis > 0L) {
-                delay(runtime.initialConnectDelayMillis)
+                withTimeoutOrNull(runtime.initialConnectDelayMillis) {
+                    firstTransportConnected.await()
+                }
             }
             while (currentCoroutineContext().isActive) {
                 val transport = try {
@@ -402,9 +406,12 @@ class AceLiveTcpConnectionPool(
                 }
 
                 // Once any real TCP connection exists, this is no longer a cold-start candidate
-                // race. Later refill peers start immediately; reconnect attempts keep their existing
-                // per-peer policy and are never re-staggered.
-                transportConnectedAtLeastOnce.set(true)
+                // race. Release already-waiting startup candidates too; later refill peers start
+                // immediately, while reconnect attempts keep their existing per-peer policy and are
+                // never re-staggered.
+                if (transportConnectedAtLeastOnce.compareAndSet(false, true)) {
+                    firstTransportConnected.complete(Unit)
+                }
 
                 // A real TCP connection disproves any still-live negative endpoint memory for this
                 // exact swarm, even before the application handshake is evaluated.
