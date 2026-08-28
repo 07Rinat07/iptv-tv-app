@@ -20,7 +20,8 @@ class AceLivePeerHandshakeCodecTest {
             "AceStreamProtocol".toByteArray(Charsets.US_ASCII),
             encoded.copyOfRange(1, 18)
         )
-        assertArrayEquals(ByteArray(8), encoded.copyOfRange(18, 26))
+        val reserved = ByteArray(8).also { bytes -> bytes[5] = 0x10 }
+        assertArrayEquals(reserved, encoded.copyOfRange(18, 26))
         assertArrayEquals(swarmKey, encoded.copyOfRange(26, 46))
         assertArrayEquals(peerId, encoded.copyOfRange(46, 66))
     }
@@ -34,7 +35,8 @@ class AceLivePeerHandshakeCodecTest {
             AceLivePeerHandshakeDecodeResult.Decoded
 
         assertEquals(66, decoded.consumedBytes)
-        assertArrayEquals(ByteArray(8), decoded.handshake.reservedBytes())
+        val reserved = ByteArray(8).also { bytes -> bytes[5] = 0x10 }
+        assertArrayEquals(reserved, decoded.handshake.reservedBytes())
         assertArrayEquals(swarmKey, decoded.handshake.swarmKeyBytes())
         assertArrayEquals(peerId, decoded.handshake.peerIdBytes())
         assertArrayEquals(byteArrayOf(0, 0, 0, 0), coalesced.copyOfRange(decoded.consumedBytes, coalesced.size))

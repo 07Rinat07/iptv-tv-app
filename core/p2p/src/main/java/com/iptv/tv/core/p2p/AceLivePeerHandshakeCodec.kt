@@ -123,7 +123,7 @@ class AceLivePeerHandshakeCodec {
     fun encode(
         swarmKey: ByteArray,
         peerId: ByteArray,
-        reserved: ByteArray = ByteArray(RESERVED_BYTES)
+        reserved: ByteArray = extensionProtocolReservedBytes()
     ): ByteArray {
         require(swarmKey.size == SWARM_KEY_BYTES) { "swarm key must be $SWARM_KEY_BYTES bytes" }
         require(peerId.size == PEER_ID_BYTES) { "peer id must be $PEER_ID_BYTES bytes" }
@@ -155,6 +155,14 @@ class AceLivePeerHandshakeCodec {
         const val HANDSHAKE_BYTES: Int = 66
 
         const val PROTOCOL_NAME: String = "AceStreamProtocol"
+        const val EXTENSION_PROTOCOL_RESERVED_INDEX: Int = 5
+        const val EXTENSION_PROTOCOL_RESERVED_MASK: Int = 0x10
+
+        internal fun extensionProtocolReservedBytes(): ByteArray =
+            ByteArray(RESERVED_BYTES).also { reserved ->
+                reserved[EXTENSION_PROTOCOL_RESERVED_INDEX] = EXTENSION_PROTOCOL_RESERVED_MASK.toByte()
+            }
+
         private val PROTOCOL_BYTES: ByteArray = PROTOCOL_NAME.toByteArray(StandardCharsets.US_ASCII)
     }
 }

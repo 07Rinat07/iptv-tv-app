@@ -71,6 +71,47 @@ class AceLivePeerRefillCoordinatorTest {
         assertEquals(window(100, 120), plan.candidates.single().advertisedWindow)
     }
 
+
+    @Test
+    fun `pex candidates enter normal refill but one source cannot fill the plan`() {
+        val coordinator = coordinator(target = 2, max = 3, maxStarts = 3)
+        val first = endpoint("8.8.8.8", 8621)
+        val second = endpoint("1.1.1.1", 8621)
+        coordinator.onPoolEvent(
+            AceLiveTcpPoolEvent.Ingress(
+                peerId = 70,
+                result = AceLivePeerIngressResult(peerExchangePeers = listOf(first, second))
+            ),
+            nowMillis = 1_000
+        )
+
+        val singleSourcePlan = coordinator.planRefill(
+            activePeerIds = emptySet(),
+            nextNeededPiece = null,
+            poolStale = false,
+            nowMillis = 1_000
+        )
+        assertEquals(1, singleSourcePlan.candidates.size)
+        assertEquals(1, singleSourcePlan.candidates.single().peerExchangeSourceCount)
+        singleSourcePlan.candidates.forEach { coordinator.releaseReservation(it.endpoint) }
+
+        coordinator.onPoolEvent(
+            AceLiveTcpPoolEvent.Ingress(
+                peerId = 71,
+                result = AceLivePeerIngressResult(peerExchangePeers = listOf(second))
+            ),
+            nowMillis = 1_001
+        )
+        val diversified = coordinator.planRefill(
+            activePeerIds = emptySet(),
+            nextNeededPiece = null,
+            poolStale = false,
+            nowMillis = 1_001
+        )
+        assertEquals(2, diversified.candidates.size)
+        assertTrue(diversified.candidates.any { it.endpoint == second && it.peerExchangeSourceCount == 2 })
+    }
+
     @Test
     fun `stale pool adds bounded probes but healthy full target adds none`() {
         val coordinator = coordinator(target = 2, max = 4, staleProbe = 2, maxStarts = 4)

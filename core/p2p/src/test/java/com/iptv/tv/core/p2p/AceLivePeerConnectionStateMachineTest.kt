@@ -39,6 +39,61 @@ class AceLivePeerConnectionStateMachineTest {
         assertTrue(scheduled.all { it.request.peerId == 7L && it.request.piece == 10L })
     }
 
+
+    @Test
+    fun negotiatedPeerExchangeProducesUntrustedCandidatesAndResetsOnReconnect() {
+        val session = session()
+        val connection = connected(session)
+        val extensionHandshake = AceBencodeEncoder.encode(
+            AceBencodeValue.Dictionary(
+                mapOf(
+                    "m" to AceBencodeValue.Dictionary(
+                        mapOf("ut_pex" to AceBencodeValue.Integer(7))
+                    )
+                )
+            )
+        )
+        val negotiation = connection.consumePeerBytes(
+            frame(id = 20, payload = byteArrayOf(0) + extensionHandshake),
+            nowMillis = 0
+        )
+
+        assertTrue(negotiation.peerExchangeHandshakeObserved)
+        assertEquals(true, negotiation.peerExchangeEnabledUpdate)
+        assertEquals(7, negotiation.peerExchangeMessageId)
+        assertTrue(negotiation.unknownMessageIds.isEmpty())
+
+        val exchangePayload = AceBencodeEncoder.encode(
+            AceBencodeValue.Dictionary(
+                mapOf(
+                    "added" to AceBencodeValue.Bytes(
+                        compactPeer(8, 8, 8, 8, 8621) + compactPeer(1, 1, 1, 1, 9000)
+                    )
+                )
+            )
+        )
+        val exchange = connection.consumePeerBytes(
+            frame(id = 20, payload = byteArrayOf(7) + exchangePayload),
+            nowMillis = 1
+        )
+        assertEquals(
+            listOf(
+                AceLiveTcpPeerEndpoint("8.8.8.8", 8621),
+                AceLiveTcpPeerEndpoint("1.1.1.1", 9000)
+            ),
+            exchange.peerExchangePeers
+        )
+
+        connection.onTransportDisconnected()
+        connection.onTransportConnected()
+        connection.onHandshakeAccepted()
+        val staleMapping = connection.consumePeerBytes(
+            frame(id = 20, payload = byteArrayOf(7) + exchangePayload),
+            nowMillis = 2
+        )
+        assertTrue(staleMapping.peerExchangePeers.isEmpty())
+    }
+
     @Test
     fun partialMetadataFrameIsBufferedUntilComplete() {
         val session = session()
@@ -275,6 +330,11 @@ class AceLivePeerConnectionStateMachineTest {
     }
 
     private fun ascii(value: String): ByteArray = value.toByteArray(Charsets.US_ASCII)
+
+    private fun compactPeer(a: Int, b: Int, c: Int, d: Int, port: Int): ByteArray = byteArrayOf(
+        a.toByte(), b.toByte(), c.toByte(), d.toByte(),
+        (port ushr 8).toByte(), port.toByte()
+    )
 
     private fun compactLiveStatus(minPiece: Long, maxPiece: Long, position: Long): ByteArray =
         ascii(

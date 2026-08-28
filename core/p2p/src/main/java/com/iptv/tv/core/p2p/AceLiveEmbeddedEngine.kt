@@ -1036,6 +1036,28 @@ class AceLiveEmbeddedEngine(
                 return
             }
 
+            if (event.result.peerExchangeHandshakeObserved) {
+                runCatching {
+                    diagnosticsObserver(
+                        "embedded_ace_live_peer_exchange",
+                        "event=extension_handshake peer=${event.peerId} " +
+                            "enabled_update=${event.result.peerExchangeEnabledUpdate ?: "unchanged"} " +
+                            "message_id=${event.result.peerExchangeMessageId ?: "none"} " +
+                            "elapsed_ms=${startupElapsedMillis()}"
+                    )
+                }
+            }
+            if (event.result.peerExchangePeers.isNotEmpty()) {
+                runCatching {
+                    diagnosticsObserver(
+                        "embedded_ace_live_peer_exchange",
+                        "event=candidates peer=${event.peerId} " +
+                            "added=${event.result.peerExchangePeers.size} " +
+                            "elapsed_ms=${startupElapsedMillis()}"
+                    )
+                }
+            }
+
             event.result.metadataUpdates.forEach { window ->
                 latestHead.accumulateAndGet(window.maxPiece) { current, update -> maxOf(current, update) }
             }

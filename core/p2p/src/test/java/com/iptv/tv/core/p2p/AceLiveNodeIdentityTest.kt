@@ -26,6 +26,11 @@ class AceLiveNodeIdentityTest {
         val parsed = AceBoundedBencodeParser(frame.copyOfRange(6, frame.size)).parseRootDictionary()
         val nodeId = (parsed.values.getValue("node_id") as AceBencodeValue.Bytes).value
         val signature = (parsed.values.getValue("signature") as AceBencodeValue.Bytes).value
+        val messageMap = parsed.values.getValue("m") as AceBencodeValue.Dictionary
+        assertEquals(
+            ACE_LIVE_LOCAL_UT_PEX_MESSAGE_ID.toLong(),
+            (messageMap.values.getValue("ut_pex") as AceBencodeValue.Integer).value
+        )
         assertEquals(32, nodeId.size)
         assertEquals(64, signature.size)
 
@@ -42,4 +47,14 @@ class AceLiveNodeIdentityTest {
         verifier.update(digest)
         assertTrue(verifier.verify(signature))
     }
+    @Test
+    fun metadataHandshakeDoesNotAdvertisePeerExchange() {
+        val frame = AceLiveNodeIdentity.generate().signedMetadataExtendedHandshake(timestamp = 5_000)
+        val parsed = AceBoundedBencodeParser(frame.copyOfRange(6, frame.size)).parseRootDictionary()
+        val messageMap = parsed.values.getValue("m") as AceBencodeValue.Dictionary
+
+        assertTrue("ut_metadata" in messageMap.values)
+        assertTrue("ut_pex" !in messageMap.values)
+    }
+
 }
