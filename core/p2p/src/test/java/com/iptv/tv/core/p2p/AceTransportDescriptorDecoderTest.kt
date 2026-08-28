@@ -21,7 +21,16 @@ class AceTransportDescriptorDecoderTest {
                 "piece_length" to AceBencodeValue.Integer(1_048_576),
                 "pubkey" to AceBencodeValue.Bytes(ByteArray(124) { index -> (index + 1).toByte() }),
                 "trackers" to AceBencodeValue.ListValue(
-                    listOf(bytes("udp://t1.torrentstream.org:2710/announce"))
+                    listOf(
+                        bytes("udp://t1.torrentstream.org:2710/announce"),
+                        bytes("https://tracker.example/announce")
+                    )
+                ),
+                "metatrackers" to AceBencodeValue.ListValue(
+                    listOf(bytes("https://meta.example/discovery"))
+                ),
+                "startup_nodes" to AceBencodeValue.ListValue(
+                    listOf(bytes("8.8.8.8:8621"))
                 )
             )
         )
@@ -36,8 +45,47 @@ class AceTransportDescriptorDecoderTest {
         assertEquals(16_384, live.geometry.chunkLengthBytes)
         assertEquals(8_000_000, live.geometry.bitrate)
         assertArrayEquals(ByteArray(124) { index -> (index + 1).toByte() }, live.publicKeyDer)
-        assertEquals(listOf("udp://t1.torrentstream.org:2710/announce"), live.trackers)
+        assertEquals(
+            listOf(
+                "ace-startup:8.8.8.8:8621",
+                "ace-metatracker:https://meta.example/discovery",
+                "udp://t1.torrentstream.org:2710/announce",
+                "https://tracker.example/announce"
+            ),
+            live.trackers
+        )
         assertEquals(40, live.swarmKey.toHex().length)
+    }
+
+    @Test
+    fun acceptsScalarLegacyDiscoveryFieldsAndDropsMalformedStartupNodes() {
+        val descriptor = AceBencodeValue.Dictionary(
+            mapOf(
+                "authmethod" to bytes("RSA"),
+                "bitrate" to AceBencodeValue.Integer(1_000_000),
+                "chunk_length" to AceBencodeValue.Integer(16_384),
+                "name" to bytes("Legacy Fields"),
+                "piece_length" to AceBencodeValue.Integer(524_288),
+                "pubkey" to AceBencodeValue.Bytes(ByteArray(124) { 7 }),
+                "tracker" to bytes("http://tracker.example:8630/announce"),
+                "metatracker" to bytes("http://meta.example/list"),
+                "startup-node" to bytes("not-an-endpoint")
+            )
+        )
+
+        val result = AceTransportDescriptorDecoder.decodeLive(
+            encryptTransport(AceBencodeEncoder.encode(descriptor))
+        )
+
+        assertTrue(result is P2pResult.Success)
+        val live = (result as P2pResult.Success).data
+        assertEquals(
+            listOf(
+                "ace-metatracker:http://meta.example/list",
+                "http://tracker.example:8630/announce"
+            ),
+            live.trackers
+        )
     }
 
     @Test
