@@ -11,6 +11,13 @@ data class AceResolvedLiveTransport(
     val name: String,
     val geometry: AceLiveTransportGeometry,
     val swarmKey: AceLiveSwarmKey,
+    /**
+     * Descriptor discovery entries consumed by the tracker adapter.
+     *
+     * Normal BitTorrent tracker URLs are preserved verbatim. Ace startup-node and metatracker
+     * fields are represented by bounded internal hints so the existing runtime wiring can pass
+     * them into discovery without changing the public swarm identity or playback path.
+     */
     val trackers: List<String>,
     val publicKeyDer: ByteArray?,
     val authMethod: String
@@ -76,17 +83,38 @@ internal object AceTransportDescriptorDecoder {
             "Ace live public key has an invalid size"
         }
 
-        val trackers = (descriptor.values["trackers"] as? AceBencodeValue.ListValue)
-            ?.values
-            .orEmpty()
-            .asSequence()
-            .mapNotNull { value -> (value as? AceBencodeValue.Bytes)?.value }
-            .map { value -> value.toString(StandardCharsets.UTF_8).trim() }
-            .filter(String::isNotBlank)
-            .filter { value -> value.length <= MAX_TRACKER_LENGTH }
-            .distinct()
-            .take(MAX_TRACKERS)
-            .toList()
+        val explicitTrackers = descriptor.textValues(
+            names = listOf("trackers", "tracker"),
+            maxEntries = MAX_TRACKERS,
+            maxLength = MAX_DISCOVERY_ENTRY_LENGTH
+        )
+        val startupNodes = descriptor.textValues(
+            names = listOf(
+                "startup_nodes",
+                "startup-nodes",
+                "startupnodes",
+                "startup_node",
+                "startup-node"
+            ),
+            maxEntries = MAX_STARTUP_NODES,
+            maxLength = MAX_STARTUP_NODE_LENGTH
+        )
+        val metatrackers = descriptor.textValues(
+            names = listOf("metatrackers", "metatracker"),
+            maxEntries = MAX_METATRACKERS,
+            maxLength = MAX_DISCOVERY_ENTRY_LENGTH
+        )
+        val discoveryEntries = buildList {
+            // Startup nodes are intentionally first: Ace documents them as the fastest bootstrap
+            // path. They remain mere candidates and still must pass the normal TCP/Ace handshake.
+            for (startupNode in startupNodes) {
+                AceLiveDiscoveryHttpProtocol.encodeStartupHint(startupNode)?.let(::add)
+            }
+            for (metatracker in metatrackers) {
+                AceLiveDiscoveryHttpProtocol.encodeMetatrackerHint(metatracker)?.let(::add)
+            }
+            addAll(explicitTrackers)
+        }.distinct().take(MAX_DISCOVERY_ENTRIES)
 
         val infoHashInput = AceBencodeValue.ListValue(
             INFO_HASH_FIELDS.map { field ->
@@ -112,7 +140,7 @@ internal object AceTransportDescriptorDecoder {
                 bitrate = bitrate
             ),
             swarmKey = swarmKey,
-            trackers = trackers,
+            trackers = discoveryEntries,
             publicKeyDer = publicKey.copyOf(),
             authMethod = authMethod
         )
@@ -147,6 +175,39 @@ internal object AceTransportDescriptorDecoder {
             .takeIf(String::isNotBlank)
     }
 
+    private fun AceBencodeValue.Dictionary.textValues(
+        names: List<String>,
+        maxEntries: Int,
+        maxLength: Int
+    ): List<String> {
+        require(maxEntries > 0) { "maxEntries must be positive" }
+        require(maxLength > 0) { "maxLength must be positive" }
+        val output = ArrayList<String>()
+        for (name in names) {
+            when (val raw = values[name]) {
+                is AceBencodeValue.Bytes -> {
+                    raw.value.toString(StandardCharsets.UTF_8)
+                        .trim()
+                        .takeIf { it.isNotBlank() && it.length <= maxLength }
+                        ?.let(output::add)
+                }
+                is AceBencodeValue.ListValue -> {
+                    for (entry in raw.values) {
+                        if (output.size >= maxEntries) break
+                        val bytes = (entry as? AceBencodeValue.Bytes)?.value ?: continue
+                        bytes.toString(StandardCharsets.UTF_8)
+                            .trim()
+                            .takeIf { it.isNotBlank() && it.length <= maxLength }
+                            ?.let(output::add)
+                    }
+                }
+                else -> Unit
+            }
+            if (output.size >= maxEntries) break
+        }
+        return output.distinct().take(maxEntries)
+    }
+
     private val TRANSPORT_MAGIC = "AceStreamTransport".toByteArray(StandardCharsets.US_ASCII)
     private val TRANSPORT_KEY = byteArrayOf(
         0xa5.toByte(), 0x0c, 0x4e, 0x33, 0xa2.toByte(), 0xf4.toByte(), 0x8c.toByte(), 0xc5.toByte(),
@@ -176,6 +237,10 @@ internal object AceTransportDescriptorDecoder {
     private const val MIN_PUBLIC_KEY_BYTES = 64
     private const val MAX_PUBLIC_KEY_BYTES = 4 * 1024
     private const val MAX_TRACKERS = 32
-    private const val MAX_TRACKER_LENGTH = 256
+    private const val MAX_STARTUP_NODES = 32
+    private const val MAX_METATRACKERS = 16
+    private const val MAX_DISCOVERY_ENTRIES = 64
+    private const val MAX_DISCOVERY_ENTRY_LENGTH = 1_024
+    private const val MAX_STARTUP_NODE_LENGTH = 320
     private const val MAX_NAME_BYTES = 256
 }

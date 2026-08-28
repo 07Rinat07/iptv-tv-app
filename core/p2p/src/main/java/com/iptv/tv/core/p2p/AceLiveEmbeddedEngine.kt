@@ -973,7 +973,7 @@ class AceLiveEmbeddedEngine(
                     diagnosticsObserver(
                         "embedded_ace_live_peer_refill",
                         "extra_probe_peers=$extraProbePeers, previous=$previousProbePeers, " +
-                            "pressure=$pressure"
+                            "pressure=$pressure, signal=${sample.pressure.signal}"
                     )
                 }
                 if (extraProbePeers > previousProbePeers && !closed.get()) {
@@ -1199,7 +1199,9 @@ class AceLiveEmbeddedEngine(
         const val DEFAULT_DIRECT_CHUNK_BYTES = 16 * 1024
         const val CONTENT_PREPARATION_TIMEOUT_MILLIS = 60_000L
         const val DIRECT_STARTUP_SOFT_TIMEOUT_MILLIS = 8_000L
-        const val DIRECT_QUALIFICATION_GRACE_MILLIS = 2_000L
+        // A qualified peer must survive one full 6s request timeout plus the 1s recovery check
+        // before metadata handoff is allowed to tear down an otherwise progressing direct runtime.
+        const val DIRECT_QUALIFICATION_GRACE_MILLIS = 7_000L
         const val DIRECT_PROGRESS_FRESHNESS_MILLIS = 2_000L
         const val NO_CONNECTED_PEER_TIMEOUT_MILLIS = 30_000L
         const val TARGET_ACTIVE_PEERS = 6
