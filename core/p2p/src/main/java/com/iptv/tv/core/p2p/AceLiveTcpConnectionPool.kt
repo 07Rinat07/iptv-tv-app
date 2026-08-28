@@ -2,6 +2,8 @@ package com.iptv.tv.core.p2p
 
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -98,6 +100,8 @@ class AceLiveTcpConnectionPool(
         AceLiveRecoveryDiagnosticsReporter(),
     private val connectFailureMemory: AceLiveTcpConnectFailureMemory =
         AceLiveTcpConnectFailureMemory.shared,
+    private val startupCandidateStaggerMillis: Long = DEFAULT_STARTUP_CANDIDATE_STAGGER_MILLIS,
+    private val maxStaggeredStartupCandidates: Int = DEFAULT_MAX_STAGGERED_STARTUP_CANDIDATES,
     private val onEvent: (AceLiveTcpPoolEvent) -> Unit = {}
 ) {
     private val poolMutex = Mutex()
@@ -107,6 +111,18 @@ class AceLiveTcpConnectionPool(
     private val peers = LinkedHashMap<Long, PeerRuntime>()
     private val productionTracker = AceLivePeerProductionTracker()
     private val closed = AtomicBoolean(false)
+    private val transportConnectedAtLeastOnce = AtomicBoolean(false)
+    private val firstTransportConnected = CompletableDeferred<Unit>()
+    private val startupCandidateOrdinal = AtomicInteger(0)
+
+    init {
+        require(startupCandidateStaggerMillis >= 0L) {
+            "startupCandidateStaggerMillis must be non-negative"
+        }
+        require(maxStaggeredStartupCandidates > 0) {
+            "maxStaggeredStartupCandidates must be positive"
+        }
+    }
 
     suspend fun startPeer(
         peerId: Long,
@@ -142,6 +158,7 @@ class AceLiveTcpConnectionPool(
                 require(peers.size < policy.maxConcurrentPeers) {
                     "Ace Live TCP peer pool is full"
                 }
+                runtime.initialConnectDelayMillis = reserveStartupConnectDelayMillis()
                 peers[peerId] = runtime
             }
         } catch (error: Throwable) {
@@ -362,6 +379,11 @@ class AceLiveTcpConnectionPool(
     private suspend fun runPeer(runtime: PeerRuntime) {
         var reconnectAttempt = 0
         try {
+            if (runtime.initialConnectDelayMillis > 0L) {
+                withTimeoutOrNull(runtime.initialConnectDelayMillis) {
+                    firstTransportConnected.await()
+                }
+            }
             while (currentCoroutineContext().isActive) {
                 val transport = try {
                     transportFactory.connect(runtime.endpoint, policy)
@@ -381,6 +403,14 @@ class AceLiveTcpConnectionPool(
                     reconnectAttempt += 1
                     delay(policy.reconnectDelayMillis)
                     continue
+                }
+
+                // Once any real TCP connection exists, this is no longer a cold-start candidate
+                // race. Release already-waiting startup candidates too; later refill peers start
+                // immediately, while reconnect attempts keep their existing per-peer policy and are
+                // never re-staggered.
+                if (transportConnectedAtLeastOnce.compareAndSet(false, true)) {
+                    firstTransportConnected.complete(Unit)
                 }
 
                 // A real TCP connection disproves any still-live negative endpoint memory for this
@@ -439,6 +469,15 @@ class AceLiveTcpConnectionPool(
                 }
             }
         }
+    }
+
+    private fun reserveStartupConnectDelayMillis(): Long {
+        if (startupCandidateStaggerMillis == 0L || transportConnectedAtLeastOnce.get()) {
+            return 0L
+        }
+        val ordinal = startupCandidateOrdinal.getAndIncrement()
+        val boundedOrdinal = ordinal.coerceAtMost(maxStaggeredStartupCandidates - 1)
+        return boundedOrdinal.toLong() * startupCandidateStaggerMillis
     }
 
     private fun reconnectBudget(runtime: PeerRuntime): Int =
@@ -681,6 +720,8 @@ class AceLiveTcpConnectionPool(
     private companion object {
         const val DEFAULT_PREFETCH_PIECES = 8L
         const val DEFAULT_HANDSHAKE_TIMESTAMP = 5_000L
+        const val DEFAULT_STARTUP_CANDIDATE_STAGGER_MILLIS = 250L
+        const val DEFAULT_MAX_STAGGERED_STARTUP_CANDIDATES = 4
     }
 
     private class PeerRuntime(
@@ -691,6 +732,9 @@ class AceLiveTcpConnectionPool(
         val connection: AceLivePeerConnectionStateMachine
     ) {
         val writeStateMutex = Mutex()
+
+        @Volatile
+        var initialConnectDelayMillis: Long = 0L
 
         @Volatile
         var transport: AceLiveTcpTransport? = null
