@@ -7,7 +7,7 @@ import org.junit.Test
 
 class AceLiveUdpTrackerStartupFastPathTest {
     @Test
-    fun `first startup peer returns immediately and later refill continues supplemental sources`() =
+    fun `startup batch returns immediately and later refill continues supplemental sources`() =
         runBlocking {
             var fastPathClaimed = false
             val discovery = AceLiveUdpTrackerDiscovery(
@@ -24,24 +24,29 @@ class AceLiveUdpTrackerStartupFastPathTest {
                 swarmKey = AceLiveSwarmKey.parseHex(SWARM_HEX)!!,
                 trackers = listOf(
                     "ace-startup:8.8.8.8:8621",
+                    "ace-startup:1.1.1.1:8632",
                     "not-a-valid-discovery-source"
                 ),
                 peerId = ByteArray(AceLiveUdpTrackerCodec.PEER_ID_BYTES) { index -> index.toByte() },
                 announcePort = 8621
             )
+            val expectedStartupPeers = listOf(
+                AceLiveTcpPeerEndpoint("8.8.8.8", 8621),
+                AceLiveTcpPeerEndpoint("1.1.1.1", 8632)
+            )
 
             val first = discovery.discover(request)
 
-            assertEquals(listOf(AceLiveTcpPeerEndpoint("8.8.8.8", 8621)), first.peers)
-            assertEquals(1, first.attemptedTrackers)
+            assertEquals(expectedStartupPeers, first.peers)
+            assertEquals(2, first.attemptedTrackers)
             assertEquals(0, first.failedTrackers)
             assertEquals(0, first.rejectedTrackers)
             assertTrue(fastPathClaimed)
 
             val supplemental = discovery.discover(request)
 
-            assertEquals(listOf(AceLiveTcpPeerEndpoint("8.8.8.8", 8621)), supplemental.peers)
-            assertEquals(1, supplemental.attemptedTrackers)
+            assertEquals(expectedStartupPeers, supplemental.peers)
+            assertEquals(2, supplemental.attemptedTrackers)
             assertEquals(0, supplemental.failedTrackers)
             assertEquals(1, supplemental.rejectedTrackers)
         }
