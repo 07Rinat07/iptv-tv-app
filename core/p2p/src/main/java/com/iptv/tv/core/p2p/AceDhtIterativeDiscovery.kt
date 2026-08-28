@@ -182,7 +182,11 @@ internal class AceDhtIterativeDiscovery(
                     }
                 }
 
-                fillBootstrapResolutionPipeline()
+                var bootstrapResolutionDeferredForSerialWarmStart =
+                    policy.searchBranching == 1 && frontier.isNotEmpty()
+                if (!bootstrapResolutionDeferredForSerialWarmStart) {
+                    fillBootstrapResolutionPipeline()
+                }
                 try {
                     while (
                         peers.size < completionPeerCount &&
@@ -428,6 +432,10 @@ internal class AceDhtIterativeDiscovery(
                                             }
                                         }
                                     }
+                                }
+                                if (bootstrapResolutionDeferredForSerialWarmStart) {
+                                    bootstrapResolutionDeferredForSerialWarmStart = false
+                                    fillBootstrapResolutionPipeline()
                                 }
                             }
                         }
