@@ -88,6 +88,42 @@ class AceLiveDhtCodecTest {
     }
 
     @Test
+    fun `top level observed IP is available even when strict node rejects client identity`() {
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val bytes = errorResponseWithObservedIp(
+            transactionId = transactionId,
+            observed = compactEndpoint(8, 8, 8, 8, 49152)
+        )
+
+        assertEquals(
+            AceLiveTcpPeerEndpoint("8.8.8.8", 49152),
+            AceLiveDhtCodec.decodeExternalAddressObservation(
+                bytes = bytes,
+                expectedTransactionId = transactionId
+            )
+        )
+        expectProtocolFailure {
+            AceLiveDhtCodec.decodeGetPeersResponse(
+                bytes = bytes,
+                expectedTransactionId = transactionId
+            )
+        }
+    }
+
+    @Test
+    fun `observed IP decoder rejects unrelated transaction`() {
+        expectProtocolFailure {
+            AceLiveDhtCodec.decodeExternalAddressObservation(
+                bytes = errorResponseWithObservedIp(
+                    transactionId = byteArrayOf(1, 2),
+                    observed = compactEndpoint(8, 8, 4, 4, 40000)
+                ),
+                expectedTransactionId = byteArrayOf(9, 9)
+            )
+        }
+    }
+
+    @Test
     fun `response parses compact peers and nodes`() {
         val transactionId = byteArrayOf(0x12, 0x34)
         val remoteId = ByteArray(20) { 1 }
@@ -205,6 +241,17 @@ class AceLiveDhtCodecTest {
         writeAscii("e1:t${transactionId.size}:")
         write(transactionId)
         writeAscii("1:y1:re")
+    }.toByteArray()
+
+    private fun errorResponseWithObservedIp(
+        transactionId: ByteArray,
+        observed: ByteArray
+    ): ByteArray = ByteArrayOutputStream().apply {
+        writeAscii("d1:eli203e15:invalid node ide2:ip${observed.size}:")
+        write(observed)
+        writeAscii("1:t${transactionId.size}:")
+        write(transactionId)
+        writeAscii("1:y1:ee")
     }.toByteArray()
 
     private fun compactEndpoint(a: Int, b: Int, c: Int, d: Int, port: Int): ByteArray =
