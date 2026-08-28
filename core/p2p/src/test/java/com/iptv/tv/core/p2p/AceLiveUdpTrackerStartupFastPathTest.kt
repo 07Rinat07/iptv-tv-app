@@ -40,18 +40,22 @@ class AceLiveUdpTrackerStartupFastPathTest {
         }
 
     @Test
-    fun `new swarm key instance can fast path the same content again`() = runBlocking {
+    fun `default fast path is one shot per runtime and resets for reopened content`() = runBlocking {
         val discovery = AceLiveUdpTrackerDiscovery()
-        val firstRuntime = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
-        val reopenedRuntime = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
+        val sameRuntimeRequest = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
 
-        val first = discovery.discover(firstRuntime)
-        val reopened = discovery.discover(reopenedRuntime)
+        val first = discovery.discover(sameRuntimeRequest)
+        val sameRuntimeRefill = discovery.discover(sameRuntimeRequest)
+        val reopenedRuntime = discovery.discover(
+            request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
+        )
 
         assertEquals(startupPeers(), first.peers)
         assertEquals(0, first.rejectedTrackers)
-        assertEquals(startupPeers(), reopened.peers)
-        assertEquals(0, reopened.rejectedTrackers)
+        assertEquals(startupPeers(), sameRuntimeRefill.peers)
+        assertEquals(1, sameRuntimeRefill.rejectedTrackers)
+        assertEquals(startupPeers(), reopenedRuntime.peers)
+        assertEquals(0, reopenedRuntime.rejectedTrackers)
     }
 
     private fun request(swarmKey: AceLiveSwarmKey) = AceLiveUdpTrackerDiscoveryRequest(
