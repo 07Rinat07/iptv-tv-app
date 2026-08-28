@@ -46,6 +46,7 @@ data class AceLiveTcpConnectionPolicy(
     val writeTimeoutMillis: Int = 5_000,
     val readBufferBytes: Int = 64 * 1024,
     val maxConcurrentPeers: Int = 16,
+    val maxConcurrentInboundPeers: Int = 4,
     val maxReconnectAttempts: Int = 2,
     val maxPreHandshakeReconnectAttempts: Int = 0,
     val reconnectDelayMillis: Long = 500
@@ -69,6 +70,9 @@ data class AceLiveTcpConnectionPolicy(
         require(maxConcurrentPeers in 1..MAX_CONCURRENT_PEERS) {
             "maxConcurrentPeers must be in 1..$MAX_CONCURRENT_PEERS"
         }
+        require(maxConcurrentInboundPeers in 0..MAX_CONCURRENT_INBOUND_PEERS) {
+            "maxConcurrentInboundPeers must be in 0..$MAX_CONCURRENT_INBOUND_PEERS"
+        }
         require(maxReconnectAttempts in 0..MAX_RECONNECT_ATTEMPTS) {
             "maxReconnectAttempts must be in 0..$MAX_RECONNECT_ATTEMPTS"
         }
@@ -83,6 +87,7 @@ data class AceLiveTcpConnectionPolicy(
     companion object {
         const val MAX_READ_BUFFER_BYTES: Int = 1024 * 1024
         const val MAX_CONCURRENT_PEERS: Int = 64
+        const val MAX_CONCURRENT_INBOUND_PEERS: Int = 16
         const val MAX_RECONNECT_ATTEMPTS: Int = 10
         const val MAX_RECONNECT_DELAY_MILLIS: Long = 30_000
     }
@@ -103,6 +108,19 @@ fun interface AceLiveTcpTransportFactory {
         endpoint: AceLiveTcpPeerEndpoint,
         policy: AceLiveTcpConnectionPolicy
     ): AceLiveTcpTransport
+}
+
+/** Adopts a socket accepted by the runtime's advertised peer listener. */
+internal fun adoptAceLiveAcceptedSocket(
+    socket: Socket,
+    policy: AceLiveTcpConnectionPolicy,
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+): AceLiveTcpTransport {
+    require(socket.isConnected && !socket.isClosed) { "accepted peer socket must be connected" }
+    socket.tcpNoDelay = true
+    socket.keepAlive = true
+    socket.soTimeout = policy.readTimeoutMillis
+    return SocketAceLiveTcpTransport(socket, ioDispatcher)
 }
 
 /**

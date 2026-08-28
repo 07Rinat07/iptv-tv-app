@@ -334,6 +334,144 @@ class AceLiveTcpConnectionPoolTest {
     }
 
     @Test
+    fun inboundPeerIsAdoptedWithoutOpeningOutboundTransport() = runBlocking {
+        val metadata = frame(
+            id = 99,
+            payload = ascii("d9:max_piecei12e9:min_piecei10ee")
+        )
+        val inbound = FakeTransport(
+            listOf(
+                ReadAction.Data(
+                    handshakeCodec.encode(swarmKey, remotePeerId) + metadata + frame(id = 1)
+                )
+            )
+        )
+        val factory = FakeTransportFactory()
+        val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
+        val pool = pool(factory = factory, events = events)
+
+        assertTrue(
+            pool.startInboundPeer(
+                peerId = 31,
+                endpoint = AceLiveTcpPeerEndpoint("198.51.100.20", 45000),
+                transport = inbound,
+                swarmKey = swarmKey,
+                localPeerId = localPeerId
+            )
+        )
+        awaitCondition {
+            events.any { it is AceLiveTcpPoolEvent.HandshakeAccepted && it.peerId == 31L }
+        }
+
+        assertEquals(0, factory.connectCount)
+        assertTrue(pool.activePeerIds().contains(31L))
+        assertTrue(inbound.writes.size >= 3)
+        assertArrayEquals(handshakeCodec.encode(swarmKey, localPeerId), inbound.writes[0])
+
+        pool.stopPeer(31)
+    }
+
+    @Test
+    fun wrongInboundSwarmIsRejectedBeforeLocalHandshakeIsRevealed() = runBlocking {
+        val wrongSwarm = swarmKey.copyOf().also { it[0] = 0x7f }
+        val inbound = FakeTransport(
+            listOf(ReadAction.Data(handshakeCodec.encode(wrongSwarm, remotePeerId)))
+        )
+        val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
+        val pool = pool(factory = FakeTransportFactory(), events = events)
+
+        assertTrue(
+            pool.startInboundPeer(
+                peerId = 32,
+                endpoint = AceLiveTcpPeerEndpoint("198.51.100.21", 45001),
+                transport = inbound,
+                swarmKey = swarmKey,
+                localPeerId = localPeerId
+            )
+        )
+        awaitCondition {
+            events.any { it is AceLiveTcpPoolEvent.HandshakeRejected && it.peerId == 32L }
+        }
+        awaitCondition { pool.activePeerIds().isEmpty() }
+
+        assertTrue(inbound.writes.isEmpty())
+        assertFalse(
+            events.any { it is AceLiveTcpPoolEvent.TransportConnected && it.peerId == 32L }
+        )
+    }
+
+    @Test
+    fun inboundCapacityIsBoundedWithoutConsumingReservedOutboundSlot() = runBlocking {
+        val firstInbound = FakeTransport(
+            listOf(ReadAction.Data(handshakeCodec.encode(swarmKey, remotePeerId)))
+        )
+        val rejectedInbound = FakeTransport(emptyList())
+        val outbound = FakeTransport(
+            listOf(ReadAction.Data(handshakeCodec.encode(swarmKey, remotePeerId)))
+        )
+        val secondOutbound = FakeTransport(
+            listOf(ReadAction.Data(handshakeCodec.encode(swarmKey, remotePeerId)))
+        )
+        val factory = FakeTransportFactory(outbound, secondOutbound)
+        val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
+        val pool = pool(
+            factory = factory,
+            events = events,
+            policy = policy(maxConcurrentPeers = 2, maxConcurrentInboundPeers = 1)
+        )
+
+        assertTrue(
+            pool.startInboundPeer(
+                peerId = 33,
+                endpoint = AceLiveTcpPeerEndpoint("198.51.100.22", 45002),
+                transport = firstInbound,
+                swarmKey = swarmKey,
+                localPeerId = localPeerId
+            )
+        )
+        awaitCondition {
+            events.any { it is AceLiveTcpPoolEvent.HandshakeAccepted && it.peerId == 33L }
+        }
+
+        assertFalse(
+            pool.startInboundPeer(
+                peerId = 34,
+                endpoint = AceLiveTcpPeerEndpoint("198.51.100.23", 45003),
+                transport = rejectedInbound,
+                swarmKey = swarmKey,
+                localPeerId = localPeerId
+            )
+        )
+        assertTrue(rejectedInbound.isClosed)
+
+        pool.startPeer(
+            peerId = 35,
+            endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9025),
+            swarmKey = swarmKey,
+            localPeerId = localPeerId
+        )
+        awaitCondition {
+            events.any { it is AceLiveTcpPoolEvent.HandshakeAccepted && it.peerId == 35L }
+        }
+        pool.startPeer(
+            peerId = 36,
+            endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9026),
+            swarmKey = swarmKey,
+            localPeerId = localPeerId
+        )
+        awaitCondition {
+            events.any { it is AceLiveTcpPoolEvent.HandshakeAccepted && it.peerId == 36L }
+        }
+
+        assertEquals(2, factory.connectCount)
+        assertEquals(setOf(35L, 36L), pool.outboundPeerIds())
+
+        pool.stopPeer(33)
+        pool.stopPeer(35)
+        pool.stopPeer(36)
+    }
+
+    @Test
     fun immediateStopReleasesRegisteredPeerSlot() = runBlocking {
         val transport = FakeTransport(emptyList())
         val pool = pool(
@@ -369,6 +507,7 @@ class AceLiveTcpConnectionPoolTest {
 
     private fun policy(
         maxConcurrentPeers: Int = 4,
+        maxConcurrentInboundPeers: Int = 4,
         maxReconnectAttempts: Int = 0,
         reconnectDelayMillis: Long = 0,
         handshakeTimeoutMillis: Int = 1_000,
@@ -380,6 +519,7 @@ class AceLiveTcpConnectionPoolTest {
         writeTimeoutMillis = writeTimeoutMillis,
         readBufferBytes = 4 * 1024,
         maxConcurrentPeers = maxConcurrentPeers,
+        maxConcurrentInboundPeers = maxConcurrentInboundPeers,
         maxReconnectAttempts = maxReconnectAttempts,
         reconnectDelayMillis = reconnectDelayMillis
     )
@@ -435,6 +575,9 @@ class AceLiveTcpConnectionPoolTest {
 
         @Volatile
         private var closed = false
+
+        val isClosed: Boolean
+            get() = closed
 
         init {
             initialReads.forEach { action ->
