@@ -440,6 +440,7 @@ class AceLiveUdpTrackerDiscovery(
                                 throw IOException("HTTP discovery returned ${safeResponse.code}")
                             }
                             val body = safeResponse.body
+                                ?: throw IOException("HTTP discovery returned an empty response body")
                             body.byteStream().use { input ->
                                 val output = ByteArrayOutputStream(minOf(4_096, policy.maxResponseBytes))
                                 val buffer = ByteArray(4_096)
