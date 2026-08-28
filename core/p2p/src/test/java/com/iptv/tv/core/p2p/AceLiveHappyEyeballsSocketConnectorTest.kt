@@ -3,6 +3,8 @@ package com.iptv.tv.core.p2p
 import java.io.IOException
 import java.net.InetAddress
 import java.net.Socket
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -27,6 +29,27 @@ class AceLiveHappyEyeballsSocketConnectorTest {
             listOf(ipv6First, ipv4First, ipv6Second, ipv4Second),
             aceLiveHappyEyeballsOrder(
                 listOf(ipv6First, ipv6Second, ipv4First, ipv4Second)
+            )
+        )
+    }
+
+    @Test
+    fun `remembered family overrides resolver order only while still available`() {
+        val ipv6 = ipv6(2)
+        val ipv4 = ipv4(2)
+
+        assertEquals(
+            listOf(ipv4, ipv6),
+            aceLiveHappyEyeballsOrder(
+                addresses = listOf(ipv6, ipv4),
+                preferredIpv6 = false
+            )
+        )
+        assertEquals(
+            listOf(ipv6),
+            aceLiveHappyEyeballsOrder(
+                addresses = listOf(ipv6),
+                preferredIpv6 = false
             )
         )
     }
@@ -61,6 +84,7 @@ class AceLiveHappyEyeballsSocketConnectorTest {
                         else -> error("unexpected address $address")
                     }
                 },
+                familyMemory = AceLiveHappyEyeballsAddressFamilyMemory(),
                 fallbackDelayMillis = 100L
             )
 
@@ -109,6 +133,7 @@ class AceLiveHappyEyeballsSocketConnectorTest {
                         else -> error("unexpected address $address")
                     }
                 },
+                familyMemory = AceLiveHappyEyeballsAddressFamilyMemory(),
                 fallbackDelayMillis = 5_000L
             )
 
@@ -125,6 +150,42 @@ class AceLiveHappyEyeballsSocketConnectorTest {
 
             assertTrue(alternateStarted.isCompleted)
             socket.close()
+        }
+    }
+
+    @Test
+    fun `successful alternate family is preferred on next connect`() {
+        runBlocking {
+            val preferred = ipv6(5)
+            val alternate = ipv4(5)
+            val failPreferredOnce = AtomicBoolean(true)
+            val started = CopyOnWriteArrayList<InetAddress>()
+            val memory = AceLiveHappyEyeballsAddressFamilyMemory()
+            val connector = AceLiveHappyEyeballsSocketConnector(
+                ioDispatcher = Dispatchers.Default,
+                addressResolver = { listOf(preferred, alternate) },
+                socketConnector = { address, _ ->
+                    started += address.address
+                    if (
+                        address.address == preferred &&
+                        failPreferredOnce.compareAndSet(true, false)
+                    ) {
+                        throw IOException("preferred path unavailable")
+                    }
+                    Socket()
+                },
+                familyMemory = memory,
+                fallbackDelayMillis = 5_000L
+            )
+            val endpoint = AceLiveTcpPeerEndpoint("peer.test", 9_302)
+            val policy = AceLiveTcpConnectionPolicy()
+
+            connector.connect(endpoint, policy).close()
+            assertEquals(listOf(preferred, alternate), started.toList())
+
+            started.clear()
+            connector.connect(endpoint, policy).close()
+            assertEquals(listOf(alternate), started.toList())
         }
     }
 

@@ -6,6 +6,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.util.LinkedHashMap
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -105,16 +106,27 @@ fun interface AceLiveTcpTransportFactory {
 }
 
 /**
- * Keeps the resolver's preferred address family first, then alternates families so a bounded
- * fallback can escape a black-holed IPv6 or IPv4 path without serializing full connect timeouts.
+ * Keeps the resolver's preferred address family first, unless a recent successful connection for
+ * the same host gives us stronger local evidence. Families are still alternated so the fallback
+ * remains bounded and can escape a path that has changed since the remembered success.
  */
-internal fun aceLiveHappyEyeballsOrder(addresses: List<InetAddress>): List<InetAddress> {
+internal fun aceLiveHappyEyeballsOrder(
+    addresses: List<InetAddress>,
+    preferredIpv6: Boolean? = null
+): List<InetAddress> {
     val distinct = addresses.distinctBy { address -> address.hostAddress }
     if (distinct.size <= 1) return distinct
 
-    val preferredIpv6 = distinct.first() is Inet6Address
-    val preferred = distinct.filter { address -> (address is Inet6Address) == preferredIpv6 }
-    val alternate = distinct.filter { address -> (address is Inet6Address) != preferredIpv6 }
+    val resolverPreferredIpv6 = distinct.first() is Inet6Address
+    val selectedPreferredIpv6 = preferredIpv6
+        ?.takeIf { family -> distinct.any { address -> (address is Inet6Address) == family } }
+        ?: resolverPreferredIpv6
+    val preferred = distinct.filter { address ->
+        (address is Inet6Address) == selectedPreferredIpv6
+    }
+    val alternate = distinct.filter { address ->
+        (address is Inet6Address) != selectedPreferredIpv6
+    }
     if (alternate.isEmpty()) return preferred
 
     val ordered = ArrayList<InetAddress>(distinct.size)
@@ -126,11 +138,52 @@ internal fun aceLiveHappyEyeballsOrder(addresses: List<InetAddress>): List<InetA
 }
 
 /**
+ * Small process-wide LRU of successful address families.
+ *
+ * This is only a connect-order hint. It never suppresses the alternate family and is bounded so
+ * arbitrary peer hostnames cannot create unbounded process state.
+ */
+internal class AceLiveHappyEyeballsAddressFamilyMemory(
+    private val maxEntries: Int = DEFAULT_MAX_ENTRIES
+) {
+    private val stateLock = Any()
+    private val preferredIpv6ByHost = LinkedHashMap<String, Boolean>(16, 0.75f, true)
+
+    init {
+        require(maxEntries > 0) { "maxEntries must be positive" }
+    }
+
+    fun preferredIpv6(host: String): Boolean? = synchronized(stateLock) {
+        preferredIpv6ByHost[normalizeHost(host)]
+    }
+
+    fun recordSuccess(host: String, address: InetAddress) = synchronized(stateLock) {
+        preferredIpv6ByHost[normalizeHost(host)] = address is Inet6Address
+        while (preferredIpv6ByHost.size > maxEntries) {
+            val iterator = preferredIpv6ByHost.entries.iterator()
+            if (!iterator.hasNext()) break
+            iterator.next()
+            iterator.remove()
+        }
+    }
+
+    private fun normalizeHost(host: String): String =
+        host.trim().trimEnd('.').lowercase()
+
+    companion object {
+        val shared = AceLiveHappyEyeballsAddressFamilyMemory()
+
+        private const val DEFAULT_MAX_ENTRIES = 128
+    }
+}
+
+/**
  * Bounded Happy-Eyeballs socket acquisition for one discovered peer host.
  *
- * At most two resolved addresses are attempted. The resolver-preferred address starts first; the
- * alternate starts after a small fallback delay, or immediately if the first address fails fast.
- * First success owns the peer and cancels the losing attempt.
+ * At most two resolved addresses are attempted. The preferred address starts first; the alternate
+ * starts after a small fallback delay, or immediately if the first address fails fast. A recent
+ * successful address family for the same host may become preferred on later connects. First success
+ * owns the peer and cancels the losing attempt.
  */
 internal class AceLiveHappyEyeballsSocketConnector(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -141,6 +194,8 @@ internal class AceLiveHappyEyeballsSocketConnector(
         address: InetSocketAddress,
         policy: AceLiveTcpConnectionPolicy
     ) -> Socket = ::connectAceLiveSocket,
+    private val familyMemory: AceLiveHappyEyeballsAddressFamilyMemory =
+        AceLiveHappyEyeballsAddressFamilyMemory.shared,
     private val fallbackDelayMillis: Long = DEFAULT_FALLBACK_DELAY_MILLIS
 ) {
     init {
@@ -153,24 +208,30 @@ internal class AceLiveHappyEyeballsSocketConnector(
         endpoint: AceLiveTcpPeerEndpoint,
         policy: AceLiveTcpConnectionPolicy
     ): Socket = withContext(ioDispatcher) {
-        val addresses = aceLiveHappyEyeballsOrder(addressResolver(endpoint.host))
-            .take(MAX_RACING_ADDRESSES)
+        val addresses = aceLiveHappyEyeballsOrder(
+            addresses = addressResolver(endpoint.host),
+            preferredIpv6 = familyMemory.preferredIpv6(endpoint.host)
+        ).take(MAX_RACING_ADDRESSES)
         if (addresses.isEmpty()) {
             throw UnknownHostException("No addresses resolved for ${endpoint.host}")
         }
-        raceAddresses(addresses, endpoint.port, policy)
+        raceAddresses(addresses, endpoint.host, endpoint.port, policy)
     }
 
     private suspend fun raceAddresses(
         addresses: List<InetAddress>,
+        host: String,
         port: Int,
         policy: AceLiveTcpConnectionPolicy
     ): Socket = coroutineScope {
         if (addresses.size == 1) {
+            val address = addresses.first()
             return@coroutineScope socketConnector(
-                InetSocketAddress(addresses.first(), port),
+                InetSocketAddress(address, port),
                 policy
-            )
+            ).also {
+                familyMemory.recordSuccess(host, address)
+            }
         }
 
         val winnerReady = CompletableDeferred<Unit>()
@@ -190,6 +251,7 @@ internal class AceLiveHappyEyeballsSocketConnector(
                 try {
                     val socket = socketConnector(InetSocketAddress(address, port), policy)
                     if (winnerSocket.compareAndSet(null, socket)) {
+                        familyMemory.recordSuccess(host, address)
                         winnerReady.complete(Unit)
                     } else {
                         runCatching { socket.close() }
