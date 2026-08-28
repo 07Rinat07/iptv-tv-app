@@ -1,5 +1,6 @@
 package com.iptv.tv.core.p2p
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -40,11 +41,35 @@ class AceDhtNodeIdSecurityTest {
         assertTrue(AceDhtNodeIdSecurity.isValidWriteTarget(arbitrary, "127.0.0.1"))
     }
 
-    private fun nodeId(hex: String): AceLiveDhtNodeId {
+    @Test
+    fun `generated BEP42 identity reproduces published IPv4 vector`() {
+        val published = hexBytes("5fbfbff10c5d6a4ec8a88e4c6ab4c28b95eee401")
+        val generated = requireNotNull(
+            AceDhtNodeIdSecurity.createCompatibleNodeId(
+                host = "124.31.75.21",
+                randomBytes = published
+            )
+        )
+
+        assertArrayEquals(published, generated.toByteArray())
+        assertTrue(AceDhtNodeIdSecurity.isValidWriteTarget(generated, "124.31.75.21"))
+    }
+
+    @Test
+    fun `external identity observations accept only globally routable IPv4`() {
+        assertTrue(AceDhtNodeIdSecurity.isGloballyRoutableIpv4("8.8.8.8"))
+        assertFalse(AceDhtNodeIdSecurity.isGloballyRoutableIpv4("10.1.2.3"))
+        assertFalse(AceDhtNodeIdSecurity.isGloballyRoutableIpv4("192.0.2.1"))
+        assertFalse(AceDhtNodeIdSecurity.isGloballyRoutableIpv4("127.0.0.1"))
+    }
+
+    private fun nodeId(hex: String): AceLiveDhtNodeId =
+        AceLiveDhtNodeId.fromBytes(hexBytes(hex))
+
+    private fun hexBytes(hex: String): ByteArray {
         require(hex.length == 40)
-        val bytes = ByteArray(20) { index ->
+        return ByteArray(20) { index ->
             hex.substring(index * 2, index * 2 + 2).toInt(16).toByte()
         }
-        return AceLiveDhtNodeId.fromBytes(bytes)
     }
 }

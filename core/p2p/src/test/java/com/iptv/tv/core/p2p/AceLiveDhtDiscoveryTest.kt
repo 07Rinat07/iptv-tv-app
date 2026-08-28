@@ -348,6 +348,57 @@ class AceLiveDhtDiscoveryTest {
         }
     }
 
+    @Test
+    fun `BEP42 external address is observed before strict error response is rejected`() = runBlocking {
+        val server = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val observations = mutableListOf<Pair<String, String>>()
+        val serverThread = dhtServerThread(server) { _ ->
+            errorResponseWithObservedIp(
+                transactionId = transactionId,
+                observed = compactEndpoint(8, 8, 8, 8, 49152)
+            )
+        }
+
+        try {
+            val walker = AceDhtIterativeDiscovery(
+                policy = AceLiveDhtPolicy(
+                    requestTimeoutMillis = 1_000,
+                    discoveryBudgetMillis = 2_000,
+                    maxQueries = 1,
+                    allowNonGlobalNodeAddresses = true
+                ),
+                randomInt = { 0x1234 },
+                addressResolver = { listOf(ipv4("127.0.0.1")) },
+                externalAddressObserver = AceDhtExternalAddressObserver { observedHost, responderHost ->
+                    observations += observedHost to responderHost
+                }
+            )
+            val swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 0x55 })
+            val outcome = walker.discover(
+                AceDhtLookupRequest(
+                    targetBytes = swarmKey.toByteArray(),
+                    bootstrapNodes = listOf(AceLiveDhtBootstrapNode("bootstrap.test", server.localPort)),
+                    localNodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 0x44 }),
+                    encodeGetPeersQuery = { queryTransactionId, nodeId ->
+                        AceLiveDhtCodec.encodeGetPeersQuery(
+                            transactionId = queryTransactionId,
+                            nodeId = nodeId,
+                            swarmKey = swarmKey
+                        )
+                    }
+                )
+            )
+
+            assertEquals(1, outcome.queriesSent)
+            assertEquals(1, outcome.failedQueries)
+            assertEquals(listOf("8.8.8.8" to "127.0.0.1"), observations)
+        } finally {
+            server.close()
+            serverThread.join(2_000)
+        }
+    }
+
     private fun localDiscovery(policy: AceLiveDhtPolicy): AceLiveDhtDiscovery =
         AceLiveDhtDiscovery(
             policy = policy,
@@ -425,6 +476,17 @@ class AceLiveDhtDiscoveryTest {
         writeAscii("e1:t${transactionId.size}:")
         write(transactionId)
         writeAscii("1:y1:re")
+    }.toByteArray()
+
+    private fun errorResponseWithObservedIp(
+        transactionId: ByteArray,
+        observed: ByteArray
+    ): ByteArray = ByteArrayOutputStream().apply {
+        writeAscii("d1:eli203e15:invalid node ide2:ip${observed.size}:")
+        write(observed)
+        writeAscii("1:t${transactionId.size}:")
+        write(transactionId)
+        writeAscii("1:y1:ee")
     }.toByteArray()
 
     private fun compactEndpoint(a: Int, b: Int, c: Int, d: Int, port: Int): ByteArray =

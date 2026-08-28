@@ -126,6 +126,36 @@ object AceLiveDhtCodec {
         return output.toByteArray()
     }
 
+    /**
+     * Extracts the top-level BEP-5 `ip` observation without requiring `y=r`. Strict BEP-42 nodes
+     * may reject an old random client id with `y=e` while still reporting the address they observed.
+     * The transaction id and message type are still checked so unrelated datagrams cannot vote.
+     */
+    fun decodeExternalAddressObservation(
+        bytes: ByteArray,
+        expectedTransactionId: ByteArray,
+        maxPacketBytes: Int = DEFAULT_MAX_PACKET_BYTES
+    ): AceLiveTcpPeerEndpoint? {
+        validateTransactionId(expectedTransactionId)
+        require(maxPacketBytes in 128..65_507) { "maxPacketBytes must be in 128..65507" }
+        if (bytes.isEmpty() || bytes.size > maxPacketBytes) {
+            throw AceLiveDhtProtocolException("KRPC packet exceeds local byte bounds")
+        }
+
+        val root = BencodeParser(bytes).parseRoot() as? BValue.Dict
+            ?: throw AceLiveDhtProtocolException("KRPC root must be a dictionary")
+        val transactionId = root.byteString("t")
+            ?: throw AceLiveDhtProtocolException("KRPC response is missing transaction id")
+        if (!transactionId.contentEquals(expectedTransactionId)) {
+            throw AceLiveDhtProtocolException("KRPC transaction id mismatch")
+        }
+        val type = root.byteString("y")?.ascii() ?: return null
+        if (type != "r" && type != "e") return null
+        val compact = root.byteString("ip") ?: return null
+        if (compact.size != COMPACT_PEER_BYTES) return null
+        return compactPeer(compact, 0)
+    }
+
     fun decodeGetPeersResponse(
         bytes: ByteArray,
         expectedTransactionId: ByteArray,

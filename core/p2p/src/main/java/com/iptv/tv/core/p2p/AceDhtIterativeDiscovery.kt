@@ -90,7 +90,8 @@ internal class AceDhtIterativeDiscovery(
     private val policy: AceLiveDhtPolicy = AceLiveDhtPolicy(),
     private val randomInt: () -> Int = DEFAULT_RANDOM_INT,
     private val addressResolver: (String) -> List<Inet4Address> = DEFAULT_ADDRESS_RESOLVER,
-    private val routingMemory: AceDhtRoutingMemory? = null
+    private val routingMemory: AceDhtRoutingMemory? = null,
+    private val externalAddressObserver: AceDhtExternalAddressObserver = AceLiveDhtClientIdentity
 ) {
     suspend fun discover(request: AceDhtLookupRequest): AceDhtDiscoveryOutcome =
         withContext(ioDispatcher) {
@@ -501,6 +502,18 @@ internal class AceDhtIterativeDiscovery(
             currentCoroutineContext().ensureActive()
             val responseBytes = receiveBounded(socket)
             currentCoroutineContext().ensureActive()
+            runCatching {
+                AceLiveDhtCodec.decodeExternalAddressObservation(
+                    bytes = responseBytes,
+                    expectedTransactionId = transactionId,
+                    maxPacketBytes = policy.maxPacketBytes
+                )
+            }.getOrNull()?.let { observed ->
+                externalAddressObserver.observe(
+                    observedHost = observed.host,
+                    responderHost = endpoint.host
+                )
+            }
             return AceLiveDhtCodec.decodeGetPeersResponse(
                 bytes = responseBytes,
                 expectedTransactionId = transactionId,
