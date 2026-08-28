@@ -175,7 +175,9 @@ class AceLiveUdpTrackerDiscovery(
     private val addressResolver: (String) -> List<Inet4Address> = DEFAULT_ADDRESS_RESOLVER,
     private val httpClient: OkHttpClient = DEFAULT_HTTP_CLIENT,
     private val startupFastPathClaim: (AceLiveSwarmKey, Int) -> Boolean =
-        AceLiveStartupFastPathMemory::claim
+        { swarmKey, announcePort ->
+            AceLiveStartupFastPathMemory.claim(swarmKey, announcePort)
+        }
 ) {
     suspend fun discover(request: AceLiveUdpTrackerDiscoveryRequest): AceLiveUdpTrackerDiscoveryResult =
         withContext(ioDispatcher) {
