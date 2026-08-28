@@ -101,7 +101,9 @@ class AceLiveDiscoveryHttpProtocolTest {
               "interval": 3600,
               "ignored": {"enabled": true}
             }
-        """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+        """.trimIndent()
+            .replace("\\\\/", "\\/")
+            .toByteArray(StandardCharsets.UTF_8)
 
         val snapshot = AceLiveDiscoveryHttpProtocol.decodeMetatrackerResponse(json)
 
