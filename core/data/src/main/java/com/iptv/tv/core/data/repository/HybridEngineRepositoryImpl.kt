@@ -59,6 +59,7 @@ class HybridEngineRepositoryImpl @Inject constructor(
     private val aceLiveEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         AceLiveEmbeddedEngine(
             okHttpClient = okHttpClient,
+            stateDirectory = File(appContext.filesDir, "p2p/ace-live"),
             diagnosticsObserver = { status, message ->
                 cleanupScope.launch { log(status, message) }
             }

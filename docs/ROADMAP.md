@@ -22,9 +22,20 @@
 
 Диагностика и исправления должны сохранять явную лестницу:
 
-`discovered -> connected -> handshaked/qualified -> producing -> TS -> Media3 tracks -> first frame/audio`
+`discovered -> connected -> handshaked/qualified -> useful window -> producing -> TS -> Media3 tracks -> first frame/audio`
 
 Discovery/connect, protocol/producer и P2P-to-Media3 boundary — отдельные defect boundaries. Не расширять глобальные startup timeout, request depth, peer caps, buffers или heap без измеренного evidence конкретного лимита.
+
+Устойчивый контракт discovery-state описан в [`P2P_DISCOVERY_STATE.md`](P2P_DISCOVERY_STATE.md). Архитектурное направление:
+
+1. сохранять bounded verified DHT routing contacts между runtime/process restarts;
+2. сохранять короткую same-swarm peer reputation по `swarm + endpoint`;
+3. считать tracker/DHT endpoints кандидатами, а не признаком успешного startup;
+4. продолжать bounded tracker+DHT acquisition до достаточного qualified/productive peer set;
+5. квалифицировать небольшой набор независимых candidates параллельно в пределах hard peer cap;
+6. измерять first qualified peer, first producer, first media и first frame вместо оправдания 20–60-секундного ожидания общим timeout.
+
+Persistent routing/reputation — только optimization. Повреждение/отсутствие cache не должно ломать bootstrap, tracker discovery или playback correctness.
 
 ### EPG и archive
 
@@ -78,6 +89,8 @@ CI является regression gate, но не заменяет TV Box/network f
 - Stale generation/session не может получить ownership после более новой playback generation.
 - Логи не должны содержать credential-bearing URL, токены, content IDs или полный пользовательский payload без явной безопасной необходимости.
 - Compatibility fallback не должен скрывать первичный failure stage.
+- Persistent DHT state хранит только verified routing contacts; peer reputation всегда scoped точным swarm key и имеет bounded TTL.
+- Disk I/O persistent P2P state не должен выполняться под socket/pool/refill ownership lock.
 
 ## Документация и evidence
 

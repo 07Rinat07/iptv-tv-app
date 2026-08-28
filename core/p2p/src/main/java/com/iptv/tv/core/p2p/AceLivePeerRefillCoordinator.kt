@@ -77,14 +77,14 @@ data class AceLivePeerRefillCycleResult(
 /**
  * Candidate state/ranking for background Ace Live peer refill.
  *
- * Ranking deliberately gives verified live-window usefulness precedence over discovery provenance.
- * A peer found by both DHT and a tracker only wins a tie after window usefulness, failure history,
- * and successful-handshake history. Final failures use bounded exponential backoff; no candidate is
- * permanently banned by this layer.
+ * Ranking gives verified live-window usefulness precedence, then uses short-lived same-swarm
+ * reputation from earlier runtimes before local failure/handshake/source tie-breakers. Persisted
+ * evidence never creates a permanent allow/deny: discovery still owns the candidate set and local
+ * bounded backoff remains authoritative for immediate retries.
  *
- * All mutable candidate/reservation/ownership state is serialized under one local monitor. This
- * keeps selection plus reservation atomic when background refill cycles overlap on different
- * dispatcher threads without giving this policy layer ownership of coroutines or sockets.
+ * All mutable candidate/reservation/ownership state is serialized under one local monitor. Disk
+ * persistence is deliberately invoked only after leaving this monitor so a filesystem stall cannot
+ * block pool ownership/refill decisions.
  *
  * Owned pool entries and protocol-qualified peers are deliberately separate. A started socket/job
  * consumes hard capacity immediately, but it does not satisfy the normal peer target until the
@@ -92,11 +92,25 @@ data class AceLivePeerRefillCycleResult(
  * from suppressing alternative tracker/DHT discovery while retaining the existing socket hard cap.
  */
 class AceLivePeerRefillCoordinator(
-    val policy: AceLivePeerRefillPolicy = AceLivePeerRefillPolicy()
+    val policy: AceLivePeerRefillPolicy = AceLivePeerRefillPolicy(),
+    swarmKey: ByteArray? = null,
+    private val reputationStore: AceLivePeerReputationStore? = null
 ) {
+    private val reputationSwarmKey = swarmKey?.copyOf()
     private val stateLock = Any()
     private val candidates = LinkedHashMap<String, CandidateState>()
     private val peerIdToEndpointKey = HashMap<Long, String>()
+
+    init {
+        require((reputationSwarmKey == null) == (reputationStore == null)) {
+            "swarmKey and reputationStore must be supplied together"
+        }
+        reputationSwarmKey?.let { key ->
+            require(key.size == AceLivePeerHandshakeCodec.SWARM_KEY_BYTES) {
+                "swarmKey must be ${AceLivePeerHandshakeCodec.SWARM_KEY_BYTES} bytes"
+            }
+        }
+    }
 
     fun ingestDiscovery(
         result: AceLivePeerDiscoveryOrchestrationResult,
@@ -190,7 +204,7 @@ class AceLivePeerRefillCoordinator(
             .filter { state -> state.managedPeerId == null }
             .filter { state -> !state.startReserved && !state.startInProgress }
             .filter { state -> nowMillis >= state.retryNotBeforeMillis }
-            .sortedWith(candidateComparator(nextNeededPiece))
+            .sortedWith(candidateComparator(nextNeededPiece, nowMillis))
             .take(slots)
             .toList()
 
@@ -248,53 +262,82 @@ class AceLivePeerRefillCoordinator(
     }
 
     /**
-     * Pool events update only evidence relevant to refill ranking and current qualification.
-     * Retry-internal failures are not scored until the TCP pool exhausts its own retry loop, but a
-     * disconnect/reconnect immediately removes qualification until a new handshake is accepted.
+     * Pool events update local evidence under the coordinator lock and persist cross-runtime
+     * reputation afterwards. Retry-internal failures are not persisted until the TCP pool exhausts
+     * its own retry loop.
      */
-    fun onPoolEvent(event: AceLiveTcpPoolEvent, nowMillis: Long) = withStateLock {
+    fun onPoolEvent(event: AceLiveTcpPoolEvent, nowMillis: Long) {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
-        val state = stateForPeerLocked(event.peerId) ?: return@withStateLock
-        when (event) {
-            is AceLiveTcpPoolEvent.TransportConnected -> {
-                state.startInProgress = false
-                state.currentlyQualified = false
-            }
-
-            is AceLiveTcpPoolEvent.HandshakeAccepted -> {
-                state.startInProgress = false
-                state.currentlyQualified = true
-                state.consecutiveFailures = 0
-                state.retryNotBeforeMillis = 0
-                state.lastHandshakeAtMillis = nowMillis
-            }
-
-            is AceLiveTcpPoolEvent.Ingress -> {
-                event.result.metadataUpdates.lastOrNull()?.let { window ->
-                    state.advertisedWindow = window
+        val evidence = withStateLock {
+            val state = stateForPeerLocked(event.peerId) ?: return@withStateLock null
+            when (event) {
+                is AceLiveTcpPoolEvent.TransportConnected -> {
+                    state.startInProgress = false
+                    state.currentlyQualified = false
+                    null
                 }
-            }
 
-            is AceLiveTcpPoolEvent.ConnectFailed -> {
-                state.currentlyQualified = false
-                if (!event.retrying) {
-                    recordFailureLocked(state, nowMillis)
-                    clearManagedPeerLocked(event.peerId, state)
+                is AceLiveTcpPoolEvent.HandshakeAccepted -> {
+                    state.startInProgress = false
+                    state.currentlyQualified = true
+                    state.consecutiveFailures = 0
+                    state.retryNotBeforeMillis = 0
+                    state.lastHandshakeAtMillis = nowMillis
+                    ReputationEvidence(state.endpoint, ReputationEvidenceType.HANDSHAKE_ACCEPTED)
                 }
-            }
 
-            is AceLiveTcpPoolEvent.Disconnected -> {
-                state.currentlyQualified = false
-                if (!event.retrying) {
-                    recordFailureLocked(state, nowMillis)
-                    clearManagedPeerLocked(event.peerId, state)
+                is AceLiveTcpPoolEvent.Ingress -> {
+                    event.result.metadataUpdates.lastOrNull()?.let { window ->
+                        state.advertisedWindow = window
+                    }
+                    null
                 }
-            }
 
-            is AceLiveTcpPoolEvent.HandshakeRejected -> {
-                state.currentlyQualified = false
+                is AceLiveTcpPoolEvent.ConnectFailed -> {
+                    state.currentlyQualified = false
+                    if (!event.retrying) {
+                        val result = ReputationEvidence(
+                            state.endpoint,
+                            ReputationEvidenceType.FINAL_FAILURE
+                        )
+                        recordFailureLocked(state, nowMillis)
+                        clearManagedPeerLocked(event.peerId, state)
+                        result
+                    } else {
+                        null
+                    }
+                }
+
+                is AceLiveTcpPoolEvent.Disconnected -> {
+                    state.currentlyQualified = false
+                    if (!event.retrying) {
+                        val result = ReputationEvidence(
+                            state.endpoint,
+                            ReputationEvidenceType.FINAL_FAILURE
+                        )
+                        recordFailureLocked(state, nowMillis)
+                        clearManagedPeerLocked(event.peerId, state)
+                        result
+                    } else {
+                        null
+                    }
+                }
+
+                is AceLiveTcpPoolEvent.HandshakeRejected -> {
+                    state.currentlyQualified = false
+                    ReputationEvidence(state.endpoint, ReputationEvidenceType.FINAL_FAILURE)
+                }
             }
         }
+        recordReputationEvidence(evidence, nowMillis)
+    }
+
+    /** Called only after authenticated/resynchronized bytes were actually accepted by media output. */
+    fun markMediaProduced(peerId: Long, nowMillis: Long) {
+        require(nowMillis >= 0) { "nowMillis must be non-negative" }
+        val endpoint = withStateLock { stateForPeerLocked(peerId)?.endpoint } ?: return
+        val key = reputationSwarmKey ?: return
+        reputationStore?.recordMediaProduced(key, endpoint, nowMillis)
     }
 
     fun snapshot(endpoint: AceLiveTcpPeerEndpoint): AceLivePeerRefillSnapshot? = withStateLock {
@@ -346,20 +389,49 @@ class AceLivePeerRefillCoordinator(
         expiredKeys.forEach(candidates::remove)
     }
 
-    private fun candidateComparator(nextNeededPiece: Long?): Comparator<CandidateState> =
-        Comparator { left, right ->
-            compareValuesBy(
-                left,
-                right,
-                { state -> windowUsefulnessRank(state.advertisedWindow, nextNeededPiece) },
-                { state -> state.consecutiveFailures },
-                { state -> if (state.lastHandshakeAtMillis != null) 0 else 1 },
-                { state -> -state.sources.size },
-                { state -> -state.lastDiscoveredAtMillis },
-                { state -> state.endpoint.host },
-                { state -> state.endpoint.port }
-            )
+    private fun candidateComparator(
+        nextNeededPiece: Long?,
+        nowMillis: Long
+    ): Comparator<CandidateState> = Comparator { left, right ->
+        compareValuesBy(
+            left,
+            right,
+            { state -> windowUsefulnessRank(state.advertisedWindow, nextNeededPiece) },
+            { state -> persistentReputationRank(state.endpoint, nowMillis) },
+            { state -> state.consecutiveFailures },
+            { state -> if (state.lastHandshakeAtMillis != null) 0 else 1 },
+            { state -> -state.sources.size },
+            { state -> -state.lastDiscoveredAtMillis },
+            { state -> state.endpoint.host },
+            { state -> state.endpoint.port }
+        )
+    }
+
+    private fun persistentReputationRank(
+        endpoint: AceLiveTcpPeerEndpoint,
+        nowMillis: Long
+    ): Int {
+        val key = reputationSwarmKey ?: return NEUTRAL_REPUTATION_RANK
+        return reputationStore
+            ?.snapshot(key, endpoint, nowMillis)
+            ?.priorityRank(nowMillis)
+            ?: NEUTRAL_REPUTATION_RANK
+    }
+
+    private fun recordReputationEvidence(
+        evidence: ReputationEvidence?,
+        nowMillis: Long
+    ) {
+        val item = evidence ?: return
+        val key = reputationSwarmKey ?: return
+        val store = reputationStore ?: return
+        when (item.type) {
+            ReputationEvidenceType.HANDSHAKE_ACCEPTED ->
+                store.recordHandshakeAccepted(key, item.endpoint, nowMillis)
+            ReputationEvidenceType.FINAL_FAILURE ->
+                store.recordFinalFailure(key, item.endpoint, nowMillis)
         }
+    }
 
     private fun windowUsefulnessRank(
         window: AceLivePeerAdvertisedWindow?,
@@ -442,8 +514,19 @@ class AceLivePeerRefillCoordinator(
         )
     }
 
+    private data class ReputationEvidence(
+        val endpoint: AceLiveTcpPeerEndpoint,
+        val type: ReputationEvidenceType
+    )
+
+    private enum class ReputationEvidenceType {
+        HANDSHAKE_ACCEPTED,
+        FINAL_FAILURE
+    }
+
     private companion object {
         const val MAX_FAILURE_EXPONENT: Int = 20
+        const val NEUTRAL_REPUTATION_RANK: Int = 2
     }
 }
 
