@@ -40,34 +40,22 @@ class AceLiveUdpTrackerStartupFastPathTest {
         }
 
     @Test
-    fun `independent runtime claims do not share one-shot state`() = runBlocking {
-        var firstRuntimeClaimed = false
-        var reopenedRuntimeClaimed = false
-        val firstRuntime = AceLiveUdpTrackerDiscovery(
-            startupFastPathClaim = { _, _ ->
-                if (firstRuntimeClaimed) false else true.also { firstRuntimeClaimed = true }
-            }
-        )
-        val reopenedRuntime = AceLiveUdpTrackerDiscovery(
-            startupFastPathClaim = { _, _ ->
-                if (reopenedRuntimeClaimed) false else true.also { reopenedRuntimeClaimed = true }
-            }
-        )
-        val firstRequest = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
-        val reopenedRequest = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
+    fun `default fast path is one shot per runtime and resets for reopened content`() = runBlocking {
+        val discovery = AceLiveUdpTrackerDiscovery()
+        val sameRuntimeRequest = request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
 
-        val first = firstRuntime.discover(firstRequest)
-        val sameRuntimeRefill = firstRuntime.discover(firstRequest)
-        val reopened = reopenedRuntime.discover(reopenedRequest)
+        val first = discovery.discover(sameRuntimeRequest)
+        val sameRuntimeRefill = discovery.discover(sameRuntimeRequest)
+        val reopenedRuntime = discovery.discover(
+            request(AceLiveSwarmKey.parseHex(SWARM_HEX)!!)
+        )
 
         assertEquals(startupPeers(), first.peers)
         assertEquals(0, first.rejectedTrackers)
         assertEquals(startupPeers(), sameRuntimeRefill.peers)
         assertEquals(1, sameRuntimeRefill.rejectedTrackers)
-        assertEquals(startupPeers(), reopened.peers)
-        assertEquals(0, reopened.rejectedTrackers)
-        assertTrue(firstRuntimeClaimed)
-        assertTrue(reopenedRuntimeClaimed)
+        assertEquals(startupPeers(), reopenedRuntime.peers)
+        assertEquals(0, reopenedRuntime.rejectedTrackers)
     }
 
     private fun request(swarmKey: AceLiveSwarmKey) = AceLiveUdpTrackerDiscoveryRequest(
