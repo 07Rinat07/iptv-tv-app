@@ -34,7 +34,8 @@ internal class AceDhtLookupRequest(
     targetBytes: ByteArray,
     bootstrapNodes: List<AceLiveDhtBootstrapNode>,
     val localNodeId: AceLiveDhtNodeId,
-    val encodeGetPeersQuery: (ByteArray, AceLiveDhtNodeId) -> ByteArray
+    val encodeGetPeersQuery: (ByteArray, AceLiveDhtNodeId) -> ByteArray,
+    val collectWriteTokens: Boolean = false
 ) {
     val targetBytes: ByteArray = targetBytes.copyOf()
     val bootstrapNodes: List<AceLiveDhtBootstrapNode> = bootstrapNodes.toList()
@@ -47,12 +48,21 @@ internal class AceDhtLookupRequest(
     }
 }
 
+internal class AceDhtWriteTokenCandidate(
+    val nodeId: AceLiveDhtNodeId,
+    val endpoint: AceLiveTcpPeerEndpoint,
+    token: ByteArray
+) {
+    val token: ByteArray = token.copyOf()
+}
+
 internal data class AceDhtDiscoveryOutcome(
     val peers: List<AceLiveTcpPeerEndpoint>,
     val queriesSent: Int,
     val failedQueries: Int,
     val rejectedEndpoints: Int,
-    val warmRoutingSeedsUsed: Int
+    val warmRoutingSeedsUsed: Int,
+    val writeTokenCandidates: List<AceDhtWriteTokenCandidate> = emptyList()
 )
 
 internal fun aceDhtWarmRoutingSeedLimit(
@@ -66,6 +76,7 @@ internal fun aceDhtWarmRoutingSeedLimit(
 }
 
 internal const val ACE_DHT_MAX_WARM_ROUTING_SEEDS = 4
+internal const val ACE_DHT_MAX_WRITE_TOKEN_CANDIDATES = 64
 internal const val ACE_DHT_MAX_CONCURRENT_BOOTSTRAP_RESOLUTIONS = 4
 internal const val ACE_DHT_GLOBAL_RESOLVER_WORKERS = 4
 
@@ -89,6 +100,7 @@ internal class AceDhtIterativeDiscovery(
             val queuedNodeIds = HashSet<AceLiveDhtNodeId>()
             val queriedEndpoints = HashSet<String>()
             val peers = LinkedHashMap<String, AceLiveTcpPeerEndpoint>()
+            val writeTokenCandidates = LinkedHashMap<String, AceDhtWriteTokenCandidate>()
             val completionPeerCount = policy.returnAfterPeers ?: policy.maxTotalPeers
             var rejected = 0
             var failed = 0
@@ -350,6 +362,26 @@ internal class AceDhtIterativeDiscovery(
                                             )
                                         )
                                         queuedNodeIds.add(response.remoteNodeId)
+                                        response.token
+                                            ?.takeIf { request.collectWriteTokens }
+                                            ?.takeIf {
+                                                AceDhtNodeIdSecurity.isValidWriteTarget(
+                                                    nodeId = response.remoteNodeId,
+                                                    host = candidate.endpoint.host
+                                                )
+                                            }
+                                            ?.let { token ->
+                                                if (writeTokenCandidates.size < ACE_DHT_MAX_WRITE_TOKEN_CANDIDATES) {
+                                                    writeTokenCandidates.putIfAbsent(
+                                                        response.remoteNodeId.toString() + "@" + endpointKey(candidate.endpoint),
+                                                        AceDhtWriteTokenCandidate(
+                                                            nodeId = response.remoteNodeId,
+                                                            endpoint = candidate.endpoint,
+                                                            token = token
+                                                        )
+                                                    )
+                                                }
+                                            }
 
                                         for (peer in response.peers) {
                                             if (!isAllowedPeerEndpoint(peer)) {
@@ -405,12 +437,24 @@ internal class AceDhtIterativeDiscovery(
                 }
             }
 
+            val orderedWriteCandidates = writeTokenCandidates.values
+                .sortedWith { left, right ->
+                    val distanceOrder = compareXorDistance(
+                        left.nodeId.toByteArray(),
+                        right.nodeId.toByteArray(),
+                        request.targetBytes
+                    )
+                    if (distanceOrder != 0) distanceOrder
+                    else endpointKey(left.endpoint).compareTo(endpointKey(right.endpoint))
+                }
+
             AceDhtDiscoveryOutcome(
                 peers = peers.values.toList(),
                 queriesSent = queries,
                 failedQueries = failed,
                 rejectedEndpoints = rejected,
-                warmRoutingSeedsUsed = warmRoutingSeedsUsed
+                warmRoutingSeedsUsed = warmRoutingSeedsUsed,
+                writeTokenCandidates = orderedWriteCandidates
             )
         }
 

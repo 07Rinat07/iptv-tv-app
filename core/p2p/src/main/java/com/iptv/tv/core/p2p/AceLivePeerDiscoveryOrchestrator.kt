@@ -83,12 +83,18 @@ data class AceLivePeerDiscoveryOrchestrationResult(
     val dhtQueriesSent: Int = 0,
     val dhtFailedQueries: Int = 0,
     val dhtWarmRoutingSeedsUsed: Int = 0,
-    val dhtCacheHit: Boolean = false
+    val dhtCacheHit: Boolean = false,
+    val dhtAnnouncesSent: Int = 0,
+    val dhtAnnouncesSucceeded: Int = 0
 ) {
     init {
         require(dhtQueriesSent >= 0) { "DHT query count must be non-negative" }
         require(dhtFailedQueries >= 0) { "DHT failed query count must be non-negative" }
         require(dhtWarmRoutingSeedsUsed >= 0) { "DHT warm seed count must be non-negative" }
+        require(dhtAnnouncesSent >= 0) { "DHT announce count must be non-negative" }
+        require(dhtAnnouncesSucceeded in 0..dhtAnnouncesSent) {
+            "DHT successful announce count must not exceed sent announces"
+        }
     }
 
     fun tcpEndpoints(): List<AceLiveTcpPeerEndpoint> = peers.map(AceLiveDiscoveredPeer::endpoint)
@@ -385,7 +391,9 @@ class AceLivePeerDiscoveryOrchestrator(
             dhtQueriesSent = dhtResult?.queriesSent ?: 0,
             dhtFailedQueries = dhtResult?.failedQueries ?: 0,
             dhtWarmRoutingSeedsUsed = dhtResult?.warmRoutingSeedsUsed ?: 0,
-            dhtCacheHit = dhtResult?.cacheHit ?: false
+            dhtCacheHit = dhtResult?.cacheHit ?: false,
+            dhtAnnouncesSent = dhtResult?.announcesSent ?: 0,
+            dhtAnnouncesSucceeded = dhtResult?.announcesSucceeded ?: 0
         )
     }
 

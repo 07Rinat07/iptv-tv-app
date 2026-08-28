@@ -39,27 +39,36 @@ data class AceLiveDhtNodeContact(
 class AceLiveDhtGetPeersResponse(
     val remoteNodeId: AceLiveDhtNodeId,
     peers: List<AceLiveTcpPeerEndpoint>,
-    nodes: List<AceLiveDhtNodeContact>
+    nodes: List<AceLiveDhtNodeContact>,
+    token: ByteArray? = null
 ) {
     val peers: List<AceLiveTcpPeerEndpoint> = peers.toList()
     val nodes: List<AceLiveDhtNodeContact> = nodes.toList()
+    private val tokenBytes: ByteArray? = token?.copyOf()
+    val token: ByteArray?
+        get() = tokenBytes?.copyOf()
 }
+
+class AceLiveDhtAnnouncePeerResponse(
+    val remoteNodeId: AceLiveDhtNodeId
+)
 
 class AceLiveDhtProtocolException(message: String) : IllegalArgumentException(message)
 
 /**
  * Bounded BEP-5/KRPC codec used only by the Ace Live DHT discovery adapter.
  *
- * This client performs lookup-only `get_peers` queries and has no inbound DHT listener. Every
- * outgoing query therefore carries BEP-43 `ro=1`, so remote nodes do not retain our ephemeral UDP
- * endpoint in their routing tables. `announce_peer` remains intentionally absent until the app owns
- * a real inbound peer-listener port.
+ * This client performs bounded `get_peers` lookups and may write back the app-owned TCP peer
+ * listener with `announce_peer` using opaque tokens returned by those exact nodes. It still has no
+ * inbound DHT/KRPC listener, so every outgoing query carries BEP-43 `ro=1`; remote nodes must not
+ * retain our ephemeral UDP endpoint in their routing tables.
  */
 object AceLiveDhtCodec {
     const val DEFAULT_MAX_PACKET_BYTES: Int = 8 * 1024
     const val DEFAULT_MAX_PEERS: Int = 128
     const val DEFAULT_MAX_NODES: Int = 128
     const val MAX_TRANSACTION_ID_BYTES: Int = 8
+    const val MAX_WRITE_TOKEN_BYTES: Int = 64
 
     private const val COMPACT_PEER_BYTES = 6
     private const val COMPACT_NODE_BYTES = 26
@@ -80,6 +89,36 @@ object AceLiveDhtCodec {
         output.writeAscii("9:info_hash20:")
         output.write(swarmKey.toByteArray())
         output.writeAscii("e1:q9:get_peers2:roi1e1:t")
+        output.writeAscii(transactionId.size.toString())
+        output.write(':'.code)
+        output.write(transactionId)
+        output.writeAscii("1:y1:qe")
+        return output.toByteArray()
+    }
+
+    fun encodeAnnouncePeerQuery(
+        transactionId: ByteArray,
+        nodeId: AceLiveDhtNodeId,
+        swarmKey: AceLiveSwarmKey,
+        peerPort: Int,
+        token: ByteArray
+    ): ByteArray {
+        validateTransactionId(transactionId)
+        require(peerPort in 1..65535) { "peerPort must be in 1..65535" }
+        require(token.isNotEmpty() && token.size <= MAX_WRITE_TOKEN_BYTES) {
+            "token must contain 1..$MAX_WRITE_TOKEN_BYTES bytes"
+        }
+
+        val output = ByteArrayOutputStream(160)
+        output.writeAscii("d1:ad2:id20:")
+        output.write(nodeId.toByteArray())
+        output.writeAscii("9:info_hash20:")
+        output.write(swarmKey.toByteArray())
+        output.writeAscii("4:porti${peerPort}e5:token${token.size}:")
+        output.write(token)
+        // The app still has no inbound DHT/KRPC listener. BEP-43 therefore remains accurate for
+        // the DHT node even though announce_peer publishes the separate TCP peer-listener port.
+        output.writeAscii("e1:q13:announce_peer2:roi1e1:t")
         output.writeAscii(transactionId.size.toString())
         output.write(':'.code)
         output.write(transactionId)
@@ -122,10 +161,48 @@ object AceLiveDhtCodec {
             throw AceLiveDhtProtocolException("KRPC node id must be exactly 20 bytes")
         }
 
+        val token = response.byteString("token")
+            ?.takeIf { value -> value.isNotEmpty() && value.size <= MAX_WRITE_TOKEN_BYTES }
         return AceLiveDhtGetPeersResponse(
             remoteNodeId = AceLiveDhtNodeId.fromBytes(remoteIdBytes),
             peers = parseCompactPeers(response.values["values"], maxPeers),
-            nodes = parseCompactNodes(response.values["nodes"], maxNodes)
+            nodes = parseCompactNodes(response.values["nodes"], maxNodes),
+            token = token
+        )
+    }
+
+    fun decodeAnnouncePeerResponse(
+        bytes: ByteArray,
+        expectedTransactionId: ByteArray,
+        maxPacketBytes: Int = DEFAULT_MAX_PACKET_BYTES
+    ): AceLiveDhtAnnouncePeerResponse {
+        validateTransactionId(expectedTransactionId)
+        require(maxPacketBytes in 128..65_507) { "maxPacketBytes must be in 128..65507" }
+        if (bytes.isEmpty() || bytes.size > maxPacketBytes) {
+            throw AceLiveDhtProtocolException("KRPC packet exceeds local byte bounds")
+        }
+
+        val root = BencodeParser(bytes).parseRoot() as? BValue.Dict
+            ?: throw AceLiveDhtProtocolException("KRPC root must be a dictionary")
+        val transactionId = root.byteString("t")
+            ?: throw AceLiveDhtProtocolException("KRPC response is missing transaction id")
+        if (!transactionId.contentEquals(expectedTransactionId)) {
+            throw AceLiveDhtProtocolException("KRPC transaction id mismatch")
+        }
+        val type = root.byteString("y")?.ascii()
+            ?: throw AceLiveDhtProtocolException("KRPC response is missing message type")
+        if (type != "r") {
+            throw AceLiveDhtProtocolException("KRPC message is not a response")
+        }
+        val response = root.values["r"] as? BValue.Dict
+            ?: throw AceLiveDhtProtocolException("KRPC response dictionary is missing")
+        val remoteIdBytes = response.byteString("id")
+            ?: throw AceLiveDhtProtocolException("KRPC response is missing node id")
+        if (remoteIdBytes.size != AceLiveDhtNodeId.BYTES) {
+            throw AceLiveDhtProtocolException("KRPC node id must be exactly 20 bytes")
+        }
+        return AceLiveDhtAnnouncePeerResponse(
+            remoteNodeId = AceLiveDhtNodeId.fromBytes(remoteIdBytes)
         )
     }
 

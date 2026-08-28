@@ -58,12 +58,16 @@ data class AceLiveDhtPolicy(
 class AceLiveDhtDiscoveryRequest(
     val swarmKey: AceLiveSwarmKey,
     bootstrapNodes: List<AceLiveDhtBootstrapNode>,
-    val localNodeId: AceLiveDhtNodeId = AceLiveDhtClientIdentity.current()
+    val localNodeId: AceLiveDhtNodeId = AceLiveDhtClientIdentity.current(),
+    val announcePort: Int? = null
 ) {
     val bootstrapNodes: List<AceLiveDhtBootstrapNode> = bootstrapNodes.toList()
 
     init {
         require(this.bootstrapNodes.isNotEmpty()) { "At least one DHT bootstrap node is required" }
+        require(announcePort == null || announcePort in 1..65535) {
+            "announcePort must be null or in 1..65535"
+        }
     }
 }
 
@@ -73,11 +77,22 @@ data class AceLiveDhtDiscoveryResult(
     val failedQueries: Int,
     val rejectedEndpoints: Int,
     val warmRoutingSeedsUsed: Int = 0,
-    val cacheHit: Boolean = false
-)
+    val cacheHit: Boolean = false,
+    val announcesSent: Int = 0,
+    val announcesSucceeded: Int = 0
+) {
+    init {
+        require(announcesSent >= 0)
+        require(announcesSucceeded in 0..announcesSent)
+    }
+}
 
 /**
- * Clean-room Mainline DHT (BEP-5) `get_peers` discovery for an already-known Ace Live swarm key.
+ * Clean-room Mainline DHT (BEP-5) discovery for an already-known Ace Live swarm key.
+ *
+ * Full, non-startup walks may use tokens returned by verified `get_peers` responders to publish the
+ * caller-owned TCP listener with bounded `announce_peer` writes. Startup early-return walks never
+ * wait for write-back, and announcement failures never invalidate already-discovered peers.
  *
  * The public request remains explicitly swarm-key based. The bounded iterative network walk is
  * shared internally with Content ID discovery without converting either identity into the other.
@@ -120,7 +135,9 @@ class AceLiveDhtDiscovery(
                         failedQueries = 0,
                         rejectedEndpoints = 0,
                         warmRoutingSeedsUsed = 0,
-                        cacheHit = true
+                        cacheHit = true,
+                        announcesSent = 0,
+                        announcesSucceeded = 0
                     )
                 }
             }
@@ -150,7 +167,8 @@ class AceLiveDhtDiscovery(
                             nodeId = nodeId,
                             swarmKey = request.swarmKey
                         )
-                    }
+                    },
+                    collectWriteTokens = request.announcePort != null && policy.returnAfterPeers == null
                 )
             )
         } finally {
@@ -158,13 +176,32 @@ class AceLiveDhtDiscovery(
             // cancellation ends the current lookup after useful KRPC responses were already seen.
             routingMemory?.flush()
         }
+        val announceResult = if (
+            request.announcePort != null &&
+            policy.returnAfterPeers == null &&
+            outcome.writeTokenCandidates.isNotEmpty()
+        ) {
+            AceLiveDhtPeerAnnouncer(
+                ioDispatcher = ioDispatcher,
+                randomInt = randomInt
+            ).announce(
+                swarmKey = request.swarmKey,
+                localNodeId = request.localNodeId,
+                peerPort = request.announcePort,
+                candidates = outcome.writeTokenCandidates
+            )
+        } else {
+            AceLiveDhtAnnounceResult(sent = 0, succeeded = 0)
+        }
         val result = AceLiveDhtDiscoveryResult(
             peers = outcome.peers,
             queriesSent = outcome.queriesSent,
             failedQueries = outcome.failedQueries,
             rejectedEndpoints = outcome.rejectedEndpoints,
             warmRoutingSeedsUsed = outcome.warmRoutingSeedsUsed,
-            cacheHit = false
+            cacheHit = false,
+            announcesSent = announceResult.sent,
+            announcesSucceeded = announceResult.succeeded
         )
         if (reuseRecentResults && result.peers.isNotEmpty()) {
             rememberDhtResult(cacheKey, result, clockMillis())
@@ -217,7 +254,12 @@ class AceLiveDhtDiscovery(
             }
             recentResults[key] = CachedDhtResult(
                 storedAtMillis = nowMillis,
-                result = result.copy(peers = result.peers.toList(), cacheHit = false)
+                result = result.copy(
+                    peers = result.peers.toList(),
+                    cacheHit = false,
+                    announcesSent = 0,
+                    announcesSucceeded = 0
+                )
             )
         }
 
