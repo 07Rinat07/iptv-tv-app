@@ -161,10 +161,10 @@ internal data class AceLiveUdpTrackerEndpoint(
  * normal TCP connection, Ace handshake, reputation and producer qualification path; no source is
  * trusted merely because it appeared in transport metadata.
  *
- * A runtime's first eligible startup node is returned immediately so TCP/Ace qualification can begin
- * while the orchestrator's already-started DHT walk continues. Later refills for that same runtime
- * keep processing metatracker and normal tracker sources, preventing the fast path from starving the
- * wider candidate pool.
+ * A runtime's first eligible startup-node batch is returned immediately so TCP/Ace qualification can
+ * begin while the orchestrator's already-started DHT walk continues. Later refills for that same
+ * runtime keep processing metatracker and normal tracker sources, preventing the fast path from
+ * starving the wider candidate pool.
  *
  * DHT/LSD, peer scoring, inbound listening and NAT mapping remain separate concerns.
  */
@@ -219,10 +219,29 @@ class AceLiveUdpTrackerDiscovery(
                     attempted += 1
                     if (isAllowedPeerEndpoint(startupNode)) {
                         peers.putIfAbsent(endpointKey(startupNode), startupNode)
-                        if (
-                            startupFastPathClaim(request.swarmKey, request.announcePort) &&
-                            peers.isNotEmpty()
-                        ) {
+                        if (startupFastPathClaim(request.swarmKey, request.announcePort)) {
+                            // Transport descriptors and metatracker snapshots carry startup nodes as
+                            // one contiguous bootstrap batch. Consume that whole local-only batch
+                            // before returning; this adds no network wait and avoids betting startup
+                            // on a single stale node while slower discovery continues in the background.
+                            while (
+                                pending.isNotEmpty() &&
+                                processedSources < policy.maxTrackers &&
+                                peers.size < policy.maxTotalPeers
+                            ) {
+                                val nextRaw = pending.first().trim()
+                                val nextStartup = AceLiveDiscoveryHttpProtocol.parseStartupHint(nextRaw)
+                                    ?: break
+                                pending.removeFirst()
+                                if (!seen.add(nextRaw)) continue
+                                processedSources += 1
+                                attempted += 1
+                                if (isAllowedPeerEndpoint(nextStartup)) {
+                                    peers.putIfAbsent(endpointKey(nextStartup), nextStartup)
+                                } else {
+                                    rejected += 1
+                                }
+                            }
                             return@withContext AceLiveUdpTrackerDiscoveryResult(
                                 peers = peers.values.toList(),
                                 attemptedTrackers = attempted,
