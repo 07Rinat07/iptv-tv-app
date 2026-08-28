@@ -1,5 +1,7 @@
 package com.iptv.tv.core.p2p
 
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.Inet4Address
@@ -8,29 +10,39 @@ import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.net.URI
 import java.security.SecureRandom
+import java.util.ArrayDeque
 import java.util.concurrent.CancellationException
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.math.min
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlin.math.min
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 
 private data class AceLiveIpv4Cidr(
     val network: Long,
     val prefixBits: Int
 )
 
-/** Local safety bounds for descriptor-provided UDP tracker discovery. */
+/** Local safety bounds for descriptor-provided tracker/startup discovery. */
 data class AceLiveUdpTrackerPolicy(
     val requestTimeoutMillis: Int = 2_000,
     val maxRequestAttempts: Int = 2,
     val retryBaseDelayMillis: Long = 200,
     val discoveryBudgetMillis: Long = 20_000,
-    val maxTrackers: Int = 32,
+    val maxTrackers: Int = 64,
     val maxResolvedAddressesPerTracker: Int = 4,
-    val maxTrackerUrlLength: Int = 256,
+    val maxTrackerUrlLength: Int = 1_024,
     val maxResponseBytes: Int = 8 * 1024,
     val maxPeersPerTracker: Int = 128,
     val maxTotalPeers: Int = 256,
@@ -87,17 +99,23 @@ internal data class AceLiveUdpTrackerEndpoint(
 )
 
 /**
- * Clean-room BEP-15 adapter for independently verified Ace Live tracker discovery.
+ * Bounded Ace Live tracker/bootstrap discovery adapter.
  *
- * It consumes only explicit `udp://` descriptor trackers and an already-resolved 20-byte live
- * swarm key. DHT/LSD, peer scoring, inbound listening, NAT mapping and proprietary identity are
- * deliberately separate concerns.
+ * The class keeps its historical name because it is already wired through the P2P stack, but it now
+ * consumes all independently documented discovery entries carried by an Ace transport: BEP-15 UDP
+ * trackers, BEP-3 HTTP/HTTPS trackers, startup nodes and Ace metatrackers. Metatracker responses are
+ * bounded and may add tracker URLs or startup nodes. Every returned endpoint still goes through the
+ * normal TCP connection, Ace handshake, reputation and producer qualification path; no source is
+ * trusted merely because it appeared in transport metadata.
+ *
+ * DHT/LSD, peer scoring, inbound listening and NAT mapping remain separate concerns.
  */
 class AceLiveUdpTrackerDiscovery(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val policy: AceLiveUdpTrackerPolicy = AceLiveUdpTrackerPolicy(),
     private val randomInt: () -> Int = DEFAULT_RANDOM_INT,
-    private val addressResolver: (String) -> List<Inet4Address> = DEFAULT_ADDRESS_RESOLVER
+    private val addressResolver: (String) -> List<Inet4Address> = DEFAULT_ADDRESS_RESOLVER,
+    private val httpClient: OkHttpClient = DEFAULT_HTTP_CLIENT
 ) {
     suspend fun discover(request: AceLiveUdpTrackerDiscoveryRequest): AceLiveUdpTrackerDiscoveryResult =
         withContext(ioDispatcher) {
@@ -107,23 +125,109 @@ class AceLiveUdpTrackerDiscovery(
             var rejected = 0
             val deadlineNanos = System.nanoTime() + policy.discoveryBudgetMillis * NANOS_PER_MILLI
 
-            val trackerValues = request.trackers
+            val pending = ArrayDeque<String>()
+            request.trackers
                 .asSequence()
                 .map(String::trim)
                 .filter(String::isNotEmpty)
                 .distinct()
                 .take(policy.maxTrackers)
-                .toList()
+                .forEach(pending::addLast)
+            val seen = HashSet<String>()
+            var processedSources = 0
 
-            trackerLoop@ for (rawTracker in trackerValues) {
+            sourceLoop@ while (
+                pending.isNotEmpty() &&
+                processedSources < policy.maxTrackers &&
+                peers.size < policy.maxTotalPeers
+            ) {
                 currentCoroutineContext().ensureActive()
                 if (remainingBudgetMillis(deadlineNanos) <= 0) break
 
-                if (rawTracker.length > policy.maxTrackerUrlLength) {
+                val rawSource = pending.removeFirst().trim()
+                if (!seen.add(rawSource)) continue
+                processedSources += 1
+                if (rawSource.length > MAX_DISCOVERY_HINT_LENGTH) {
                     rejected += 1
                     continue
                 }
-                val endpoint = parseTrackerEndpoint(rawTracker)
+
+                val startupNode = AceLiveDiscoveryHttpProtocol.parseStartupHint(rawSource)
+                if (startupNode != null) {
+                    attempted += 1
+                    if (isAllowedPeerEndpoint(startupNode)) {
+                        peers.putIfAbsent(endpointKey(startupNode), startupNode)
+                    } else {
+                        rejected += 1
+                    }
+                    continue
+                }
+
+                val metatrackerUrl = AceLiveDiscoveryHttpProtocol.parseMetatrackerHint(rawSource)
+                if (metatrackerUrl != null) {
+                    if (
+                        metatrackerUrl.length > policy.maxTrackerUrlLength ||
+                        !isAllowedHttpSource(metatrackerUrl)
+                    ) {
+                        rejected += 1
+                        continue
+                    }
+                    attempted += 1
+                    val snapshot = try {
+                        fetchMetatracker(
+                            metatrackerUrl = metatrackerUrl,
+                            swarmKey = request.swarmKey,
+                            deadlineNanos = deadlineNanos
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: DiscoveryBudgetExhaustedException) {
+                        break@sourceLoop
+                    } catch (_: Exception) {
+                        failed += 1
+                        continue
+                    }
+                    for (node in snapshot.startupNodes) {
+                        AceLiveDiscoveryHttpProtocol.encodeStartupHint(node)?.let(pending::addLast)
+                    }
+                    for (tracker in snapshot.trackers) {
+                        if (tracker.length <= policy.maxTrackerUrlLength) pending.addLast(tracker)
+                    }
+                    continue
+                }
+
+                if (AceLiveDiscoveryHttpProtocol.isHttpTracker(rawSource)) {
+                    if (
+                        rawSource.length > policy.maxTrackerUrlLength ||
+                        !isAllowedHttpSource(rawSource)
+                    ) {
+                        rejected += 1
+                        continue
+                    }
+                    attempted += 1
+                    val discovered = try {
+                        announceHttp(
+                            rawTracker = rawSource,
+                            request = request,
+                            deadlineNanos = deadlineNanos
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: DiscoveryBudgetExhaustedException) {
+                        break@sourceLoop
+                    } catch (_: Exception) {
+                        failed += 1
+                        continue
+                    }
+                    addEligiblePeers(peers, discovered)
+                    continue
+                }
+
+                if (rawSource.length > policy.maxTrackerUrlLength) {
+                    rejected += 1
+                    continue
+                }
+                val endpoint = parseTrackerEndpoint(rawSource)
                 if (endpoint == null) {
                     rejected += 1
                     continue
@@ -157,7 +261,7 @@ class AceLiveUdpTrackerDiscovery(
                     }
 
                     val discovered = try {
-                        announce(
+                        announceUdp(
                             endpoint = InetSocketAddress(address, endpoint.port),
                             request = request,
                             deadlineNanos = deadlineNanos
@@ -172,17 +276,12 @@ class AceLiveUdpTrackerDiscovery(
                     }
 
                     trackerSucceeded = true
-                    for (peer in discovered) {
-                        if (!isAllowedPeerEndpoint(peer)) continue
-                        val key = "${peer.host}:${peer.port}"
-                        peers.putIfAbsent(key, peer)
-                        if (peers.size >= policy.maxTotalPeers) break
-                    }
+                    addEligiblePeers(peers, discovered)
                     break
                 }
 
                 if (!trackerSucceeded && !budgetExhausted) failed += 1
-                if (budgetExhausted || peers.size >= policy.maxTotalPeers) break@trackerLoop
+                if (budgetExhausted) break@sourceLoop
             }
 
             AceLiveUdpTrackerDiscoveryResult(
@@ -200,6 +299,33 @@ class AceLiveUdpTrackerDiscovery(
         val host = uri.host?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val port = uri.port.takeIf { it in 1..65535 } ?: return null
         return AceLiveUdpTrackerEndpoint(host = host, port = port)
+    }
+
+    private fun addEligiblePeers(
+        target: LinkedHashMap<String, AceLiveTcpPeerEndpoint>,
+        discovered: List<AceLiveTcpPeerEndpoint>
+    ) {
+        for (peer in discovered) {
+            if (!isAllowedPeerEndpoint(peer)) continue
+            target.putIfAbsent(endpointKey(peer), peer)
+            if (target.size >= policy.maxTotalPeers) break
+        }
+    }
+
+    private fun endpointKey(peer: AceLiveTcpPeerEndpoint): String =
+        "${peer.host.lowercase()}:${peer.port}"
+
+    private fun isAllowedHttpSource(rawUrl: String): Boolean {
+        val host = AceLiveDiscoveryHttpProtocol.httpHost(rawUrl) ?: return false
+        return try {
+            addressResolver(host)
+                .asSequence()
+                .filter(::isAllowedTrackerAddress)
+                .take(policy.maxResolvedAddressesPerTracker)
+                .any()
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun isAllowedTrackerAddress(address: Inet4Address): Boolean =
@@ -220,7 +346,7 @@ class AceLiveUdpTrackerDiscovery(
         return SPECIAL_USE_IPV4_RANGES.none { cidr -> containsIpv4(cidr, value) }
     }
 
-    private suspend fun announce(
+    private suspend fun announceUdp(
         endpoint: InetSocketAddress,
         request: AceLiveUdpTrackerDiscoveryRequest,
         deadlineNanos: Long
@@ -229,6 +355,114 @@ class AceLiveUdpTrackerDiscovery(
             socket.connect(endpoint)
             val connectionId = connectWithRetry(socket, deadlineNanos)
             return announceWithRetry(socket, connectionId, request, deadlineNanos)
+        }
+    }
+
+    private suspend fun announceHttp(
+        rawTracker: String,
+        request: AceLiveUdpTrackerDiscoveryRequest,
+        deadlineNanos: Long
+    ): List<AceLiveTcpPeerEndpoint> {
+        val url = AceLiveDiscoveryHttpProtocol.buildHttpTrackerAnnounceUrl(
+            rawUrl = rawTracker,
+            swarmKey = request.swarmKey,
+            peerId = request.peerId,
+            announcePort = request.announcePort,
+            key = randomInt(),
+            numWant = policy.numWant
+        ) ?: throw AceLiveTrackerProtocolException("Invalid HTTP tracker URL")
+        val response = fetchHttpBytes(url, deadlineNanos)
+        return AceLiveDiscoveryHttpProtocol.decodeHttpTrackerResponse(
+            bytes = response,
+            maxPeers = policy.maxPeersPerTracker,
+            maxResponseBytes = policy.maxResponseBytes
+        )
+    }
+
+    private suspend fun fetchMetatracker(
+        metatrackerUrl: String,
+        swarmKey: AceLiveSwarmKey,
+        deadlineNanos: Long
+    ): AceLiveMetatrackerSnapshot {
+        val cacheKey = metatrackerUrl + "|" + swarmKey.toHex()
+        val now = System.currentTimeMillis()
+        recentMetatracker(cacheKey, now)?.let { return it }
+        val requestUrl = AceLiveDiscoveryHttpProtocol.buildMetatrackerRequestUrl(
+            rawUrl = metatrackerUrl,
+            swarmKey = swarmKey
+        ) ?: throw AceLiveTrackerProtocolException("Invalid Ace metatracker URL")
+        val response = fetchHttpBytes(requestUrl, deadlineNanos)
+        val snapshot = AceLiveDiscoveryHttpProtocol.decodeMetatrackerResponse(
+            bytes = response,
+            maxEntries = policy.maxTrackers,
+            maxStringLength = policy.maxTrackerUrlLength
+        )
+        val ttlSeconds = snapshot.intervalSeconds
+            ?.coerceIn(MIN_METATRACKER_CACHE_SECONDS, MAX_METATRACKER_CACHE_SECONDS)
+            ?: DEFAULT_METATRACKER_CACHE_SECONDS
+        rememberMetatracker(
+            key = cacheKey,
+            snapshot = snapshot,
+            expiresAtMillis = now + ttlSeconds * 1_000L,
+            nowMillis = now
+        )
+        return snapshot
+    }
+
+    private suspend fun fetchHttpBytes(
+        url: String,
+        deadlineNanos: Long
+    ): ByteArray {
+        val remaining = remainingBudgetMillis(deadlineNanos)
+        if (remaining <= 0L) throw DiscoveryBudgetExhaustedException()
+        val timeoutMillis = min(policy.requestTimeoutMillis.toLong(), remaining).coerceAtLeast(1L)
+        val boundedClient = httpClient.newBuilder()
+            .connectTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
+            .writeTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
+            .callTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+        val httpRequest = Request.Builder().url(url).get().build()
+        return suspendCancellableCoroutine { continuation ->
+            val call = boundedClient.newCall(httpRequest)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, error: IOException) {
+                    if (continuation.isActive) continuation.resumeWithException(error)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    try {
+                        response.use { safeResponse ->
+                            if (!safeResponse.isSuccessful) {
+                                throw IOException("HTTP discovery returned ${safeResponse.code}")
+                            }
+                            val body = safeResponse.body
+                            body.byteStream().use { input ->
+                                val output = ByteArrayOutputStream(minOf(4_096, policy.maxResponseBytes))
+                                val buffer = ByteArray(4_096)
+                                var total = 0
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read < 0) break
+                                    total += read
+                                    if (total > policy.maxResponseBytes) {
+                                        throw AceLiveTrackerProtocolException(
+                                            "HTTP discovery response exceeds local byte cap"
+                                        )
+                                    }
+                                    output.write(buffer, 0, read)
+                                }
+                                if (continuation.isActive) continuation.resume(output.toByteArray())
+                            }
+                        }
+                    } catch (error: Throwable) {
+                        if (continuation.isActive) continuation.resumeWithException(error)
+                    }
+                }
+            })
         }
     }
 
@@ -334,6 +568,11 @@ class AceLiveUdpTrackerDiscovery(
     private companion object {
         const val NANOS_PER_MILLI: Long = 1_000_000
         const val IPV4_MASK: Long = 0xFFFF_FFFFL
+        const val MAX_DISCOVERY_HINT_LENGTH = 4_096
+        const val MIN_METATRACKER_CACHE_SECONDS = 15L
+        const val DEFAULT_METATRACKER_CACHE_SECONDS = 300L
+        const val MAX_METATRACKER_CACHE_SECONDS = 3_600L
+        const val MAX_METATRACKER_CACHE_ENTRIES = 32
 
         val SPECIAL_USE_IPV4_RANGES: List<AceLiveIpv4Cidr> = listOf(
             cidr(0, 0, 0, 0, 8),
@@ -361,6 +600,46 @@ class AceLiveUdpTrackerDiscovery(
         val DEFAULT_ADDRESS_RESOLVER: (String) -> List<Inet4Address> = { host ->
             InetAddress.getAllByName(host).filterIsInstance<Inet4Address>()
         }
+        val DEFAULT_HTTP_CLIENT = OkHttpClient.Builder()
+            .connectTimeout(2_000, TimeUnit.MILLISECONDS)
+            .readTimeout(2_000, TimeUnit.MILLISECONDS)
+            .writeTimeout(2_000, TimeUnit.MILLISECONDS)
+            .callTimeout(2_000, TimeUnit.MILLISECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+
+        val metatrackerCacheLock = Any()
+        val metatrackerCache = LinkedHashMap<String, CachedMetatracker>()
+
+        fun recentMetatracker(key: String, nowMillis: Long): AceLiveMetatrackerSnapshot? =
+            synchronized(metatrackerCacheLock) {
+                pruneMetatrackerCache(nowMillis)
+                metatrackerCache[key]?.snapshot
+            }
+
+        fun rememberMetatracker(
+            key: String,
+            snapshot: AceLiveMetatrackerSnapshot,
+            expiresAtMillis: Long,
+            nowMillis: Long
+        ) = synchronized(metatrackerCacheLock) {
+            pruneMetatrackerCache(nowMillis)
+            metatrackerCache.remove(key)
+            while (metatrackerCache.size >= MAX_METATRACKER_CACHE_ENTRIES) {
+                val eldest = metatrackerCache.keys.firstOrNull() ?: break
+                metatrackerCache.remove(eldest)
+            }
+            metatrackerCache[key] = CachedMetatracker(expiresAtMillis, snapshot)
+        }
+
+        fun pruneMetatrackerCache(nowMillis: Long) {
+            val iterator = metatrackerCache.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (nowMillis >= entry.value.expiresAtMillis) iterator.remove()
+            }
+        }
 
         fun cidr(a: Int, b: Int, c: Int, d: Int, prefixBits: Int): AceLiveIpv4Cidr =
             AceLiveIpv4Cidr(
@@ -377,4 +656,9 @@ class AceLiveUdpTrackerDiscovery(
             return (value and mask) == (cidr.network and mask)
         }
     }
+
+    private data class CachedMetatracker(
+        val expiresAtMillis: Long,
+        val snapshot: AceLiveMetatrackerSnapshot
+    )
 }
