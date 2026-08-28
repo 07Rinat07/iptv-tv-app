@@ -8,6 +8,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -21,6 +22,7 @@ class AceLiveDhtSharedRoutingMemoryTest {
         val learnedNode = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
         val blockedResolverEntered = CountDownLatch(1)
         val releaseBlockedResolver = CountDownLatch(1)
+        val warmQueryOverlappedBlockedResolver = CountDownLatch(1)
         val transactionId = byteArrayOf(0x12, 0x34)
         val learnedNodeId = ByteArray(20) { 0x22 }
         val learnedCompactNode = learnedNodeId +
@@ -30,6 +32,9 @@ class AceLiveDhtSharedRoutingMemoryTest {
             response(transactionId, ByteArray(20) { 0x11 }, nodes = learnedCompactNode)
         }
         val learnedThread = dhtServerThread(learnedNode, responses = 3) { index, _ ->
+            if (index == 1 && blockedResolverEntered.await(500L, TimeUnit.MILLISECONDS)) {
+                warmQueryOverlappedBlockedResolver.countDown()
+            }
             response(
                 transactionId = transactionId,
                 remoteId = learnedNodeId,
@@ -42,8 +47,8 @@ class AceLiveDhtSharedRoutingMemoryTest {
         try {
             val memory = AceDhtRoutingMemory()
             val policy = AceLiveDhtPolicy(
-                requestTimeoutMillis = 250,
-                discoveryBudgetMillis = 1_000,
+                requestTimeoutMillis = 750,
+                discoveryBudgetMillis = 2_000,
                 searchBranching = 1,
                 returnAfterPeers = 1,
                 allowNonGlobalNodeAddresses = true,
@@ -73,7 +78,7 @@ class AceLiveDhtSharedRoutingMemoryTest {
                     emptyList()
                 }
             )
-            val second = withTimeout(1_000L) {
+            val second = withTimeout(2_500L) {
                 secondDiscovery.discover(
                     request(
                         swarmByte = 0x66,
@@ -84,11 +89,12 @@ class AceLiveDhtSharedRoutingMemoryTest {
             }
 
             assertEquals(0L, blockedResolverEntered.count)
+            assertEquals(0L, warmQueryOverlappedBlockedResolver.count)
             assertEquals(listOf(AceLiveTcpPeerEndpoint("127.0.0.1", 8622)), second.peers)
             assertEquals(1, second.queriesSent)
             assertEquals(1, second.warmRoutingSeedsUsed)
 
-            val contentResult = withTimeout(1_000L) {
+            val contentResult = withTimeout(2_500L) {
                 AceContentIdDhtDiscovery(
                     policy = policy,
                     randomInt = { 0x1234 },
