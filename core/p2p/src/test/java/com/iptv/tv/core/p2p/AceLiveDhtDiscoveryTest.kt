@@ -57,6 +57,146 @@ class AceLiveDhtDiscoveryTest {
     }
 
     @Test
+    fun `full live lookup announces owned TCP listener to token bearing node`() = runBlocking {
+        val server = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val token = "write-token".toByteArray(StandardCharsets.US_ASCII)
+        val remoteId = ByteArray(20) { 0x31 }
+        val queries = mutableListOf<String>()
+        val serverThread = dhtServerThread(server, requestCount = 2) { query, requestIndex ->
+            queries += String(query, StandardCharsets.ISO_8859_1)
+            if (requestIndex == 0) {
+                response(transactionId, remoteId, token = token)
+            } else {
+                response(transactionId, remoteId)
+            }
+        }
+
+        try {
+            val discovery = localDiscovery(
+                policy = AceLiveDhtPolicy(
+                    requestTimeoutMillis = 1_000,
+                    discoveryBudgetMillis = 2_000,
+                    maxQueries = 1,
+                    allowNonGlobalNodeAddresses = true,
+                    allowNonGlobalPeerAddresses = true
+                )
+            )
+            val result = discovery.discover(
+                AceLiveDhtDiscoveryRequest(
+                    swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 0x55 }),
+                    bootstrapNodes = listOf(AceLiveDhtBootstrapNode("bootstrap.test", server.localPort)),
+                    localNodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 0x44 }),
+                    announcePort = 45678
+                )
+            )
+
+            assertEquals(1, result.queriesSent)
+            assertEquals(1, result.announcesSent)
+            assertEquals(1, result.announcesSucceeded)
+            assertEquals(2, queries.size)
+            assertTrue(queries[0].contains("get_peers"))
+            assertTrue(queries[1].contains("announce_peer"))
+            assertTrue(queries[1].contains("4:porti45678e"))
+            assertTrue(queries[1].contains("5:token${token.size}:write-token"))
+        } finally {
+            server.close()
+            serverThread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `failed DHT announce does not discard discovered peer`() = runBlocking {
+        val server = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val peer = compactEndpoint(127, 0, 0, 1, 8621)
+        val remoteId = ByteArray(20) { 0x31 }
+        val wrongAnnounceId = ByteArray(20) { 0x32 }
+        val serverThread = dhtServerThread(server, requestCount = 2) { _, requestIndex ->
+            if (requestIndex == 0) {
+                response(
+                    transactionId,
+                    remoteId,
+                    values = listOf(peer),
+                    token = "write-token".toByteArray(StandardCharsets.US_ASCII)
+                )
+            } else {
+                response(transactionId, wrongAnnounceId)
+            }
+        }
+
+        try {
+            val discovery = localDiscovery(
+                policy = AceLiveDhtPolicy(
+                    requestTimeoutMillis = 1_000,
+                    discoveryBudgetMillis = 2_000,
+                    maxQueries = 1,
+                    allowNonGlobalNodeAddresses = true,
+                    allowNonGlobalPeerAddresses = true
+                )
+            )
+            val result = discovery.discover(
+                AceLiveDhtDiscoveryRequest(
+                    swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 0x55 }),
+                    bootstrapNodes = listOf(AceLiveDhtBootstrapNode("bootstrap.test", server.localPort)),
+                    localNodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 0x44 }),
+                    announcePort = 45678
+                )
+            )
+
+            assertEquals(listOf(AceLiveTcpPeerEndpoint("127.0.0.1", 8621)), result.peers)
+            assertEquals(1, result.announcesSent)
+            assertEquals(0, result.announcesSucceeded)
+        } finally {
+            server.close()
+            serverThread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `startup early return never waits for DHT announce`() = runBlocking {
+        val server = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val peer = compactEndpoint(127, 0, 0, 1, 8621)
+        val serverThread = dhtServerThread(server) { _ ->
+            response(
+                transactionId,
+                ByteArray(20) { 0x31 },
+                values = listOf(peer),
+                token = "write-token".toByteArray(StandardCharsets.US_ASCII)
+            )
+        }
+
+        try {
+            val discovery = localDiscovery(
+                policy = AceLiveDhtPolicy(
+                    requestTimeoutMillis = 1_000,
+                    discoveryBudgetMillis = 2_000,
+                    maxQueries = 1,
+                    returnAfterPeers = 1,
+                    allowNonGlobalNodeAddresses = true,
+                    allowNonGlobalPeerAddresses = true
+                )
+            )
+            val result = discovery.discover(
+                AceLiveDhtDiscoveryRequest(
+                    swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 0x55 }),
+                    bootstrapNodes = listOf(AceLiveDhtBootstrapNode("bootstrap.test", server.localPort)),
+                    localNodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 0x44 }),
+                    announcePort = 45678
+                )
+            )
+
+            assertEquals(listOf(AceLiveTcpPeerEndpoint("127.0.0.1", 8621)), result.peers)
+            assertEquals(0, result.announcesSent)
+            assertEquals(0, result.announcesSucceeded)
+        } finally {
+            server.close()
+            serverThread.join(2_000)
+        }
+    }
+
+    @Test
     fun `loopback bootstrap is rejected by default`() = runBlocking {
         val discovery = AceLiveDhtDiscovery(
             policy = AceLiveDhtPolicy(requestTimeoutMillis = 100, discoveryBudgetMillis = 100),
@@ -238,17 +378,41 @@ class AceLiveDhtDiscoveryTest {
         }
     }
 
+    private fun dhtServerThread(
+        socket: DatagramSocket,
+        requestCount: Int,
+        responseFactory: (ByteArray, Int) -> ByteArray
+    ): Thread = thread(start = true, isDaemon = true) {
+        try {
+            repeat(requestCount) { requestIndex ->
+                val buffer = ByteArray(8 * 1024)
+                val packet = DatagramPacket(buffer, buffer.size)
+                socket.receive(packet)
+                val query = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
+                val response = responseFactory(query, requestIndex)
+                socket.send(DatagramPacket(response, response.size, packet.socketAddress))
+            }
+        } catch (_: Exception) {
+            // Socket closure is normal test cleanup.
+        }
+    }
+
     private fun response(
         transactionId: ByteArray,
         remoteId: ByteArray,
         values: List<ByteArray> = emptyList(),
-        nodes: ByteArray? = null
+        nodes: ByteArray? = null,
+        token: ByteArray? = null
     ): ByteArray = ByteArrayOutputStream().apply {
         writeAscii("d1:rd2:id20:")
         write(remoteId)
         if (nodes != null) {
             writeAscii("5:nodes${nodes.size}:")
             write(nodes)
+        }
+        if (token != null) {
+            writeAscii("5:token${token.size}:")
+            write(token)
         }
         if (values.isNotEmpty()) {
             writeAscii("6:valuesl")

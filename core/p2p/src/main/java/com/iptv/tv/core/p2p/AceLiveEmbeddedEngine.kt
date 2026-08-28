@@ -810,7 +810,8 @@ class AceLiveEmbeddedEngine(
             val discoveryStartedAtMillis = System.currentTimeMillis()
             val dhtRequest = AceLiveDhtDiscoveryRequest(
                 swarmKey = transport.swarmKey,
-                bootstrapNodes = DEFAULT_DHT_BOOTSTRAP_NODES
+                bootstrapNodes = DEFAULT_DHT_BOOTSTRAP_NODES,
+                announcePort = announceLease.port
             )
             val trackers = (transport.trackers + DEFAULT_ACE_TRACKER).distinct()
             val trackerRequest = AceLiveUdpTrackerDiscoveryRequest(
@@ -914,7 +915,8 @@ class AceLiveEmbeddedEngine(
                             "dhtQueries=${result.dhtQueriesSent}, " +
                             "dhtFailed=${result.dhtFailedQueries}, " +
                             "dhtWarmSeeds=${result.dhtWarmRoutingSeedsUsed}, " +
-                            "dhtCacheHit=${result.dhtCacheHit}"
+                            "dhtCacheHit=${result.dhtCacheHit}, " +
+                            "dhtAnnounces=${result.dhtAnnouncesSucceeded}/${result.dhtAnnouncesSent}"
                     )
                 }
             }

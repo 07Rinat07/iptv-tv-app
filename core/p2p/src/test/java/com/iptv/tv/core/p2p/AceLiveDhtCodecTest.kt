@@ -25,6 +25,68 @@ class AceLiveDhtCodecTest {
         )
     }
 
+
+    @Test
+    fun `announce peer query publishes explicit TCP listener port and remains DHT read only`() {
+        val transactionId = "xy".toByteArray(StandardCharsets.US_ASCII)
+        val query = AceLiveDhtCodec.encodeAnnouncePeerQuery(
+            transactionId = transactionId,
+            nodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 'A'.code.toByte() }),
+            swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 'B'.code.toByte() }),
+            peerPort = 8621,
+            token = "tok".toByteArray(StandardCharsets.US_ASCII)
+        )
+
+        assertEquals(
+            "d1:ad2:id20:AAAAAAAAAAAAAAAAAAAA9:info_hash20:BBBBBBBBBBBBBBBBBBBB" +
+                "4:porti8621e5:token3:toke1:q13:announce_peer2:roi1e1:t2:xy1:y1:qe",
+            String(query, StandardCharsets.US_ASCII)
+        )
+    }
+
+    @Test
+    fun `get peers response exposes bounded defensive token`() {
+        val transactionId = byteArrayOf(1, 2)
+        val token = byteArrayOf(9, 8, 7)
+        val decoded = AceLiveDhtCodec.decodeGetPeersResponse(
+            bytes = response(transactionId, ByteArray(20) { 3 }, token = token),
+            expectedTransactionId = transactionId
+        )
+
+        token.fill(0)
+        assertArrayEquals(byteArrayOf(9, 8, 7), decoded.token)
+        val copy = decoded.token!!
+        copy.fill(1)
+        assertArrayEquals(byteArrayOf(9, 8, 7), decoded.token)
+    }
+
+    @Test
+    fun `oversized get peers token is ignored without losing discovery response`() {
+        val transactionId = byteArrayOf(1, 2)
+        val decoded = AceLiveDhtCodec.decodeGetPeersResponse(
+            bytes = response(
+                transactionId,
+                ByteArray(20) { 3 },
+                token = ByteArray(AceLiveDhtCodec.MAX_WRITE_TOKEN_BYTES + 1) { 4 }
+            ),
+            expectedTransactionId = transactionId
+        )
+
+        assertEquals(null, decoded.token)
+    }
+
+    @Test
+    fun `announce peer response validates transaction and node id`() {
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val remoteId = ByteArray(20) { 5 }
+        val decoded = AceLiveDhtCodec.decodeAnnouncePeerResponse(
+            bytes = response(transactionId, remoteId),
+            expectedTransactionId = transactionId
+        )
+
+        assertEquals(AceLiveDhtNodeId.fromBytes(remoteId), decoded.remoteNodeId)
+    }
+
     @Test
     fun `response parses compact peers and nodes`() {
         val transactionId = byteArrayOf(0x12, 0x34)
@@ -119,13 +181,18 @@ class AceLiveDhtCodecTest {
         transactionId: ByteArray,
         remoteId: ByteArray,
         values: List<ByteArray> = emptyList(),
-        nodes: ByteArray? = null
+        nodes: ByteArray? = null,
+        token: ByteArray? = null
     ): ByteArray = ByteArrayOutputStream().apply {
         writeAscii("d1:rd2:id20:")
         write(remoteId)
         if (nodes != null) {
             writeAscii("5:nodes${nodes.size}:")
             write(nodes)
+        }
+        if (token != null) {
+            writeAscii("5:token${token.size}:")
+            write(token)
         }
         if (values.isNotEmpty()) {
             writeAscii("6:valuesl")
