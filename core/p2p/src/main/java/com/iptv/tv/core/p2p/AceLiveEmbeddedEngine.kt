@@ -558,6 +558,12 @@ class AceLiveEmbeddedEngine(
         private val pool = AceLiveTcpConnectionPool(
             scope = scope,
             session = session,
+            transportFactory = JvmAceLiveTcpTransportFactory(
+                metricsReporter = AceLiveTransportRaceDiagnosticsReporter(
+                    observer = diagnosticsObserver,
+                    context = runtimeDiagnosticsContext
+                )
+            ),
             policy = tcpConnectionPolicy,
             recoveryDiagnostics = AceLiveRecoveryDiagnosticsReporter(
                 observer = diagnosticsObserver,

@@ -325,7 +325,8 @@ internal class AceLiveHappyEyeballsSocketConnector(
  * merely because the other transport completed its lower-level handshake first.
  */
 class JvmAceLiveTcpTransportFactory(
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val metricsReporter: P2pRuntimeMetricsReporter = P2pRuntimeMetricsReporter.LOGCAT
 ) : AceLiveTcpTransportFactory {
     private val socketConnector = AceLiveHappyEyeballsSocketConnector(ioDispatcher = ioDispatcher)
     private val utpFactory = JvmAceLiveUtpTransportFactory(ioDispatcher = ioDispatcher)
@@ -335,7 +336,8 @@ class JvmAceLiveTcpTransportFactory(
             SocketAceLiveTcpTransport(socket, ioDispatcher)
         },
         utpConnect = utpFactory::connect,
-        ioDispatcher = ioDispatcher
+        ioDispatcher = ioDispatcher,
+        metricsReporter = metricsReporter
     )
 
     override suspend fun connect(
