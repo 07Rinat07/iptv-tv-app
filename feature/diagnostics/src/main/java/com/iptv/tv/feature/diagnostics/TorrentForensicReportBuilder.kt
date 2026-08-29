@@ -91,6 +91,7 @@ internal object TorrentForensicReportBuilder {
         val latestPeerQuality = logs.lastOrNull { it.status == PEER_QUALITY_STATUS }
         val discoveryLogs = logs.filter { it.status == PEER_DISCOVERY_STATUS }
         val peerLifecycle = logs.filter { it.status == PEER_LIFECYCLE_STATUS }
+        val transportRaceLogs = logs.filter { it.status == TRANSPORT_RACE_STATUS }
         val connectFailures = peerLifecycle.count { it.message.contains("event=connect_failed") }
         val handshakeRejects = peerLifecycle.count { it.message.contains("event=handshake_rejected") }
         val disconnects = peerLifecycle.count { it.message.contains("event=disconnected") }
@@ -147,6 +148,8 @@ internal object TorrentForensicReportBuilder {
                 append('\n')
             }
         }
+
+        appendTransportRaceSummary(transportRaceLogs)
 
         if (latestPeerQuality != null) {
             append("peer_quality: ")
@@ -209,6 +212,88 @@ internal object TorrentForensicReportBuilder {
         append("interpretation: ")
         append(diagnosis.interpretation)
         append('\n')
+    }
+
+    private fun StringBuilder.appendTransportRaceSummary(logs: List<SyncLog>) {
+        if (logs.isEmpty()) {
+            append("transport_race: no structured transport race samples\n")
+            return
+        }
+
+        val samples = logs.mapNotNull { log -> parseTransportRaceSample(log.message) }
+        if (samples.isEmpty()) {
+            append("transport_race: samples=0 malformed_samples=")
+            append(logs.size)
+            append('\n')
+            return
+        }
+
+        val elapsed = samples.map { it.elapsedMillis }
+        val tcpConnected = samples.mapNotNull { it.tcpConnectedMillis }
+        val utpConnected = samples.mapNotNull { it.utpConnectedMillis }
+        append("transport_race: samples=")
+        append(samples.size)
+        append(" malformed_samples=")
+        append(logs.size - samples.size)
+        append(" tcp_wins=")
+        append(samples.count { it.winner == "tcp" })
+        append(" utp_wins=")
+        append(samples.count { it.winner == "utp" })
+        append(" no_winner=")
+        append(samples.count { it.winner == "none" })
+        append(" avg_elapsed_ms=")
+        append(elapsed.average().toLong())
+        append(" p50_elapsed_ms=")
+        append(medianLong(elapsed))
+        append(" tcp_connect_avg_ms=")
+        append(averageOrNone(tcpConnected))
+        append(" utp_connect_avg_ms=")
+        append(averageOrNone(utpConnected))
+        append(" tcp_outcomes=")
+        append(formatOutcomeCounts(samples.map { it.tcpOutcome }))
+        append(" utp_outcomes=")
+        append(formatOutcomeCounts(samples.map { it.utpOutcome }))
+        append('\n')
+    }
+
+    private fun parseTransportRaceSample(message: String): TransportRaceSample? {
+        val elapsedMillis = extractLong(message, "elapsed_ms") ?: return null
+        val winner = extractToken(message, "winner")
+            ?.takeIf { it == "tcp" || it == "utp" || it == "none" }
+            ?: "none"
+        return TransportRaceSample(
+            winner = winner,
+            elapsedMillis = elapsedMillis,
+            tcpConnectedMillis = extractLong(message, "tcp_connected_ms"),
+            utpConnectedMillis = extractLong(message, "utp_connected_ms"),
+            tcpOutcome = extractToken(message, "tcp_outcome") ?: "unknown",
+            utpOutcome = extractToken(message, "utp_outcome") ?: "unknown"
+        )
+    }
+
+    private fun extractToken(message: String, key: String): String? =
+        Regex("(?:^|[,\\s])${Regex.escape(key)}=([^,\\s]+)")
+            .find(message)
+            ?.groupValues
+            ?.getOrNull(1)
+
+    private fun formatOutcomeCounts(outcomes: List<String>): String = outcomes
+        .groupingBy { it }
+        .eachCount()
+        .toSortedMap()
+        .entries
+        .joinToString(",") { (outcome, count) -> "$outcome:$count" }
+
+    private fun averageOrNone(values: List<Long>): String =
+        if (values.isEmpty()) "none" else values.average().toLong().toString()
+
+    private fun medianLong(values: List<Long>): Long {
+        val ordered = values.sorted()
+        val middle = ordered.size / 2
+        if (ordered.size % 2 == 1) return ordered[middle]
+        val lower = ordered[middle - 1]
+        val upper = ordered[middle]
+        return lower + (upper - lower) / 2L
     }
 
     private fun diagnose(
@@ -317,6 +402,15 @@ internal object TorrentForensicReportBuilder {
         val playerRequest: SyncLog?
     )
 
+    private data class TransportRaceSample(
+        val winner: String,
+        val elapsedMillis: Long,
+        val tcpConnectedMillis: Long?,
+        val utpConnectedMillis: Long?,
+        val tcpOutcome: String,
+        val utpOutcome: String
+    )
+
     private data class Diagnosis(
         val stage: String,
         val interpretation: String
@@ -327,6 +421,7 @@ internal object TorrentForensicReportBuilder {
     private const val PEER_LIFECYCLE_STATUS = "embedded_ace_live_peer_lifecycle"
     private const val PEER_QUALITY_STATUS = "embedded_ace_live_peer_quality"
     private const val PRODUCER_GAP_STATUS = "embedded_ace_live_producer_gap"
+    private const val TRANSPORT_RACE_STATUS = "embedded_ace_live_transport_race"
     private const val PLAYER_BOUNDARY_STATUS = "player_p2p_boundary"
     private const val PLAYER_CONTEXT_WINDOW_MS = 15_000L
     private const val DEFAULT_MAX_ATTEMPTS = 4
