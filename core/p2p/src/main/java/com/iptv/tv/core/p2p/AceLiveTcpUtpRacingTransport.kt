@@ -21,17 +21,80 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
+internal enum class AceLiveTransportKind(val wireName: String) {
+    TCP("tcp"),
+    UTP("utp")
+}
+
+internal enum class AceLiveTransportCandidateOutcome(val wireName: String) {
+    CONNECT_FAILED("connect_failed"),
+    CONNECT_TIMEOUT("connect_timeout"),
+    HANDSHAKE_WRITE_FAILED("handshake_write_failed"),
+    HANDSHAKE_READ_FAILED("handshake_read_failed"),
+    HANDSHAKE_REJECTED("handshake_rejected"),
+    QUALIFIED_WINNER("qualified_winner"),
+    CANCELLED_AFTER_WINNER("cancelled_after_winner"),
+    CANCELLED_BEFORE_WINNER("cancelled_before_winner")
+}
+
+internal data class AceLiveTransportCandidateMetric(
+    val transport: AceLiveTransportKind,
+    val physicalConnectedMillis: Long?,
+    val outcome: AceLiveTransportCandidateOutcome,
+    val terminalElapsedMillis: Long
+) {
+    init {
+        require(physicalConnectedMillis == null || physicalConnectedMillis >= 0L) {
+            "physicalConnectedMillis must be non-negative when present"
+        }
+        require(terminalElapsedMillis >= 0L) {
+            "terminalElapsedMillis must be non-negative"
+        }
+        require(
+            physicalConnectedMillis == null || terminalElapsedMillis >= physicalConnectedMillis
+        ) {
+            "terminal outcome must not precede physical connection"
+        }
+    }
+}
+
+internal data class AceLiveTransportRaceMetric(
+    override val elapsedMillis: Long,
+    val endpointHost: String,
+    val endpointPort: Int,
+    val winner: AceLiveTransportKind?,
+    val candidates: List<AceLiveTransportCandidateMetric>
+) : P2pRuntimeMetric {
+    override val sourceType: String = "ace_live"
+
+    init {
+        require(elapsedMillis >= 0L) { "elapsedMillis must be non-negative" }
+        require(endpointHost.isNotBlank()) { "endpointHost must not be blank" }
+        require(endpointPort in 1..65535) { "endpointPort must be in 1..65535" }
+        require(candidates.isNotEmpty()) { "transport candidates must not be empty" }
+        require(candidates.map(AceLiveTransportCandidateMetric::transport).distinct().size == candidates.size) {
+            "transport candidates must be unique"
+        }
+        val winners = candidates.filter {
+            it.outcome == AceLiveTransportCandidateOutcome.QUALIFIED_WINNER
+        }
+        if (winner == null) {
+            require(winners.isEmpty()) { "failed race must not contain a qualified winner" }
+        } else {
+            require(winners.size == 1 && winners.single().transport == winner) {
+                "winner must match exactly one qualified candidate"
+            }
+        }
+    }
+}
+
 internal data class AceLiveTransportCandidateConnector(
-    val name: String,
+    val kind: AceLiveTransportKind,
     val connect: suspend (
         endpoint: AceLiveTcpPeerEndpoint,
         policy: AceLiveTcpConnectionPolicy
     ) -> AceLiveTcpTransport
-) {
-    init {
-        require(name.isNotBlank()) { "transport candidate name must not be blank" }
-    }
-}
+)
 
 /**
  * Races physical TCP/uTP acquisition but delays transport ownership until a candidate returns a
@@ -49,11 +112,13 @@ internal class AceLiveTcpUtpRacingTransportFactory(
         policy: AceLiveTcpConnectionPolicy
     ) -> AceLiveTcpTransport,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val handshakeCodec: AceLivePeerHandshakeCodec = AceLivePeerHandshakeCodec()
+    private val handshakeCodec: AceLivePeerHandshakeCodec = AceLivePeerHandshakeCodec(),
+    private val metricsReporter: P2pRuntimeMetricsReporter = P2pRuntimeMetricsReporter.LOGCAT,
+    private val nanoTime: () -> Long = System::nanoTime
 ) : AceLiveTcpTransportFactory {
     private val candidates = listOf(
-        AceLiveTransportCandidateConnector("tcp", tcpConnect),
-        AceLiveTransportCandidateConnector("utp", utpConnect)
+        AceLiveTransportCandidateConnector(AceLiveTransportKind.TCP, tcpConnect),
+        AceLiveTransportCandidateConnector(AceLiveTransportKind.UTP, utpConnect)
     )
 
     override suspend fun connect(
@@ -65,7 +130,9 @@ internal class AceLiveTcpUtpRacingTransportFactory(
             policy = policy,
             candidateConnectors = candidates,
             ioDispatcher = ioDispatcher,
-            handshakeCodec = handshakeCodec
+            handshakeCodec = handshakeCodec,
+            metricsReporter = metricsReporter,
+            nanoTime = nanoTime
         )
         return try {
             transport.awaitFirstPhysicalConnection()
@@ -130,7 +197,9 @@ private class AceLiveHandshakeQualifiedTransportRace(
     private val policy: AceLiveTcpConnectionPolicy,
     candidateConnectors: List<AceLiveTransportCandidateConnector>,
     private val ioDispatcher: CoroutineDispatcher,
-    private val handshakeCodec: AceLivePeerHandshakeCodec
+    private val handshakeCodec: AceLivePeerHandshakeCodec,
+    private val metricsReporter: P2pRuntimeMetricsReporter,
+    private val nanoTime: () -> Long
 ) : AceLiveTcpTransport {
     private class CandidateState(
         val connector: AceLiveTransportCandidateConnector
@@ -140,8 +209,12 @@ private class AceLiveHandshakeQualifiedTransportRace(
         val handshakeSent = AtomicBoolean(false)
         val qualifierStarted = AtomicBoolean(false)
         val connectJob = AtomicReference<Job?>(null)
+        val physicalConnectedMillis = AtomicReference<Long?>(null)
+        val outcome = AtomicReference<AceLiveTransportCandidateOutcome?>(null)
+        val terminalElapsedMillis = AtomicReference<Long?>(null)
     }
 
+    private val raceStartedAtNanos = nanoTime()
     private val candidateStates = candidateConnectors.map(::CandidateState)
     private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val closed = AtomicBoolean(false)
@@ -154,6 +227,7 @@ private class AceLiveHandshakeQualifiedTransportRace(
     private val winnerPrebuffer = AtomicReference<ByteArray?>(null)
     private val terminalCount = AtomicInteger(0)
     private val lastFailure = AtomicReference<Throwable?>(null)
+    private val metricReported = AtomicBoolean(false)
     private val writeMutex = Mutex()
     private val readMutex = Mutex()
     private var winnerPrebufferOffset = 0
@@ -169,6 +243,13 @@ private class AceLiveHandshakeQualifiedTransportRace(
             true
         } ?: false
         if (!connected) {
+            candidateStates.forEach { state ->
+                recordTerminalOutcome(
+                    state,
+                    AceLiveTransportCandidateOutcome.CONNECT_TIMEOUT
+                )
+            }
+            reportRaceMetric(winner = null)
             throw IOException("transport race exceeded ${policy.connectTimeoutMillis} ms")
         }
     }
@@ -216,6 +297,15 @@ private class AceLiveHandshakeQualifiedTransportRace(
 
     override suspend fun close() {
         if (!closed.compareAndSet(false, true)) return
+        if (winner.get() == null) {
+            candidateStates.forEach { state ->
+                recordTerminalOutcome(
+                    state,
+                    AceLiveTransportCandidateOutcome.CANCELLED_BEFORE_WINNER
+                )
+            }
+            reportRaceMetric(winner = null)
+        }
         scope.cancel()
         withContext(NonCancellable + ioDispatcher) {
             candidateStates.forEach { state ->
@@ -231,7 +321,20 @@ private class AceLiveHandshakeQualifiedTransportRace(
         val job = scope.launch {
             try {
                 val transport = state.connector.connect(endpoint, policy)
-                if (closed.get() || winner.get() != null) {
+                state.physicalConnectedMillis.compareAndSet(null, elapsedMillis())
+                if (state.terminal.get()) {
+                    runCatching { transport.close() }
+                    return@launch
+                }
+                if (closed.get()) {
+                    runCatching { transport.close() }
+                    return@launch
+                }
+                if (winner.get() != null) {
+                    recordTerminalOutcome(
+                        state,
+                        AceLiveTransportCandidateOutcome.CANCELLED_AFTER_WINNER
+                    )
                     runCatching { transport.close() }
                     return@launch
                 }
@@ -241,7 +344,11 @@ private class AceLiveHandshakeQualifiedTransportRace(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                markTerminal(state, error)
+                markFailed(
+                    state = state,
+                    outcome = AceLiveTransportCandidateOutcome.CONNECT_FAILED,
+                    error = error
+                )
             }
         }
         state.connectJob.set(job)
@@ -259,7 +366,11 @@ private class AceLiveHandshakeQualifiedTransportRace(
                     true
                 } ?: false
                 if (!sent) {
-                    markTerminal(state, IOException("${state.connector.name} handshake write timed out"))
+                    markFailed(
+                        state = state,
+                        outcome = AceLiveTransportCandidateOutcome.HANDSHAKE_WRITE_FAILED,
+                        error = IOException("${state.connector.kind.wireName} handshake write timed out")
+                    )
                     return@launch
                 }
                 firstHandshakeSent.complete(Unit)
@@ -267,7 +378,11 @@ private class AceLiveHandshakeQualifiedTransportRace(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                markTerminal(state, error)
+                markFailed(
+                    state = state,
+                    outcome = AceLiveTransportCandidateOutcome.HANDSHAKE_WRITE_FAILED,
+                    error = error
+                )
             }
         }
     }
@@ -277,29 +392,49 @@ private class AceLiveHandshakeQualifiedTransportRace(
         scope.launch {
             val transport = state.transport.get() ?: return@launch
             val expected = expectedSwarmKey.get()
-                ?: return@launch markTerminal(state, IOException("Ace swarm key is unavailable"))
+                ?: return@launch markFailed(
+                    state = state,
+                    outcome = AceLiveTransportCandidateOutcome.HANDSHAKE_READ_FAILED,
+                    error = IOException("Ace swarm key is unavailable")
+                )
             val readBuffer = ByteArray(policy.readBufferBytes)
             var accumulated = ByteArray(0)
             try {
                 while (!closed.get() && winner.get() == null) {
                     val count = transport.read(readBuffer)
                     if (count < 0) {
-                        markTerminal(state, IOException("${state.connector.name} closed during Ace handshake"))
+                        markFailed(
+                            state = state,
+                            outcome = AceLiveTransportCandidateOutcome.HANDSHAKE_READ_FAILED,
+                            error = IOException(
+                                "${state.connector.kind.wireName} closed during Ace handshake"
+                            )
+                        )
                         return@launch
                     }
                     if (count == 0) continue
-                    require(count <= readBuffer.size) { "transport returned more bytes than requested" }
+                    require(count <= readBuffer.size) {
+                        "transport returned more bytes than requested"
+                    }
                     if (accumulated.size > policy.readBufferBytes - count) {
-                        markTerminal(state, IOException("Ace handshake prebuffer exceeded the read bound"))
+                        markFailed(
+                            state = state,
+                            outcome = AceLiveTransportCandidateOutcome.HANDSHAKE_READ_FAILED,
+                            error = IOException("Ace handshake prebuffer exceeded the read bound")
+                        )
                         return@launch
                     }
                     accumulated += readBuffer.copyOf(count)
                     when (val decoded = handshakeCodec.decode(accumulated, expected)) {
                         is AceLivePeerHandshakeDecodeResult.NeedMoreData -> Unit
                         is AceLivePeerHandshakeDecodeResult.Rejected -> {
-                            markTerminal(
-                                state,
-                                IOException("${state.connector.name} rejected Ace handshake: ${decoded.reason}")
+                            markFailed(
+                                state = state,
+                                outcome = AceLiveTransportCandidateOutcome.HANDSHAKE_REJECTED,
+                                error = IOException(
+                                    "${state.connector.kind.wireName} rejected Ace handshake: " +
+                                        decoded.reason
+                                )
                             )
                             return@launch
                         }
@@ -312,19 +447,28 @@ private class AceLiveHandshakeQualifiedTransportRace(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                markTerminal(state, error)
+                markFailed(
+                    state = state,
+                    outcome = AceLiveTransportCandidateOutcome.HANDSHAKE_READ_FAILED,
+                    error = error
+                )
             }
         }
     }
 
     private suspend fun selectWinner(state: CandidateState, prebuffer: ByteArray) {
         if (!winner.compareAndSet(null, state)) return
+        recordTerminalOutcome(state, AceLiveTransportCandidateOutcome.QUALIFIED_WINNER)
         winnerPrebuffer.set(prebuffer.copyOf())
         withContext(NonCancellable) {
             candidateStates
                 .asSequence()
                 .filter { candidate -> candidate !== state }
                 .forEach { loser ->
+                    recordTerminalOutcome(
+                        loser,
+                        AceLiveTransportCandidateOutcome.CANCELLED_AFTER_WINNER
+                    )
                     loser.connectJob.get()?.cancel()
                     loser.transport.getAndSet(null)?.let { transport ->
                         runCatching { transport.close() }
@@ -332,22 +476,65 @@ private class AceLiveHandshakeQualifiedTransportRace(
                 }
         }
         winnerReady.complete(state)
+        reportRaceMetric(winner = state.connector.kind)
     }
 
-    private fun markTerminal(state: CandidateState, error: Throwable) {
-        if (!state.terminal.compareAndSet(false, true)) return
+    private fun markFailed(
+        state: CandidateState,
+        outcome: AceLiveTransportCandidateOutcome,
+        error: Throwable
+    ) {
+        if (!recordTerminalOutcome(state, outcome)) return
         lastFailure.set(error)
         scope.launch {
             state.transport.getAndSet(null)?.let { transport ->
                 runCatching { transport.close() }
             }
         }
-        if (terminalCount.incrementAndGet() == candidateStates.size && winner.get() == null) {
+        if (terminalCount.get() == candidateStates.size && winner.get() == null) {
             val failure = lastFailure.get() ?: IOException("all transport candidates failed")
             firstConnected.completeExceptionally(failure)
             firstHandshakeSent.completeExceptionally(failure)
             winnerReady.completeExceptionally(failure)
+            reportRaceMetric(winner = null)
         }
+    }
+
+    private fun recordTerminalOutcome(
+        state: CandidateState,
+        outcome: AceLiveTransportCandidateOutcome
+    ): Boolean {
+        if (!state.terminal.compareAndSet(false, true)) return false
+        state.outcome.set(outcome)
+        state.terminalElapsedMillis.set(elapsedMillis())
+        terminalCount.incrementAndGet()
+        return true
+    }
+
+    private fun reportRaceMetric(winner: AceLiveTransportKind?) {
+        if (!metricReported.compareAndSet(false, true)) return
+        val candidates = candidateStates.map { state ->
+            AceLiveTransportCandidateMetric(
+                transport = state.connector.kind,
+                physicalConnectedMillis = state.physicalConnectedMillis.get(),
+                outcome = checkNotNull(state.outcome.get()) {
+                    "terminal transport candidate is missing an outcome"
+                },
+                terminalElapsedMillis = checkNotNull(state.terminalElapsedMillis.get()) {
+                    "terminal transport candidate is missing elapsed time"
+                }
+            )
+        }
+        val elapsed = candidates.maxOf(AceLiveTransportCandidateMetric::terminalElapsedMillis)
+        metricsReporter.reportSafely(
+            AceLiveTransportRaceMetric(
+                elapsedMillis = elapsed,
+                endpointHost = endpoint.host,
+                endpointPort = endpoint.port,
+                winner = winner,
+                candidates = candidates
+            )
+        )
     }
 
     private fun drainWinnerPrebuffer(target: ByteArray): Int {
@@ -371,7 +558,14 @@ private class AceLiveHandshakeQualifiedTransportRace(
         return count
     }
 
+    private fun elapsedMillis(): Long =
+        ((nanoTime() - raceStartedAtNanos).coerceAtLeast(0L)) / NANOS_PER_MILLI
+
     private fun checkOpen() {
         if (closed.get()) throw IOException("transport race is closed")
+    }
+
+    private companion object {
+        const val NANOS_PER_MILLI = 1_000_000L
     }
 }

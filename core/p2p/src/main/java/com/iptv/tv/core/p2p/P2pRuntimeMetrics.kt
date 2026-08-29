@@ -49,7 +49,8 @@ internal fun P2pRuntimeMetricsReporter.reportSafely(metric: P2pRuntimeMetric) {
 
 internal fun P2pRuntimeMetric.toLogLine(): String = when (this) {
     is P2pRuntimeMetric.MetadataReady ->
-        "event=metadata_ready source=$sourceType elapsed_ms=$elapsedMillis files=$fileCount piece_length_bytes=$pieceLengthBytes"
+        "event=metadata_ready source=$sourceType elapsed_ms=$elapsedMillis " +
+            "files=$fileCount piece_length_bytes=$pieceLengthBytes"
 
     is P2pRuntimeMetric.StreamReady ->
         "event=stream_ready source=$sourceType elapsed_ms=$elapsedMillis metadata_ms=$metadataMillis " +
@@ -57,7 +58,37 @@ internal fun P2pRuntimeMetric.toLogLine(): String = when (this) {
             "file=${fileName.replace(' ', '_')}"
 
     is P2pRuntimeMetric.FirstByteReady ->
-        "event=first_byte_ready source=$sourceType elapsed_ms=$elapsedMillis position_bytes=$positionBytes bytes=$byteCount"
+        "event=first_byte_ready source=$sourceType elapsed_ms=$elapsedMillis " +
+            "position_bytes=$positionBytes bytes=$byteCount"
+
+    is AceLiveTransportRaceMetric -> buildString {
+        append("event=ace_live_transport_race source=")
+        append(sourceType)
+        append(" elapsed_ms=")
+        append(elapsedMillis)
+        append(" endpoint_host=")
+        append(endpointHost.replace(' ', '_'))
+        append(" endpoint_port=")
+        append(endpointPort)
+        append(" winner=")
+        append(winner?.wireName ?: "none")
+        candidates
+            .sortedBy { candidate -> candidate.transport.ordinal }
+            .forEach { candidate ->
+                append(' ')
+                append(candidate.transport.wireName)
+                append("_connected_ms=")
+                append(candidate.physicalConnectedMillis ?: "none")
+                append(' ')
+                append(candidate.transport.wireName)
+                append("_outcome=")
+                append(candidate.outcome.wireName)
+                append(' ')
+                append(candidate.transport.wireName)
+                append("_terminal_ms=")
+                append(candidate.terminalElapsedMillis)
+            }
+    }
 }
 
 internal fun elapsedMillis(startNanos: Long, endNanos: Long): Long {
