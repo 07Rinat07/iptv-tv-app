@@ -52,6 +52,14 @@ internal class AceLiveAnnouncePortLease private constructor(
 
     val port: Int = socket.localPort
 
+    // Only the callback-owning live runtime is eligible to advertise this listener through LSD.
+    // Metadata-only temporary listeners use the no-arg constructor and are never registered.
+    private val localServiceDiscoveryRegistration = if (enablePortMapping) {
+        AceLiveLsdRuntimeRegistry.registerListener(port)
+    } else {
+        null
+    }
+
     // Only the callback-owning live runtime reaches this constructor. Metadata probes use the
     // no-arg constructor and therefore never expose a useless temporary listener through NAT.
     private val portMappingLease = if (enablePortMapping) {
@@ -67,6 +75,7 @@ internal class AceLiveAnnouncePortLease private constructor(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         runCatching { socket.close() }
+        runCatching { localServiceDiscoveryRegistration?.close() }
         runCatching { portMappingLease?.close() }
     }
 
