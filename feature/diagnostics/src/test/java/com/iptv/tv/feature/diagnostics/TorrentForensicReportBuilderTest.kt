@@ -80,6 +80,51 @@ class TorrentForensicReportBuilderTest {
     }
 
     @Test
+    fun aggregatesTransportRaceEvidencePerAttempt() {
+        val report = TorrentForensicReportBuilder.build(
+            listOf(
+                log(1, "embedded_ace_live_startup_timeline", "phase=transport_selection, elapsed_ms=0"),
+                log(
+                    2,
+                    "embedded_ace_live_transport_race",
+                    "winner=tcp elapsed_ms=40 tcp_connected_ms=10 tcp_outcome=qualified_winner tcp_terminal_ms=40 " +
+                        "utp_connected_ms=25 utp_outcome=handshake_rejected utp_terminal_ms=30 startup_id=1 runtime_id=1 generation=1 path=direct"
+                ),
+                log(
+                    3,
+                    "embedded_ace_live_transport_race",
+                    "winner=utp elapsed_ms=60 tcp_connected_ms=20 tcp_outcome=handshake_rejected tcp_terminal_ms=50 " +
+                        "utp_connected_ms=30 utp_outcome=qualified_winner utp_terminal_ms=60 startup_id=1 runtime_id=1 generation=1 path=direct"
+                ),
+                log(
+                    4,
+                    "embedded_ace_live_transport_race",
+                    "winner=none elapsed_ms=100 tcp_connected_ms=none tcp_outcome=connect_failed tcp_terminal_ms=100 " +
+                        "utp_connected_ms=none utp_outcome=connect_failed utp_terminal_ms=100 startup_id=1 runtime_id=1 generation=1 path=direct"
+                )
+            )
+        )
+
+        assertTrue(report.contains("transport_race: samples=3 malformed_samples=0 tcp_wins=1 utp_wins=1 no_winner=1"))
+        assertTrue(report.contains("avg_elapsed_ms=66 p50_elapsed_ms=60"))
+        assertTrue(report.contains("tcp_connect_avg_ms=15 utp_connect_avg_ms=27"))
+        assertTrue(report.contains("tcp_outcomes=connect_failed:1,handshake_rejected:1,qualified_winner:1"))
+        assertTrue(report.contains("utp_outcomes=connect_failed:1,handshake_rejected:1,qualified_winner:1"))
+    }
+
+    @Test
+    fun malformedTransportRaceEvidenceIsBoundedAndDoesNotCrashReport() {
+        val report = TorrentForensicReportBuilder.build(
+            listOf(
+                log(1, "embedded_ace_live_startup_timeline", "phase=transport_selection, elapsed_ms=0"),
+                log(2, "embedded_ace_live_transport_race", "winner=tcp tcp_outcome=qualified_winner")
+            )
+        )
+
+        assertTrue(report.contains("transport_race: samples=0 malformed_samples=1"))
+    }
+
+    @Test
     fun laterDirectPlaybackDoesNotCompletePreviousTorrentAttempt() {
         val phases = listOf(
             "transport_selection",
