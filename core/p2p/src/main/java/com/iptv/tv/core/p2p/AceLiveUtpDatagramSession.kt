@@ -60,10 +60,12 @@ internal class AceLiveUtpReceiveResult(
     val acknowledgement: AceLiveUtpTransmission?,
     acknowledgedSequenceNumbers: Set<Int>,
     val ignored: Boolean,
-    val remoteClosed: Boolean
+    val remoteClosed: Boolean,
+    fastRetransmissions: List<AceLiveUtpTransmission> = emptyList()
 ) {
     val deliveredBytes: ByteArray = deliveredBytes.copyOf()
     val acknowledgedSequenceNumbers: Set<Int> = acknowledgedSequenceNumbers.toSet()
+    val fastRetransmissions: List<AceLiveUtpTransmission> = fastRetransmissions.toList()
 }
 
 internal sealed interface AceLiveUtpTimeoutResult {
@@ -136,8 +138,9 @@ internal class AceLiveUtpRttEstimator(
  * Deterministic connected uTP session core.
  *
  * Owns packet sequence numbers, cumulative/selective ACK processing, bounded out-of-order receive
- * buffering, peer receive-window flow control and bounded timeout retransmission. It deliberately
- * does not own a DatagramSocket or LEDBAT congestion control yet; those are separate adapters.
+ * buffering, peer receive-window flow control, bounded fast loss recovery and timeout retransmission.
+ * It deliberately does not own a DatagramSocket or LEDBAT congestion control; those are socket
+ * adapter responsibilities.
  */
 internal class AceLiveUtpDatagramSession(
     private val connectionIds: AceLiveUtpClientConnectionIds,
@@ -149,7 +152,14 @@ internal class AceLiveUtpDatagramSession(
     private data class SentPacket(
         var packet: AceLiveUtpPacket,
         var lastSentAtMillis: Long,
-        var attempt: Int
+        var attempt: Int,
+        var lossEvidenceCount: Int = 0,
+        var fastRetransmitted: Boolean = false
+    )
+
+    private data class AckProcessingResult(
+        val acknowledgedSequenceNumbers: Set<Int>,
+        val fastRetransmissions: List<AceLiveUtpTransmission>
     )
 
     private val unacknowledged = LinkedHashMap<Int, SentPacket>()
@@ -217,18 +227,20 @@ internal class AceLiveUtpDatagramSession(
     fun receiveDatagram(
         datagram: ByteArray,
         nowMillis: Long,
-        nowMicros: Long
+        nowMicros: Long,
+        timestampDifferenceMicros: Long = 0L
     ): AceLiveUtpReceiveResult {
         require(nowMillis >= 0L)
         val packet = AceLiveUtpCodec.decode(datagram)
             ?: return ignoredReceiveResult()
-        return receivePacket(packet, nowMillis, nowMicros)
+        return receivePacket(packet, nowMillis, nowMicros, timestampDifferenceMicros)
     }
 
     fun receivePacket(
         packet: AceLiveUtpPacket,
         nowMillis: Long,
-        nowMicros: Long
+        nowMicros: Long,
+        timestampDifferenceMicros: Long = 0L
     ): AceLiveUtpReceiveResult {
         require(nowMillis >= 0L)
         if (
@@ -240,16 +252,23 @@ internal class AceLiveUtpDatagramSession(
         }
 
         remoteReceiveWindowBytes = packet.header.receiveWindowBytes
-        val newlyAcknowledged = acknowledgeOutbound(packet, nowMillis)
+        val ackProgress = acknowledgeOutbound(
+            packet = packet,
+            nowMillis = nowMillis,
+            timestampMicros = nowMicros,
+            timestampDifferenceMicros = timestampDifferenceMicros,
+            allowFastRetransmit = packet.header.type != AceLiveUtpPacketType.RESET
+        )
 
         if (packet.header.type == AceLiveUtpPacketType.RESET) {
             reset = true
             return AceLiveUtpReceiveResult(
                 deliveredBytes = ByteArray(0),
                 acknowledgement = null,
-                acknowledgedSequenceNumbers = newlyAcknowledged,
+                acknowledgedSequenceNumbers = ackProgress.acknowledgedSequenceNumbers,
                 ignored = false,
-                remoteClosed = true
+                remoteClosed = true,
+                fastRetransmissions = emptyList()
             )
         }
 
@@ -259,9 +278,10 @@ internal class AceLiveUtpDatagramSession(
             return AceLiveUtpReceiveResult(
                 deliveredBytes = ByteArray(0),
                 acknowledgement = null,
-                acknowledgedSequenceNumbers = newlyAcknowledged,
+                acknowledgedSequenceNumbers = ackProgress.acknowledgedSequenceNumbers,
                 ignored = false,
-                remoteClosed = isRemoteClosed()
+                remoteClosed = isRemoteClosed(),
+                fastRetransmissions = ackProgress.fastRetransmissions
             )
         }
 
@@ -284,9 +304,10 @@ internal class AceLiveUtpDatagramSession(
                 attempt = 1,
                 retransmission = false
             ),
-            acknowledgedSequenceNumbers = newlyAcknowledged,
+            acknowledgedSequenceNumbers = ackProgress.acknowledgedSequenceNumbers,
             ignored = false,
-            remoteClosed = isRemoteClosed()
+            remoteClosed = isRemoteClosed(),
+            fastRetransmissions = ackProgress.fastRetransmissions
         )
     }
 
@@ -344,8 +365,16 @@ internal class AceLiveUtpDatagramSession(
         return fin == lastContiguousRemoteSequenceNumber
     }
 
-    private fun acknowledgeOutbound(packet: AceLiveUtpPacket, nowMillis: Long): Set<Int> {
-        if (unacknowledged.isEmpty()) return emptySet()
+    private fun acknowledgeOutbound(
+        packet: AceLiveUtpPacket,
+        nowMillis: Long,
+        timestampMicros: Long,
+        timestampDifferenceMicros: Long,
+        allowFastRetransmit: Boolean
+    ): AckProcessingResult {
+        if (unacknowledged.isEmpty()) {
+            return AckProcessingResult(emptySet(), emptyList())
+        }
 
         val acknowledged = linkedSetOf<Int>()
         val cumulativeAck = packet.header.acknowledgementNumber
@@ -366,7 +395,9 @@ internal class AceLiveUtpDatagramSession(
             }
             else -> false
         }
-        if (!acknowledgementBaseIsValid) return emptySet()
+        if (!acknowledgementBaseIsValid) {
+            return AckProcessingResult(emptySet(), emptyList())
+        }
 
         packet.extensions
             .asSequence()
@@ -385,7 +416,11 @@ internal class AceLiveUtpDatagramSession(
                 }
             }
 
-        if (acknowledged.isEmpty()) return emptySet()
+        recordLossEvidence(
+            cumulativeAck = cumulativeAck,
+            cumulativeDistance = cumulativeDistance,
+            newlyAcknowledged = acknowledged
+        )
 
         var sampledRtt = false
         acknowledged.forEach { sequence ->
@@ -396,10 +431,95 @@ internal class AceLiveUtpDatagramSession(
                 sampledRtt = true
             }
         }
-        if (!sampledRtt) {
+        if (acknowledged.isNotEmpty() && !sampledRtt) {
             rttEstimator.onAcknowledgement(sampleMillis = null)
         }
-        return acknowledged
+
+        val fastRetransmissions = if (allowFastRetransmit) {
+            buildFastRetransmissions(
+                nowMillis = nowMillis,
+                timestampMicros = timestampMicros,
+                timestampDifferenceMicros = timestampDifferenceMicros
+            )
+        } else {
+            emptyList()
+        }
+
+        return AckProcessingResult(
+            acknowledgedSequenceNumbers = acknowledged,
+            fastRetransmissions = fastRetransmissions
+        )
+    }
+
+    private fun recordLossEvidence(
+        cumulativeAck: Int,
+        cumulativeDistance: Int,
+        newlyAcknowledged: Set<Int>
+    ) {
+        if (unacknowledged.isEmpty()) return
+
+        unacknowledged.forEach { (sequence, sent) ->
+            if (sequence in newlyAcknowledged || sent.fastRetransmitted) return@forEach
+            val acknowledgedPast = newlyAcknowledged.count { acknowledgedSequence ->
+                val distance = forwardDistance(sequence, acknowledgedSequence)
+                distance in 1..MAX_FORWARD_SEQUENCE_DISTANCE
+            }
+            if (acknowledgedPast > 0) {
+                sent.lossEvidenceCount = (sent.lossEvidenceCount + acknowledgedPast)
+                    .coerceAtMost(FAST_LOSS_EVIDENCE_THRESHOLD)
+            }
+        }
+
+        if (cumulativeDistance != 0) return
+        val missingSequence = nextUint16(cumulativeAck)
+        val missing = unacknowledged[missingSequence] ?: return
+        if (missing.fastRetransmitted) return
+        val newlyAcknowledgedPastMissing = newlyAcknowledged.any { acknowledgedSequence ->
+            val distance = forwardDistance(missingSequence, acknowledgedSequence)
+            distance in 1..MAX_FORWARD_SEQUENCE_DISTANCE
+        }
+        if (!newlyAcknowledgedPastMissing) {
+            missing.lossEvidenceCount = (missing.lossEvidenceCount + 1)
+                .coerceAtMost(FAST_LOSS_EVIDENCE_THRESHOLD)
+        }
+    }
+
+    private fun buildFastRetransmissions(
+        nowMillis: Long,
+        timestampMicros: Long,
+        timestampDifferenceMicros: Long
+    ): List<AceLiveUtpTransmission> {
+        val retransmissions = ArrayList<AceLiveUtpTransmission>()
+        unacknowledged.values.forEach { sent ->
+            if (retransmissions.size >= MAX_FAST_RETRANSMISSIONS_PER_ACK) return@forEach
+            if (
+                sent.lossEvidenceCount < FAST_LOSS_EVIDENCE_THRESHOLD ||
+                sent.fastRetransmitted
+            ) {
+                return@forEach
+            }
+
+            sent.fastRetransmitted = true
+            val retransmissionsSoFar = sent.attempt - 1
+            if (retransmissionsSoFar >= policy.maxRetransmissionsPerPacket) {
+                return@forEach
+            }
+
+            val replacement = copyForRetransmission(
+                packet = sent.packet,
+                timestampMicros = timestampMicros,
+                timestampDifferenceMicros = timestampDifferenceMicros
+            )
+            sent.packet = replacement
+            sent.lastSentAtMillis = nowMillis
+            sent.attempt += 1
+            retransmissions += AceLiveUtpTransmission(
+                packet = replacement,
+                attempt = sent.attempt,
+                retransmission = true
+            )
+        }
+        return retransmissions
     }
 
     private fun acceptInboundData(packet: AceLiveUtpPacket): ByteArray {
@@ -558,6 +678,8 @@ internal class AceLiveUtpDatagramSession(
         const val UINT32_MAX = 0xffff_ffffL
         const val MAX_FORWARD_SEQUENCE_DISTANCE = 0x7fff
         const val MAX_SELECTIVE_ACK_OFFSET = 255
+        const val FAST_LOSS_EVIDENCE_THRESHOLD = 3
+        const val MAX_FAST_RETRANSMISSIONS_PER_ACK = 4
     }
 }
 
