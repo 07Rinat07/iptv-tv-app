@@ -120,12 +120,19 @@ internal class AceLiveUtpConnectedSocket(
         val datagram = receiveDatagram() ?: return null
         return sessionMutex.withLock {
             val decoded = AceLiveUtpCodec.decode(datagram)
-            val result = session.receiveDatagram(datagram, nowMillis, nowMicros)
+            val currentReplyMicroseconds = decoded
+                ?.let { packet ->
+                    unsignedTimestampDifference(nowMicros, packet.header.timestampMicros)
+                }
+                ?: replyMicroseconds
+            val result = session.receiveDatagram(
+                datagram = datagram,
+                nowMillis = nowMillis,
+                nowMicros = nowMicros,
+                timestampDifferenceMicros = currentReplyMicroseconds
+            )
             if (!result.ignored && decoded != null) {
-                replyMicroseconds = unsignedTimestampDifference(
-                    nowMicros,
-                    decoded.header.timestampMicros
-                )
+                replyMicroseconds = currentReplyMicroseconds
                 val acknowledgedBytes = result.acknowledgedSequenceNumbers.sumOf { sequence ->
                     sentPayloadBytesBySequence.remove(sequence) ?: 0
                 }
@@ -139,6 +146,12 @@ internal class AceLiveUtpConnectedSocket(
                 } else if (delaySample != null) {
                     congestionController.recordDelaySample(delaySample, nowMillis)
                 }
+                if (result.fastRetransmissions.isNotEmpty()) {
+                    congestionController.onPacketLoss()
+                }
+            }
+            result.fastRetransmissions.forEach { retransmission ->
+                sendDatagram(retransmission.datagram)
             }
             result.acknowledgement?.let { acknowledgement ->
                 sendDatagram(acknowledgement.datagram)
