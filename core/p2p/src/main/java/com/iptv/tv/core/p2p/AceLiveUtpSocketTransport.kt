@@ -8,6 +8,7 @@ import java.net.InetSocketAddress
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.security.SecureRandom
+import java.util.LinkedHashMap
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineDispatcher
@@ -60,18 +61,22 @@ internal data class AceLiveUtpSocketBinding(
 /**
  * Owns one connected UDP socket after a successful BEP-29 client handshake.
  *
- * It is deliberately not an [AceLiveTcpTransport] yet. The future byte-stream adapter can drive
- * [send], [receiveOnce] and [pollTimeout] while this object keeps socket lifetime and session state
- * together. LEDBAT/congestion-window policy remains outside this layer.
+ * The socket is the single owner of delay feedback and congestion state. Reliability, ACK/SACK and
+ * reordering remain in [AceLiveUtpDatagramSession], while the byte-stream adapter drives this object
+ * without creating another DatagramSocket receive owner.
  */
 internal class AceLiveUtpConnectedSocket(
     private val socket: DatagramSocket,
     private val session: AceLiveUtpDatagramSession,
+    private val congestionController: AceLiveUtpCongestionController,
     private val ioDispatcher: CoroutineDispatcher,
-    private val nanoTime: () -> Long
+    private val nanoTime: () -> Long,
+    initialReplyMicroseconds: Long = 0L
 ) : Closeable {
     private val closed = AtomicBoolean(false)
     private val sessionMutex = Mutex()
+    private val sentPayloadBytesBySequence = LinkedHashMap<Int, Int>()
+    private var replyMicroseconds = initialReplyMicroseconds and UINT32_MASK
 
     suspend fun send(
         bytes: ByteArray,
@@ -80,8 +85,27 @@ internal class AceLiveUtpConnectedSocket(
     ): AceLiveUtpSendResult {
         checkOpen()
         return sessionMutex.withLock {
-            val result = session.send(bytes, nowMillis, timestampMicros)
+            val congestionBudget = congestionController.availableWindowBytes(
+                session.inFlightPayloadBytes()
+            )
+            if (congestionBudget <= 0 || bytes.isEmpty()) {
+                return@withLock AceLiveUtpSendResult(acceptedBytes = 0, transmissions = emptyList())
+            }
+
+            val boundedBytes = if (bytes.size <= congestionBudget) {
+                bytes
+            } else {
+                bytes.copyOf(congestionBudget)
+            }
+            val result = session.send(
+                bytes = boundedBytes,
+                nowMillis = nowMillis,
+                timestampMicros = timestampMicros,
+                timestampDifferenceMicros = replyMicroseconds
+            )
             result.transmissions.forEach { transmission ->
+                sentPayloadBytesBySequence[transmission.packet.header.sequenceNumber] =
+                    transmission.packet.payload.size
                 sendDatagram(transmission.datagram)
             }
             result
@@ -95,7 +119,27 @@ internal class AceLiveUtpConnectedSocket(
         checkOpen()
         val datagram = receiveDatagram() ?: return null
         return sessionMutex.withLock {
+            val decoded = AceLiveUtpCodec.decode(datagram)
             val result = session.receiveDatagram(datagram, nowMillis, nowMicros)
+            if (!result.ignored && decoded != null) {
+                replyMicroseconds = unsignedTimestampDifference(
+                    nowMicros,
+                    decoded.header.timestampMicros
+                )
+                val acknowledgedBytes = result.acknowledgedSequenceNumbers.sumOf { sequence ->
+                    sentPayloadBytesBySequence.remove(sequence) ?: 0
+                }
+                val delaySample = decoded.header.timestampDifferenceMicros.takeIf { it != 0L }
+                if (acknowledgedBytes > 0) {
+                    congestionController.onAcknowledgement(
+                        acknowledgedBytes = acknowledgedBytes,
+                        delaySampleMicros = delaySample,
+                        nowMillis = nowMillis
+                    )
+                } else if (delaySample != null) {
+                    congestionController.recordDelaySample(delaySample, nowMillis)
+                }
+            }
             result.acknowledgement?.let { acknowledgement ->
                 sendDatagram(acknowledgement.datagram)
             }
@@ -109,8 +153,13 @@ internal class AceLiveUtpConnectedSocket(
     ): AceLiveUtpTimeoutResult {
         checkOpen()
         return sessionMutex.withLock {
-            val result = session.pollTimeout(nowMillis, timestampMicros)
+            val result = session.pollTimeout(
+                nowMillis = nowMillis,
+                timestampMicros = timestampMicros,
+                timestampDifferenceMicros = replyMicroseconds
+            )
             if (result is AceLiveUtpTimeoutResult.Retransmit) {
+                congestionController.onTimeout()
                 sendDatagram(result.transmission.datagram)
             }
             result
@@ -119,6 +168,18 @@ internal class AceLiveUtpConnectedSocket(
 
     suspend fun inFlightPacketCount(): Int = sessionMutex.withLock {
         session.inFlightPacketCount()
+    }
+
+    internal suspend fun congestionWindowBytes(): Int = sessionMutex.withLock {
+        congestionController.congestionWindowBytes()
+    }
+
+    internal suspend fun baseDelayMicros(): Long? = sessionMutex.withLock {
+        congestionController.baseDelayMicros()
+    }
+
+    internal suspend fun queueDelayMicros(): Long? = sessionMutex.withLock {
+        congestionController.queueDelayMicros()
     }
 
     fun isClosed(): Boolean = closed.get() || socket.isClosed
@@ -199,11 +260,24 @@ internal class AceLiveUtpSocketConnector(
                 initialRemoteReceiveWindowBytes = state.header.receiveWindowBytes,
                 policy = sessionPolicy
             )
+            val congestionController = AceLiveUtpCongestionController(
+                aceLiveUtpCongestionPolicy(sessionPolicy)
+            )
+            state.header.timestampDifferenceMicros
+                .takeIf { delay -> delay != 0L }
+                ?.let { delay ->
+                    congestionController.recordDelaySample(delay, monotonicMillis())
+                }
             val connection = AceLiveUtpConnectedSocket(
                 socket = socket,
                 session = session,
+                congestionController = congestionController,
                 ioDispatcher = ioDispatcher,
-                nanoTime = nanoTime
+                nanoTime = nanoTime,
+                initialReplyMicroseconds = unsignedTimestampDifference(
+                    timestampMicros(),
+                    state.header.timestampMicros
+                )
             )
             returningConnection = true
             connection
@@ -276,6 +350,8 @@ internal class AceLiveUtpSocketConnector(
 
     private fun timestampMicros(): Long = (nanoTime() / NANOS_PER_MICRO) and UINT32_MASK
 
+    private fun monotonicMillis(): Long = nanoTime() / NANOS_PER_MILLI
+
     private fun nanosToTimeoutMillis(nanos: Long): Int =
         ((nanos + NANOS_PER_MILLI - 1L) / NANOS_PER_MILLI)
             .coerceIn(1L, Int.MAX_VALUE.toLong())
@@ -292,3 +368,6 @@ internal class AceLiveUtpSocketConnector(
         const val UINT32_MASK = 0xffff_ffffL
     }
 }
+
+private fun unsignedTimestampDifference(nowMicros: Long, previousMicros: Long): Long =
+    (nowMicros - previousMicros) and 0xffff_ffffL
