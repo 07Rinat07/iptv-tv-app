@@ -35,24 +35,39 @@ internal object AceLiveNetworkDefaults {
  * here. The small kernel backlog is only a burst buffer: the TCP pool applies its own stricter
  * active/inbound caps before an accepted connection can participate in the swarm.
  */
-internal class AceLiveAnnouncePortLease(
-    private val onAcceptedSocket: (Socket) -> Boolean = { false }
+internal class AceLiveAnnouncePortLease private constructor(
+    private val onAcceptedSocket: (Socket) -> Boolean,
+    enablePortMapping: Boolean
 ) : Closeable {
+    constructor() : this(onAcceptedSocket = { false }, enablePortMapping = false)
+
+    constructor(onAcceptedSocket: (Socket) -> Boolean) :
+        this(onAcceptedSocket = onAcceptedSocket, enablePortMapping = true)
+
     private val closed = AtomicBoolean(false)
     private val socket = ServerSocket().apply {
         reuseAddress = true
         bind(InetSocketAddress(InetAddress.getByName("0.0.0.0"), 0), ACCEPT_BACKLOG)
+    }
+
+    val port: Int = socket.localPort
+
+    // Only the callback-owning live runtime reaches this constructor. Metadata probes use the
+    // no-arg constructor and therefore never expose a useless temporary listener through NAT.
+    private val portMappingLease = if (enablePortMapping) {
+        AceLivePortMappingRuntime.start(port)
+    } else {
+        null
     }
     private val acceptThread = Thread(::acceptLoop, "ace-live-announce-port").apply {
         isDaemon = true
         start()
     }
 
-    val port: Int = socket.localPort
-
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         runCatching { socket.close() }
+        runCatching { portMappingLease?.close() }
     }
 
     private fun acceptLoop() {
