@@ -9,7 +9,8 @@ import kotlinx.coroutines.sync.withLock
 /** Public discovery source identity kept with a peer for later scoring/refill policy. */
 enum class AceLivePeerDiscoverySource {
     MAINLINE_DHT,
-    UDP_TRACKER
+    UDP_TRACKER,
+    LOCAL_SERVICE_DISCOVERY
 }
 
 enum class AceLivePeerDiscoverySourceStatus {
@@ -257,6 +258,10 @@ class AceLivePeerDiscoveryOrchestrator(
         val trackerRequest = request.trackerRequest
         val swarmKey = trackerRequest?.swarmKey ?: requireNotNull(dhtRequest).swarmKey
         val swarmBytes = swarmKey.toByteArray()
+        val announcePort = trackerRequest?.announcePort ?: dhtRequest?.announcePort
+        announcePort?.let { port ->
+            AceLiveLsdRuntimeRegistry.startOrSnapshot(swarmKey, port)
+        }
         val dhtPermitted = dhtRequest != null && dhtHeadroomAvailable()
 
         if (policy.preferTrackerFastPath && trackerRequest != null) {
@@ -278,22 +283,30 @@ class AceLivePeerDiscoveryOrchestrator(
             val fastPathThreshold = minOf(policy.trackerFastPathMinPeers, policy.maxTotalPeers)
 
             if (eligibleTrackerPeers.size >= fastPathThreshold || !dhtPermitted) {
-                return@supervisorScope buildResult(
-                    dhtExecution = SourceExecution.NotRequested,
-                    trackerExecution = trackerExecution,
-                    swarmKey = swarmBytes,
-                    eligibleTrackerPeers = eligibleTrackerPeers
+                return@supervisorScope withLocalServicePeers(
+                    result = buildResult(
+                        dhtExecution = SourceExecution.NotRequested,
+                        trackerExecution = trackerExecution,
+                        swarmKey = swarmBytes,
+                        eligibleTrackerPeers = eligibleTrackerPeers
+                    ),
+                    swarmKey = swarmKey,
+                    announcePort = announcePort
                 )
             }
 
             val dhtExecution = backgroundDht?.let { lease ->
                 awaitBackgroundDht(lease)
             } ?: SourceExecution.NotRequested
-            return@supervisorScope buildResult(
-                dhtExecution = dhtExecution,
-                trackerExecution = trackerExecution,
-                swarmKey = swarmBytes,
-                eligibleTrackerPeers = eligibleTrackerPeers
+            return@supervisorScope withLocalServicePeers(
+                result = buildResult(
+                    dhtExecution = dhtExecution,
+                    trackerExecution = trackerExecution,
+                    swarmKey = swarmBytes,
+                    eligibleTrackerPeers = eligibleTrackerPeers
+                ),
+                swarmKey = swarmKey,
+                announcePort = announcePort
             )
         }
 
@@ -321,7 +334,26 @@ class AceLivePeerDiscoveryOrchestrator(
 
         val dhtExecution = dhtDeferred?.await() ?: SourceExecution.NotRequested
         val trackerExecution = trackerDeferred?.await() ?: SourceExecution.NotRequested
-        buildResult(dhtExecution, trackerExecution, swarmBytes)
+        withLocalServicePeers(
+            result = buildResult(dhtExecution, trackerExecution, swarmBytes),
+            swarmKey = swarmKey,
+            announcePort = announcePort
+        )
+    }
+
+    private fun withLocalServicePeers(
+        result: AceLivePeerDiscoveryOrchestrationResult,
+        swarmKey: AceLiveSwarmKey,
+        announcePort: Int?
+    ): AceLivePeerDiscoveryOrchestrationResult {
+        val port = announcePort ?: return result
+        val localPeers = AceLiveLsdRuntimeRegistry.startOrSnapshot(swarmKey, port)
+        return mergeAceLiveSupplementalPeers(
+            result = result,
+            peers = localPeers,
+            source = AceLivePeerDiscoverySource.LOCAL_SERVICE_DISCOVERY,
+            maxTotalPeers = policy.maxTotalPeers
+        )
     }
 
     private suspend fun awaitBackgroundDht(

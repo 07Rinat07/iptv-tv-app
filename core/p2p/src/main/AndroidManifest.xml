@@ -1,10 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <application>
         <provider
             android:name="com.iptv.tv.core.p2p.AceLivePortMappingInitializer"
             android:authorities="${applicationId}.ace-live-nat-init"
+            android:exported="false" />
+        <provider
+            android:name="com.iptv.tv.core.p2p.AceLiveLsdInitializer"
+            android:authorities="${applicationId}.ace-live-lsd-init"
             android:exported="false" />
     </application>
 </manifest>
