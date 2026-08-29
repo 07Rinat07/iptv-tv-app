@@ -314,27 +314,34 @@ internal class AceLiveHappyEyeballsSocketConnector(
 }
 
 /**
- * Android/JVM raw-socket implementation. Tracker/DHT discovery and peer selection stay outside.
+ * Android/JVM outbound transport implementation.
  *
- * Hostname endpoints use a bounded Happy-Eyeballs race across resolved addresses. IP-literal peers
- * still resolve to a single address and keep the previous one-socket connect path.
+ * TCP keeps its existing bounded Happy-Eyeballs acquisition. In parallel, a uTP candidate targets
+ * the same discovered peer endpoint. Physical connection success alone does not select the winner:
+ * [AceLiveTcpUtpRacingTransportFactory] mirrors the pool's first public Ace handshake to both live
+ * candidates and retains only the first transport that returns a swarm-valid handshake.
  *
- * Cancellation closes the owned socket immediately. This is important for first-success startup:
- * a losing metadata peer must not keep a channel switch blocked until its read timeout expires.
- * Write deadlines are still enforced by [AceLiveTcpConnectionPool].
+ * This preserves the existing connect/read/write budgets and avoids cancelling a viable fallback
+ * merely because the other transport completed its lower-level handshake first.
  */
 class JvmAceLiveTcpTransportFactory(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : AceLiveTcpTransportFactory {
     private val socketConnector = AceLiveHappyEyeballsSocketConnector(ioDispatcher = ioDispatcher)
+    private val utpFactory = JvmAceLiveUtpTransportFactory(ioDispatcher = ioDispatcher)
+    private val racingFactory = AceLiveTcpUtpRacingTransportFactory(
+        tcpConnect = { endpoint, policy ->
+            val socket = socketConnector.connect(endpoint, policy)
+            SocketAceLiveTcpTransport(socket, ioDispatcher)
+        },
+        utpConnect = utpFactory::connect,
+        ioDispatcher = ioDispatcher
+    )
 
     override suspend fun connect(
         endpoint: AceLiveTcpPeerEndpoint,
         policy: AceLiveTcpConnectionPolicy
-    ): AceLiveTcpTransport {
-        val socket = socketConnector.connect(endpoint, policy)
-        return SocketAceLiveTcpTransport(socket, ioDispatcher)
-    }
+    ): AceLiveTcpTransport = racingFactory.connect(endpoint, policy)
 }
 
 private suspend fun connectAceLiveSocket(
