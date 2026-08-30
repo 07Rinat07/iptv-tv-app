@@ -1155,8 +1155,8 @@ class AceLiveEmbeddedEngine(
                             }}"
                 )
             }
-            logProgress(event)
             emitPieces(event.result.emittedPieces)
+            logProgress(event)
         }
 
         private fun logProgress(event: AceLiveTcpPoolEvent.Ingress) {
@@ -1167,13 +1167,15 @@ class AceLiveEmbeddedEngine(
             val previous = lastProgressLogAt.get()
             if (previous != 0L && now - previous < PROGRESS_LOG_INTERVAL_MILLIS) return
             if (!lastProgressLogAt.compareAndSet(previous, now)) return
-            Log.i(
-                LOG_TAG,
-                "event=media_progress peer=${event.peerId} pieces=${pieces.size} " +
-                    "piece_first=${pieces.first().piece} piece_last=${pieces.last().piece} " +
-                    "total_bytes=$totalBytes retained_bytes=${mediaBuffer.retainedBytes()} " +
-                    "advertised_head=${latestHead.get()} elapsed_ms=${startupElapsedMillis(now)}"
-            )
+            runCatching {
+                Log.i(
+                    LOG_TAG,
+                    "event=media_progress peer=${event.peerId} pieces=${pieces.size} " +
+                        "piece_first=${pieces.first().piece} piece_last=${pieces.last().piece} " +
+                        "total_bytes=$totalBytes retained_bytes=${mediaBuffer.retainedBytes()} " +
+                        "advertised_head=${latestHead.get()} elapsed_ms=${startupElapsedMillis(now)}"
+                )
+            }
         }
 
         private fun claimThrottledLog(lastLogAt: AtomicLong): Boolean {
@@ -1245,14 +1247,16 @@ class AceLiveEmbeddedEngine(
                                     )
                                     if (decision.ready) {
                                         startupTimelineDiagnostics.onBufferReady(now)
-                                        Log.i(
-                                            LOG_TAG,
-                                            "event=startup_buffer_ready buffered_bytes=${mediaBuffer.retainedBytes()} " +
-                                                "target_bytes=${decision.targetBytes} " +
-                                                "rate_bps=${decision.observedBytesPerSecond} forced=${decision.forced} " +
-                                                "elapsed_ms=${startupElapsedMillis(now)}"
-                                        )
                                         startup.complete(Unit)
+                                        runCatching {
+                                            Log.i(
+                                                LOG_TAG,
+                                                "event=startup_buffer_ready buffered_bytes=${mediaBuffer.retainedBytes()} " +
+                                                    "target_bytes=${decision.targetBytes} " +
+                                                    "rate_bps=${decision.observedBytesPerSecond} forced=${decision.forced} " +
+                                                    "elapsed_ms=${startupElapsedMillis(now)}"
+                                            )
+                                        }
                                     }
                                 }
                             }
