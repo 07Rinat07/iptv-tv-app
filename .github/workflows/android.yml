@@ -46,10 +46,14 @@ jobs:
           changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
           printf '%s\n' "$changed_files"
 
+          # Test-only P2P/engine qualification changes are deterministic CI work.
+          # Keep the volatile live-swarm smoke blocking for production/runtime changes.
+          smoke_changed_files="$(printf '%s\n' "$changed_files" | grep -Ev '^core/(p2p|engine)/src/(test|androidTest)/' || true)"
+
           run_smoke=false
           if grep -Eq \
             '^(app/src/androidTest/java/com/iptv/tv/(TorrentTvPlaybackSmokeTest|HiltTestRunner)\.kt|app/src/main/java/com/iptv/tv/ApplicationEngineEntryPoint\.kt|core/(p2p|engine)/|core/data/src/main/java/com/iptv/tv/core/data/repository/(HybridEngineRepositoryImpl|CoalescingEngineRepository)\.kt)' \
-            <<< "$changed_files"; then
+            <<< "$smoke_changed_files"; then
             run_smoke=true
           elif git diff --unified=0 "$base_sha" "$head_sha" -- \
             core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt \
