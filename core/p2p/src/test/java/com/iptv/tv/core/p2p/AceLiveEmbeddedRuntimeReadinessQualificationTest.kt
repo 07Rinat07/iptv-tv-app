@@ -9,6 +9,7 @@ import java.net.Socket
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -25,7 +26,7 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
     @Test
     fun `prepare infohash reaches startup ready and serves media through production runtime`() = runBlocking {
         LocalTcpLivePeer().use { peer ->
-            val diagnostics = mutableListOf<Pair<String, String>>()
+            val diagnostics = CopyOnWriteArrayList<Pair<String, String>>()
             val engine = AceLiveEmbeddedEngine(
                 okHttpClient = OkHttpClient(),
                 bufferSettings = AceLiveBufferSettings(
@@ -58,8 +59,13 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
             }
 
             try {
-                val result = withTimeout(8_000) {
-                    engine.prepareInfoHash(INFO_HASH)
+                val result = try {
+                    withTimeout(8_000) {
+                        engine.prepareInfoHash(INFO_HASH)
+                    }
+                } catch (error: Throwable) {
+                    peer.throwIfFailed()
+                    throw error
                 }
                 assertTrue(result is P2pResult.Success)
                 val prepared = (result as P2pResult.Success).data
@@ -178,9 +184,14 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
                     output.flush()
 
                     val requestedChunks = linkedSetOf<Int>()
+                    var requestFrames = 0
                     while (requestedChunks.size < CHUNKS_PER_PIECE) {
                         val request = readFrame(input)
                         if (request.isEmpty() || (request[0].toInt() and 0xff) != 6) continue
+                        requestFrames += 1
+                        check(requestFrames <= MAX_CHUNK_REQUEST_FRAMES) {
+                            "Too many chunk request frames before completing the piece: $requestFrames"
+                        }
                         check(request.size == 11) { "Unexpected chunk request body size ${request.size}" }
                         val payload = ByteBuffer.wrap(request, 1, 10).order(ByteOrder.BIG_ENDIAN)
                         val streamIndex = payload.int.toLong() and 0xffff_ffffL
@@ -189,8 +200,12 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
                         check(streamIndex == 0L)
                         check(piece == PIECE_NUMBER)
                         check(chunkIndex in 0 until CHUNKS_PER_PIECE)
-                        check(requestedChunks.add(chunkIndex)) { "Duplicate chunk request $chunkIndex" }
 
+                        // The production scheduler is allowed to retry a still-missing chunk after
+                        // its bounded retry interval. A deterministic peer fixture must answer that
+                        // retry instead of treating it as a protocol violation. The unique-set
+                        // condition below still requires the runtime to request every chunk.
+                        requestedChunks.add(chunkIndex)
                         output.write(liveChunkFrame(chunkIndex))
                         output.flush()
                     }
@@ -221,6 +236,7 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
         const val PIECE_BYTES = 512 * 1024
         const val CHUNK_BYTES = 16 * 1024
         const val CHUNKS_PER_PIECE = PIECE_BYTES / CHUNK_BYTES
+        const val MAX_CHUNK_REQUEST_FRAMES = CHUNKS_PER_PIECE * 3
         const val SIGNATURE_BYTES = 96
         const val TS_PACKET_BYTES = 188
         const val STARTUP_BYTES = 256 * 1024
