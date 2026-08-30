@@ -13,17 +13,21 @@ import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AceLiveUtpWireHandshakeIntegrationTest {
     private val loopback: InetAddress = InetAddress.getByName("127.0.0.1")
+    private val handshakeCodec = AceLivePeerHandshakeCodec()
 
     @Test
-    fun `full duplex established wire carries client handshake ack and remote payload`() = runBlocking {
-        StrictWirePeer(loopback).use { peer ->
+    fun `full duplex byte stream carries production Ace handshake and uTP ack`() = runBlocking {
+        StrictWirePeer(
+            bindAddress = loopback,
+            expectedSwarmKey = SWARM_KEY,
+            serverPeerId = SERVER_PEER_ID
+        ).use { peer ->
             val connection = AceLiveUtpSocketConnector(
                 policy = AceLiveUtpSocketPolicy(
                     initialSynTimeoutMillis = 500,
@@ -38,29 +42,45 @@ class AceLiveUtpWireHandshakeIntegrationTest {
             assertTrue(peer.awaitStateSent())
             peer.throwIfFailed()
 
-            val aceHandshake = ByteArray(66) { index -> (index + 1).toByte() }
-            val sent = connection.send(aceHandshake)
-            assertEquals(aceHandshake.size, sent.acceptedBytes)
-            assertEquals(1, sent.transmissions.size)
+            val transport = AceLiveUtpByteStreamTransport(connection)
+            val clientHandshakeBytes = handshakeCodec.encode(
+                swarmKey = SWARM_KEY,
+                peerId = CLIENT_PEER_ID
+            )
+            transport.write(clientHandshakeBytes)
 
             assertTrue(peer.awaitClientData())
             peer.throwIfFailed()
-            assertArrayEquals(aceHandshake, peer.clientData.get()!!.payload)
+            assertArrayEquals(clientHandshakeBytes, peer.clientData.get()!!.payload)
 
-            val ack = connection.receiveOnce()
-            assertNotNull(ack)
-            ack!!
-            assertTrue(ack.deliveredBytes.isEmpty())
-            assertEquals(setOf(2), ack.acknowledgedSequenceNumbers)
-            assertFalse(ack.remoteClosed)
+            val clientHandshake = peer.clientHandshake.get()
+            assertNotNull(clientHandshake)
+            clientHandshake!!
+            assertArrayEquals(SWARM_KEY, clientHandshake.swarmKeyBytes())
+            assertArrayEquals(CLIENT_PEER_ID, clientHandshake.peerIdBytes())
+            assertArrayEquals(
+                AceLivePeerHandshakeCodec.extensionProtocolReservedBytes(),
+                clientHandshake.reservedBytes()
+            )
 
             assertTrue(peer.awaitServerDataSent())
-            val inbound = connection.receiveOnce()
-            assertNotNull(inbound)
-            inbound!!
-            assertArrayEquals(StrictWirePeer.SERVER_PAYLOAD, inbound.deliveredBytes)
-            assertTrue(inbound.acknowledgedSequenceNumbers.isEmpty())
-            assertFalse(inbound.remoteClosed)
+            val serverHandshakeBytes = readExactly(
+                transport = transport,
+                byteCount = AceLivePeerHandshakeCodec.HANDSHAKE_BYTES
+            )
+            val decodedServerHandshake = handshakeCodec.decode(
+                buffer = serverHandshakeBytes,
+                expectedSwarmKey = SWARM_KEY
+            )
+            assertTrue(decodedServerHandshake is AceLivePeerHandshakeDecodeResult.Decoded)
+            decodedServerHandshake as AceLivePeerHandshakeDecodeResult.Decoded
+            assertEquals(AceLivePeerHandshakeCodec.HANDSHAKE_BYTES, decodedServerHandshake.consumedBytes)
+            assertArrayEquals(SWARM_KEY, decodedServerHandshake.handshake.swarmKeyBytes())
+            assertArrayEquals(SERVER_PEER_ID, decodedServerHandshake.handshake.peerIdBytes())
+            assertArrayEquals(
+                AceLivePeerHandshakeCodec.extensionProtocolReservedBytes(),
+                decodedServerHandshake.handshake.reservedBytes()
+            )
 
             assertTrue(peer.awaitClientAck())
             peer.throwIfFailed()
@@ -71,13 +91,53 @@ class AceLiveUtpWireHandshakeIntegrationTest {
             assertEquals(peer.clientSendConnectionId(), clientAck.header.connectionId)
             assertEquals(StrictWirePeer.SERVER_DATA_SEQUENCE, clientAck.header.acknowledgementNumber)
 
-            connection.close()
+            transport.close()
         }
     }
 
+    private suspend fun readExactly(
+        transport: AceLiveTcpTransport,
+        byteCount: Int
+    ): ByteArray {
+        val output = ByteArray(byteCount)
+        var offset = 0
+
+        repeat(MAX_READ_ATTEMPTS) {
+            if (offset == byteCount) return output
+
+            val readBuffer = ByteArray(byteCount - offset)
+            when (val read = transport.read(readBuffer)) {
+                -1 -> error("Remote uTP peer closed after $offset of $byteCount handshake bytes")
+                0 -> Unit
+                else -> {
+                    readBuffer.copyInto(
+                        destination = output,
+                        destinationOffset = offset,
+                        startIndex = 0,
+                        endIndex = read
+                    )
+                    offset += read
+                }
+            }
+        }
+
+        check(offset == byteCount) {
+            "Expected $byteCount handshake bytes from uTP byte stream, received $offset"
+        }
+        return output
+    }
+
     private class StrictWirePeer(
-        bindAddress: InetAddress
+        bindAddress: InetAddress,
+        expectedSwarmKey: ByteArray,
+        serverPeerId: ByteArray
     ) : Closeable {
+        private val expectedSwarmKey = expectedSwarmKey.copyOf()
+        private val serverHandshake = AceLivePeerHandshakeCodec().encode(
+            swarmKey = expectedSwarmKey,
+            peerId = serverPeerId
+        )
+        private val handshakeCodec = AceLivePeerHandshakeCodec()
         private val socket = DatagramSocket(InetSocketAddress(bindAddress, 0)).apply {
             soTimeout = 3_000
         }
@@ -85,6 +145,7 @@ class AceLiveUtpWireHandshakeIntegrationTest {
         private val syn = AtomicReference<AceLiveUtpPacket?>(null)
         private val clientAddress = AtomicReference<SocketAddress?>(null)
         val clientData = AtomicReference<AceLiveUtpPacket?>(null)
+        val clientHandshake = AtomicReference<AceLivePeerHandshake?>(null)
         val clientAck = AtomicReference<AceLiveUtpPacket?>(null)
         private val stateSent = CountDownLatch(1)
         private val clientDataSeen = CountDownLatch(1)
@@ -126,8 +187,15 @@ class AceLiveUtpWireHandshakeIntegrationTest {
                 check(data.header.connectionId == clientSendConnectionId())
                 check(data.header.sequenceNumber == 2)
                 check(data.header.acknowledgementNumber == SERVER_STATE_SEQUENCE)
-                check(data.payload.size == 66)
+                check(data.payload.size == AceLivePeerHandshakeCodec.HANDSHAKE_BYTES)
+                val decodedClientHandshake = handshakeCodec.decode(
+                    buffer = data.payload,
+                    expectedSwarmKey = expectedSwarmKey
+                )
+                check(decodedClientHandshake is AceLivePeerHandshakeDecodeResult.Decoded)
+                check(decodedClientHandshake.consumedBytes == AceLivePeerHandshakeCodec.HANDSHAKE_BYTES)
                 clientData.set(data)
+                clientHandshake.set(decodedClientHandshake.handshake)
                 clientDataSeen.countDown()
 
                 send(
@@ -154,7 +222,7 @@ class AceLiveUtpWireHandshakeIntegrationTest {
                             sequenceNumber = SERVER_DATA_SEQUENCE,
                             acknowledgementNumber = data.header.sequenceNumber
                         ),
-                        payload = SERVER_PAYLOAD
+                        payload = serverHandshake
                     )
                 )
                 serverDataSent.countDown()
@@ -216,7 +284,19 @@ class AceLiveUtpWireHandshakeIntegrationTest {
         companion object {
             const val SERVER_STATE_SEQUENCE = 500
             const val SERVER_DATA_SEQUENCE = 501
-            val SERVER_PAYLOAD = byteArrayOf(9, 8, 7, 6)
+        }
+    }
+
+    private companion object {
+        const val MAX_READ_ATTEMPTS = 4
+        val SWARM_KEY = ByteArray(AceLivePeerHandshakeCodec.SWARM_KEY_BYTES) { index ->
+            (0x20 + index).toByte()
+        }
+        val CLIENT_PEER_ID = ByteArray(AceLivePeerHandshakeCodec.PEER_ID_BYTES) { index ->
+            (0x40 + index).toByte()
+        }
+        val SERVER_PEER_ID = ByteArray(AceLivePeerHandshakeCodec.PEER_ID_BYTES) { index ->
+            (0x60 + index).toByte()
         }
     }
 }
