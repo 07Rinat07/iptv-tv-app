@@ -12,6 +12,7 @@ import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
@@ -33,7 +34,7 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
                     mode = AceLiveBufferMode.MANUAL,
                     manualStartupBufferBytes = STARTUP_BYTES.toLong(),
                     outputBufferBytes = 4 * 1024 * 1024,
-                    startupTimeoutMillis = 10_000,
+                    startupTimeoutMillis = STARTUP_TIMEOUT_MILLIS,
                     mediaStallTimeoutMillis = 5_000
                 ),
                 diagnosticsObserver = { status, message -> diagnostics += status to message }
@@ -60,12 +61,26 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
 
             try {
                 val result = try {
-                    withTimeout(8_000) {
+                    // Runtime owns the real 10s startup deadline. This outer bound exists only to
+                    // catch a harness deadlock after the production-configured startup has expired.
+                    withTimeout(TEST_WATCHDOG_TIMEOUT_MILLIS) {
                         engine.prepareInfoHash(INFO_HASH)
                     }
                 } catch (error: Throwable) {
                     peer.throwIfFailed()
-                    throw error
+                    throw AssertionError(
+                        "embedded runtime prepare failed: ${peer.snapshot()}; " +
+                            "diagnostics=${diagnostics.takeLast(8)}",
+                        error
+                    )
+                }
+                if (result is P2pResult.Error) {
+                    peer.throwIfFailed()
+                    throw AssertionError(
+                        "embedded runtime returned error=${result.message}; ${peer.snapshot()}; " +
+                            "diagnostics=${diagnostics.takeLast(8)}",
+                        result.cause
+                    )
                 }
                 assertTrue(result is P2pResult.Success)
                 val prepared = (result as P2pResult.Success).data
@@ -73,7 +88,10 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
                 assertTrue(prepared.url.startsWith("http://127.0.0.1:"))
                 assertTrue(prepared.url.endsWith("/live.ts"))
 
-                assertTrue(peer.awaitAllChunkResponses())
+                assertTrue(
+                    "peer did not finish all chunks: ${peer.snapshot()}",
+                    peer.awaitAllChunkResponses()
+                )
                 peer.throwIfFailed()
 
                 val delivered = readLoopbackPrefix(prepared.url, STARTUP_BYTES)
@@ -141,9 +159,12 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
         private val server = ServerSocket().apply {
             reuseAddress = true
             bind(InetSocketAddress(loopback, 0))
-            soTimeout = 8_000
+            soTimeout = PEER_SOCKET_TIMEOUT_MILLIS
         }
         private val failure = AtomicReference<Throwable?>(null)
+        private val stage = AtomicReference("LISTENING")
+        private val requestFramesSeen = AtomicInteger(0)
+        private val uniqueChunksSeen = AtomicInteger(0)
         private val allChunkResponses = CountDownLatch(1)
         private val release = CountDownLatch(1)
         val port: Int = server.localPort
@@ -155,7 +176,8 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
         ) {
             try {
                 server.accept().use { socket ->
-                    socket.soTimeout = 8_000
+                    stage.set("ACCEPTED")
+                    socket.soTimeout = PEER_SOCKET_TIMEOUT_MILLIS
                     val input = socket.getInputStream()
                     val output = socket.getOutputStream()
 
@@ -165,6 +187,7 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
                         expectedSwarmKey = SWARM_KEY_BYTES
                     )
                     check(handshake is AceLivePeerHandshakeDecodeResult.Decoded)
+                    stage.set("CLIENT_HANDSHAKE_RECEIVED")
                     output.write(
                         handshakeCodec.encode(
                             swarmKey = SWARM_KEY_BYTES,
@@ -172,23 +195,26 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
                         )
                     )
                     output.flush()
+                    stage.set("SERVER_HANDSHAKE_SENT")
 
                     var interestedSeen = false
                     while (!interestedSeen) {
                         val frame = readFrame(input)
                         interestedSeen = frame.size == 1 && (frame[0].toInt() and 0xff) == 2
                     }
+                    stage.set("INTERESTED_SEEN")
 
                     output.write(frame(11, compactLiveStatus(PIECE_NUMBER, PIECE_NUMBER, PIECE_NUMBER)))
                     output.write(frame(1))
                     output.flush()
+                    stage.set("WINDOW_SENT")
 
                     val requestedChunks = linkedSetOf<Int>()
-                    var requestFrames = 0
                     while (requestedChunks.size < CHUNKS_PER_PIECE) {
                         val request = readFrame(input)
                         if (request.isEmpty() || (request[0].toInt() and 0xff) != 6) continue
-                        requestFrames += 1
+                        stage.set("REQUESTING")
+                        val requestFrames = requestFramesSeen.incrementAndGet()
                         check(requestFrames <= MAX_CHUNK_REQUEST_FRAMES) {
                             "Too many chunk request frames before completing the piece: $requestFrames"
                         }
@@ -205,10 +231,13 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
                         // its bounded retry interval. A deterministic peer fixture must answer that
                         // retry instead of treating it as a protocol violation. The unique-set
                         // condition below still requires the runtime to request every chunk.
-                        requestedChunks.add(chunkIndex)
+                        if (requestedChunks.add(chunkIndex)) {
+                            uniqueChunksSeen.incrementAndGet()
+                        }
                         output.write(liveChunkFrame(chunkIndex))
                         output.flush()
                     }
+                    stage.set("ALL_CHUNKS_RESPONDED")
                     allChunkResponses.countDown()
                     release.await(10, TimeUnit.SECONDS)
                 }
@@ -220,8 +249,15 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
 
         fun awaitAllChunkResponses(): Boolean = allChunkResponses.await(5, TimeUnit.SECONDS)
 
+        fun snapshot(): String =
+            "stage=${stage.get()}, requestFrames=${requestFramesSeen.get()}, " +
+                "uniqueChunks=${uniqueChunksSeen.get()}/$CHUNKS_PER_PIECE, " +
+                "workerFailure=${failure.get()?.let { error ->
+                    "${error.javaClass.simpleName}:${error.message}"
+                } ?: "none"}"
+
         fun throwIfFailed() {
-            failure.get()?.let { throw AssertionError("embedded runtime peer failed", it) }
+            failure.get()?.let { throw AssertionError("embedded runtime peer failed: ${snapshot()}", it) }
         }
 
         override fun close() {
@@ -240,6 +276,9 @@ class AceLiveEmbeddedRuntimeReadinessQualificationTest {
         const val SIGNATURE_BYTES = 96
         const val TS_PACKET_BYTES = 188
         const val STARTUP_BYTES = 256 * 1024
+        const val STARTUP_TIMEOUT_MILLIS = 10_000L
+        const val TEST_WATCHDOG_TIMEOUT_MILLIS = 12_000L
+        const val PEER_SOCKET_TIMEOUT_MILLIS = 11_000
         const val DHT_BATCH_SIZE = 4
         const val INFO_HASH = "1112131415161718191a1b1c1d1e1f2021222324"
 
