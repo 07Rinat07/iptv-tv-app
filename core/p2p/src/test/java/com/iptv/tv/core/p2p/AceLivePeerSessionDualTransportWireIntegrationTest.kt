@@ -89,6 +89,14 @@ class AceLivePeerSessionDualTransportWireIntegrationTest {
                         quality.windowUsefulPeers == 1 &&
                         quality.unchokedPeers == 1
                 }
+                awaitCondition {
+                    events.filterIsInstance<AceLiveTcpPoolEvent.Ingress>().any { event ->
+                        event.peerId == PEER_ID &&
+                            event.result.metadataUpdates.any { window ->
+                                window.minPiece == 10L && window.maxPiece == 12L
+                            }
+                    }
+                }
 
                 val ingress = events.filterIsInstance<AceLiveTcpPoolEvent.Ingress>()
                     .first { event ->
@@ -102,7 +110,6 @@ class AceLivePeerSessionDualTransportWireIntegrationTest {
 
                 val dispatch = pool.scheduleAndDispatch(
                     head = 10,
-                    nowMillis = 1_000,
                     maxInFlightPerPeer = 1
                 )
 
