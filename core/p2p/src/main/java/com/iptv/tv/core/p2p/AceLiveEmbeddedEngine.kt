@@ -152,6 +152,8 @@ class AceLiveEmbeddedEngine(
         routingMemory = dhtRoutingMemory
     )
     private var activeRuntime: Runtime? = null
+    internal var peerDiscoveryRunner: AceLiveEmbeddedPeerDiscoveryRunner =
+        AceLiveEmbeddedPeerDiscoveryRunner.Production
 
     suspend fun prepareStream(contentId: String): P2pResult<AceLivePreparedStream> {
         val token = generation.incrementAndGet()
@@ -380,6 +382,7 @@ class AceLiveEmbeddedEngine(
                     startupTimelineDiagnostics = startupTimeline,
                     dhtRoutingMemory = dhtRoutingMemory,
                     peerReputationStore = peerReputationStore,
+                    peerDiscoveryRunner = peerDiscoveryRunner,
                     startupId = startupId,
                     generationToken = token,
                     runtimePath = runtimePath
@@ -475,6 +478,7 @@ class AceLiveEmbeddedEngine(
         private val startupTimelineDiagnostics: AceLiveStartupTimelineDiagnostics,
         private val dhtRoutingMemory: AceDhtRoutingMemory,
         private val peerReputationStore: AceLivePeerReputationStore?,
+        private val peerDiscoveryRunner: AceLiveEmbeddedPeerDiscoveryRunner,
         startupId: Long,
         generationToken: Long,
         runtimePath: AceLiveRuntimePath
@@ -739,11 +743,6 @@ class AceLiveEmbeddedEngine(
                                         startupDhtProbeRefillPending.get() &&
                                         !startup.isCompleted
                                     ) {
-                                        // One DHT endpoint frequently accepts no useful live session. A
-                                        // bounded four-candidate batch gives the TCP pool several chances in
-                                        // a few seconds, while two independent rounds reduce dependence on a
-                                        // single routing-table path. Neither walk blocks scheduling or media
-                                        // ingestion from candidates already in the pool.
                                         val probeRefill = refillLoop.runOneCycle()
                                         val completedRounds = startupDhtProbeRounds.get()
                                         val returnedDhtPeers = lastStartupDhtProbePeerCount.get()
@@ -757,8 +756,6 @@ class AceLiveEmbeddedEngine(
                                                 "returned_peers=$returnedDhtPeers " +
                                                 "started_peers=${probeRefill.startedPeers}"
                                         )
-                                        // Discovery can be skipped if enough candidates became active while
-                                        // this coroutine was scheduled. Do not spin on an unconsumed flag.
                                         if (!probeRefill.discoveryAttempted) break
                                     }
                                     if (
@@ -771,9 +768,6 @@ class AceLiveEmbeddedEngine(
                                         startupDhtFullExpansionPending.get() &&
                                         !startup.isCompleted
                                     ) {
-                                        // Once the first DHT candidate is being probed concurrently by the
-                                        // session, collect the wider candidate set for resiliency and stale-
-                                        // peer recovery. This second pass remains off the critical path.
                                         val expandedRefill = refillLoop.runOneCycle()
                                         Log.i(
                                             LOG_TAG,
@@ -853,14 +847,10 @@ class AceLiveEmbeddedEngine(
                         discoveryBudgetMillis = ACE_LIVE_STARTUP_DHT_PROBE_BUDGET_MILLIS,
                         returnAfterPeers = ACE_LIVE_STARTUP_DHT_PROBE_RETURN_AFTER_PEERS
                     ),
-                    // A cached one-peer fast-path result must not satisfy a four-peer probe batch.
-                    // An uncached round also explores a fresh randomized routing-table path.
                     reuseRecentResults = false,
                     routingMemory = dhtRoutingMemory
                 )
                 useStartupDhtFullExpansion -> AceLiveDhtDiscovery(
-                    // The initial result was intentionally short. A full startup expansion must not
-                    // reuse it from the positive-result cache.
                     reuseRecentResults = false,
                     routingMemory = dhtRoutingMemory
                 )
@@ -869,19 +859,19 @@ class AceLiveEmbeddedEngine(
                     routingMemory = dhtRoutingMemory
                 )
             }
-            val result = AceLivePeerDiscoveryOrchestrator(
+            val discoveryRequest = AceLivePeerDiscoveryOrchestrationRequest(
+                dhtRequest = dhtRequest,
+                trackerRequest = trackerRequest.takeIf {
+                    aceLiveStartupDiscoveryShouldUseTracker(
+                        useStartupDhtProbeRefill = useStartupDhtProbeRefill,
+                        useStartupDhtFullExpansion = useStartupDhtFullExpansion
+                    )
+                }
+            )
+            val result = peerDiscoveryRunner.discover(
                 dhtDiscover = dhtDiscovery::discover,
-                policy = discoveryPolicy
-            ).discover(
-                AceLivePeerDiscoveryOrchestrationRequest(
-                    dhtRequest = dhtRequest,
-                    trackerRequest = trackerRequest.takeIf {
-                        aceLiveStartupDiscoveryShouldUseTracker(
-                            useStartupDhtProbeRefill = useStartupDhtProbeRefill,
-                            useStartupDhtFullExpansion = useStartupDhtFullExpansion
-                        )
-                    }
-                )
+                policy = discoveryPolicy,
+                request = discoveryRequest
             )
             val discoveryCompletedAt = System.currentTimeMillis()
             pool.recordDiscoveredCandidateCount(result.peers.size)
@@ -1165,8 +1155,8 @@ class AceLiveEmbeddedEngine(
                             }}"
                 )
             }
-            logProgress(event)
             emitPieces(event.result.emittedPieces)
+            logProgress(event)
         }
 
         private fun logProgress(event: AceLiveTcpPoolEvent.Ingress) {
@@ -1177,13 +1167,15 @@ class AceLiveEmbeddedEngine(
             val previous = lastProgressLogAt.get()
             if (previous != 0L && now - previous < PROGRESS_LOG_INTERVAL_MILLIS) return
             if (!lastProgressLogAt.compareAndSet(previous, now)) return
-            Log.i(
-                LOG_TAG,
-                "event=media_progress peer=${event.peerId} pieces=${pieces.size} " +
-                    "piece_first=${pieces.first().piece} piece_last=${pieces.last().piece} " +
-                    "total_bytes=$totalBytes retained_bytes=${mediaBuffer.retainedBytes()} " +
-                    "advertised_head=${latestHead.get()} elapsed_ms=${startupElapsedMillis(now)}"
-            )
+            runCatching {
+                Log.i(
+                    LOG_TAG,
+                    "event=media_progress peer=${event.peerId} pieces=${pieces.size} " +
+                        "piece_first=${pieces.first().piece} piece_last=${pieces.last().piece} " +
+                        "total_bytes=$totalBytes retained_bytes=${mediaBuffer.retainedBytes()} " +
+                        "advertised_head=${latestHead.get()} elapsed_ms=${startupElapsedMillis(now)}"
+                )
+            }
         }
 
         private fun claimThrottledLog(lastLogAt: AtomicLong): Boolean {
@@ -1255,14 +1247,16 @@ class AceLiveEmbeddedEngine(
                                     )
                                     if (decision.ready) {
                                         startupTimelineDiagnostics.onBufferReady(now)
-                                        Log.i(
-                                            LOG_TAG,
-                                            "event=startup_buffer_ready buffered_bytes=${mediaBuffer.retainedBytes()} " +
-                                                "target_bytes=${decision.targetBytes} " +
-                                                "rate_bps=${decision.observedBytesPerSecond} forced=${decision.forced} " +
-                                                "elapsed_ms=${startupElapsedMillis(now)}"
-                                        )
                                         startup.complete(Unit)
+                                        runCatching {
+                                            Log.i(
+                                                LOG_TAG,
+                                                "event=startup_buffer_ready buffered_bytes=${mediaBuffer.retainedBytes()} " +
+                                                    "target_bytes=${decision.targetBytes} " +
+                                                    "rate_bps=${decision.observedBytesPerSecond} forced=${decision.forced} " +
+                                                    "elapsed_ms=${startupElapsedMillis(now)}"
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1300,8 +1294,6 @@ class AceLiveEmbeddedEngine(
         const val DEFAULT_DIRECT_CHUNK_BYTES = 16 * 1024
         const val CONTENT_PREPARATION_TIMEOUT_MILLIS = 60_000L
         const val DIRECT_STARTUP_SOFT_TIMEOUT_MILLIS = 8_000L
-        // A qualified peer must survive one full 6s request timeout plus the 1s recovery check
-        // before metadata handoff is allowed to tear down an otherwise progressing direct runtime.
         const val DIRECT_QUALIFICATION_GRACE_MILLIS = 7_000L
         const val DIRECT_PROGRESS_FRESHNESS_MILLIS = 2_000L
         const val NO_CONNECTED_PEER_TIMEOUT_MILLIS = 30_000L
