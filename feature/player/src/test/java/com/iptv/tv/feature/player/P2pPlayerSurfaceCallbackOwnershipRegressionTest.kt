@@ -6,6 +6,24 @@ import org.junit.Test
 
 class P2pPlayerSurfaceCallbackOwnershipRegressionTest {
     @Test
+    fun `render helpers bind callbacks to the concrete session id`() {
+        val shell = stablePlayerShellSource()
+
+        assertTrue(
+            "dashboard and fullscreen render paths must both bind readiness to the concrete session",
+            occurrences(shell, "onReady = { onReady(session.sessionId) }") >= 2
+        )
+        assertTrue(
+            "dashboard and fullscreen render paths must both bind errors to the concrete session",
+            occurrences(shell, "onError = { onError(session.sessionId, it) }") >= 2
+        )
+        assertTrue(
+            "both render paths must preserve P2P boundary telemetry forwarding",
+            occurrences(shell, "onP2pBoundaryTelemetry = onP2pBoundaryTelemetry") >= 2
+        )
+    }
+
+    @Test
     fun `fullscreen and inline player routes preserve session ownership`() {
         val source = stablePlayerScreenSource()
 
@@ -85,6 +103,11 @@ class P2pPlayerSurfaceCallbackOwnershipRegressionTest {
         )
     }
 
+    private fun stablePlayerShellSource(): String = sourceFile(
+        modulePath = "feature/player",
+        relativePath = "src/main/java/com/iptv/tv/feature/player/StablePlayerShell.kt"
+    )
+
     private fun stablePlayerScreenSource(): String = sourceFile(
         modulePath = "feature/player",
         relativePath = "src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt"
@@ -126,6 +149,10 @@ class P2pPlayerSurfaceCallbackOwnershipRegressionTest {
         }
         error("Unbalanced production function body: $signature")
     }
+
+    private fun occurrences(source: String, token: String): Int =
+        source.windowed(size = token.length, step = 1, partialWindows = false)
+            .count { it == token }
 
     private fun assertOrdered(source: String, vararg tokens: String) {
         var previous = -1
