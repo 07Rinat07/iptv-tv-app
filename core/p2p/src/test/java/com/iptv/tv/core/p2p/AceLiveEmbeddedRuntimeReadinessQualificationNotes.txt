@@ -1,4 +1,0 @@
-This branch intentionally injects only the final discovery orchestration result.
-Production tracker/DHT request construction, TCP/uTP transport racing, Ace handshake,
-request scheduling, chunk reassembly, media authentication, MPEG-TS resynchronization,
-startup buffering and loopback HTTP delivery remain on their production implementations.
