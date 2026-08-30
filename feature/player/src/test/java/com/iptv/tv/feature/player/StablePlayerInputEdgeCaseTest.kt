@@ -69,4 +69,33 @@ class StablePlayerInputEdgeCaseTest {
         assertFalse(stableActionRevealsControls(StableRemoteAction.TOGGLE_FULLSCREEN))
         assertFalse(stableActionRevealsControls(StableRemoteAction.NONE))
     }
+
+    @Test
+    fun `rapid cross-channel zaps are bounded by one cooldown`() {
+        val throttle = StableChannelZapThrottle(cooldownMillis = 350L)
+
+        assertTrue(throttle.shouldDispatch(StableRemoteAction.NEXT_CHANNEL, nowMillis = 1_000L))
+        assertFalse(throttle.shouldDispatch(StableRemoteAction.PREVIOUS_CHANNEL, nowMillis = 1_150L))
+        assertFalse(throttle.shouldDispatch(StableRemoteAction.NEXT_CHANNEL, nowMillis = 1_349L))
+        assertTrue(throttle.shouldDispatch(StableRemoteAction.PREVIOUS_CHANNEL, nowMillis = 1_350L))
+    }
+
+    @Test
+    fun `channel zap throttle never delays non-channel input`() {
+        val throttle = StableChannelZapThrottle(cooldownMillis = 350L)
+
+        assertTrue(throttle.shouldDispatch(StableRemoteAction.NEXT_CHANNEL, nowMillis = 2_000L))
+        assertTrue(throttle.shouldDispatch(StableRemoteAction.VOLUME_UP, nowMillis = 2_050L))
+        assertTrue(throttle.shouldDispatch(StableRemoteAction.TOGGLE_PLAYBACK, nowMillis = 2_050L))
+        assertTrue(throttle.shouldDispatch(StableRemoteAction.TOGGLE_CONTROLS, nowMillis = 2_050L))
+    }
+
+    @Test
+    fun `clock rollback resets channel zap cooldown instead of suppressing input`() {
+        val throttle = StableChannelZapThrottle(cooldownMillis = 350L)
+
+        assertTrue(throttle.shouldDispatch(StableRemoteAction.NEXT_CHANNEL, nowMillis = 5_000L))
+        assertTrue(throttle.shouldDispatch(StableRemoteAction.NEXT_CHANNEL, nowMillis = 4_000L))
+        assertFalse(throttle.shouldDispatch(StableRemoteAction.NEXT_CHANNEL, nowMillis = 4_100L))
+    }
 }
