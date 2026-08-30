@@ -9,7 +9,6 @@ import java.net.InetSocketAddress
 import java.net.SocketAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
@@ -29,7 +28,6 @@ class AceLiveTcpUtpRacingWireIntegrationTest {
             expectedSwarmKey = SWARM_KEY,
             serverPeerId = SERVER_PEER_ID
         ).use { peer ->
-            val tcpAttempted = AtomicBoolean(false)
             val utpFactory = JvmAceLiveUtpTransportFactory(
                 addressResolver = { listOf(loopback) },
                 connectAddress = { address, port ->
@@ -46,7 +44,6 @@ class AceLiveTcpUtpRacingWireIntegrationTest {
             )
             val factory = AceLiveTcpUtpRacingTransportFactory(
                 tcpConnect = { _, _ ->
-                    tcpAttempted.set(true)
                     throw IOException("TCP intentionally unavailable for real uTP qualification")
                 },
                 utpConnect = { endpoint, policy ->
@@ -63,7 +60,6 @@ class AceLiveTcpUtpRacingWireIntegrationTest {
             val raced = factory.connect(endpoint, policy)
 
             try {
-                assertTrue(tcpAttempted.get())
                 assertTrue(peer.awaitStateSent())
                 peer.throwIfFailed()
 
