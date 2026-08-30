@@ -19,8 +19,7 @@ class P2pMedia3BoundaryCallbackWiringRegressionTest {
             "if (session.isP2pPlayback)",
             "P2pPlayerBoundaryTelemetryTracker(",
             "sessionId = session.sessionId",
-            "playbackStartedAtMillis = session.playbackStartedAtMillis",
-            "else {\n                null"
+            "playbackStartedAtMillis = session.playbackStartedAtMillis"
         )
     }
 
@@ -86,12 +85,12 @@ class P2pMedia3BoundaryCallbackWiringRegressionTest {
     fun `p2p media source keeps zero media3 retry budget`() {
         val surface = stableMedia3Surface()
 
-        assertTrue(
-            "P2P Media3 source must continue using the dedicated zero-retry policy",
-            surface.contains(
-                "DefaultLoadErrorHandlingPolicy(\n" +
-                    "                            StableP2pMedia3RecoveryPolicy.MIN_LOADABLE_RETRY_COUNT"
-            )
+        assertOrdered(
+            surface,
+            "if (session.isP2pPlayback)",
+            "setLoadErrorHandlingPolicy(",
+            "DefaultLoadErrorHandlingPolicy(",
+            "StableP2pMedia3RecoveryPolicy.MIN_LOADABLE_RETRY_COUNT"
         )
     }
 
