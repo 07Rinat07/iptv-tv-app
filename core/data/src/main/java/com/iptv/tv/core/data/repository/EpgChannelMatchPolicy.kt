@@ -4,9 +4,9 @@ package com.iptv.tv.core.data.repository
  * Conservative fallback matching for XMLTV channel identifiers.
  *
  * Exact tvg-id/display-name/channel-id matching is handled by the repository before this
- * fallback is consulted. A partial/quality-alias match is accepted only when every matching
- * normalized key resolves to the same XMLTV channel. This keeps the result independent from
- * XMLTV/map order and fails closed when multiple channels are plausible.
+ * fallback is consulted. A presentation/region alias is accepted only when every matching
+ * normalized key resolves to the same XMLTV channel. Arbitrary substring similarity is never
+ * considered a match.
  */
 internal object EpgChannelMatchPolicy {
     fun uniquePartialChannelId(
@@ -20,14 +20,7 @@ internal object EpgChannelMatchPolicy {
         for ((channelKey, channelId) in channelIdsByTextKey) {
             if (channelKey.isBlank()) continue
             val keyAliases = presentationAliases(channelKey)
-            val matches = channelAliases.any { channelAlias ->
-                keyAliases.any { keyAlias ->
-                    channelAlias == keyAlias ||
-                        keyAlias.contains(channelAlias) ||
-                        channelAlias.contains(keyAlias)
-                }
-            }
-            if (!matches) continue
+            if (channelAliases.intersect(keyAliases).isEmpty()) continue
 
             val existing = candidate
             if (existing == null) {
@@ -40,10 +33,10 @@ internal object EpgChannelMatchPolicy {
     }
 
     /**
-     * IPTV catalogues commonly append transport/presentation metadata to the human channel name,
-     * while XMLTV keeps the base station name. Input is already normalized to letters/digits.
-     * Strip only well-known *trailing* decorations and retain every intermediate alias so ambiguity
-     * checks still fail closed instead of broadening arbitrary substring matching.
+     * IPTV catalogues commonly append transport/presentation or bounded regional metadata to a
+     * human channel name, while XMLTV keeps the base station name. Input is already normalized to
+     * letters/digits. Strip only well-known *trailing* decorations and retain every intermediate
+     * alias so ambiguity checks still fail closed when both base and decorated feeds are present.
      */
     internal fun presentationAliases(normalized: String): Set<String> {
         val value = normalized.trim()
@@ -72,8 +65,11 @@ internal object EpgChannelMatchPolicy {
     private const val MIN_BASE_KEY_LENGTH = 4
 
     // Order longest/editorial tags first so e.g. "...1080pgeoblocked" becomes base channel name
-    // through deterministic, bounded suffix peeling.
+    // through deterministic, bounded suffix peeling. Regional tags intentionally exclude short
+    // country codes such as "ru" because they collide with legitimate channel names.
     private val PRESENTATION_SUFFIXES = listOf(
+        "sanktpeterburg",
+        "санктпетербург",
         "geoblocked",
         "notavailable",
         "not247",
@@ -89,8 +85,16 @@ internal object EpgChannelMatchPolicy {
         "360p",
         "240p",
         "fullhd",
+        "russia",
+        "россия",
+        "moscow",
+        "москва",
         "fhd",
         "uhd",
+        "spb",
+        "спб",
+        "msk",
+        "мск",
         "4k",
         "hd",
         "sd"
