@@ -10,6 +10,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.iptv.tv.core.model.EpgSettingsPolicy
+import com.iptv.tv.core.model.EpgUserSettings
 import com.iptv.tv.sync.worker.DownloadQueueWorker
 import com.iptv.tv.sync.worker.EpgRefreshWorker
 import com.iptv.tv.sync.worker.PlaylistSyncWorker
@@ -77,9 +78,9 @@ object SyncScheduler {
     }
 
     /**
-     * Startup refreshes are freshness-gated again inside the worker so a periodic run winning the
-     * race does not cause a second large XMLTV pass. A future explicit user action should set
-     * [force] to true so "Обновить EPG" always performs the requested refresh.
+     * Startup and foreground-return refreshes are freshness-gated again inside the worker so a
+     * periodic run winning the race does not cause a second large XMLTV pass. A future explicit
+     * user action should set [force] to true so "Обновить EPG" always performs the requested refresh.
      */
     fun requestEpgRefresh(workManager: WorkManager, force: Boolean = false) {
         val request = OneTimeWorkRequestBuilder<EpgRefreshWorker>()
@@ -188,3 +189,9 @@ object SyncScheduler {
         )
     }
 }
+
+fun shouldRequestEpgRefreshOnForegroundReturn(
+    settings: EpgUserSettings,
+    nowMs: Long = System.currentTimeMillis()
+): Boolean =
+    settings.refreshOnStartIfStale && EpgSettingsPolicy.isRefreshStale(settings, nowMs)
