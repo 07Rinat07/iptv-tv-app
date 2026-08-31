@@ -100,6 +100,7 @@ class AceDhtQueryFailureMemoryIntegrationTest {
         val bootstrap = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
         val transactionId = byteArrayOf(0x12, 0x34)
         val peer = AceLiveTcpPeerEndpoint("127.0.0.1", 9201)
+        val bootstrapEndpoint = AceLiveTcpPeerEndpoint("127.0.0.1", bootstrap.localPort)
         val bootstrapThread = dhtServerThread(bootstrap, requestCount = 1) { _, _ ->
             response(
                 transactionId = transactionId,
@@ -112,7 +113,7 @@ class AceDhtQueryFailureMemoryIntegrationTest {
             backoffMillis = 20_000L
         )
         memory.recordFailure(
-            AceLiveTcpPeerEndpoint("127.0.0.1", bootstrap.localPort),
+            bootstrapEndpoint,
             nowMillis = 1_000L
         )
 
@@ -143,6 +144,7 @@ class AceDhtQueryFailureMemoryIntegrationTest {
             assertEquals(1, result.queriesSent)
             assertEquals(0, result.failedQueries)
             assertTrue(result.peers.contains(peer))
+            assertTrue(memory.isEligible(bootstrapEndpoint, nowMillis = 1_000L))
         } finally {
             bootstrap.close()
             bootstrapThread.join(2_000)
@@ -208,7 +210,7 @@ class AceDhtQueryFailureMemoryIntegrationTest {
             assertEquals(0, result.failedQueries)
             assertEquals(0, result.warmRoutingSeedsUsed)
             assertTrue(result.peers.contains(peer))
-            assertFalse(memory.isEligible(endpoint, nowMillis = 1_000L))
+            assertTrue(memory.isEligible(endpoint, nowMillis = 1_000L))
         } finally {
             bootstrap.close()
             bootstrapThread.join(2_000)
