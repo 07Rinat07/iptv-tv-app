@@ -94,15 +94,29 @@ class SyncSchedulerTest {
     }
 
     @Test
-    fun configurationRecreationIsNotDetectedAsForegroundReturn() {
+    fun configurationRecreationStaysInsideForeground() {
         val tracker = EpgForegroundReturnTracker()
         tracker.onActivityStarted()
 
-        assertTrue(tracker.onActivityStopped(isChangingConfigurations = true))
+        assertFalse(tracker.onActivityStopped(isChangingConfigurations = true))
+        val transition = tracker.onActivityStarted()
+
+        assertFalse(transition.enteredForeground)
+        assertFalse(transition.returnedFromBackground)
+    }
+
+    @Test
+    fun realBackgroundAfterConfigurationRecreationIsStillDetected() {
+        val tracker = EpgForegroundReturnTracker()
+        tracker.onActivityStarted()
+        tracker.onActivityStopped(isChangingConfigurations = true)
+        tracker.onActivityStarted()
+
+        assertTrue(tracker.onActivityStopped(isChangingConfigurations = false))
         val transition = tracker.onActivityStarted()
 
         assertTrue(transition.enteredForeground)
-        assertFalse(transition.returnedFromBackground)
+        assertTrue(transition.returnedFromBackground)
     }
 
     @Test
