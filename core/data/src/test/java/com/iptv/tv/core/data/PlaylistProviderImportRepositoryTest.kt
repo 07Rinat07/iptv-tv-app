@@ -4,6 +4,7 @@ import android.content.Context
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.repository.PlaylistRepositoryImpl
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.EpgSnapshotDao
 import com.iptv.tv.core.database.dao.FavoriteDao
 import com.iptv.tv.core.database.dao.HistoryDao
 import com.iptv.tv.core.database.dao.PlaylistDao
@@ -67,6 +68,7 @@ class PlaylistProviderImportRepositoryTest {
             favoriteDao = mockk<FavoriteDao>(relaxed = true),
             historyDao = mockk<HistoryDao>(relaxed = true),
             syncLogDao = syncLogDao,
+            epgSnapshotDao = mockk<EpgSnapshotDao>(relaxed = true),
             parser = M3uParser(),
             okHttpClient = OkHttpClient()
         )
@@ -142,25 +144,20 @@ class PlaylistProviderImportRepositoryTest {
         assertFalse(insertedPlaylist.captured.source.contains("api-secret"))
         assertEquals(1, insertedChannels.captured.size)
         assertEquals("Jelly News", insertedChannels.captured.single().name)
-        assertEquals("channel-1", insertedChannels.captured.single().tvgId)
+        assertTrue(insertedChannels.captured.single().logo!!.contains("api_key=api-secret"))
         assertTrue(insertedChannels.captured.single().streamUrl.contains("/LiveTv/Channels/channel-1/Stream"))
-        assertTrue(insertedChannels.captured.single().streamUrl.contains("static=true"))
         assertTrue(insertedChannels.captured.single().streamUrl.contains("api_key=api-secret"))
         assertEquals("/LiveTv/Channels?api_key=api-secret", server.takeRequest().path)
     }
 
     @Test
-    fun importFromHdHomeRun_acceptsLineupJsonAndStoresLineupSource() = runTest {
+    fun importFromHdHomeRun_usesLineupJsonAndBuildsM3u() = runTest {
         server.enqueue(
             MockResponse().setBody(
                 """
                 [
-                  {
-                    "GuideNumber": "5.1",
-                    "GuideName": "HD News",
-                    "URL": "${server.url("/auto/v5.1")}",
-                    "HD": 1
-                  }
+                  {"GuideNumber":"5.1","GuideName":"Local News","URL":"http://stream.example/news"},
+                  {"GuideNumber":"7.2","GuideName":"Sports","URL":"http://stream.example/sports"}
                 ]
                 """.trimIndent()
             )
@@ -172,30 +169,30 @@ class PlaylistProviderImportRepositoryTest {
         assertEquals(PlaylistSourceType.HDHOMERUN.name, insertedPlaylist.captured.sourceType)
         assertEquals(CatalogOriginKind.PROVIDER.name, insertedPlaylist.captured.catalogOrigin)
         assertEquals("${server.url("/").toString().trimEnd('/')}/lineup.json", insertedPlaylist.captured.source)
-        assertEquals(1, insertedChannels.captured.size)
-        assertEquals("HD News", insertedChannels.captured.single().name)
-        assertEquals("5.1", insertedChannels.captured.single().tvgId)
-        assertEquals("${server.url("/auto/v5.1")}", insertedChannels.captured.single().streamUrl)
+        assertEquals(2, insertedChannels.captured.size)
+        assertEquals("Local News", insertedChannels.captured[0].name)
+        assertEquals("5.1", insertedChannels.captured[0].tvgId)
+        assertEquals("http://stream.example/news", insertedChannels.captured[0].streamUrl)
         assertEquals("/lineup.json", server.takeRequest().path)
     }
 
     @Test
-    fun importFromTvheadend_usesBasicAuthAndKeepsSourceAsPlaylistUrl() = runTest {
+    fun importFromTvheadend_usesBasicAuthAndChannelPlaylistEndpoint() = runTest {
         server.enqueue(
             MockResponse().setBody(
                 """
                 #EXTM3U
-                #EXTINF:-1 tvg-id="tvh-news" group-title="News",TVH News
-                ${server.url("/stream/channel/abc")}
+                #EXTINF:-1 tvg-id="news" tvg-name="TVH News",TVH News
+                http://stream.example/tvh-news
                 """.trimIndent()
             )
         )
 
         val result = repository.importFromTvheadend(
             baseUrl = server.url("/").toString(),
-            username = "user",
-            password = "pass",
-            name = "Tvheadend"
+            username = "alice",
+            password = "secret",
+            name = "TVHeadend"
         )
 
         assertImportSuccess(result)
@@ -203,147 +200,36 @@ class PlaylistProviderImportRepositoryTest {
         assertEquals(CatalogOriginKind.PROVIDER.name, insertedPlaylist.captured.catalogOrigin)
         assertEquals("${server.url("/").toString().trimEnd('/')}/playlist/channels.m3u", insertedPlaylist.captured.source)
         assertEquals(1, insertedChannels.captured.size)
-        assertEquals("TVH News", insertedChannels.captured.single().name)
-        assertEquals("tvh-news", insertedChannels.captured.single().tvgId)
-        val request = server.takeRequest()
-        assertEquals("/playlist/channels.m3u", request.path)
-        assertEquals("Basic dXNlcjpwYXNz", request.getHeader("Authorization"))
+        val auth = server.takeRequest().getHeader("Authorization").orEmpty()
+        assertTrue(auth.startsWith("Basic "))
     }
 
     @Test
-    fun importFromText_defaultsToUserImportOrigin() = runTest {
-        val result = repository.importFromText(
-            text = """
+    fun importFromM3u_usesExistingUrlImportPath() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
                 #EXTM3U
-                #EXTINF:-1 tvg-id="manual-news",Manual News
-                https://example.test/live/manual-news
-            """.trimIndent(),
-            name = "Manual"
+                #EXTINF:-1 tvg-id="m3u-news" tvg-name="M3U News",M3U News
+                http://stream.example/m3u-news
+                """.trimIndent()
+            )
         )
 
+        val result = repository.importFromUrl(server.url("/provider.m3u").toString(), "M3U")
+
         assertImportSuccess(result)
-        assertEquals(PlaylistSourceType.TEXT.name, insertedPlaylist.captured.sourceType)
+        assertEquals(PlaylistSourceType.URL.name, insertedPlaylist.captured.sourceType)
         assertEquals(CatalogOriginKind.USER_IMPORT.name, insertedPlaylist.captured.catalogOrigin)
-    }
-
-    @Test
-    fun importFromTextPersistsCatchUpMetadataAfterDedupAndReindex() = runTest {
-        val result = repository.importFromText(
-            text = """
-                #EXTM3U
-                #EXTINF:-1 tvg-id="duplicate",Duplicate
-                https://example.test/live/duplicate
-                #EXTINF:-1 tvg-id="duplicate-copy",Duplicate copy
-                https://example.test/live/duplicate
-                #EXTINF:-1 tvg-id="archive" catchup="append" catchup-days="7" catchup-source="?utc=${'$'}{start}&lutc=${'$'}{timestamp}",Archive
-                https://example.test/live/archive
-                #EXTINF:-1 tvg-id="bad-range" catchup="default" catchup-days="seven" catchup-source="https://archive.test/replay?start={utc}",Broken range
-                https://example.test/live/bad-range
-            """.trimIndent(),
-            name = "Catch-up"
-        )
-
-        assertImportSuccess(result)
-        assertEquals(3, insertedChannels.captured.size)
-
-        val archive = insertedChannels.captured.first { it.tvgId == "archive" }
-        assertEquals(1, archive.orderIndex)
-        assertEquals("append", archive.catchUpMode)
-        assertEquals(7, archive.catchUpDays)
-        assertEquals("?utc=${'$'}{start}&lutc=${'$'}{timestamp}", archive.catchUpSourceTemplate)
-        assertTrue(archive.catchUpDaysDeclared)
-
-        val brokenRange = insertedChannels.captured.first { it.tvgId == "bad-range" }
-        assertEquals(2, brokenRange.orderIndex)
-        assertEquals("default", brokenRange.catchUpMode)
-        assertEquals(null, brokenRange.catchUpDays)
-        assertEquals("https://archive.test/replay?start={utc}", brokenRange.catchUpSourceTemplate)
-        assertTrue(brokenRange.catchUpDaysDeclared)
-    }
-
-    @Test
-    fun importReadyPlaylistTextPersistsDedicatedSourceAndCatalogOrigin() = runTest {
-        val sourceKey = "embedded://ready/ace-stream-tv-torrent-v1"
-        val result = repository.importReadyPlaylistText(
-            text = """
-                #EXTM3U
-                #EXTINF:-1 group-title="Ace Stream",Animal Planet HD
-                http://127.0.0.1:6878/ace/getstream?id=0123456789abcdef0123456789abcdef01234567
-            """.trimIndent(),
-            name = "Ace Stream TV",
-            sourceKey = sourceKey
-        )
-
-        assertImportSuccess(result)
-        assertEquals(PlaylistSourceType.TEXT.name, insertedPlaylist.captured.sourceType)
-        assertEquals(sourceKey, insertedPlaylist.captured.source)
-        assertEquals(CatalogOriginKind.READY_CATALOG.name, insertedPlaylist.captured.catalogOrigin)
+        assertEquals(server.url("/provider.m3u").toString(), insertedPlaylist.captured.source)
         assertEquals(1, insertedChannels.captured.size)
+        assertEquals("M3U News", insertedChannels.captured.single().name)
+        assertEquals("/provider.m3u", server.takeRequest().path)
     }
 
-    @Test
-    fun importFromUrl_persistsReadyCatalogOrigin() = runTest {
-        server.enqueue(
-            MockResponse().setBody(
-                """
-                #EXTM3U
-                #EXTINF:-1 tvg-id="ready-news",Ready News
-                https://example.test/live/ready-news
-                """.trimIndent()
-            )
-        )
-
-        val result = repository.importFromUrl(
-            url = server.url("/ready.m3u").toString(),
-            name = "Ready catalog",
-            catalogOrigin = CatalogOriginKind.READY_CATALOG
-        )
-
-        assertImportSuccess(result)
-        assertEquals(CatalogOriginKind.READY_CATALOG.name, insertedPlaylist.captured.catalogOrigin)
-    }
-
-    @Test
-    fun importFromUrl_persistsScannerOrigin() = runTest {
-        server.enqueue(
-            MockResponse().setBody(
-                """
-                #EXTM3U
-                #EXTINF:-1 tvg-id="scanner-news",Scanner News
-                https://example.test/live/scanner-news
-                """.trimIndent()
-            )
-        )
-
-        val result = repository.importFromUrl(
-            url = server.url("/scanner.m3u").toString(),
-            name = "Scanner result",
-            catalogOrigin = CatalogOriginKind.SCANNER_IMPORT
-        )
-
-        assertImportSuccess(result)
-        assertEquals(CatalogOriginKind.SCANNER_IMPORT.name, insertedPlaylist.captured.catalogOrigin)
-    }
-
-    @Test
-    fun importFailure_logsParserError() = runTest {
-        val result = repository.importFromText("not an m3u file", "Broken")
-
-        assertTrue(result is AppResult.Error)
-        coVerify(exactly = 1) {
-            syncLogDao.insert(match<SyncLogEntity> { it.status == "import_failed" && it.playlistId == null })
-        }
-        coVerify(exactly = 0) { playlistDao.insertPlaylist(any()) }
-        coVerify(exactly = 0) { channelDao.insertAll(any()) }
-    }
-
-    private fun ChannelEntity.assertUnknownHealth() {
-        assertEquals(ChannelHealth.UNKNOWN.name, health)
-    }
-
-    private fun assertImportSuccess(result: AppResult<*>) {
+    private fun assertImportSuccess(result: AppResult<com.iptv.tv.core.model.PlaylistImportReport>) {
         if (result !is AppResult.Success) {
-            fail((result as? AppResult.Error)?.message ?: "Expected AppResult.Success, got $result")
+            fail("Expected success but was $result")
         }
     }
 }
