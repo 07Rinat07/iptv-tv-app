@@ -860,6 +860,86 @@ class PlayerViewModel @Inject constructor(
         playSelectedWith(playerType = _uiState.value.effectivePlayer, context = context)
     }
 
+    fun playCatchUpProgram(program: EpgProgram, context: Context) {
+        val state = _uiState.value
+        val channel = state.channels.firstOrNull { candidate -> candidate.id == state.selectedChannelId }
+        if (channel == null) {
+            _uiState.update {
+                it.copy(
+                    lastError = "Выберите канал для просмотра архива",
+                    lastInfo = null
+                )
+            }
+            return
+        }
+
+        val resolution = StableCatchUpActionPolicy.resolve(
+            channel = channel,
+            program = program,
+            nowMs = System.currentTimeMillis()
+        )
+        val playbackUrl = resolution
+            ?.takeIf { it.supported }
+            ?.playbackUrl
+            ?.takeIf { it.isNotBlank() }
+        if (playbackUrl == null) {
+            _uiState.update {
+                it.copy(
+                    lastError = "Архив недоступен для выбранной передачи",
+                    lastInfo = null
+                )
+            }
+            logAsync(
+                status = "player_catchup_unsupported",
+                message = "channelId=${channel.id}, start=${program.startEpochMs}, end=${program.endEpochMs}, reason=${resolution?.reason ?: "no_resolution"}",
+                playlistId = channel.playlistId
+            )
+            return
+        }
+
+        val requestId = beginPrimaryPlaybackRequest()
+        val playerType = state.effectivePlayer
+        _uiState.update {
+            it.copy(
+                internalSession = null,
+                isStartingPlayback = true,
+                retryAttempt = 0,
+                resolvedStreamUrl = null,
+                lastError = null,
+                lastInfo = "Подготовка архива: ${program.title}"
+            )
+        }
+        primaryPlaybackJob = viewModelScope.launch {
+            // Archive URLs are direct HTTP/HTTPS by resolver contract. Stop any previous P2P
+            // producer before handing the resolved archive URL to the normal playback pipeline.
+            engineRepository.stopTorrentStream()
+            if (!isCurrentPrimaryPlaybackRequest(requestId)) {
+                return@launch
+            }
+
+            val archiveChannel = channel.copy(streamUrl = playbackUrl)
+            _uiState.update { it.copy(resolvedStreamUrl = playbackUrl) }
+            safeLog(
+                status = "player_catchup_start",
+                message = "channelId=${channel.id}, start=${program.startEpochMs}, end=${program.endEpochMs}, player=$playerType",
+                playlistId = channel.playlistId
+            )
+
+            when (playerType) {
+                PlayerType.INTERNAL -> startInternalPlayback(
+                    channel = archiveChannel,
+                    infoMessage = "Запущен архив: ${program.title}",
+                    requestId = requestId
+                )
+                PlayerType.VLC -> launchExternalVlcOrFallback(
+                    context = context,
+                    channel = archiveChannel,
+                    requestId = requestId
+                )
+            }
+        }
+    }
+
     fun playSelectedInternal() {
         playSelectedWith(playerType = PlayerType.INTERNAL, context = null)
     }

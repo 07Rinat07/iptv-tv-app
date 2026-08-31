@@ -432,6 +432,7 @@ fun StablePlayerScreen(
                                 viewModel.onInternalPlaybackError(message, context, sessionId)
                             },
                             onPlaySelected = { viewModel.playSelected(context) },
+                            onPlayCatchUp = { program -> viewModel.playCatchUpProgram(program, context) },
                             onToggleFullscreen = viewModel::toggleInternalPlayerSize,
                             onPreviousChannel = { playAdjacent(-1) },
                             onNextChannel = { playAdjacent(1) },
@@ -475,6 +476,7 @@ fun StablePlayerScreen(
                             viewModel.onInternalPlaybackError(message, context, sessionId)
                         },
                         onPlaySelected = { viewModel.playSelected(context) },
+                        onPlayCatchUp = { program -> viewModel.playCatchUpProgram(program, context) },
                         onToggleFullscreen = viewModel::toggleInternalPlayerSize,
                         onPreviousChannel = { playAdjacent(-1) },
                         onNextChannel = { playAdjacent(1) },

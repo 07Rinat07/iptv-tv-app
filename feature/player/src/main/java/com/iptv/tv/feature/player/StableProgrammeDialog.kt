@@ -40,6 +40,7 @@ import java.util.TimeZone
 internal fun StableProgrammeDialog(
     channel: Channel?,
     programs: List<EpgProgram>,
+    onPlayCatchUp: (EpgProgram) -> Unit,
     onDismiss: () -> Unit
 ) {
     val nowMs = remember { System.currentTimeMillis() }
@@ -185,6 +186,20 @@ internal fun StableProgrammeDialog(
                                                         overflow = TextOverflow.Ellipsis
                                                     )
                                                 }
+                                            if (
+                                                StableCatchUpActionPolicy.isAvailable(
+                                                    channel = channel,
+                                                    program = program,
+                                                    nowMs = nowMs
+                                                )
+                                            ) {
+                                                OutlinedButton(
+                                                    onClick = { onPlayCatchUp(program) },
+                                                    modifier = Modifier.padding(top = 4.dp)
+                                                ) {
+                                                    Text("Архив")
+                                                }
+                                            }
                                         }
                                     }
                                 }
