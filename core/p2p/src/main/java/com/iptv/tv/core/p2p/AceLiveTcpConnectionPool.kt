@@ -244,6 +244,7 @@ class AceLiveTcpConnectionPool(
 
     suspend fun stopPeer(peerId: Long) {
         val runtime = poolMutex.withLock { peers[peerId] } ?: return
+        runtime.stopRequested = true
         runtime.transport?.close()
         runtime.writeJob?.cancel()
         runtime.job?.cancelAndJoin()
@@ -262,6 +263,7 @@ class AceLiveTcpConnectionPool(
         if (!closed.compareAndSet(false, true)) return
         val runtimes = poolMutex.withLock { peers.values.toList() }
         runtimes.forEach { runtime ->
+            runtime.stopRequested = true
             runtime.transport?.close()
             runtime.writeJob?.cancel()
             runtime.job?.cancelAndJoin()
@@ -470,7 +472,11 @@ class AceLiveTcpConnectionPool(
                     throw cancelled
                 } catch (_: Throwable) {
                     val retrying = reconnectAttempt < reconnectBudget(runtime)
-                    if (!retrying && !runtime.handshakeAcceptedAtLeastOnce) {
+                    if (
+                        !retrying &&
+                        !runtime.stopRequested &&
+                        !runtime.handshakeAcceptedAtLeastOnce
+                    ) {
                         connectFailureMemory.recordFinalPreHandshakeFailure(
                             swarmKey = runtime.swarmKey,
                             endpoint = runtime.endpoint,
@@ -511,7 +517,11 @@ class AceLiveTcpConnectionPool(
                 val retrying =
                     exit.retryable && reconnectAttempt < reconnectBudget(runtime) &&
                         currentCoroutineContext().isActive
-                if (!retrying && !runtime.handshakeAcceptedAtLeastOnce) {
+                if (
+                    !retrying &&
+                    !runtime.stopRequested &&
+                    !runtime.handshakeAcceptedAtLeastOnce
+                ) {
                     connectFailureMemory.recordFinalPreHandshakeFailure(
                         swarmKey = runtime.swarmKey,
                         endpoint = runtime.endpoint,
@@ -925,6 +935,9 @@ class AceLiveTcpConnectionPool(
 
         @Volatile
         var handshakeAcceptedAtLeastOnce: Boolean = false
+
+        @Volatile
+        var stopRequested: Boolean = false
     }
 
     private data class PeerRequestability(
