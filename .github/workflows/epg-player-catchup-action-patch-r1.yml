@@ -42,4 +42,4 @@ jobs:
           git commit -m "feat(epg): wire fail-closed archive playback action"
           git push origin HEAD:feat/epg-player-catchup-action-r1
 
-# retry: exact responsive indentation handled separately
+# retry: responsive and screen call-site indentation handled separately
