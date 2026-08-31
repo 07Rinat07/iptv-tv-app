@@ -37,14 +37,23 @@ internal object StableProgrammeSchedule {
         maxDays: Int = DEFAULT_MAX_DAYS
     ): List<Long> {
         require(maxDays > 0) { "maxDays must be positive" }
-        return programs
+        val days = linkedSetOf<Long>()
+        programs
             .asSequence()
             .filter(EpgProgramDisplayPolicy::isUsable)
-            .map { program -> startOfDay(program.startEpochMs, timeZone) }
-            .distinct()
-            .sorted()
-            .take(maxDays)
-            .toList()
+            .sortedBy { it.startEpochMs }
+            .forEach { program ->
+                var dayStart = startOfDay(program.startEpochMs, timeZone)
+                val finalDayStart = startOfDay(program.endEpochMs - 1L, timeZone)
+                while (dayStart <= finalDayStart && days.size < maxDays) {
+                    days += dayStart
+                    if (dayStart == finalDayStart) break
+                    val next = nextDayStart(dayStart, timeZone)
+                    if (next <= dayStart) break
+                    dayStart = next
+                }
+            }
+        return days.toList()
     }
 
     fun defaultDayStart(
