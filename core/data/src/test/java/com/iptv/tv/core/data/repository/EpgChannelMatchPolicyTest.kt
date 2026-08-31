@@ -6,7 +6,7 @@ import org.junit.Test
 
 class EpgChannelMatchPolicyTest {
     @Test
-    fun uniquePartialCandidateIsAccepted() {
+    fun presentationAliasCandidateIsAccepted() {
         val result = EpgChannelMatchPolicy.uniquePartialChannelId(
             normalizedChannelName = "discovery",
             channelIdsByTextKey = listOf(
@@ -19,15 +19,12 @@ class EpgChannelMatchPolicyTest {
     }
 
     @Test
-    fun ambiguousPartialCandidatesFailClosed() {
+    fun ambiguousAliasCandidatesFailClosed() {
         val firstOrder = listOf(
             "discoveryhd" to "xmltv.discovery.hd",
-            "discoveryplus" to "xmltv.discovery.plus"
+            "discovery4k" to "xmltv.discovery.4k"
         )
-        val reverseOrder = listOf(
-            "discoveryplus" to "xmltv.discovery.plus",
-            "discoveryhd" to "xmltv.discovery.hd"
-        )
+        val reverseOrder = firstOrder.reversed()
 
         assertNull(EpgChannelMatchPolicy.uniquePartialChannelId("discovery", firstOrder))
         assertNull(EpgChannelMatchPolicy.uniquePartialChannelId("discovery", reverseOrder))
@@ -38,8 +35,8 @@ class EpgChannelMatchPolicyTest {
         val result = EpgChannelMatchPolicy.uniquePartialChannelId(
             normalizedChannelName = "news",
             channelIdsByTextKey = listOf(
-                "worldnews" to "xmltv.news",
-                "newsworld" to "xmltv.news"
+                "newshd" to "xmltv.news",
+                "news4k" to "xmltv.news"
             )
         )
 
@@ -47,9 +44,22 @@ class EpgChannelMatchPolicyTest {
     }
 
     @Test
+    fun arbitrarySubstringSimilarityIsNotAccepted() {
+        assertNull(
+            EpgChannelMatchPolicy.uniquePartialChannelId(
+                normalizedChannelName = "news",
+                channelIdsByTextKey = listOf(
+                    "worldnews" to "xmltv.world-news",
+                    "newsworld" to "xmltv.news-world"
+                )
+            )
+        )
+    }
+
+    @Test
     fun collidingNormalizedKeysWithDifferentChannelsFailClosed() {
         val result = EpgChannelMatchPolicy.uniquePartialChannelId(
-            normalizedChannelName = "news",
+            normalizedChannelName = "newshd",
             channelIdsByTextKey = listOf(
                 "newshd" to "xmltv.news-hd",
                 "newshd" to "xmltv.news hd"
@@ -60,7 +70,7 @@ class EpgChannelMatchPolicyTest {
     }
 
     @Test
-    fun noPartialCandidateReturnsNull() {
+    fun noAliasCandidateReturnsNull() {
         assertNull(
             EpgChannelMatchPolicy.uniquePartialChannelId(
                 normalizedChannelName = "sports",
@@ -106,6 +116,40 @@ class EpgChannelMatchPolicyTest {
         )
 
         assertEquals("xmltv.etv-manisa", result)
+    }
+
+    @Test
+    fun boundedRegionalSuffixMatchesBaseXmlTvChannel() {
+        assertEquals(
+            "xmltv.russia1",
+            EpgChannelMatchPolicy.uniquePartialChannelId(
+                normalizedChannelName = "россия1москваhd",
+                channelIdsByTextKey = listOf(
+                    "россия1" to "xmltv.russia1",
+                    "россия24" to "xmltv.russia24"
+                )
+            )
+        )
+        assertEquals(
+            "xmltv.discovery",
+            EpgChannelMatchPolicy.uniquePartialChannelId(
+                normalizedChannelName = "discoveryrussia",
+                channelIdsByTextKey = listOf("discovery" to "xmltv.discovery")
+            )
+        )
+    }
+
+    @Test
+    fun regionalAliasFailsClosedWhenBaseAndRegionalFeedsBothExist() {
+        val result = EpgChannelMatchPolicy.uniquePartialChannelId(
+            normalizedChannelName = "discoveryrussia",
+            channelIdsByTextKey = listOf(
+                "discovery" to "xmltv.discovery",
+                "discoveryrussia" to "xmltv.discovery.russia"
+            )
+        )
+
+        assertNull(result)
     }
 
     @Test
