@@ -78,7 +78,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
@@ -1646,9 +1645,10 @@ class PlaylistRepositoryImpl @Inject constructor(
             throw IOException("EPG temporarily unavailable: ${failure.reason}")
         }
 
-        return epgLoadMutex.withLock {
+        epgLoadMutex.lock()
+        return try {
             val lockedNow = System.currentTimeMillis()
-            freshEpgEntry(url, lockedNow)?.let { return@withLock it }
+            freshEpgEntry(url, lockedNow)?.let { return it }
             hydrateStoredEpgEntry(url, lockedNow)?.let { restored ->
                 val freshness = EpgStaleFallbackPolicy.freshness(
                     loadedAtMs = restored.loadedAtMs,
@@ -1656,7 +1656,7 @@ class PlaylistRepositoryImpl @Inject constructor(
                     freshTtlMs = EPG_CACHE_TTL_MS,
                     maxStaleAgeMs = EPG_STALE_FALLBACK_MAX_AGE_MS
                 )
-                if (freshness == EpgCacheFreshness.FRESH) return@withLock restored
+                if (freshness == EpgCacheFreshness.FRESH) return restored
             }
             epgFailureBackoff.active(url)?.let { failure ->
                 throw IOException("EPG temporarily unavailable: ${failure.reason}")
@@ -1739,8 +1739,11 @@ class PlaylistRepositoryImpl @Inject constructor(
                 }
                 throw failure
             }
+        } finally {
+            epgLoadMutex.unlock()
         }
     }
+
     private fun freshEpgEntry(url: String, now: Long): EpgCacheEntry? {
         val cached = epgCache[url] ?: return null
         return when (
