@@ -4,6 +4,7 @@ import android.content.Context
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.repository.PlaylistRepositoryImpl
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.EpgSnapshotDao
 import com.iptv.tv.core.database.dao.FavoriteDao
 import com.iptv.tv.core.database.dao.HistoryDao
 import com.iptv.tv.core.database.dao.PlaylistDao
@@ -67,6 +68,7 @@ class PlaylistProviderImportRepositoryTest {
             favoriteDao = mockk<FavoriteDao>(relaxed = true),
             historyDao = mockk<HistoryDao>(relaxed = true),
             syncLogDao = syncLogDao,
+            epgSnapshotDao = mockk<EpgSnapshotDao>(relaxed = true),
             parser = M3uParser(),
             okHttpClient = OkHttpClient()
         )
