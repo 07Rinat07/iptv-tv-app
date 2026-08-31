@@ -54,6 +54,26 @@ class StableCatchUpPlaybackWiringRegressionTest {
         )
     }
 
+    @Test
+    fun `programme dialog renders archive range only from bounded range policy`() {
+        val dialog = functionBody(
+            source = programmeDialogSource(),
+            signature = "internal fun StableProgrammeDialog("
+        )
+
+        assertOrdered(
+            dialog,
+            "val archiveRangeLabel = remember(channel, programs, nowMs)",
+            "StableCatchUpRangePolicy.label(",
+            "channel = channel",
+            "programs = programs",
+            "nowMs = nowMs",
+            "archiveRangeLabel?.let { label ->",
+            "Text(",
+            "label,"
+        )
+    }
+
     private fun playerViewModelSource(): String = sourceFile(
         moduleRelative = "src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt",
         repositoryRelative = "feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt"
