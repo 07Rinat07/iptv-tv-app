@@ -36,14 +36,16 @@ class AceContentIdDhtDiscovery(
     policy: AceLiveDhtPolicy = AceLiveDhtPolicy(),
     randomInt: () -> Int = AceDhtIterativeDiscovery.DEFAULT_RANDOM_INT,
     addressResolver: (String) -> List<Inet4Address> = AceDhtIterativeDiscovery.DEFAULT_ADDRESS_RESOLVER,
-    routingMemory: AceDhtRoutingMemory? = null
+    routingMemory: AceDhtRoutingMemory? = null,
+    queryFailureMemory: AceDhtQueryFailureMemory = AceDhtQueryFailureMemory.shared
 ) {
     private val delegate = AceDhtIterativeDiscovery(
         ioDispatcher = ioDispatcher,
         policy = policy,
         randomInt = randomInt,
         addressResolver = addressResolver,
-        routingMemory = routingMemory
+        routingMemory = routingMemory,
+        queryFailureMemory = queryFailureMemory
     )
 
     suspend fun discover(request: AceContentIdDhtDiscoveryRequest): AceContentIdDhtDiscoveryResult {

@@ -116,6 +116,7 @@ class AceLiveDhtDiscovery(
     private val reuseRecentResults: Boolean = false,
     private val clockMillis: () -> Long = System::currentTimeMillis,
     private val routingMemory: AceDhtRoutingMemory? = null,
+    private val queryFailureMemory: AceDhtQueryFailureMemory = AceDhtQueryFailureMemory.shared,
     private val connectFailureMemory: AceLiveTcpConnectFailureMemory =
         AceLiveTcpConnectFailureMemory.shared
 ) {
@@ -215,7 +216,8 @@ class AceLiveDhtDiscovery(
             policy = delegatePolicy,
             randomInt = randomInt,
             addressResolver = addressResolver,
-            routingMemory = routingMemory
+            routingMemory = routingMemory,
+            queryFailureMemory = queryFailureMemory
         )
 
     private fun AceLiveDhtDiscoveryRequest.cacheKey(): String = buildString {
