@@ -1,0 +1,48 @@
+name: Temporary EPG foreground imports patch
+
+on:
+  push:
+    branches:
+      - fix/epg-foreground-refresh-r1
+
+permissions:
+  contents: write
+
+jobs:
+  apply-imports:
+    if: "${{ github.actor != 'github-actions[bot]' }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/epg-foreground-refresh-r1
+          persist-credentials: true
+      - name: Add guarded sync imports
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('app/src/main/java/com/iptv/tv/IptvApp.kt')
+          text = path.read_text()
+          old = 'import com.iptv.tv.sync.SyncScheduler\n'
+          new = (
+              'import com.iptv.tv.sync.EpgForegroundRefreshGate\n'
+              'import com.iptv.tv.sync.SyncScheduler\n'
+              'import com.iptv.tv.sync.shouldRequestEpgRefreshOnForeground\n'
+          )
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected SyncScheduler import exactly once, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- app/src/main/java/com/iptv/tv/IptvApp.kt
+      - name: Commit imports
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app/src/main/java/com/iptv/tv/IptvApp.kt
+          git diff --cached --quiet && exit 1
+          git commit -m 'refactor(epg): import foreground refresh policy from sync'
+          git push origin HEAD:fix/epg-foreground-refresh-r1
