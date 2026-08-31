@@ -91,6 +91,7 @@ internal class AceDhtIterativeDiscovery(
     private val randomInt: () -> Int = DEFAULT_RANDOM_INT,
     private val addressResolver: (String) -> List<Inet4Address> = DEFAULT_ADDRESS_RESOLVER,
     private val routingMemory: AceDhtRoutingMemory? = null,
+    private val queryFailureMemory: AceDhtQueryFailureMemory = AceDhtQueryFailureMemory(),
     private val externalAddressObserver: AceDhtExternalAddressObserver = AceLiveDhtClientIdentity
 ) {
     suspend fun discover(request: AceDhtLookupRequest): AceDhtDiscoveryOutcome =
@@ -116,6 +117,7 @@ internal class AceDhtIterativeDiscovery(
             ).orEmpty()
             var warmRoutingSeedsUsed = 0
             for (contact in warmContacts) {
+                if (!queryFailureMemory.isEligible(contact.endpoint)) continue
                 val key = endpointKey(contact.endpoint)
                 if (!queuedEndpoints.containsKey(key) && queuedNodeIds.add(contact.nodeId)) {
                     queuedEndpoints[key] = contact.nodeId
@@ -246,6 +248,10 @@ internal class AceDhtIterativeDiscovery(
                             }
                             val candidateKey = endpointKey(candidate.endpoint)
                             if (!queriedEndpoints.add(candidateKey)) continue
+                            if (
+                                !candidate.fromBootstrap &&
+                                !queryFailureMemory.isEligible(candidate.endpoint)
+                            ) continue
 
                             queries += 1
                             if (candidate.fromBootstrap) bootstrapQueryLaunched = true
@@ -339,6 +345,11 @@ internal class AceDhtIterativeDiscovery(
                                     QueryCompletion.BudgetExhausted -> break
                                     is QueryCompletion.Failed -> {
                                         failed += 1
+                                        if (!completion.candidate.fromBootstrap) {
+                                            queryFailureMemory.recordFailure(
+                                                completion.candidate.endpoint
+                                            )
+                                        }
                                         completion.candidate.routingContactOrNull()
                                             ?.let { contact -> routingMemory?.forget(contact) }
                                     }
@@ -351,11 +362,17 @@ internal class AceDhtIterativeDiscovery(
                                             candidate.nodeId != response.remoteNodeId
                                         ) {
                                             failed += 1
+                                            if (!candidate.fromBootstrap) {
+                                                queryFailureMemory.recordFailure(candidate.endpoint)
+                                            }
                                             candidate.routingContactOrNull()
                                                 ?.let { contact -> routingMemory?.forget(contact) }
                                             continue
                                         }
 
+                                        if (!candidate.fromBootstrap) {
+                                            queryFailureMemory.recordSuccess(candidate.endpoint)
+                                        }
                                         routingMemory?.remember(
                                             AceLiveDhtNodeContact(
                                                 nodeId = response.remoteNodeId,
@@ -399,6 +416,7 @@ internal class AceDhtIterativeDiscovery(
                                                 rejected += 1
                                                 continue
                                             }
+                                            if (!queryFailureMemory.isEligible(contact.endpoint)) continue
                                             if (contact.nodeId in queuedNodeIds) continue
                                             val key = endpointKey(contact.endpoint)
                                             if (key in queriedEndpoints) continue
