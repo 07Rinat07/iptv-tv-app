@@ -570,6 +570,7 @@ internal fun StableFullscreenPlayerReplacement(
     onReady: (Long) -> Unit,
     onP2pBoundaryTelemetry: (P2pPlayerBoundaryTelemetry) -> Unit,
     onError: (Long?, String) -> Unit,
+    onPlayCatchUp: (EpgProgram) -> Unit,
     onToggleFullscreen: () -> Unit,
     onPreviousChannel: () -> Unit,
     onNextChannel: () -> Unit,
@@ -694,6 +695,10 @@ internal fun StableFullscreenPlayerReplacement(
         StableProgrammeDialog(
             channel = channel,
             programs = programs,
+            onPlayCatchUp = { program ->
+                programmeVisible = false
+                onPlayCatchUp(program)
+            },
             onDismiss = { programmeVisible = false }
         )
     }

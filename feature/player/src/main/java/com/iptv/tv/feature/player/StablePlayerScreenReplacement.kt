@@ -387,6 +387,7 @@ fun StablePlayerScreen(
                 onError = { sessionId, message ->
                     viewModel.onInternalPlaybackError(message, context, sessionId)
                 },
+                onPlayCatchUp = { program -> viewModel.playCatchUpProgram(program, context) },
                 onToggleFullscreen = { viewModel.setInternalPlayerExpanded(false) },
                 onPreviousChannel = { playAdjacent(-1) },
                 onNextChannel = { playAdjacent(1) },
