@@ -645,6 +645,19 @@ internal fun StableFullscreenPlayerReplacement(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        val p2pLabel = p2pChannelOsdLabel(
+                            streamUrl = channel?.streamUrl,
+                            status = channel?.id?.let(P2pChannelAvailabilityUiCache.statuses::get)
+                        )
+                        if (p2pLabel != null) {
+                            Text(
+                                p2pLabel,
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                     OutlinedButton(onClick = { programmeVisible = true }) { Text("Программа") }
                     OutlinedButton(onClick = onStop) { Text("■") }
