@@ -781,7 +781,8 @@ class PlaylistRepositoryImpl @Inject constructor(
                     matchedBy = match.matchedBy,
                     now = nowProgram,
                     next = nextProgram,
-                    upcoming = upcoming
+                    upcoming = upcoming,
+                    schedule = match.programs
                 )
             )
         }

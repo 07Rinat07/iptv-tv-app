@@ -300,7 +300,13 @@ fun StablePlayerScreen(
 
     val selectedChannel = state.channels.firstOrNull { it.id == state.selectedChannelId }
     val selectedPrograms = selectedChannel
-        ?.let { state.channelListEpgPrograms[it.id].orEmpty() }
+        ?.let { channel ->
+            state.channelEpgInfo
+                ?.takeIf { epgInfo -> epgInfo.channelId == channel.id }
+                ?.schedule
+                ?.takeIf(List<EpgProgram>::isNotEmpty)
+                ?: state.channelListEpgPrograms[channel.id].orEmpty()
+        }
         .orEmpty()
 
     fun toggleFavorite(channelId: Long) {
