@@ -15,7 +15,9 @@ import com.iptv.tv.core.domain.repository.EpgSettingsRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.EpgSettingsPolicy
 import com.iptv.tv.core.utils.FileLogger
+import com.iptv.tv.sync.EpgForegroundRefreshGate
 import com.iptv.tv.sync.SyncScheduler
+import com.iptv.tv.sync.shouldRequestEpgRefreshOnForeground
 import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
