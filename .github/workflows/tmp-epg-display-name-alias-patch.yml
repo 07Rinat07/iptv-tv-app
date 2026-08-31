@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   apply-patch:
-    if: github.actor != 'github-actions[bot]' && github.event.head_commit.message == 'chore(epg): apply display-name alias wiring'
+    if: "${{ github.actor != 'github-actions[bot]' }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
