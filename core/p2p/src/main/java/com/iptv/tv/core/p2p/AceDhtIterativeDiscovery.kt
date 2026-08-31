@@ -247,11 +247,17 @@ internal class AceDhtIterativeDiscovery(
                                 else -> break
                             }
                             val candidateKey = endpointKey(candidate.endpoint)
-                            if (!queriedEndpoints.add(candidateKey)) continue
                             if (
                                 !candidate.fromBootstrap &&
                                 !queryFailureMemory.isEligible(candidate.endpoint)
-                            ) continue
+                            ) {
+                                if (queuedEndpoints[candidateKey] == candidate.nodeId) {
+                                    queuedEndpoints.remove(candidateKey)
+                                    candidate.nodeId?.let { nodeId -> queuedNodeIds.remove(nodeId) }
+                                }
+                                continue
+                            }
+                            if (!queriedEndpoints.add(candidateKey)) continue
 
                             queries += 1
                             if (candidate.fromBootstrap) bootstrapQueryLaunched = true
