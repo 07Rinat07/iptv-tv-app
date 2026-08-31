@@ -108,6 +108,10 @@ internal class AceDhtIterativeDiscovery(
             var failed = 0
             var queries = 0
 
+            // Known-ID contacts sort ahead of unresolved bootstraps. Bound the warm set below the
+            // concurrent branch count so normal bootstrap always retains a first-wave lane in
+            // production. Serial test/custom policies still try one verified contact before
+            // falling back to bootstrap after the existing request timeout.
             val warmContacts = routingMemory?.recentContacts(
                 aceDhtWarmRoutingSeedLimit(policy.searchBranching)
             ).orEmpty()
@@ -133,6 +137,9 @@ internal class AceDhtIterativeDiscovery(
                 val bootstrapPrimaryFrontier = ArrayDeque<QueryCandidate>()
                 val bootstrapExtraFrontier = ArrayDeque<QueryCandidate>()
                 var bootstrapQueryLaunched = false
+                // Bootstrap DNS runs beside the query loop. This lets verified warm contacts start
+                // immediately. Resolution is pipelined under its own small cap so a caller's larger
+                // bootstrap policy cannot create an unbounded burst of resolver work.
                 val pendingBootstraps = ArrayDeque(
                     request.bootstrapNodes
                         .distinct()
@@ -283,6 +290,8 @@ internal class AceDhtIterativeDiscovery(
                             bootstrapExtraFrontier.isEmpty()
                         ) break
                         val selected = select<DiscoverySelection> {
+                            // Kotlin select is biased. Register DNS first so an already-resolved
+                            // bootstrap cannot be starved by a stream of fast warm-node responses.
                             if (queries < policy.maxQueries) {
                                 bootstrapInFlight.forEach { pending ->
                                     pending.onAwait { outcome ->
