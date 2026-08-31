@@ -2,6 +2,8 @@ package com.iptv.tv.feature.player
 
 import kotlin.math.abs
 
+internal const val STABLE_CHANNEL_ZAP_COOLDOWN_MS = 350L
+
 internal data class StablePlayerInputCallbacks(
     val onToggleControls: () -> Unit,
     val onToggleFullscreen: () -> Unit,
@@ -12,6 +14,44 @@ internal data class StablePlayerInputCallbacks(
     val onToggleMute: () -> Unit,
     val onTogglePlayback: () -> Unit
 )
+
+/**
+ * Bounds remote/channel-key zapping without delaying an explicit channel-list click.
+ *
+ * The input handler is the only caller: browser selection bypasses this gate and remains immediate.
+ * A monotonic clock rollback is treated as a new epoch so one bad sample cannot suppress input.
+ */
+internal class StableChannelZapThrottle(
+    private val cooldownMillis: Long = STABLE_CHANNEL_ZAP_COOLDOWN_MS
+) {
+    private var lastChannelActionAtMillis: Long? = null
+
+    init {
+        require(cooldownMillis >= 0L) { "cooldownMillis must be non-negative" }
+    }
+
+    fun shouldDispatch(action: StableRemoteAction, nowMillis: Long): Boolean {
+        require(nowMillis >= 0L) { "nowMillis must be non-negative" }
+        if (
+            action != StableRemoteAction.NEXT_CHANNEL &&
+            action != StableRemoteAction.PREVIOUS_CHANNEL
+        ) {
+            return true
+        }
+
+        val previous = lastChannelActionAtMillis
+        if (
+            previous != null &&
+            nowMillis >= previous &&
+            nowMillis - previous < cooldownMillis
+        ) {
+            return false
+        }
+
+        lastChannelActionAtMillis = nowMillis
+        return true
+    }
+}
 
 /**
  * Stateless policy used by the production [StablePlayerInputHandler].

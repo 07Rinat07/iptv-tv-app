@@ -10,7 +10,6 @@ import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
 
-private const val HORIZONTAL_SCROLL_COOLDOWN_MS = 350L
 private const val CONTROLS_AUTO_HIDE_MS = 4_000L
 private const val MIN_GENERIC_SCROLL = 0.01f
 
@@ -20,6 +19,7 @@ internal class StablePlayerInputHandler(context: Context) :
     View.OnKeyListener {
 
     private val movementThresholdPx = 48f * context.resources.displayMetrics.density
+    private val channelZapThrottle = StableChannelZapThrottle()
     private var expanded = false
     private var controlsVisible = true
     private var callbacks = StablePlayerInputCallbacks(
@@ -36,7 +36,6 @@ internal class StablePlayerInputHandler(context: Context) :
     private var downX = 0f
     private var downY = 0f
     private var verticalDistance = 0f
-    private var lastHorizontalScrollAtMs = 0L
 
     private val hideControlsRunnable = Runnable {
         if (expanded && controlsVisible) {
@@ -128,8 +127,12 @@ internal class StablePlayerInputHandler(context: Context) :
                 val deltaX = event.x - downX
                 val deltaY = event.y - downY
                 if (abs(deltaX) >= movementThresholdPx && abs(deltaX) > abs(deltaY)) {
-                    revealControlsForInput()
-                    if (deltaX > 0f) callbacks.onPreviousChannel() else callbacks.onNextChannel()
+                    val action = if (deltaX > 0f) {
+                        StableRemoteAction.PREVIOUS_CHANNEL
+                    } else {
+                        StableRemoteAction.NEXT_CHANNEL
+                    }
+                    dispatch(action)
                 }
                 verticalDistance = 0f
             }
@@ -153,15 +156,7 @@ internal class StablePlayerInputHandler(context: Context) :
             return false
         }
 
-        val action = stableScrollAction(horizontal, vertical)
-        if (action == StableRemoteAction.NEXT_CHANNEL ||
-            action == StableRemoteAction.PREVIOUS_CHANNEL
-        ) {
-            val now = SystemClock.uptimeMillis()
-            if (now - lastHorizontalScrollAtMs < HORIZONTAL_SCROLL_COOLDOWN_MS) return true
-            lastHorizontalScrollAtMs = now
-        }
-        return dispatch(action)
+        return dispatch(stableScrollAction(horizontal, vertical))
     }
 
     override fun onKey(view: View, keyCode: Int, event: KeyEvent): Boolean {
@@ -194,6 +189,9 @@ internal class StablePlayerInputHandler(context: Context) :
     }
 
     private fun dispatch(action: StableRemoteAction): Boolean {
+        if (!channelZapThrottle.shouldDispatch(action, SystemClock.uptimeMillis())) {
+            return true
+        }
         if (stableActionRevealsControls(action)) revealControlsForInput()
         return when (action) {
             StableRemoteAction.TOGGLE_CONTROLS -> {
