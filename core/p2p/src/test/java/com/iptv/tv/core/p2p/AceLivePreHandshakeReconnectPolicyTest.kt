@@ -33,18 +33,24 @@ class AceLivePreHandshakeReconnectPolicyTest {
         )
         val factory = FakeTransportFactory(unqualified, unusedAlternative)
         val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
+        val memory = AceLiveTcpConnectFailureMemory(
+            clockMillis = { 0L },
+            backoffMillis = 5_000L
+        )
+        val endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9041)
         val pool = pool(
             factory = factory,
             events = events,
             policy = policy(
                 maxReconnectAttempts = 2,
                 maxPreHandshakeReconnectAttempts = 0
-            )
+            ),
+            connectFailureMemory = memory
         )
 
         pool.startPeer(
             peerId = 41,
-            endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9041),
+            endpoint = endpoint,
             swarmKey = swarmKey,
             localPeerId = localPeerId
         )
@@ -60,6 +66,53 @@ class AceLivePreHandshakeReconnectPolicyTest {
                     !it.retrying
             }
         )
+        assertFalse(memory.isEligible(swarmKey, endpoint, nowMillis = 0L))
+    }
+
+    @Test
+    fun outboundFailureMemoryClearsOnlyAfterAcceptedHandshake() = runBlocking {
+        val transport = FakeTransport(emptyList())
+        val factory = FakeTransportFactory(transport)
+        val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
+        val memory = AceLiveTcpConnectFailureMemory(
+            clockMillis = { 0L },
+            backoffMillis = 5_000L
+        )
+        val endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9044)
+        memory.recordFinalPreHandshakeFailure(
+            swarmKey = swarmKey,
+            endpoint = endpoint,
+            nowMillis = 0L
+        )
+        val pool = pool(
+            factory = factory,
+            events = events,
+            policy = policy(
+                maxReconnectAttempts = 0,
+                maxPreHandshakeReconnectAttempts = 0
+            ),
+            connectFailureMemory = memory
+        )
+
+        pool.startPeer(
+            peerId = 44,
+            endpoint = endpoint,
+            swarmKey = swarmKey,
+            localPeerId = localPeerId
+        )
+
+        awaitCondition {
+            events.any { event -> event is AceLiveTcpPoolEvent.TransportConnected }
+        }
+        assertFalse(memory.isEligible(swarmKey, endpoint, nowMillis = 0L))
+
+        transport.enqueue(ReadAction.Data(handshakeCodec.encode(swarmKey, remotePeerId)))
+        awaitCondition {
+            events.any { event -> event is AceLiveTcpPoolEvent.HandshakeAccepted }
+        }
+        assertTrue(memory.isEligible(swarmKey, endpoint, nowMillis = 0L))
+
+        pool.stopPeer(44)
     }
 
     @Test
@@ -137,7 +190,8 @@ class AceLivePreHandshakeReconnectPolicyTest {
     private fun pool(
         factory: AceLiveTcpTransportFactory,
         events: CopyOnWriteArrayList<AceLiveTcpPoolEvent>,
-        policy: AceLiveTcpConnectionPolicy
+        policy: AceLiveTcpConnectionPolicy,
+        connectFailureMemory: AceLiveTcpConnectFailureMemory = AceLiveTcpConnectFailureMemory()
     ) = AceLiveTcpConnectionPool(
         scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default),
         session = AceLivePeerSessionCoordinator(
@@ -152,6 +206,7 @@ class AceLivePreHandshakeReconnectPolicyTest {
         transportFactory = factory,
         policy = policy,
         clockMillis = { 0L },
+        connectFailureMemory = connectFailureMemory,
         onEvent = events::add
     )
 
@@ -189,6 +244,10 @@ class AceLivePreHandshakeReconnectPolicyTest {
 
         init {
             initialReads.forEach { action -> check(reads.trySend(action).isSuccess) }
+        }
+
+        fun enqueue(action: ReadAction) {
+            check(reads.trySend(action).isSuccess)
         }
 
         override suspend fun read(buffer: ByteArray): Int {
