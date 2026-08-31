@@ -5,6 +5,12 @@ import com.iptv.tv.core.model.CatchUpPlaybackResolver
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.EpgProgram
 
+internal enum class StableCatchUpActionState {
+    HIDDEN,
+    AVAILABLE,
+    UNAVAILABLE
+}
+
 /**
  * Presentation boundary for archive actions shown from the Player programme guide.
  *
@@ -27,12 +33,25 @@ internal object StableCatchUpActionPolicy {
         )
     }
 
+    fun state(
+        channel: Channel?,
+        program: EpgProgram,
+        nowMs: Long
+    ): StableCatchUpActionState {
+        if (channel == null || program.endEpochMs > nowMs) {
+            return StableCatchUpActionState.HIDDEN
+        }
+        val resolution = resolve(channel, program, nowMs)
+        return if (resolution?.supported == true && !resolution.playbackUrl.isNullOrBlank()) {
+            StableCatchUpActionState.AVAILABLE
+        } else {
+            StableCatchUpActionState.UNAVAILABLE
+        }
+    }
+
     fun isAvailable(
         channel: Channel?,
         program: EpgProgram,
         nowMs: Long
-    ): Boolean {
-        val resolution = resolve(channel, program, nowMs) ?: return false
-        return resolution.supported && !resolution.playbackUrl.isNullOrBlank()
-    }
+    ): Boolean = state(channel, program, nowMs) == StableCatchUpActionState.AVAILABLE
 }
