@@ -36,6 +36,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class IptvApp : Application(), Configuration.Provider {
     private val processStartedAtElapsedMs = SystemClock.elapsedRealtime()
     private var startedActivityCount = 0
+    private val epgForegroundRefreshGate = EpgForegroundRefreshGate()
 
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
@@ -102,7 +103,12 @@ class IptvApp : Application(), Configuration.Provider {
 
             override fun onActivityStarted(activity: Activity) {
                 startedActivityCount += 1
-                if (startedActivityCount == 1) markProcessForeground(foreground = true)
+                if (startedActivityCount == 1) {
+                    markProcessForeground(foreground = true)
+                    if (epgForegroundRefreshGate.onForegroundEntered()) {
+                        requestEpgRefreshOnForegroundIfStale()
+                    }
+                }
             }
 
             override fun onActivityResumed(activity: Activity) = Unit
@@ -167,6 +173,20 @@ class IptvApp : Application(), Configuration.Provider {
                             }
                         }
                     }
+            }
+        }
+    }
+
+    private fun requestEpgRefreshOnForegroundIfStale() {
+        applicationScope.launch(Dispatchers.IO) {
+            val current = epgSettingsRepository.get().currentSettings()
+            if (
+                shouldRequestEpgRefreshOnForeground(
+                    returningToForeground = true,
+                    settings = current
+                )
+            ) {
+                SyncScheduler.requestEpgRefresh(WorkManager.getInstance(this@IptvApp))
             }
         }
     }
