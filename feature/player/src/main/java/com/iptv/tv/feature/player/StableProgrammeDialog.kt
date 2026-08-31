@@ -186,19 +186,32 @@ internal fun StableProgrammeDialog(
                                                         overflow = TextOverflow.Ellipsis
                                                     )
                                                 }
-                                            if (
-                                                StableCatchUpActionPolicy.isAvailable(
+                                            when (
+                                                StableCatchUpActionPolicy.state(
                                                     channel = channel,
                                                     program = program,
                                                     nowMs = nowMs
                                                 )
                                             ) {
-                                                OutlinedButton(
-                                                    onClick = { onPlayCatchUp(program) },
-                                                    modifier = Modifier.padding(top = 4.dp)
-                                                ) {
-                                                    Text("Архив")
+                                                StableCatchUpActionState.AVAILABLE -> {
+                                                    OutlinedButton(
+                                                        onClick = { onPlayCatchUp(program) },
+                                                        modifier = Modifier.padding(top = 4.dp)
+                                                    ) {
+                                                        Text("Архив")
+                                                    }
                                                 }
+
+                                                StableCatchUpActionState.UNAVAILABLE -> {
+                                                    Text(
+                                                        "Архив недоступен",
+                                                        modifier = Modifier.padding(top = 4.dp),
+                                                        color = MaterialTheme.colorScheme.outline,
+                                                        style = MaterialTheme.typography.labelSmall
+                                                    )
+                                                }
+
+                                                StableCatchUpActionState.HIDDEN -> Unit
                                             }
                                         }
                                     }

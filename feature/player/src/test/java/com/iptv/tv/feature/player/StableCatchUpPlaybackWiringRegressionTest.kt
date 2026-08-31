@@ -33,7 +33,7 @@ class StableCatchUpPlaybackWiringRegressionTest {
     }
 
     @Test
-    fun `programme dialog exposes archive callback only behind fail closed policy`() {
+    fun `programme dialog derives available and unavailable archive UI from fail closed policy`() {
         val dialog = functionBody(
             source = programmeDialogSource(),
             signature = "internal fun StableProgrammeDialog("
@@ -41,12 +41,16 @@ class StableCatchUpPlaybackWiringRegressionTest {
 
         assertOrdered(
             dialog,
-            "StableCatchUpActionPolicy.isAvailable(",
+            "StableCatchUpActionPolicy.state(",
             "channel = channel",
             "program = program",
+            "StableCatchUpActionState.AVAILABLE ->",
             "OutlinedButton(",
             "onClick = { onPlayCatchUp(program) }",
-            "Text(\"Архив\")"
+            "Text(\"Архив\")",
+            "StableCatchUpActionState.UNAVAILABLE ->",
+            "\"Архив недоступен\"",
+            "StableCatchUpActionState.HIDDEN -> Unit"
         )
     }
 
