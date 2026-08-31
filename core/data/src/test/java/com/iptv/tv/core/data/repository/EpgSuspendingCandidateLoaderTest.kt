@@ -4,7 +4,6 @@ import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -71,21 +70,23 @@ class EpgSuspendingCandidateLoaderTest {
     fun cancellationIsPropagatedWithoutFallbackOrErrorCallback() = runTest {
         var capturedStale = false
         var reportedError = false
+        var cancelled = false
 
-        assertThrows(CancellationException::class.java) {
-            kotlinx.coroutines.test.runTest {
-                loadEpgCandidatesFreshFirstSuspending(
-                    candidates = listOf("primary"),
-                    loadFresh = { throw CancellationException("cancelled") },
-                    captureStaleFallback = {
-                        capturedStale = true
-                        "stale"
-                    },
-                    onLoadError = { reportedError = true }
-                )
-            }
+        try {
+            loadEpgCandidatesFreshFirstSuspending(
+                candidates = listOf("primary"),
+                loadFresh = { throw CancellationException("cancelled") },
+                captureStaleFallback = {
+                    capturedStale = true
+                    "stale"
+                },
+                onLoadError = { reportedError = true }
+            )
+        } catch (_: CancellationException) {
+            cancelled = true
         }
 
+        assertTrue(cancelled)
         assertTrue(!capturedStale)
         assertTrue(!reportedError)
     }
