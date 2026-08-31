@@ -116,6 +116,41 @@ class AceLivePreHandshakeReconnectPolicyTest {
     }
 
     @Test
+    fun explicitStopBeforeHandshakeDoesNotCreateCrossRuntimeFailure() = runBlocking {
+        val transport = FakeTransport(emptyList(), closeDelayMillis = 50L)
+        val factory = FakeTransportFactory(transport)
+        val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
+        val memory = AceLiveTcpConnectFailureMemory(
+            clockMillis = { 0L },
+            backoffMillis = 5_000L
+        )
+        val endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", 9045)
+        val pool = pool(
+            factory = factory,
+            events = events,
+            policy = policy(
+                maxReconnectAttempts = 0,
+                maxPreHandshakeReconnectAttempts = 0
+            ),
+            connectFailureMemory = memory
+        )
+
+        pool.startPeer(
+            peerId = 45,
+            endpoint = endpoint,
+            swarmKey = swarmKey,
+            localPeerId = localPeerId
+        )
+
+        awaitCondition {
+            events.any { event -> event is AceLiveTcpPoolEvent.TransportConnected }
+        }
+        pool.stopPeer(45)
+
+        assertTrue(memory.isEligible(swarmKey, endpoint, nowMillis = 0L))
+    }
+
+    @Test
     fun establishedPeerKeepsBoundedReconnectBudget() = runBlocking {
         val first = FakeTransport(
             listOf(
@@ -236,7 +271,10 @@ class AceLivePreHandshakeReconnectPolicyTest {
         data object Eof : ReadAction
     }
 
-    private class FakeTransport(initialReads: List<ReadAction>) : AceLiveTcpTransport {
+    private class FakeTransport(
+        initialReads: List<ReadAction>,
+        private val closeDelayMillis: Long = 0L
+    ) : AceLiveTcpTransport {
         private val reads = Channel<ReadAction>(Channel.UNLIMITED)
 
         @Volatile
@@ -271,6 +309,7 @@ class AceLivePreHandshakeReconnectPolicyTest {
             if (!closed) {
                 closed = true
                 reads.trySend(ReadAction.Eof)
+                if (closeDelayMillis > 0L) delay(closeDelayMillis)
             }
         }
     }
