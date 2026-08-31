@@ -21,7 +21,10 @@ jobs:
 
       - name: Apply exact repository patch
         run: |
+          python -c 'from pathlib import Path; p=Path(".github/scripts/epg_wiring_patch_r1.py"); s=p.read_text(); needle="    expected=3,\n)\n\nnew_loader"; assert s.count(needle) == 1; p.write_text(s.replace(needle, "    expected=2,\n)\n\nnew_loader", 1))'
           python .github/scripts/epg_wiring_patch_r1.py
+          sed -i 's/loadFresh = ::getOrLoadXmlTv/loadFresh = { url -> getOrLoadXmlTv(url) }/g' core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt
+          sed -i 's/captureStaleFallback = ::staleEpgEntryForActiveTransientBackoff/captureStaleFallback = { url -> staleEpgEntryForActiveTransientBackoff(url) }/g' core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt
           git diff --check
           grep -R -n --include='*.kt' 'PlaylistRepositoryImpl(' core/data/src/test core/data/src/main || true
           git diff -- core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt
