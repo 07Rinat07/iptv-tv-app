@@ -70,4 +70,49 @@ class SyncSchedulerTest {
 
         assertTrue(shouldRequestEpgRefreshOnForegroundReturn(settings, nowMs = now))
     }
+
+    @Test
+    fun firstForegroundEntryIsNotAForegroundReturn() {
+        val tracker = EpgForegroundReturnTracker()
+
+        val transition = tracker.onActivityStarted()
+
+        assertTrue(transition.enteredForeground)
+        assertFalse(transition.returnedFromBackground)
+    }
+
+    @Test
+    fun realBackgroundThenForegroundIsDetected() {
+        val tracker = EpgForegroundReturnTracker()
+        tracker.onActivityStarted()
+
+        assertTrue(tracker.onActivityStopped(isChangingConfigurations = false))
+        val transition = tracker.onActivityStarted()
+
+        assertTrue(transition.enteredForeground)
+        assertTrue(transition.returnedFromBackground)
+    }
+
+    @Test
+    fun configurationRecreationIsNotDetectedAsForegroundReturn() {
+        val tracker = EpgForegroundReturnTracker()
+        tracker.onActivityStarted()
+
+        assertTrue(tracker.onActivityStopped(isChangingConfigurations = true))
+        val transition = tracker.onActivityStarted()
+
+        assertTrue(transition.enteredForeground)
+        assertFalse(transition.returnedFromBackground)
+    }
+
+    @Test
+    fun multipleStartedActivitiesOnlyLeaveForegroundAfterLastStops() {
+        val tracker = EpgForegroundReturnTracker()
+        tracker.onActivityStarted()
+        tracker.onActivityStarted()
+
+        assertFalse(tracker.onActivityStopped(isChangingConfigurations = false))
+        assertTrue(tracker.onActivityStopped(isChangingConfigurations = false))
+        assertTrue(tracker.onActivityStarted().returnedFromBackground)
+    }
 }
