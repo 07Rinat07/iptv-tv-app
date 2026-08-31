@@ -143,7 +143,8 @@ data class ChannelEpgInfo(
     val matchedBy: String,
     val now: EpgProgram?,
     val next: EpgProgram?,
-    val upcoming: List<EpgProgram>
+    val upcoming: List<EpgProgram>,
+    val schedule: List<EpgProgram> = emptyList()
 )
 
 data class PlaylistCandidate(

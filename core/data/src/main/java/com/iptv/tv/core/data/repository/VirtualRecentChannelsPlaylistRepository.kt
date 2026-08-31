@@ -184,47 +184,32 @@ class VirtualRecentChannelsPlaylistRepository @Inject constructor(
 
     override suspend fun getChannelEpgNowNext(channelId: Long): AppResult<ChannelEpgInfo> {
         val settings = epgSettingsRepository.currentSettings()
-        if (settings.manualOffsetMinutes == 0) {
-            return delegate.getChannelEpgNowNext(channelId)
-        }
-
         val baseInfo = when (val result = delegate.getChannelEpgNowNext(channelId)) {
             is AppResult.Success -> result.data
             is AppResult.Error -> return result
             AppResult.Loading -> return AppResult.Loading
         }
-        val channel = when (val result = delegate.getChannelById(channelId)) {
-            is AppResult.Success -> result.data
-            is AppResult.Error -> return result
-            AppResult.Loading -> return AppResult.Loading
+        if (settings.manualOffsetMinutes == 0) {
+            return AppResult.Success(baseInfo)
         }
 
         val nowMs = System.currentTimeMillis()
-        return when (
-            val result = getPlaylistEpgWindow(
-                playlistId = channel.playlistId,
-                startEpochMs = nowMs - EPG_NOW_NEXT_LOOKBACK_MS,
-                endEpochMs = nowMs + EPG_NOW_NEXT_LOOKAHEAD_MS,
-                query = null
+        val correctedPrograms = EpgTimeCorrection.apply(
+            baseInfo.schedule,
+            settings.manualOffsetMinutes
+        )
+        return AppResult.Success(
+            baseInfo.copy(
+                now = EpgTimeCorrection.current(correctedPrograms, nowMs),
+                next = EpgTimeCorrection.next(correctedPrograms, nowMs),
+                upcoming = correctedPrograms
+                    .asSequence()
+                    .filter { program -> program.endEpochMs > nowMs }
+                    .take(12)
+                    .toList(),
+                schedule = correctedPrograms
             )
-        ) {
-            is AppResult.Success -> {
-                val correctedPrograms = result.data[channelId].orEmpty()
-                AppResult.Success(
-                    baseInfo.copy(
-                        now = EpgTimeCorrection.current(correctedPrograms, nowMs),
-                        next = EpgTimeCorrection.next(correctedPrograms, nowMs),
-                        upcoming = correctedPrograms
-                            .asSequence()
-                            .filter { program -> program.endEpochMs > nowMs }
-                            .take(12)
-                            .toList()
-                    )
-                )
-            }
-            is AppResult.Error -> result
-            AppResult.Loading -> AppResult.Loading
-        }
+        )
     }
 }
 
@@ -312,7 +297,5 @@ private fun ParentalControlSettings.toParentalChannelGate(): ParentalChannelGate
     )
 }
 
-private const val EPG_NOW_NEXT_LOOKBACK_MS = 6L * 60L * 60L * 1_000L
-private const val EPG_NOW_NEXT_LOOKAHEAD_MS = 18L * 60L * 60L * 1_000L
 internal const val RECENT_HISTORY_LOOKBACK_LIMIT = 250
 internal const val MAX_RECENT_CHANNELS = 100
