@@ -2092,9 +2092,9 @@ class PlaylistRepositoryImpl @Inject constructor(
         val normalizedName = normalizeTextKey(channelName)
         if (normalizedName.isNotBlank()) {
             val displayNameChannelId = EpgDisplayNameMatchPolicy.uniqueChannelId(
-            normalizedChannelName = normalizedName,
-            index = data.displayNameAliasIndex
-        )
+                normalizedChannelName = normalizedName,
+                index = data.displayNameAliasIndex
+            )
             if (displayNameChannelId != null) {
                 val programs = data.programsByChannel[displayNameChannelId].orEmpty()
                 return EpgMatch(programs = programs, matchedBy = "display-name")
