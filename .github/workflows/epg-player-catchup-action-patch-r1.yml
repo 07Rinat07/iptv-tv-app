@@ -41,3 +41,5 @@ jobs:
             feature/player/src/main/java/com/iptv/tv/feature/player/PlayerViewModel.kt
           git commit -m "feat(epg): wire fail-closed archive playback action"
           git push origin HEAD:feat/epg-player-catchup-action-r1
+
+# retry: exact responsive indentation handled separately
