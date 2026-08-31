@@ -78,6 +78,24 @@ class StableProgrammeScheduleTest {
     }
 
     @Test
+    fun `cross midnight programme exposes both local days`() {
+        val zone = TimeZone.getTimeZone("UTC")
+        val crossingStart = instant(zone, 2026, Calendar.AUGUST, 31, 23)
+        val days = StableProgrammeSchedule.availableDayStarts(
+            programs = listOf(program("Crossing", crossingStart, crossingStart + 2 * HOUR_MS)),
+            timeZone = zone
+        )
+
+        assertEquals(
+            listOf(
+                dayStart(zone, 2026, Calendar.AUGUST, 31),
+                dayStart(zone, 2026, Calendar.SEPTEMBER, 1)
+            ),
+            days
+        )
+    }
+
+    @Test
     fun `day schedule keeps midnight overlap and filters invalid rows`() {
         val zone = TimeZone.getTimeZone("UTC")
         val selectedDay = dayStart(zone, 2026, Calendar.SEPTEMBER, 1)
