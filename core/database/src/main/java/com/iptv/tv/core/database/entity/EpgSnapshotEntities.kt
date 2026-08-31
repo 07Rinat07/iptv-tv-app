@@ -17,11 +17,7 @@ data class EpgSnapshotSourceEntity(
 /** Human-readable XMLTV aliases retained so channel matching can be rebuilt after process restart. */
 @Entity(
     tableName = "epg_snapshot_display_names",
-    primaryKeys = ["sourceUrl", "channelId", "displayName"],
-    indices = [
-        Index(value = ["sourceUrl"]),
-        Index(value = ["sourceUrl", "channelId"])
-    ]
+    primaryKeys = ["sourceUrl", "channelId", "displayName"]
 )
 data class EpgSnapshotDisplayNameEntity(
     val sourceUrl: String,
@@ -32,11 +28,7 @@ data class EpgSnapshotDisplayNameEntity(
 /** Bounded programme rows retained by the XMLTV parser for now/next and guide windows. */
 @Entity(
     tableName = "epg_snapshot_programs",
-    primaryKeys = ["sourceUrl", "channelId", "startEpochMs", "endEpochMs", "title"],
-    indices = [
-        Index(value = ["sourceUrl"]),
-        Index(value = ["sourceUrl", "channelId", "startEpochMs"])
-    ]
+    primaryKeys = ["sourceUrl", "channelId", "startEpochMs", "endEpochMs", "title"]
 )
 data class EpgSnapshotProgramEntity(
     val sourceUrl: String,
