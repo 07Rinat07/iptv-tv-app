@@ -22,28 +22,34 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+
           path = Path('core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt')
-          text = path.read_text()
-          old = '''            val displayNameChannelId = EpgDisplayNameMatchPolicy.uniqueChannelId(
-                      normalizedChannelName = normalizedName,
-                      index = data.displayNameAliasIndex
-                  )
-          '''
-          new = '''            val displayNameChannelId = EpgDisplayNameMatchPolicy.uniqueChannelId(
-                      normalizedChannelName = normalizedName,
-                      index = data.displayNameAliasIndex
-                  )
-          '''
-          # The exact source currently has the argument lines under-indented by four spaces.
-          old = old.replace('                      normalizedChannelName', '            normalizedChannelName')
-          old = old.replace('                      index', '            index')
-          old = old.replace('                  )', '        )')
-          if text.count(old) != 1:
-              raise SystemExit(f'expected formatting target exactly once, found {text.count(old)}')
-          text = text.replace(old, new, 1)
-          path.write_text(text)
+          lines = path.read_text().splitlines()
+          anchor = '            val displayNameChannelId = EpgDisplayNameMatchPolicy.uniqueChannelId('
+          matches = [index for index, line in enumerate(lines) if line == anchor]
+          if len(matches) != 1:
+              raise SystemExit(f'expected matcher anchor exactly once, found {len(matches)}')
+
+          index = matches[0]
+          expected = [
+              anchor,
+              '            normalizedChannelName = normalizedName,',
+              '            index = data.displayNameAliasIndex',
+              '        )',
+          ]
+          if lines[index:index + 4] != expected:
+              raise SystemExit('matcher block does not match the guarded pre-format source')
+
+          lines[index:index + 4] = [
+              anchor,
+              '                normalizedChannelName = normalizedName,',
+              '                index = data.displayNameAliasIndex',
+              '            )',
+          ]
+          path.write_text('\n'.join(lines) + '\n')
           PY
           git diff --check
+          git diff -- core/data/src/main/java/com/iptv/tv/core/data/repository/Repositories.kt
       - name: Commit formatting fix
         shell: bash
         run: |
