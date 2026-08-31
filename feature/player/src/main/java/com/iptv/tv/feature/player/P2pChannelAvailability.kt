@@ -115,6 +115,20 @@ internal fun p2pChannelAvailabilityLabel(status: P2pChannelAvailability?): Strin
     }
 }
 
+/**
+ * Fullscreen OSD should surface only actionable P2P state. Untouched P2P channels remain silent
+ * until playback actually starts probing them, and regular HTTP/HLS channels never get a badge.
+ */
+internal fun p2pChannelOsdLabel(
+    streamUrl: String?,
+    status: P2pChannelAvailability?
+): String? {
+    if (streamUrl.isNullOrBlank() || PlayerP2pDescriptor.detect(streamUrl) == null) return null
+    val value = status ?: P2pChannelAvailability()
+    if (value.state == P2pChannelAvailabilityState.UNCHECKED) return null
+    return p2pChannelAvailabilityLabel(value)
+}
+
 internal fun p2pAvailabilityFromResolveError(message: String): P2pChannelAvailabilityState {
     val normalized = message.lowercase()
     if (

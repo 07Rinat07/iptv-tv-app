@@ -2,6 +2,7 @@ package com.iptv.tv.feature.player
 
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class P2pChannelAvailabilityTest {
@@ -62,6 +63,45 @@ class P2pChannelAvailabilityTest {
                 P2pChannelAvailability(
                     state = P2pChannelAvailabilityState.PLAYING,
                     peers = 3
+                )
+            )
+        )
+    }
+
+    @Test
+    fun fullscreenOsd_hidesUncheckedP2pChannelUntilPlaybackProbeStarts() {
+        assertNull(
+            p2pChannelOsdLabel(
+                streamUrl = "acestream://0123456789abcdefghij",
+                status = null
+            )
+        )
+    }
+
+    @Test
+    fun fullscreenOsd_neverShowsP2pBadgeForRegularStream() {
+        assertNull(
+            p2pChannelOsdLabel(
+                streamUrl = "https://example.test/live/channel.m3u8",
+                status = P2pChannelAvailability(
+                    state = P2pChannelAvailabilityState.PLAYING,
+                    peers = 4,
+                    speedKbps = 2_500
+                )
+            )
+        )
+    }
+
+    @Test
+    fun fullscreenOsd_showsUsefulPlayingTelemetryForP2pChannel() {
+        assertEquals(
+            "P2P · играет · 4 пир. · 2500 Кбит/с",
+            p2pChannelOsdLabel(
+                streamUrl = "acestream://0123456789abcdefghij",
+                status = P2pChannelAvailability(
+                    state = P2pChannelAvailabilityState.PLAYING,
+                    peers = 4,
+                    speedKbps = 2_500
                 )
             )
         )
