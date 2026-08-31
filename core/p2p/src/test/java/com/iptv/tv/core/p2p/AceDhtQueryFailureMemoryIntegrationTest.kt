@@ -149,6 +149,72 @@ class AceDhtQueryFailureMemoryIntegrationTest {
         }
     }
 
+    @Test
+    fun lateNegativeWarmNodeDoesNotSuppressSameBootstrapEndpoint() = runBlocking {
+        val bootstrap = DatagramSocket(InetSocketAddress("127.0.0.1", 0))
+        val transactionId = byteArrayOf(0x12, 0x34)
+        val endpoint = AceLiveTcpPeerEndpoint("127.0.0.1", bootstrap.localPort)
+        val warmNodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 0x31 })
+        val peer = AceLiveTcpPeerEndpoint("127.0.0.1", 9301)
+        val bootstrapThread = dhtServerThread(bootstrap, requestCount = 1) { _, _ ->
+            response(
+                transactionId = transactionId,
+                remoteId = ByteArray(20) { 0x32 },
+                values = listOf(compactEndpoint(127, 0, 0, 1, peer.port))
+            )
+        }
+        val routingMemory = AceDhtRoutingMemory().apply {
+            remember(AceLiveDhtNodeContact(nodeId = warmNodeId, endpoint = endpoint))
+        }
+        var eligibilityChecks = 0
+        lateinit var memory: AceDhtQueryFailureMemory
+        memory = AceDhtQueryFailureMemory(
+            clockMillis = {
+                eligibilityChecks += 1
+                if (eligibilityChecks == 2) {
+                    memory.recordFailure(endpoint, nowMillis = 1_000L)
+                }
+                1_000L
+            },
+            backoffMillis = 20_000L
+        )
+
+        try {
+            val result = AceLiveDhtDiscovery(
+                policy = AceLiveDhtPolicy(
+                    requestTimeoutMillis = 500,
+                    discoveryBudgetMillis = 1_500,
+                    searchBranching = 1,
+                    maxQueries = 2,
+                    returnAfterPeers = 1,
+                    allowNonGlobalNodeAddresses = true,
+                    allowNonGlobalPeerAddresses = true
+                ),
+                randomInt = { 0x1234 },
+                addressResolver = { listOf(ipv4("127.0.0.1")) },
+                routingMemory = routingMemory,
+                queryFailureMemory = memory
+            ).discover(
+                AceLiveDhtDiscoveryRequest(
+                    swarmKey = AceLiveSwarmKey.fromBytes(ByteArray(20) { 0x35 }),
+                    bootstrapNodes = listOf(
+                        AceLiveDhtBootstrapNode("bootstrap.test", bootstrap.localPort)
+                    ),
+                    localNodeId = AceLiveDhtNodeId.fromBytes(ByteArray(20) { 0x44 })
+                )
+            )
+
+            assertEquals(1, result.queriesSent)
+            assertEquals(0, result.failedQueries)
+            assertEquals(0, result.warmRoutingSeedsUsed)
+            assertTrue(result.peers.contains(peer))
+            assertFalse(memory.isEligible(endpoint, nowMillis = 1_000L))
+        } finally {
+            bootstrap.close()
+            bootstrapThread.join(2_000)
+        }
+    }
+
     private fun dhtServerThread(
         socket: DatagramSocket,
         requestCount: Int,
