@@ -115,8 +115,18 @@ replace_exact(
     """                    onError = onError,
                     onPlaySelected = onPlaySelected,
                     onPlayCatchUp = onPlayCatchUp,
-                    onToggleFullscreen = onToggleFullscreen,""",
-    expected=2
+                    onToggleFullscreen = onToggleFullscreen,"""
+)
+
+replace_exact(
+    "feature/player/src/main/java/com/iptv/tv/feature/player/StableResponsiveCompactPlayer.kt",
+    """                        onError = onError,
+                        onPlaySelected = onPlaySelected,
+                        onToggleFullscreen = onToggleFullscreen,""",
+    """                        onError = onError,
+                        onPlaySelected = onPlaySelected,
+                        onPlayCatchUp = onPlayCatchUp,
+                        onToggleFullscreen = onToggleFullscreen,"""
 )
 
 replace_exact(
