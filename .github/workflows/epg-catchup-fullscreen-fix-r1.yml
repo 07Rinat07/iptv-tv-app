@@ -1,0 +1,35 @@
+name: EPG catch-up fullscreen fix r1
+
+on:
+  push:
+    branches:
+      - feat/epg-player-catchup-action-r1
+    paths:
+      - .github/workflows/epg-catchup-fullscreen-fix-r1.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/epg-player-catchup-action-r1
+          fetch-depth: 0
+      - name: Apply exact fullscreen wiring fix
+        run: |
+          python .github/scripts/epg_catchup_fullscreen_fix_r1.py
+          git diff --check
+          git diff -- feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerShell.kt
+          git diff -- feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt
+      - name: Commit fullscreen wiring fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerShell.kt \
+            feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt
+          git commit -m "fix(epg): wire archive action in fullscreen guide"
+          git push origin HEAD:feat/epg-player-catchup-action-r1
