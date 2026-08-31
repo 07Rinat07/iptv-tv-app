@@ -8,9 +8,11 @@ import com.iptv.tv.core.database.MIGRATION_7_8
 import com.iptv.tv.core.database.MIGRATION_8_9
 import com.iptv.tv.core.database.MIGRATION_9_10
 import com.iptv.tv.core.database.MIGRATION_10_11
+import com.iptv.tv.core.database.MIGRATION_11_12
 import com.iptv.tv.core.database.dao.ChannelDao
 import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.DownloadDao
+import com.iptv.tv.core.database.dao.EpgSnapshotDao
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
@@ -43,7 +45,8 @@ object DatabaseModule {
                 MIGRATION_7_8,
                 MIGRATION_8_9,
                 MIGRATION_9_10,
-                MIGRATION_10_11
+                MIGRATION_10_11,
+                MIGRATION_11_12
             )
             .fallbackToDestructiveMigration()
             .build()
@@ -98,4 +101,7 @@ object DatabaseModule {
     @Provides
     fun provideReadyPlaylistRefreshDao(database: IptvDatabase): ReadyPlaylistRefreshDao =
         database.readyPlaylistRefreshDao()
+
+    @Provides
+    fun provideEpgSnapshotDao(database: IptvDatabase): EpgSnapshotDao = database.epgSnapshotDao()
 }

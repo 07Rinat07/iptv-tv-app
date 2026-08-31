@@ -71,4 +71,26 @@ class DatabaseMigrationsTest {
         )
     }
 
+    @Test
+    fun migration11To12_createsNormalizedPersistentEpgSnapshotStorage() {
+        assertEquals(11, MIGRATION_11_12.startVersion)
+        assertEquals(12, MIGRATION_11_12.endVersion)
+        assertEquals(4, MIGRATION_11_12_SQL.size)
+
+        assertTrue(MIGRATION_11_12_SQL[0].contains("epg_snapshot_sources"))
+        assertTrue(MIGRATION_11_12_SQL[0].contains("PRIMARY KEY(`sourceUrl`)"))
+        assertTrue(MIGRATION_11_12_SQL[1].contains("index_epg_snapshot_sources_loadedAtMs"))
+        assertTrue(MIGRATION_11_12_SQL[2].contains("epg_snapshot_display_names"))
+        assertTrue(
+            MIGRATION_11_12_SQL[2].contains(
+                "PRIMARY KEY(`sourceUrl`, `channelId`, `displayName`)"
+            )
+        )
+        assertTrue(MIGRATION_11_12_SQL[3].contains("epg_snapshot_programs"))
+        assertTrue(
+            MIGRATION_11_12_SQL[3].contains(
+                "PRIMARY KEY(`sourceUrl`, `channelId`, `startEpochMs`, `endEpochMs`, `title`)"
+            )
+        )
+    }
 }
