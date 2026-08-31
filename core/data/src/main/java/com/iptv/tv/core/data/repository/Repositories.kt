@@ -1967,14 +1967,16 @@ class PlaylistRepositoryImpl @Inject constructor(
                 .takeIf { it.isNotBlank() }
                 ?.let { normalizedKey -> normalizedKey to channelId }
         }
-        val channelIdByDisplayNameKey = channelDisplayNames
-            .entries
-            .asSequence()
-            .flatMap { (channelId, names) ->
-                names.asSequence().map { displayName -> normalizeTextKey(displayName) to channelId }
-            }
-            .filter { (key, _) -> key.isNotBlank() }
-            .associateFirst()
+        val displayNameAliasIndex = EpgDisplayNameMatchPolicy.buildIndex(
+            channelDisplayNames
+                .entries
+                .asSequence()
+                .flatMap { (channelId, names) ->
+                    names.asSequence().map { displayName -> normalizeTextKey(displayName) to channelId }
+                }
+                .filter { (key, _) -> key.isNotBlank() }
+                .toList()
+        )
 
         return XmlTvData(
             channelDisplayNames = channelDisplayNames,
@@ -1982,7 +1984,7 @@ class PlaylistRepositoryImpl @Inject constructor(
             channelIdByLowercase = channelIdByLowercase,
             channelIdByTextKey = channelIdByTextKey,
             channelIdsByTextKey = channelIdsByTextKey,
-            channelIdByDisplayNameKey = channelIdByDisplayNameKey
+            displayNameAliasIndex = displayNameAliasIndex
         )
     }
 
@@ -2089,7 +2091,10 @@ class PlaylistRepositoryImpl @Inject constructor(
 
         val normalizedName = normalizeTextKey(channelName)
         if (normalizedName.isNotBlank()) {
-            val displayNameChannelId = data.channelIdByDisplayNameKey[normalizedName]
+            val displayNameChannelId = EpgDisplayNameMatchPolicy.uniqueChannelId(
+            normalizedChannelName = normalizedName,
+            index = data.displayNameAliasIndex
+        )
             if (displayNameChannelId != null) {
                 val programs = data.programsByChannel[displayNameChannelId].orEmpty()
                 return EpgMatch(programs = programs, matchedBy = "display-name")
@@ -2268,7 +2273,7 @@ class PlaylistRepositoryImpl @Inject constructor(
         val channelIdByLowercase: Map<String, String>,
         val channelIdByTextKey: Map<String, String>,
         val channelIdsByTextKey: List<Pair<String, String>>,
-        val channelIdByDisplayNameKey: Map<String, String>
+        val displayNameAliasIndex: EpgDisplayNameAliasIndex
     )
 
     private data class EpgMatch(
