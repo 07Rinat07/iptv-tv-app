@@ -19,11 +19,11 @@ internal object EpgDisplayNameMatchPolicy {
         val channelIdByAlias = linkedMapOf<String, String>()
         val ambiguousAliases = linkedSetOf<String>()
 
-        normalizedDisplayNamesByChannel.forEach { (normalizedDisplayName, channelId) ->
-            if (normalizedDisplayName.isBlank() || channelId.isBlank()) return@forEach
+        for ((normalizedDisplayName, channelId) in normalizedDisplayNamesByChannel) {
+            if (normalizedDisplayName.isBlank() || channelId.isBlank()) continue
 
-            EpgChannelMatchPolicy.presentationAliases(normalizedDisplayName).forEach { alias ->
-                if (alias in ambiguousAliases) return@forEach
+            for (alias in EpgChannelMatchPolicy.presentationAliases(normalizedDisplayName)) {
+                if (alias in ambiguousAliases) continue
 
                 val existing = channelIdByAlias[alias]
                 when {
