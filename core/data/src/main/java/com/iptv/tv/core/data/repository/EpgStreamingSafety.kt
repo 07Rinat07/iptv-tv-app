@@ -24,6 +24,15 @@ internal class EpgInputLimitExceededException(
     }
 )
 
+internal class EpgExpansionLimitExceededException(
+    val maxExpansionRatio: Long,
+    val compressedBytes: Long,
+    val decodedBytes: Long
+) : IOException(
+    "EPG gzip expansion exceeds the ${maxExpansionRatio}x safety ratio " +
+        "(compressed=$compressedBytes, decoded=$decodedBytes)"
+)
+
 internal class EpgHttpStatusException(
     val statusCode: Int
 ) : IOException("HTTP $statusCode")
@@ -62,7 +71,8 @@ internal enum class EpgSourceFormat {
 
 internal data class EpgPreparedSource(
     val input: InputStream,
-    val sourceFormat: EpgSourceFormat
+    val sourceFormat: EpgSourceFormat,
+    val sourceBytesRead: (() -> Long)? = null
 )
 
 /**
@@ -117,7 +127,10 @@ internal object EpgSourceFormatPolicy {
         val raw = inspectAndReplay(boundedSource)
         return when (raw.format) {
             EpgSourceFormat.XMLTV -> EpgPreparedSource(raw.input, EpgSourceFormat.XMLTV)
-            EpgSourceFormat.GZIP -> prepareGzipXmlTv(raw.input)
+            EpgSourceFormat.GZIP -> prepareGzipXmlTv(
+                input = raw.input,
+                sourceBytesRead = boundedSource::consumedBytes
+            )
             else -> throw EpgMalformedXmlException("EPG source is not XMLTV: format=${raw.format}")
         }
     }
@@ -130,7 +143,10 @@ internal object EpgSourceFormatPolicy {
         return inspected.input
     }
 
-    private fun prepareGzipXmlTv(input: InputStream): EpgPreparedSource {
+    private fun prepareGzipXmlTv(
+        input: InputStream,
+        sourceBytesRead: () -> Long
+    ): EpgPreparedSource {
         val gzip = try {
             GZIPInputStream(input, 32 * 1024)
         } catch (failure: ZipException) {
@@ -147,7 +163,11 @@ internal object EpgSourceFormatPolicy {
                 "EPG gzip payload is not XMLTV: format=${decoded.format}"
             )
         }
-        return EpgPreparedSource(decoded.input, EpgSourceFormat.GZIP)
+        return EpgPreparedSource(
+            input = decoded.input,
+            sourceFormat = EpgSourceFormat.GZIP,
+            sourceBytesRead = sourceBytesRead
+        )
     }
 
     private data class Inspection(
@@ -232,6 +252,7 @@ internal object EpgStaleFallbackPolicy {
 
 internal fun classifyEpgFailure(failure: IOException): EpgFailureKind = when (failure) {
     is EpgInputLimitExceededException,
+    is EpgExpansionLimitExceededException,
     is EpgMalformedXmlException -> EpgFailureKind.MALFORMED
     is EpgLowMemoryException -> EpgFailureKind.LOW_MEMORY
     is EpgHttpStatusException -> if (failure.statusCode in 500..599) {
@@ -321,21 +342,24 @@ internal object EpgDiagnosticsCacheStatusPolicy {
 }
 
 /**
- * Streaming hard limit for XMLTV bodies.
+ * Streaming guards for XMLTV bodies.
  *
  * Raw XMLTV keeps the caller-provided source limit. Raw gzip is first bounded by that same source
- * limit, decoded streaming, then bounded again by [EpgInputSafetyPolicy.MAX_DECODED_XMLTV_BYTES].
- * This preserves the existing network envelope while preventing unbounded gzip expansion.
+ * limit, then decoded streaming. Decoded XMLTV is protected by both an absolute scan budget and an
+ * expansion-ratio guard, so large legitimate guides can exceed the old 256 MiB aggregate boundary
+ * without turning compressed input into unbounded CPU work or memory retention.
  */
 internal class EpgBoundedInputStream(
     input: InputStream,
     maxBytes: Long,
     validateXmlTvPrefix: Boolean = true,
-    maxDecodedBytes: Long = EpgInputSafetyPolicy.MAX_DECODED_XMLTV_BYTES
+    maxDecodedBytes: Long = EpgInputSafetyPolicy.MAX_DECODED_XMLTV_BYTES,
+    maxExpansionRatio: Long = EpgInputSafetyPolicy.MAX_GZIP_EXPANSION_RATIO
 ) : InputStream() {
     init {
         require(maxBytes > 0L) { "maxBytes must be positive" }
         require(maxDecodedBytes > 0L) { "maxDecodedBytes must be positive" }
+        require(maxExpansionRatio > 0L) { "maxExpansionRatio must be positive" }
     }
 
     private val prepared = if (
@@ -346,10 +370,16 @@ internal class EpgBoundedInputStream(
         EpgPreparedSource(input, EpgSourceFormat.XMLTV)
     }
 
-    private val delegate = EpgByteLimitInputStream(
-        prepared.input,
-        if (prepared.sourceFormat == EpgSourceFormat.GZIP) maxDecodedBytes else maxBytes
-    )
+    private val delegate: InputStream = if (prepared.sourceFormat == EpgSourceFormat.GZIP) {
+        val decoded = EpgByteLimitInputStream(prepared.input, maxDecodedBytes)
+        EpgGzipExpansionGuardInputStream(
+            input = decoded,
+            sourceBytesRead = requireNotNull(prepared.sourceBytesRead),
+            maxExpansionRatio = maxExpansionRatio
+        )
+    } else {
+        EpgByteLimitInputStream(prepared.input, maxBytes)
+    }
 
     override fun read(): Int = mapGzipFailure { delegate.read() }
 
@@ -375,6 +405,50 @@ internal class EpgBoundedInputStream(
     }
 }
 
+private class EpgGzipExpansionGuardInputStream(
+    input: InputStream,
+    private val sourceBytesRead: () -> Long,
+    private val maxExpansionRatio: Long
+) : FilterInputStream(input) {
+    private var decodedBytes = 0L
+
+    override fun read(): Int {
+        val value = super.read()
+        if (value >= 0) recordDecoded(1L)
+        return value
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        val read = super.read(buffer, offset, length)
+        if (read > 0) recordDecoded(read.toLong())
+        return read
+    }
+
+    override fun skip(byteCount: Long): Long {
+        val skipped = super.skip(byteCount)
+        if (skipped > 0L) recordDecoded(skipped)
+        return skipped
+    }
+
+    private fun recordDecoded(delta: Long) {
+        decodedBytes += delta
+        val compressedBytes = sourceBytesRead()
+            .coerceAtLeast(EpgSourceFormatPolicy.PREFIX_BYTES.toLong())
+        val allowedDecodedBytes = if (compressedBytes > Long.MAX_VALUE / maxExpansionRatio) {
+            Long.MAX_VALUE
+        } else {
+            compressedBytes * maxExpansionRatio
+        }
+        if (decodedBytes > allowedDecodedBytes) {
+            throw EpgExpansionLimitExceededException(
+                maxExpansionRatio = maxExpansionRatio,
+                compressedBytes = compressedBytes,
+                decodedBytes = decodedBytes
+            )
+        }
+    }
+}
+
 private class EpgByteLimitInputStream(
     input: InputStream,
     private val maxBytes: Long
@@ -383,44 +457,46 @@ private class EpgByteLimitInputStream(
         require(maxBytes > 0L) { "maxBytes must be positive" }
     }
 
-    private var consumedBytes: Long = 0L
+    private var consumedByteCount: Long = 0L
+
+    fun consumedBytes(): Long = consumedByteCount
 
     override fun read(): Int {
-        if (consumedBytes >= maxBytes) {
+        if (consumedByteCount >= maxBytes) {
             val extra = super.read()
             if (extra == -1) return -1
             throw EpgInputLimitExceededException(maxBytes)
         }
         val value = super.read()
-        if (value != -1) consumedBytes += 1L
+        if (value != -1) consumedByteCount += 1L
         return value
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (length == 0) return 0
-        if (consumedBytes >= maxBytes) {
+        if (consumedByteCount >= maxBytes) {
             val extra = super.read()
             if (extra == -1) return -1
             throw EpgInputLimitExceededException(maxBytes)
         }
-        val remaining = maxBytes - consumedBytes
+        val remaining = maxBytes - consumedByteCount
         val allowed = minOf(length.toLong(), remaining).toInt()
         val read = super.read(buffer, offset, allowed)
-        if (read > 0) consumedBytes += read.toLong()
+        if (read > 0) consumedByteCount += read.toLong()
         return read
     }
 
     override fun skip(byteCount: Long): Long {
         if (byteCount <= 0L) return 0L
-        if (consumedBytes >= maxBytes) {
+        if (consumedByteCount >= maxBytes) {
             val extra = super.read()
             if (extra == -1) return 0L
             throw EpgInputLimitExceededException(maxBytes)
         }
-        val remaining = maxBytes - consumedBytes
+        val remaining = maxBytes - consumedByteCount
         val allowed = minOf(byteCount, remaining)
         val skipped = super.skip(allowed)
-        if (skipped > 0L) consumedBytes += skipped
+        if (skipped > 0L) consumedByteCount += skipped
         return skipped
     }
 }
