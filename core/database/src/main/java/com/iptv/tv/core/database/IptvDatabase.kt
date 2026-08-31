@@ -5,6 +5,7 @@ import androidx.room.RoomDatabase
 import com.iptv.tv.core.database.dao.ChannelDao
 import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.DownloadDao
+import com.iptv.tv.core.database.dao.EpgSnapshotDao
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
@@ -21,6 +22,9 @@ import com.iptv.tv.core.database.dao.TvHomeChannelDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.ChannelMetadataEntity
 import com.iptv.tv.core.database.entity.DownloadEntity
+import com.iptv.tv.core.database.entity.EpgSnapshotDisplayNameEntity
+import com.iptv.tv.core.database.entity.EpgSnapshotProgramEntity
+import com.iptv.tv.core.database.entity.EpgSnapshotSourceEntity
 import com.iptv.tv.core.database.entity.FavoriteChannelEntity
 import com.iptv.tv.core.database.entity.FavoriteChannelVariantEntity
 import com.iptv.tv.core.database.entity.FavoriteEntity
@@ -52,9 +56,12 @@ import com.iptv.tv.core.database.entity.TvHomeChannelEntity
         ProviderSyncHistoryEntity::class,
         ParentalProfileEntity::class,
         ChannelMetadataEntity::class,
-        TvHomeChannelEntity::class
+        TvHomeChannelEntity::class,
+        EpgSnapshotSourceEntity::class,
+        EpgSnapshotDisplayNameEntity::class,
+        EpgSnapshotProgramEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 abstract class IptvDatabase : RoomDatabase() {
@@ -74,4 +81,5 @@ abstract class IptvDatabase : RoomDatabase() {
     abstract fun channelMetadataDao(): ChannelMetadataDao
     abstract fun tvHomeChannelDao(): TvHomeChannelDao
     abstract fun readyPlaylistRefreshDao(): ReadyPlaylistRefreshDao
+    abstract fun epgSnapshotDao(): EpgSnapshotDao
 }
