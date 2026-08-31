@@ -16,6 +16,7 @@ import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.EpgSettingsPolicy
 import com.iptv.tv.core.utils.FileLogger
 import com.iptv.tv.sync.SyncScheduler
+import com.iptv.tv.sync.shouldRequestEpgRefreshOnForegroundReturn
 import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -36,6 +37,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class IptvApp : Application(), Configuration.Provider {
     private val processStartedAtElapsedMs = SystemClock.elapsedRealtime()
     private var startedActivityCount = 0
+    private var hasEnteredForeground = false
 
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
@@ -101,8 +103,13 @@ class IptvApp : Application(), Configuration.Provider {
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
 
             override fun onActivityStarted(activity: Activity) {
+                val returningToForeground = startedActivityCount == 0 && hasEnteredForeground
                 startedActivityCount += 1
-                if (startedActivityCount == 1) markProcessForeground(foreground = true)
+                if (startedActivityCount == 1) {
+                    markProcessForeground(foreground = true)
+                    hasEnteredForeground = true
+                    if (returningToForeground) requestEpgRefreshAfterForegroundReturn()
+                }
             }
 
             override fun onActivityResumed(activity: Activity) = Unit
@@ -167,6 +174,15 @@ class IptvApp : Application(), Configuration.Provider {
                             }
                         }
                     }
+            }
+        }
+    }
+
+    private fun requestEpgRefreshAfterForegroundReturn() {
+        applicationScope.launch(Dispatchers.IO) {
+            val current = epgSettingsRepository.get().currentSettings()
+            if (shouldRequestEpgRefreshOnForegroundReturn(current)) {
+                SyncScheduler.requestEpgRefresh(WorkManager.getInstance(this@IptvApp))
             }
         }
     }
