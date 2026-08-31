@@ -135,8 +135,16 @@ replace_exact(
                             onToggleFullscreen = viewModel::toggleInternalPlayerSize,""",
     """                            onPlaySelected = { viewModel.playSelected(context) },
                             onPlayCatchUp = { program -> viewModel.playCatchUpProgram(program, context) },
-                            onToggleFullscreen = viewModel::toggleInternalPlayerSize,""",
-    expected=2
+                            onToggleFullscreen = viewModel::toggleInternalPlayerSize,"""
+)
+
+replace_exact(
+    "feature/player/src/main/java/com/iptv/tv/feature/player/StablePlayerScreenReplacement.kt",
+    """                        onPlaySelected = { viewModel.playSelected(context) },
+                        onToggleFullscreen = viewModel::toggleInternalPlayerSize,""",
+    """                        onPlaySelected = { viewModel.playSelected(context) },
+                        onPlayCatchUp = { program -> viewModel.playCatchUpProgram(program, context) },
+                        onToggleFullscreen = viewModel::toggleInternalPlayerSize,"""
 )
 
 replace_exact(
