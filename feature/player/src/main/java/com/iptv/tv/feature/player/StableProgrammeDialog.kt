@@ -48,6 +48,13 @@ internal fun StableProgrammeDialog(
     val dayStarts = remember(programs, timeZone.id) {
         StableProgrammeSchedule.availableDayStarts(programs, timeZone)
     }
+    val archiveRangeLabel = remember(channel, programs, nowMs) {
+        StableCatchUpRangePolicy.label(
+            channel = channel,
+            programs = programs,
+            nowMs = nowMs
+        )
+    }
     var selectedDayStart by remember(programs, timeZone.id) {
         mutableStateOf(
             StableProgrammeSchedule.defaultDayStart(
@@ -86,6 +93,15 @@ internal fun StableProgrammeDialog(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                archiveRangeLabel?.let { label ->
+                    Text(
+                        label,
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         },
         text = {
