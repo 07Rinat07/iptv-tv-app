@@ -70,9 +70,10 @@ class EpgGzipSourcePolicyTest {
     }
 
     @Test
-    fun productionSafetySeparatesSourceAndDecodedEnvelopes() {
+    fun productionSafetySeparatesSourceDecodedScanAndExpansionEnvelopes() {
         assertTrue(EpgInputSafetyPolicy.MAX_INPUT_BYTES == 128L * 1024L * 1024L)
-        assertTrue(EpgInputSafetyPolicy.MAX_DECODED_XMLTV_BYTES == 256L * 1024L * 1024L)
+        assertTrue(EpgInputSafetyPolicy.MAX_DECODED_XMLTV_BYTES == 1024L * 1024L * 1024L)
+        assertTrue(EpgInputSafetyPolicy.MAX_GZIP_EXPANSION_RATIO == 64L)
     }
 
     private fun gzip(input: ByteArray): ByteArray {
