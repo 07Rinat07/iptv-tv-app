@@ -94,11 +94,7 @@ internal val MIGRATION_11_12_SQL = listOf(
     "CREATE TABLE IF NOT EXISTS `epg_snapshot_sources` (`sourceUrl` TEXT NOT NULL, `loadedAtMs` INTEGER NOT NULL, PRIMARY KEY(`sourceUrl`))",
     "CREATE INDEX IF NOT EXISTS `index_epg_snapshot_sources_loadedAtMs` ON `epg_snapshot_sources` (`loadedAtMs`)",
     "CREATE TABLE IF NOT EXISTS `epg_snapshot_display_names` (`sourceUrl` TEXT NOT NULL, `channelId` TEXT NOT NULL, `displayName` TEXT NOT NULL, PRIMARY KEY(`sourceUrl`, `channelId`, `displayName`))",
-    "CREATE INDEX IF NOT EXISTS `index_epg_snapshot_display_names_sourceUrl` ON `epg_snapshot_display_names` (`sourceUrl`)",
-    "CREATE INDEX IF NOT EXISTS `index_epg_snapshot_display_names_sourceUrl_channelId` ON `epg_snapshot_display_names` (`sourceUrl`, `channelId`)",
-    "CREATE TABLE IF NOT EXISTS `epg_snapshot_programs` (`sourceUrl` TEXT NOT NULL, `channelId` TEXT NOT NULL, `startEpochMs` INTEGER NOT NULL, `endEpochMs` INTEGER NOT NULL, `title` TEXT NOT NULL, `description` TEXT, `category` TEXT, PRIMARY KEY(`sourceUrl`, `channelId`, `startEpochMs`, `endEpochMs`, `title`))",
-    "CREATE INDEX IF NOT EXISTS `index_epg_snapshot_programs_sourceUrl` ON `epg_snapshot_programs` (`sourceUrl`)",
-    "CREATE INDEX IF NOT EXISTS `index_epg_snapshot_programs_sourceUrl_channelId_startEpochMs` ON `epg_snapshot_programs` (`sourceUrl`, `channelId`, `startEpochMs`)"
+    "CREATE TABLE IF NOT EXISTS `epg_snapshot_programs` (`sourceUrl` TEXT NOT NULL, `channelId` TEXT NOT NULL, `startEpochMs` INTEGER NOT NULL, `endEpochMs` INTEGER NOT NULL, `title` TEXT NOT NULL, `description` TEXT, `category` TEXT, PRIMARY KEY(`sourceUrl`, `channelId`, `startEpochMs`, `endEpochMs`, `title`))"
 )
 
 internal val MIGRATION_11_12 = object : Migration(11, 12) {
