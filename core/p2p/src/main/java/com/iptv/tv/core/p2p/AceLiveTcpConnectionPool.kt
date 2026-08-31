@@ -244,6 +244,7 @@ class AceLiveTcpConnectionPool(
 
     suspend fun stopPeer(peerId: Long) {
         val runtime = poolMutex.withLock { peers[peerId] } ?: return
+        runtime.stopRequested = true
         runtime.transport?.close()
         runtime.writeJob?.cancel()
         runtime.job?.cancelAndJoin()
@@ -262,6 +263,7 @@ class AceLiveTcpConnectionPool(
         if (!closed.compareAndSet(false, true)) return
         val runtimes = poolMutex.withLock { peers.values.toList() }
         runtimes.forEach { runtime ->
+            runtime.stopRequested = true
             runtime.transport?.close()
             runtime.writeJob?.cancel()
             runtime.job?.cancelAndJoin()
@@ -470,7 +472,11 @@ class AceLiveTcpConnectionPool(
                     throw cancelled
                 } catch (_: Throwable) {
                     val retrying = reconnectAttempt < reconnectBudget(runtime)
-                    if (!retrying && !runtime.handshakeAcceptedAtLeastOnce) {
+                    if (
+                        !retrying &&
+                        !runtime.stopRequested &&
+                        !runtime.handshakeAcceptedAtLeastOnce
+                    ) {
                         connectFailureMemory.recordFinalPreHandshakeFailure(
                             swarmKey = runtime.swarmKey,
                             endpoint = runtime.endpoint,
@@ -490,9 +496,6 @@ class AceLiveTcpConnectionPool(
                 // never re-staggered.
                 markTransportConnectedAtLeastOnce()
 
-                // A real TCP connection disproves any still-live negative endpoint memory for this
-                // exact swarm, even before the application handshake is evaluated.
-                connectFailureMemory.recordConnected(runtime.swarmKey, runtime.endpoint)
                 runtime.transport = transport
                 val exit = try {
                     runConnectedTransport(runtime, transport, reconnectAttempt)
@@ -514,6 +517,17 @@ class AceLiveTcpConnectionPool(
                 val retrying =
                     exit.retryable && reconnectAttempt < reconnectBudget(runtime) &&
                         currentCoroutineContext().isActive
+                if (
+                    !retrying &&
+                    !runtime.stopRequested &&
+                    !runtime.handshakeAcceptedAtLeastOnce
+                ) {
+                    connectFailureMemory.recordFinalPreHandshakeFailure(
+                        swarmKey = runtime.swarmKey,
+                        endpoint = runtime.endpoint,
+                        nowMillis = clockMillis()
+                    )
+                }
                 emit(
                     AceLiveTcpPoolEvent.Disconnected(
                         peerId = runtime.peerId,
@@ -762,6 +776,11 @@ class AceLiveTcpConnectionPool(
                             )
                         }
                         runtime.handshakeAcceptedAtLeastOnce = true
+                        if (localHandshakeAfterRemote == null) {
+                            // For outbound live candidates, protocol qualification is the recovery
+                            // point. A bare TCP/uTP connect can still repeatedly fail this handshake.
+                            connectFailureMemory.recordConnected(runtime.swarmKey, runtime.endpoint)
+                        }
                         emit(AceLiveTcpPoolEvent.HandshakeAccepted(runtime.peerId))
 
                         if (handshakeBuffer.size > decoded.consumedBytes) {
@@ -916,6 +935,9 @@ class AceLiveTcpConnectionPool(
 
         @Volatile
         var handshakeAcceptedAtLeastOnce: Boolean = false
+
+        @Volatile
+        var stopRequested: Boolean = false
     }
 
     private data class PeerRequestability(
