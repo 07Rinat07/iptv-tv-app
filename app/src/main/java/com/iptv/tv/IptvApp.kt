@@ -15,6 +15,7 @@ import com.iptv.tv.core.domain.repository.EpgSettingsRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.EpgSettingsPolicy
 import com.iptv.tv.core.utils.FileLogger
+import com.iptv.tv.sync.EpgForegroundReturnTracker
 import com.iptv.tv.sync.SyncScheduler
 import com.iptv.tv.sync.shouldRequestEpgRefreshOnForegroundReturn
 import dagger.Lazy
@@ -36,8 +37,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 @HiltAndroidApp
 class IptvApp : Application(), Configuration.Provider {
     private val processStartedAtElapsedMs = SystemClock.elapsedRealtime()
-    private var startedActivityCount = 0
-    private var hasEnteredForeground = false
+    private val epgForegroundReturnTracker = EpgForegroundReturnTracker()
 
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
@@ -103,12 +103,12 @@ class IptvApp : Application(), Configuration.Provider {
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
 
             override fun onActivityStarted(activity: Activity) {
-                val returningToForeground = startedActivityCount == 0 && hasEnteredForeground
-                startedActivityCount += 1
-                if (startedActivityCount == 1) {
+                val transition = epgForegroundReturnTracker.onActivityStarted()
+                if (transition.enteredForeground) {
                     markProcessForeground(foreground = true)
-                    hasEnteredForeground = true
-                    if (returningToForeground) requestEpgRefreshAfterForegroundReturn()
+                }
+                if (transition.returnedFromBackground) {
+                    requestEpgRefreshAfterForegroundReturn()
                 }
             }
 
@@ -117,8 +117,12 @@ class IptvApp : Application(), Configuration.Provider {
             override fun onActivityPaused(activity: Activity) = Unit
 
             override fun onActivityStopped(activity: Activity) {
-                startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
-                if (startedActivityCount == 0) markProcessForeground(foreground = false)
+                val leftForeground = epgForegroundReturnTracker.onActivityStopped(
+                    isChangingConfigurations = activity.isChangingConfigurations
+                )
+                if (leftForeground) {
+                    markProcessForeground(foreground = false)
+                }
             }
 
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
