@@ -30,18 +30,24 @@ Discovery/connect, protocol/producer и P2P-to-Media3 boundary — отдель�
 
 1. сохранять bounded verified DHT routing contacts между runtime/process restarts;
 2. сохранять короткую same-swarm peer reputation по `swarm + endpoint`;
-3. считать tracker/DHT endpoints кандидатами, а не признаком успешного startup;
-4. продолжать bounded tracker+DHT acquisition до достаточного qualified/productive peer set;
-5. квалифицировать небольшой набор независимых candidates параллельно в пределах hard peer cap;
-6. измерять first qualified peer, first producer, first media и first frame вместо оправдания 20–60-секундного ожидания общим timeout.
+3. считать tracker, DHT и `ut_pex` равноправными источниками одного bounded candidate pool, а не признаком успешного startup;
+4. сначала использовать уже известные/PEX/recent same-swarm candidates, не ставя новый tracker/DHT walk обязательным gate перед ними;
+5. выполнять bounded tracker+DHT acquisition только для оставшегося qualification demand и продолжать diversity acquisition до достаточного qualified/productive peer set;
+6. сохранять общий `maxStartsPerCycle`/hard peer cap на весь refill cycle независимо от того, пришёл кандидат из памяти, PEX, tracker или DHT;
+7. квалифицировать небольшой набор независимых candidates параллельно в пределах hard peer cap;
+8. измерять first qualified peer, first producer, first media и first frame вместо оправдания 20–60-секундного ожидания общим timeout.
+
+Следующие архитектурные проверки P2P выполняются по реальным field logs и по зрелым open-source BitTorrent реализациям. В качестве reference behavior используются прежде всего AceStream/RePEX для learned peer reuse, TorrServer/anacrolix для цельной DHT/uTP/PEX acquisition subsystem и WebTorrent/torrent-discovery для независимых discovery sources. Код не копируется вслепую: переносится только подтверждённый protocol/architecture behavior с regression tests и сохранением Android/Ace Live ownership contracts.
 
 Persistent routing/reputation — только optimization. Повреждение/отсутствие cache не должно ломать bootstrap, tracker discovery или playback correctness.
 
 ### EPG и archive
 
-Функциональный scope ведётся в Issue #47. Источник должен пройти последовательность:
+Функциональный scope ведётся в Issue #47; oversized XMLTV field acceptance — в Issue #317. Источник должен пройти последовательность:
 
 `source -> decode/classify -> XMLTV parse -> channel matching -> programme state -> Player/EPG UI`
+
+Oversized XMLTV ingestion должен оставаться streaming/bounded. Если источник уже проходит parse, но программа отсутствует у конкретных каналов, следующий defect boundary — matching по реальным `tvg-id`/XMLTV channel id/`display-name`/explicit aliases из того же источника. Не вводить глобальный fuzzy matching или эвристику по истории EPG без воспроизводимого source evidence.
 
 Persistent EPG cache реализуется отдельно по [`EPG_DISK_CACHE_PLAN.md`](EPG_DISK_CACHE_PLAN.md): bounded storage, conditional HTTP, atomic writes, stale policy и безопасные cache keys. Parser/source compatibility меняется только по воспроизводимому входному evidence.
 
@@ -71,19 +77,21 @@ Dashboard/fullscreen/overlay изменения обязаны сохранят�
 
 1. начать от актуального `main`;
 2. один defect/feature boundary — одна тематическая ветка и PR;
-3. добавить deterministic regression test, если поведение допускает воспроизводимую проверку;
-4. выполнить релевантные unit/lint/guard/build проверки;
-5. проверить CI именно на exact PR head;
-6. review findings исправлять до merge, не расширяя scope без необходимости;
-7. squash merge только после прохождения требуемых gates;
-8. проверить integrated `main` после merge;
-9. device/network-dependent behavior считать принятым только после field validation exact integrated build.
+3. до написания кода проверить field evidence и релевантные protocol/reference implementations, если boundary зависит от сетевого/форматного поведения;
+4. добавить deterministic regression test, если поведение допускает воспроизводимую проверку;
+5. выполнить релевантные unit/lint/guard/build проверки;
+6. проверить CI именно на exact PR head;
+7. review findings исправлять до merge, не расширяя scope без необходимости;
+8. squash merge только после прохождения требуемых gates;
+9. проверить integrated `main` после merge;
+10. device/network-dependent behavior считать принятым только после field validation exact integrated build.
 
 CI является regression gate, но не заменяет TV Box/network field proof для P2P, реальных EPG источников, focus/layout и hardware playback compatibility.
 
 ## Архитектурная дисциплина
 
 - P2P, EPG source/parser/cache, Player UI и catalog changes не смешивать в один PR.
+- Перед сетевым/protocol изменением отделять source-derived факт от предположения; код писать только для подтверждённого boundary.
 - Не материализовать большие playlist/EPG bodies целиком в heap в production path.
 - Absolute safety bounds менять только по измеренному evidence.
 - Stale generation/session не может получить ownership после более новой playback generation.
@@ -91,7 +99,8 @@ CI является regression gate, но не заменяет TV Box/network f
 - Compatibility fallback не должен скрывать первичный failure stage.
 - Persistent DHT state хранит только verified routing contacts; peer reputation всегда scoped точным swarm key и имеет bounded TTL.
 - Disk I/O persistent P2P state не должен выполняться под socket/pool/refill ownership lock.
+- Candidate acquisition и candidate qualification остаются разными слоями; endpoint из tracker/DHT/PEX не считается usable peer до protocol qualification.
 
 ## Документация и evidence
 
-`docs/` содержит повторяемые контракты и инструкции. Exact SHA, активная ветка, результаты единичного field run и временный handoff должны жить в соответствующем GitHub Issue/PR/Actions artifact. При изменении устойчивого пользовательского или архитектурного контракта обновляются профильные документы, а не создаётся новый датированный status-файл.
+`docs/` содержит повторяемые контракты и инструкции. Exact SHA, активная ветка, результаты единичного field run и временный handoff должны жить в соответствующем GitHub Issue/PR/Actions artifact. При изменении устойчивого пользовательского или архитектурного контракта профильные документы обновляются в том же тематическом PR; изменение не считается завершённым, если код и документация описывают разное поведение.
