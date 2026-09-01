@@ -13,6 +13,7 @@ import com.iptv.tv.core.model.SyncLog
 internal object TorrentForensicReportBuilder {
     private val timelinePhaseRegex = Regex("(?:^|[,\\s])phase=([^,\\s]+)")
     private val boundaryEventRegex = Regex("(?:^|[,\\s])event=([^,\\s]+)")
+    private val endpointFingerprintRegex = Regex("^[0-9a-f]{20}$")
     private val fortyHexRegex = Regex("(?i)\\b[a-f0-9]{40}\\b")
     private val urlRegex = Regex("(?i)https?://[^\\s,]+")
     private val magnetRegex = Regex("(?i)magnet:\\?[^\\s,]+")
@@ -231,6 +232,8 @@ internal object TorrentForensicReportBuilder {
         val elapsed = samples.map { it.elapsedMillis }
         val tcpConnected = samples.mapNotNull { it.tcpConnectedMillis }
         val utpConnected = samples.mapNotNull { it.utpConnectedMillis }
+        val endpointFingerprints = samples.mapNotNull { it.endpointFingerprint }
+        val endpointCounts = endpointFingerprints.groupingBy { it }.eachCount()
         append("transport_race: samples=")
         append(samples.size)
         append(" malformed_samples=")
@@ -253,6 +256,16 @@ internal object TorrentForensicReportBuilder {
         append(formatOutcomeCounts(samples.map { it.tcpOutcome }))
         append(" utp_outcomes=")
         append(formatOutcomeCounts(samples.map { it.utpOutcome }))
+        if (endpointCounts.isNotEmpty()) {
+            append(" endpoint_fingerprinted=")
+            append(endpointFingerprints.size)
+            append(" endpoint_unique=")
+            append(endpointCounts.size)
+            append(" endpoint_repeated=")
+            append(endpointCounts.values.sumOf { count -> (count - 1).coerceAtLeast(0) })
+            append(" endpoint_max_races=")
+            append(endpointCounts.values.maxOrNull() ?: 0)
+        }
         append('\n')
     }
 
@@ -266,6 +279,8 @@ internal object TorrentForensicReportBuilder {
             elapsedMillis = elapsedMillis,
             tcpConnectedMillis = extractLong(message, "tcp_connected_ms"),
             utpConnectedMillis = extractLong(message, "utp_connected_ms"),
+            endpointFingerprint = extractToken(message, "endpoint_fp")
+                ?.takeIf(endpointFingerprintRegex::matches),
             tcpOutcome = extractToken(message, "tcp_outcome") ?: "unknown",
             utpOutcome = extractToken(message, "utp_outcome") ?: "unknown"
         )
@@ -407,6 +422,7 @@ internal object TorrentForensicReportBuilder {
         val elapsedMillis: Long,
         val tcpConnectedMillis: Long?,
         val utpConnectedMillis: Long?,
+        val endpointFingerprint: String?,
         val tcpOutcome: String,
         val utpOutcome: String
     )
