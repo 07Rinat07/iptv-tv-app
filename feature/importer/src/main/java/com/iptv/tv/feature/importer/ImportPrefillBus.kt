@@ -10,8 +10,20 @@ data class ImportPrefill(
     val catalogOrigin: CatalogOriginKind = CatalogOriginKind.USER_IMPORT
 )
 
+object BuiltInPlaylistSources {
+    const val FREE_TV_URL = "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8"
+    const val FREE_TV_NAME = "Free-TV"
+
+    fun freeTvPrefill(): ImportPrefill = ImportPrefill(
+        url = FREE_TV_URL,
+        playlistName = FREE_TV_NAME,
+        autoImport = false,
+        catalogOrigin = CatalogOriginKind.USER_IMPORT
+    )
+}
+
 object ImportPrefillBus {
-    private val pending = AtomicReference<ImportPrefill?>(null)
+    private val pending = AtomicReference<ImportPrefill?>(BuiltInPlaylistSources.freeTvPrefill())
 
     fun push(prefill: ImportPrefill) {
         pending.set(prefill)
