@@ -152,8 +152,8 @@ class AceLivePeerRefillCoordinator(
 
     /**
      * Returns the bounded number of starts still useful for the current qualification/capacity
-     * state without reserving a candidate. The refill loop uses this to decide whether network
-     * discovery is actually needed after already-known candidates have been attempted.
+     * state without reserving a candidate. This is a start-capacity query, not a discovery-demand
+     * query: discovery may still refresh candidates while hard socket capacity is temporarily full.
      */
     fun refillDemandSlots(
         activePeerIds: Set<Long>,
@@ -651,8 +651,9 @@ class AceLivePeerRefillCoordinator(
  *
  * Already-known candidates are attempted before tracker/DHT work. Network discovery is a bounded
  * fallback for qualification demand that remains after those starts, rather than a mandatory gate
- * in front of PEX/recent candidates. Ownership remains the hard-cap signal inside
- * [AceLivePeerRefillCoordinator.planRefill].
+ * in front of PEX/recent candidates. A hard-full socket pool may still refresh discovery while it
+ * waits for capacity; it simply cannot allocate another socket. Ownership remains the hard-cap
+ * signal inside [AceLivePeerRefillCoordinator.planRefill].
  */
 class AceLivePeerRefillLoop(
     private val coordinator: AceLivePeerRefillCoordinator,
@@ -693,16 +694,15 @@ class AceLivePeerRefillLoop(
 
         val recovery = evaluateRecovery()
         val requestedAdaptiveProbePeers = adaptiveProbePeers().coerceAtLeast(0)
-        var remainingStartBudget = coordinator.policy.maxStartsPerCycle
-        if (
-            coordinator.refillDemandSlots(
-                activePeerIds = active,
-                poolStale = recovery.poolStale,
-                nowMillis = nowMillis,
-                extraProbePeers = requestedAdaptiveProbePeers,
-                maxStarts = remainingStartBudget
-            ) == 0
-        ) {
+        val recoveryProbePeers = if (recovery.poolStale) coordinator.policy.staleProbePeers else 0
+        val requestedProbePeers = maxOf(recoveryProbePeers, requestedAdaptiveProbePeers)
+            .coerceAtMost(coordinator.policy.maxActivePeers)
+        val desiredQualifiedPeers = (coordinator.policy.targetActivePeers + requestedProbePeers)
+            .coerceAtMost(coordinator.policy.maxActivePeers)
+        fun hasQualificationDemand(peerIds: Set<Long>): Boolean =
+            coordinator.qualifiedActivePeerCount(peerIds) < desiredQualifiedPeers
+
+        if (!hasQualificationDemand(active)) {
             return AceLivePeerRefillCycleResult(
                 discoveryAttempted = false,
                 plannedStarts = 0,
@@ -713,6 +713,7 @@ class AceLivePeerRefillLoop(
             )
         }
 
+        var remainingStartBudget = coordinator.policy.maxStartsPerCycle
         var plannedStarts = 0
         var startedPeers = 0
         var immediateStartFailures = 0
@@ -733,31 +734,26 @@ class AceLivePeerRefillLoop(
 
         active = activePeerIds()
         coordinator.syncActivePeerIds(active)
-        val discoveryNeeded = remainingStartBudget > 0 &&
-            coordinator.refillDemandSlots(
-                activePeerIds = active,
-                poolStale = recovery.poolStale,
-                nowMillis = nowMillis,
-                extraProbePeers = requestedAdaptiveProbePeers,
-                maxStarts = remainingStartBudget
-            ) > 0
+        val discoveryNeeded = hasQualificationDemand(active)
 
         if (discoveryNeeded) {
             val discovery = discover()
             coordinator.ingestDiscovery(discovery, nowMillis)
-            active = activePeerIds()
-            val discoveredPlan = coordinator.planRefill(
-                activePeerIds = active,
-                nextNeededPiece = nextNeededPiece(),
-                poolStale = recovery.poolStale,
-                nowMillis = nowMillis,
-                extraProbePeers = requestedAdaptiveProbePeers,
-                maxStarts = remainingStartBudget
-            )
-            val discoveredResult = startPlan(discoveredPlan)
-            plannedStarts += discoveredResult.plannedStarts
-            startedPeers += discoveredResult.startedPeers
-            immediateStartFailures += discoveredResult.immediateStartFailures
+            if (remainingStartBudget > 0) {
+                active = activePeerIds()
+                val discoveredPlan = coordinator.planRefill(
+                    activePeerIds = active,
+                    nextNeededPiece = nextNeededPiece(),
+                    poolStale = recovery.poolStale,
+                    nowMillis = nowMillis,
+                    extraProbePeers = requestedAdaptiveProbePeers,
+                    maxStarts = remainingStartBudget
+                )
+                val discoveredResult = startPlan(discoveredPlan)
+                plannedStarts += discoveredResult.plannedStarts
+                startedPeers += discoveredResult.startedPeers
+                immediateStartFailures += discoveredResult.immediateStartFailures
+            }
         }
 
         return AceLivePeerRefillCycleResult(
