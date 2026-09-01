@@ -18,6 +18,19 @@ class ImportPrefillBusTest {
     }
 
     @Test
+    fun builtInFreeTvSourceUsesCanonicalPlaylistUrl() {
+        val prefill = BuiltInPlaylistSources.freeTvPrefill()
+
+        assertEquals(
+            "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
+            prefill.url
+        )
+        assertEquals("Free-TV", prefill.playlistName)
+        assertEquals(false, prefill.autoImport)
+        assertEquals(CatalogOriginKind.USER_IMPORT, prefill.catalogOrigin)
+    }
+
+    @Test
     fun preservesExplicitCatalogOrigin() {
         ImportPrefillBus.push(
             ImportPrefill(
