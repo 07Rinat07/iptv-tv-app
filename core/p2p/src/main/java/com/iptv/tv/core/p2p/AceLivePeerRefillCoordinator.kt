@@ -1,10 +1,13 @@
 package com.iptv.tv.core.p2p
 
 import java.util.concurrent.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Local-only refill/scoring policy. None of these values are Ace protocol fields. */
 data class AceLivePeerRefillPolicy(
@@ -75,6 +78,15 @@ data class AceLivePeerRefillCycleResult(
     val poolStale: Boolean,
     val replacedPeerId: Long? = null
 )
+
+internal fun aceLivePeerRefillEventShouldWake(event: AceLiveTcpPoolEvent): Boolean = when (event) {
+    is AceLiveTcpPoolEvent.Ingress -> event.result.peerExchangePeers.isNotEmpty()
+    is AceLiveTcpPoolEvent.ConnectFailed -> !event.retrying
+    is AceLiveTcpPoolEvent.Disconnected -> !event.retrying
+    is AceLiveTcpPoolEvent.TransportConnected,
+    is AceLiveTcpPoolEvent.HandshakeAccepted,
+    is AceLiveTcpPoolEvent.HandshakeRejected -> false
+}
 
 /**
  * Candidate state/ranking for background Ace Live peer refill.
@@ -662,9 +674,11 @@ class AceLivePeerRefillCoordinator(
  *
  * Already-known candidates are attempted before tracker/DHT work. Network discovery is a bounded
  * fallback for qualification demand that remains after those starts, rather than a mandatory gate
- * in front of PEX/recent candidates. A hard-full socket pool may still refresh discovery while it
- * waits for capacity; it simply cannot allocate another socket. Ownership remains the hard-cap
- * signal inside [AceLivePeerRefillCoordinator.planRefill].
+ * in front of PEX/recent candidates. Event-driven wakeups are conflated so PEX/final-failure bursts
+ * can interrupt the periodic wait without creating parallel refill/discovery cycles. A hard-full
+ * socket pool may still refresh discovery while it waits for capacity; it simply cannot allocate
+ * another socket. Ownership remains the hard-cap signal inside
+ * [AceLivePeerRefillCoordinator.planRefill].
  */
 class AceLivePeerRefillLoop(
     private val coordinator: AceLivePeerRefillCoordinator,
@@ -680,7 +694,22 @@ class AceLivePeerRefillLoop(
         { _, _ -> null },
     private val stopPeer: suspend (peerId: Long) -> Unit = {}
 ) {
-    suspend fun runOneCycle(nowMillis: Long = clockMillis()): AceLivePeerRefillCycleResult {
+    private val cycleMutex = Mutex()
+    private val wakeups = Channel<Unit>(capacity = Channel.CONFLATED)
+
+    fun requestWakeup() {
+        wakeups.trySend(Unit)
+    }
+
+    suspend fun runOneCycle(): AceLivePeerRefillCycleResult = cycleMutex.withLock {
+        runOneCycleSerialized(clockMillis())
+    }
+
+    suspend fun runOneCycle(nowMillis: Long): AceLivePeerRefillCycleResult = cycleMutex.withLock {
+        runOneCycleSerialized(nowMillis)
+    }
+
+    private suspend fun runOneCycleSerialized(nowMillis: Long): AceLivePeerRefillCycleResult {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
         var active = activePeerIds()
         coordinator.syncActivePeerIds(active)
@@ -780,7 +809,9 @@ class AceLivePeerRefillLoop(
     suspend fun run() {
         while (currentCoroutineContext().isActive) {
             runOneCycle()
-            delay(coordinator.policy.refreshIntervalMillis)
+            withTimeoutOrNull(coordinator.policy.refreshIntervalMillis) {
+                wakeups.receive()
+            }
         }
     }
 
