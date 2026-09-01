@@ -734,7 +734,7 @@ class AceLivePeerRefillLoop(
 
         active = activePeerIds()
         coordinator.syncActivePeerIds(active)
-        val discoveryNeeded = hasQualificationDemand(active)
+        val discoveryNeeded = remainingStartBudget > 0 && hasQualificationDemand(active)
 
         if (discoveryNeeded) {
             val discovery = discover()
