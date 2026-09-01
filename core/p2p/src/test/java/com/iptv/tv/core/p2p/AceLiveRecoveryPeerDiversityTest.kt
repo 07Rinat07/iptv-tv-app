@@ -56,6 +56,52 @@ class AceLiveRecoveryPeerDiversityTest {
         )
     }
 
+    @Test
+    fun `retry preference is consumed after successful reassignment`() {
+        val scheduler = AceLiveWindowScheduler(maxInFlightPerPeer = 1)
+        scheduler.updatePeer(peer(id = 1, min = 10, max = 30))
+        scheduler.updatePeer(peer(id = 2, min = 10, max = 30))
+
+        assertEquals(1L, scheduler.assign(10, 10).single().peerId)
+        scheduler.retry(10)
+        assertEquals(2L, scheduler.assign(10, 10).single().peerId)
+
+        assertEquals(
+            listOf(10L),
+            scheduler.updatePeer(peer(id = 2, min = 11, max = 30))
+        )
+        scheduler.updatePeer(peer(id = 2, min = 10, max = 30))
+
+        assertEquals(1L, scheduler.assign(10, 10).single().peerId)
+    }
+
+    @Test
+    fun `completion clears pending retry preference`() {
+        val scheduler = AceLiveWindowScheduler(maxInFlightPerPeer = 1)
+        scheduler.updatePeer(peer(id = 1, min = 10, max = 30))
+        scheduler.updatePeer(peer(id = 2, min = 10, max = 30))
+
+        assertEquals(1L, scheduler.assign(10, 10).single().peerId)
+        scheduler.retry(10)
+        scheduler.complete(10)
+
+        assertEquals(1L, scheduler.assign(10, 10).single().peerId)
+    }
+
+    @Test
+    fun `removing previous peer clears pending retry preference`() {
+        val scheduler = AceLiveWindowScheduler(maxInFlightPerPeer = 1)
+        scheduler.updatePeer(peer(id = 1, min = 10, max = 30))
+        scheduler.updatePeer(peer(id = 2, min = 10, max = 30))
+
+        assertEquals(1L, scheduler.assign(10, 10).single().peerId)
+        scheduler.retry(10)
+        scheduler.removePeer(1)
+        scheduler.updatePeer(peer(id = 1, min = 10, max = 30))
+
+        assertEquals(1L, scheduler.assign(10, 10).single().peerId)
+    }
+
     private fun coordinator() = AceLiveRecoveryCoordinator(
         maxInFlightPerPeer = 2,
         policy = AceLiveRecoveryPolicy(
