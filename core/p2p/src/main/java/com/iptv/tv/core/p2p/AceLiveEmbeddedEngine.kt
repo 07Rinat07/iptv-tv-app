@@ -1070,6 +1070,9 @@ class AceLiveEmbeddedEngine(
         private fun onPoolEvent(event: AceLiveTcpPoolEvent) {
             val now = System.currentTimeMillis()
             refillCoordinator.onPoolEvent(event, now)
+            if (!closed.get() && aceLivePeerRefillEventShouldWake(event)) {
+                refillLoop.requestWakeup()
+            }
             startupTimelineDiagnostics.onPoolEvent(event, now)
             runCatching { eventObserver(event) }
             if (closed.get()) return
