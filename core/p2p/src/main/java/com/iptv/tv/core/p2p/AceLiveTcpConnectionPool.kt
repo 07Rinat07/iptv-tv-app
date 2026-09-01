@@ -102,7 +102,8 @@ class AceLiveTcpConnectionPool(
         AceLiveTcpConnectFailureMemory.shared,
     private val startupCandidateStaggerMillis: Long = DEFAULT_STARTUP_CANDIDATE_STAGGER_MILLIS,
     private val maxStaggeredStartupCandidates: Int = DEFAULT_MAX_STAGGERED_STARTUP_CANDIDATES,
-    private val onEvent: (AceLiveTcpPoolEvent) -> Unit = {}
+    private val onEvent: (AceLiveTcpPoolEvent) -> Unit = {},
+    private val onOutboundPeerRemoved: (Long) -> Unit = {}
 ) {
     private val poolMutex = Mutex()
     private val sessionMutex = Mutex()
@@ -553,10 +554,16 @@ class AceLiveTcpConnectionPool(
                         runtime.connection.onTransportDisconnected()
                     }
                 }
-                poolMutex.withLock {
+                val removed = poolMutex.withLock {
                     if (peers[runtime.peerId] === runtime) {
                         peers.remove(runtime.peerId)
+                        true
+                    } else {
+                        false
                     }
+                }
+                if (removed && !runtime.stopRequested && !closed.get()) {
+                    runCatching { onOutboundPeerRemoved(runtime.peerId) }
                 }
             }
         }
