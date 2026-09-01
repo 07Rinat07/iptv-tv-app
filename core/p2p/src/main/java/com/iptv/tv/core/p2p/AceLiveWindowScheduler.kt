@@ -36,6 +36,8 @@ data class AceLivePieceAssignment(
  * - only unchoked peers whose advertised window covers the piece may receive new work;
  * - each peer has a bounded number of outstanding pieces;
  * - dropping a peer or moving its window past an outstanding piece requeues that piece;
+ * - a timed-out retry prefers another eligible peer once, but immediately falls back to the prior
+ *   peer when no alternative can serve the piece;
  * - scheduling is bounded even when a peer advertises an implausibly large live head;
  * - the scheduler never skips an uncovered `nextNeeded` piece on its own. Recovery policy must
  *   explicitly advance the playback cursor before later pieces become schedulable.
@@ -46,6 +48,7 @@ class AceLiveWindowScheduler(
     private val maxInFlight = maxInFlightPerPeer.coerceAtLeast(1)
     private val peers = linkedMapOf<Long, ActivePeer>()
     private val ownerByPiece = sortedMapOf<Long, Long>()
+    private val retryAvoidPeerByPiece = mutableMapOf<Long, Long>()
 
     /**
      * Inserts or refreshes a peer window. Outstanding requests that the refreshed window no longer
@@ -80,6 +83,7 @@ class AceLiveWindowScheduler(
      */
     fun removePeer(peerId: Long): List<Long> {
         val peer = peers.remove(peerId) ?: return emptyList()
+        retryAvoidPeerByPiece.entries.removeAll { entry -> entry.value == peerId }
         val requeued = peer.inFlight.sorted()
         requeued.forEach { piece ->
             if (ownerByPiece[piece] == peerId) {
@@ -94,17 +98,24 @@ class AceLiveWindowScheduler(
      */
     fun complete(piece: Long) {
         require(piece >= 0) { "piece must be non-negative" }
+        retryAvoidPeerByPiece.remove(piece)
         val peerId = ownerByPiece.remove(piece) ?: return
         peers[peerId]?.inFlight?.remove(piece)
     }
 
     /**
      * Releases one timed-out/failed request without removing its peer.
+     *
+     * The previous owner is retained only as a one-shot scheduling hint. The next assignment
+     * prefers another eligible peer, but the previous owner remains a valid fallback when it is the
+     * only peer that can serve the piece. This avoids a timeout -> same-peer -> timeout loop without
+     * creating a ban or reducing coverage.
      */
     fun retry(piece: Long) {
         require(piece >= 0) { "piece must be non-negative" }
         val peerId = ownerByPiece.remove(piece) ?: return
         peers[peerId]?.inFlight?.remove(piece)
+        retryAvoidPeerByPiece[piece] = peerId
     }
 
     /**
@@ -117,6 +128,10 @@ class AceLiveWindowScheduler(
             val peerId = ownerByPiece.remove(piece)
             if (peerId != null) peers[peerId]?.inFlight?.remove(piece)
         }
+        retryAvoidPeerByPiece.keys
+            .filter { piece -> piece < nextNeeded }
+            .toList()
+            .forEach(retryAvoidPeerByPiece::remove)
     }
 
     /**
@@ -162,13 +177,17 @@ class AceLiveWindowScheduler(
                 continue
             }
 
+            val avoidedPeerId = retryAvoidPeerByPiece[piece]
             val candidate = peers.values
                 .asSequence()
                 .filter { it.unchoked }
                 .filter { it.inFlight.size < effectiveMaxInFlight }
                 .filter { piece in it.minPiece..it.maxPiece }
                 .minWithOrNull(
-                    compareBy<ActivePeer> { it.inFlight.size }
+                    compareBy<ActivePeer> { peer ->
+                        if (peer.peerId == avoidedPeerId) 1 else 0
+                    }
+                        .thenBy { it.inFlight.size }
                         .thenByDescending { it.maxPiece }
                         .thenBy { it.peerId }
                 )
@@ -176,6 +195,7 @@ class AceLiveWindowScheduler(
 
             candidate.inFlight += piece
             ownerByPiece[piece] = candidate.peerId
+            retryAvoidPeerByPiece.remove(piece)
             out += AceLivePieceAssignment(candidate.peerId, piece)
 
             if (piece == Long.MAX_VALUE) break
