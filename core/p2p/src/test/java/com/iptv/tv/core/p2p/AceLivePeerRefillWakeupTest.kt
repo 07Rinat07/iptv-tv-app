@@ -215,11 +215,21 @@ class AceLivePeerRefillWakeupTest {
 
         val terminalEvent = body.indexOf("terminalEvent = event")
         val removal = body.lastIndexOf("peers.remove(runtime.peerId)")
+        val intentionalStopGuard = body.indexOf(
+            "removed && !runtime.stopRequested && !closed.get()"
+        )
         val terminalEmit = body.indexOf("terminalEvent?.let(::emit)")
 
         assertTrue("terminal event must be captured before cleanup", terminalEvent >= 0)
         assertTrue("outbound capacity must be released after terminal outcome", removal > terminalEvent)
-        assertTrue("terminal loss must be published only after capacity release", terminalEmit > removal)
+        assertTrue(
+            "intentional stop and shutdown must suppress terminal failure publication",
+            intentionalStopGuard > removal
+        )
+        assertTrue(
+            "terminal loss must be published only after guarded capacity release",
+            terminalEmit > intentionalStopGuard
+        )
     }
 
     @Test
