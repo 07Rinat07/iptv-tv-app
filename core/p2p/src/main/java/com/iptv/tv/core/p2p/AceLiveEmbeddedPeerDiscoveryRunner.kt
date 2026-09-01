@@ -15,8 +15,10 @@ internal fun interface AceLiveEmbeddedPeerDiscoveryRunner {
 
     companion object {
         val Production = AceLiveEmbeddedPeerDiscoveryRunner { dhtDiscover, policy, request ->
+            val parallelTrackerDiscovery = AceLiveParallelTrackerDiscovery()
             AceLivePeerDiscoveryOrchestrator(
                 dhtDiscover = dhtDiscover,
+                trackerDiscover = parallelTrackerDiscovery::discover,
                 policy = policy
             ).discover(request)
         }
