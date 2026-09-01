@@ -589,7 +589,7 @@ class AceLiveEmbeddedEngine(
                 maxStartsPerCycle = MAX_PEER_STARTS_PER_CYCLE,
                 refreshIntervalMillis = PEER_REFRESH_INTERVAL_MILLIS
             ),
-            swarmKey = peerReputationStore?.let { transport.swarmKey.toByteArray() },
+            swarmKey = transport.swarmKey.toByteArray(),
             reputationStore = peerReputationStore
         )
         private val refillLoop = AceLivePeerRefillLoop(
