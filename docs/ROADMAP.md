@@ -30,18 +30,29 @@ Discovery/connect, protocol/producer и P2P-to-Media3 boundary — отдель�
 
 1. сохранять bounded verified DHT routing contacts между runtime/process restarts;
 2. сохранять короткую same-swarm peer reputation по `swarm + endpoint`;
-3. считать tracker/DHT endpoints кандидатами, а не признаком успешного startup;
-4. продолжать bounded tracker+DHT acquisition до достаточного qualified/productive peer set;
-5. квалифицировать небольшой набор независимых candidates параллельно в пределах hard peer cap;
-6. измерять first qualified peer, first producer, first media и first frame вместо оправдания 20–60-секундного ожидания общим timeout.
+3. считать tracker/DHT/PEX endpoints кандидатами, а не признаком успешного startup;
+4. использовать уже известные и PEX-learned candidates до нового сетевого discovery pass, не заставляя их ждать tracker/DHT latency;
+5. продолжать bounded tracker+DHT acquisition после fast-path старта до достаточного qualified/productive peer set и необходимой source diversity;
+6. делить единый `maxStartsPerCycle` между learned и newly discovered candidates, не расширяя hard peer/socket cap;
+7. квалифицировать небольшой набор независимых candidates параллельно в пределах hard peer cap;
+8. измерять first qualified peer, first producer, first media и first frame вместо оправдания 20–60-секундного ожидания общим timeout.
 
-Persistent routing/reputation — только optimization. Повреждение/отсутствие cache не должно ломать bootstrap, tracker discovery или playback correctness.
+Следующие P2P boundaries после learned-candidate fast path:
+
+- coalesced event-driven refill wakeup на новый PEX evidence и освобождение qualification capacity вместо обязательного ожидания periodic refresh;
+- bounded same-swarm warm peer cache / RePEX-подобное повторное использование недавно подтверждённых peers между соседними runtime;
+- сравнительная проверка peer acquisition против зрелых open-source реализаций (AceStream/RePEX, TorrServer/anacrolix, WebTorrent) по фактическим механизмам, а не по увеличению timeout;
+- field A/B на одном TV Box/network с одинаковыми Torrent TV каналами и полным diagnostic ladder.
+
+Persistent routing/reputation/peer cache — только optimization. Повреждение/отсутствие cache не должно ломать bootstrap, tracker discovery или playback correctness. Learned peer никогда не становится permanent allow-list entry: handshake/media evidence, bounded TTL и failure backoff остаются обязательными.
 
 ### EPG и archive
 
 Функциональный scope ведётся в Issue #47. Источник должен пройти последовательность:
 
 `source -> decode/classify -> XMLTV parse -> channel matching -> programme state -> Player/EPG UI`
+
+После устранения oversized XMLTV ingestion текущий field boundary для источников, которые загружаются без parser failure, — точное сопоставление playlist metadata (`tvg-id`, canonical/display name, provider aliases) с XMLTV channel metadata. Matcher меняется только по фактическим playlist/XMLTV данным и regression fixtures; широкое fuzzy matching без контролируемых правил запрещено.
 
 Persistent EPG cache реализуется отдельно по [`EPG_DISK_CACHE_PLAN.md`](EPG_DISK_CACHE_PLAN.md): bounded storage, conditional HTTP, atomic writes, stale policy и безопасные cache keys. Parser/source compatibility меняется только по воспроизводимому входному evidence.
 
@@ -90,8 +101,12 @@ CI является regression gate, но не заменяет TV Box/network f
 - Логи не должны содержать credential-bearing URL, токены, content IDs или полный пользовательский payload без явной безопасной необходимости.
 - Compatibility fallback не должен скрывать первичный failure stage.
 - Persistent DHT state хранит только verified routing contacts; peer reputation всегда scoped точным swarm key и имеет bounded TTL.
+- Learned/PEX candidate fast path не отменяет bounded tracker/DHT diversity acquisition и не расширяет `maxStartsPerCycle`/hard peer cap.
+- Periodic, adaptive и event-driven refill не должны выполнять overlapping discovery/start cycles; orchestration обязана иметь единый serialized ownership boundary.
 - Disk I/O persistent P2P state не должен выполняться под socket/pool/refill ownership lock.
 
 ## Документация и evidence
 
 `docs/` содержит повторяемые контракты и инструкции. Exact SHA, активная ветка, результаты единичного field run и временный handoff должны жить в соответствующем GitHub Issue/PR/Actions artifact. При изменении устойчивого пользовательского или архитектурного контракта обновляются профильные документы, а не создаётся новый датированный status-файл.
+
+Документация является частью Definition of Done: если PR меняет устойчивый архитектурный, протокольный, safety или пользовательский контракт, соответствующий `docs/` документ обновляется в том же тематическом PR. Документы не должны объявлять ещё не реализованный механизм завершённым: будущие stages явно помечаются как следующие boundaries.
