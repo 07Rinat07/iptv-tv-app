@@ -68,11 +68,11 @@ Reputation используется только для ranking. Она не я�
 Refill ordering:
 
 1. определить qualification demand и hard-cap capacity;
-2. сначала зарезервировать и запустить уже известные eligible candidates;
-3. если после этих starts остаётся bounded demand и есть capacity, выполнить network discovery;
-4. ingest новых tracker/DHT candidates в тот же pool и использовать только оставшийся `maxStartsPerCycle` budget;
+2. сначала зарезервировать и запустить уже известные eligible candidates в доступную socket capacity;
+3. если после этих starts остаётся qualification demand, выполнить bounded network discovery; hard-full pool может обновлять candidate pool, но не открывать новый socket;
+4. ingest новых tracker/DHT candidates в тот же pool и использовать только оставшийся `maxStartsPerCycle` budget, когда hard capacity доступна;
 5. не выполнять обязательный tracker/DHT walk перед уже доступным PEX/known candidate;
-6. не превышать hard peer cap и cycle start cap при переходе между known-candidate и discovery phase.
+6. не превышать hard peer cap и cycle start cap при переходе между known-candidate и discovery phase; discovery refresh сам по себе не считается socket start.
 
 Этот порядок следует общему поведению зрелых BitTorrent клиентов: peer discovery — это мультиплекс независимых источников, а learned/PEX peers являются реальным input следующего connection scheduling, а не только диагностикой.
 
@@ -97,6 +97,7 @@ Discovery sources и TCP acquisition имеют разные ownership boundarie
 - tracker может немедленно дать первые TCP attempts;
 - PEX candidate может немедленно участвовать в refill без ожидания нового DHT walk;
 - наличие tracker/PEX candidates не означает, что DHT diversity больше не нужна, если qualification demand остаётся;
+- hard-full unqualified pool может выполнять bounded discovery refresh, чтобы не начинать с пустого candidate set после освобождения capacity;
 - DHT work должен быть bounded по time/query/packet/heap;
 - несколько независимых TCP candidates могут квалифицироваться параллельно в пределах hard peer cap;
 - `maxStartsPerCycle` применяется ко всему refill cycle, а не отдельно к каждой discovery source;
@@ -147,7 +148,7 @@ Persistent state является optimization, а не correctness dependency.
 - tracker fast path не является завершением discovery;
 - PEX — first-class candidate source;
 - already-known/PEX candidates используются до нового network discovery;
-- tracker/DHT добирают только оставшийся qualification demand;
+- tracker/DHT добирают оставшийся qualification demand и могут bounded-refresh candidate pool при временно полном hard cap;
 - общий start/cap budget сохраняется на весь cycle.
 
 Следующий отдельный boundary после known-candidate fast path — event-driven refill wakeup: появление новых PEX candidates или освобождение capacity после final peer failure не должно обязательно ждать полного periodic refresh interval. Такой wakeup должен быть coalesced/bounded и не запускать параллельные unbounded discovery cycles.
