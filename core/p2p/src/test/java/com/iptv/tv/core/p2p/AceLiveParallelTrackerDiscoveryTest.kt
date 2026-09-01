@@ -17,6 +17,8 @@ class AceLiveParallelTrackerDiscoveryTest {
             val discovery = AceLiveParallelTrackerDiscovery(
                 maxConcurrentSources = 3,
                 fastPathMinPeers = 4,
+                fastPathTargetPeers = 24,
+                aggregationGraceMillis = 100,
                 singleSourceDiscover = { request ->
                     val active = activeCalls.incrementAndGet()
                     maxObservedCalls.updateAndGet { previous -> maxOf(previous, active) }
@@ -67,10 +69,12 @@ class AceLiveParallelTrackerDiscoveryTest {
         }
 
     @Test
-    fun `completed tracker results are merged and duplicate peer endpoints are removed`() = runBlocking {
+    fun `aggregation grace merges completed tracker results and removes duplicate endpoints`() = runBlocking {
         val discovery = AceLiveParallelTrackerDiscovery(
             maxConcurrentSources = 3,
             fastPathMinPeers = 100,
+            fastPathTargetPeers = 100,
+            aggregationGraceMillis = 0,
             singleSourceDiscover = { request ->
                 when (request.trackers.single()) {
                     "udp://one.example:80/announce" -> result(
