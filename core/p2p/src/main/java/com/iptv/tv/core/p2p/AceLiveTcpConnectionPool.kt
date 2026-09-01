@@ -569,7 +569,7 @@ class AceLiveTcpConnectionPool(
                         false
                     }
                 }
-                if (removed) {
+                if (removed && !runtime.stopRequested && !closed.get()) {
                     terminalEvent?.let(::emit)
                 }
             }
