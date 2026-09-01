@@ -81,8 +81,8 @@ data class AceLivePeerRefillCycleResult(
  *
  * Ranking gives verified live-window usefulness precedence, then uses short-lived same-swarm
  * reputation from earlier runtimes before local failure/handshake/source tie-breakers. Persisted
- * evidence never creates a permanent allow/deny: discovery still owns the candidate set and local
- * bounded backoff remains authoritative for immediate retries.
+ * evidence never creates a permanent allow/deny: discovery still owns the candidate set, while
+ * local retry state and shared same-swarm transport backoff both gate immediate eligibility.
  *
  * All mutable candidate/reservation/ownership state is serialized under one local monitor. Disk
  * persistence is deliberately invoked only after leaving this monitor so a filesystem stall cannot
@@ -96,18 +96,20 @@ data class AceLivePeerRefillCycleResult(
 class AceLivePeerRefillCoordinator(
     val policy: AceLivePeerRefillPolicy = AceLivePeerRefillPolicy(),
     swarmKey: ByteArray? = null,
-    private val reputationStore: AceLivePeerReputationStore? = null
+    private val reputationStore: AceLivePeerReputationStore? = null,
+    private val connectFailureMemory: AceLiveTcpConnectFailureMemory =
+        AceLiveTcpConnectFailureMemory.shared
 ) {
-    private val reputationSwarmKey = swarmKey?.copyOf()
+    private val transportSwarmKey = swarmKey?.copyOf()
     private val stateLock = Any()
     private val candidates = LinkedHashMap<String, CandidateState>()
     private val peerIdToEndpointKey = HashMap<Long, String>()
 
     init {
-        require((reputationSwarmKey == null) == (reputationStore == null)) {
-            "swarmKey and reputationStore must be supplied together"
+        require(reputationStore == null || transportSwarmKey != null) {
+            "swarmKey is required when reputationStore is supplied"
         }
-        reputationSwarmKey?.let { key ->
+        transportSwarmKey?.let { key ->
             require(key.size == AceLivePeerHandshakeCodec.SWARM_KEY_BYTES) {
                 "swarmKey must be ${AceLivePeerHandshakeCodec.SWARM_KEY_BYTES} bytes"
             }
@@ -223,6 +225,7 @@ class AceLivePeerRefillCoordinator(
             .filter { state -> state.managedPeerId == null }
             .filter { state -> !state.startReserved && !state.startInProgress }
             .filter { state -> nowMillis >= state.retryNotBeforeMillis }
+            .filter { state -> transportEligible(state.endpoint, nowMillis) }
             .sortedWith(candidateComparator(nextNeededPiece, nowMillis))
             .toList()
         val selected = selectPlanCandidatesLocked(ranked, slots)
@@ -362,7 +365,7 @@ class AceLivePeerRefillCoordinator(
     fun markMediaProduced(peerId: Long, nowMillis: Long) {
         require(nowMillis >= 0) { "nowMillis must be non-negative" }
         val endpoint = withStateLock { stateForPeerLocked(peerId)?.endpoint } ?: return
-        val key = reputationSwarmKey ?: return
+        val key = transportSwarmKey ?: return
         reputationStore?.recordMediaProduced(key, endpoint, nowMillis)
     }
 
@@ -515,11 +518,19 @@ class AceLivePeerRefillCoordinator(
         }
     }
 
+    private fun transportEligible(
+        endpoint: AceLiveTcpPeerEndpoint,
+        nowMillis: Long
+    ): Boolean {
+        val key = transportSwarmKey ?: return true
+        return connectFailureMemory.isEligible(key, endpoint, nowMillis)
+    }
+
     private fun persistentReputationRank(
         endpoint: AceLiveTcpPeerEndpoint,
         nowMillis: Long
     ): Int {
-        val key = reputationSwarmKey ?: return NEUTRAL_REPUTATION_RANK
+        val key = transportSwarmKey ?: return NEUTRAL_REPUTATION_RANK
         return reputationStore
             ?.snapshot(key, endpoint, nowMillis)
             ?.priorityRank(nowMillis)
@@ -531,7 +542,7 @@ class AceLivePeerRefillCoordinator(
         nowMillis: Long
     ) {
         val item = evidence ?: return
-        val key = reputationSwarmKey ?: return
+        val key = transportSwarmKey ?: return
         val store = reputationStore ?: return
         when (item.type) {
             ReputationEvidenceType.HANDSHAKE_ACCEPTED ->
