@@ -102,8 +102,7 @@ class AceLiveTcpConnectionPool(
         AceLiveTcpConnectFailureMemory.shared,
     private val startupCandidateStaggerMillis: Long = DEFAULT_STARTUP_CANDIDATE_STAGGER_MILLIS,
     private val maxStaggeredStartupCandidates: Int = DEFAULT_MAX_STAGGERED_STARTUP_CANDIDATES,
-    private val onEvent: (AceLiveTcpPoolEvent) -> Unit = {},
-    private val onOutboundPeerRemoved: (Long) -> Unit = {}
+    private val onEvent: (AceLiveTcpPoolEvent) -> Unit = {}
 ) {
     private val poolMutex = Mutex()
     private val sessionMutex = Mutex()
@@ -460,6 +459,7 @@ class AceLiveTcpConnectionPool(
 
     private suspend fun runPeer(runtime: PeerRuntime) {
         var reconnectAttempt = 0
+        var terminalEvent: AceLiveTcpPoolEvent? = null
         try {
             if (runtime.initialConnectDelayMillis > 0L) {
                 withTimeoutOrNull(runtime.initialConnectDelayMillis) {
@@ -484,8 +484,13 @@ class AceLiveTcpConnectionPool(
                             nowMillis = clockMillis()
                         )
                     }
-                    emit(AceLiveTcpPoolEvent.ConnectFailed(runtime.peerId, retrying))
-                    if (!retrying) break
+                    val event = AceLiveTcpPoolEvent.ConnectFailed(runtime.peerId, retrying)
+                    if (retrying) {
+                        emit(event)
+                    } else {
+                        terminalEvent = event
+                        break
+                    }
                     reconnectAttempt += 1
                     delay(policy.reconnectDelayMillis)
                     continue
@@ -529,16 +534,18 @@ class AceLiveTcpConnectionPool(
                         nowMillis = clockMillis()
                     )
                 }
-                emit(
-                    AceLiveTcpPoolEvent.Disconnected(
-                        peerId = runtime.peerId,
-                        reason = exit.reason,
-                        requeuedPieces = dropped.requeuedPieces,
-                        retrying = retrying
-                    )
+                val event = AceLiveTcpPoolEvent.Disconnected(
+                    peerId = runtime.peerId,
+                    reason = exit.reason,
+                    requeuedPieces = dropped.requeuedPieces,
+                    retrying = retrying
                 )
-
-                if (!retrying) break
+                if (retrying) {
+                    emit(event)
+                } else {
+                    terminalEvent = event
+                    break
+                }
                 reconnectAttempt += 1
                 delay(policy.reconnectDelayMillis)
             }
@@ -562,8 +569,8 @@ class AceLiveTcpConnectionPool(
                         false
                     }
                 }
-                if (removed && !runtime.stopRequested && !closed.get()) {
-                    runCatching { onOutboundPeerRemoved(runtime.peerId) }
+                if (removed) {
+                    terminalEvent?.let(::emit)
                 }
             }
         }
