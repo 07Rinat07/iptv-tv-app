@@ -35,6 +35,76 @@ class AceLiveTcpConnectFailureMemoryTest {
         assertFalse(memory.isEligible(firstSwarm.toByteArray(), failed))
         now = 6_000L
         assertTrue(memory.isEligible(firstSwarm.toByteArray(), failed))
+        assertEquals(0, memory.activeFailureCount(firstSwarm.toByteArray()))
+    }
+
+    @Test
+    fun `second consecutive failure escalates backoff across runtime-sized gap`() {
+        var now = 1_000L
+        val memory = AceLiveTcpConnectFailureMemory(
+            clockMillis = { now },
+            backoffMillis = 5_000L
+        )
+        val endpoint = AceLiveTcpPeerEndpoint("203.0.113.9", 8621)
+        val swarm = swarm(7)
+
+        memory.recordFinalPreHandshakeFailure(swarm.toByteArray(), endpoint)
+        now = 40_000L
+        assertTrue(memory.isEligible(swarm.toByteArray(), endpoint))
+
+        memory.recordFinalPreHandshakeFailure(swarm.toByteArray(), endpoint)
+
+        assertFalse(memory.isEligible(swarm.toByteArray(), endpoint))
+        assertEquals(1, memory.activeFailureCount(swarm.toByteArray()))
+        now = 99_999L
+        assertFalse(memory.isEligible(swarm.toByteArray(), endpoint))
+        now = 100_000L
+        assertTrue(memory.isEligible(swarm.toByteArray(), endpoint))
+        assertEquals(0, memory.activeFailureCount(swarm.toByteArray()))
+    }
+
+    @Test
+    fun `successful connection resets repeated failure streak`() {
+        var now = 1_000L
+        val memory = AceLiveTcpConnectFailureMemory(
+            clockMillis = { now },
+            backoffMillis = 5_000L
+        )
+        val endpoint = AceLiveTcpPeerEndpoint("203.0.113.10", 8621)
+        val swarm = swarm(8)
+
+        memory.recordFinalPreHandshakeFailure(swarm.toByteArray(), endpoint)
+        now = 6_000L
+        memory.recordFinalPreHandshakeFailure(swarm.toByteArray(), endpoint)
+        assertFalse(memory.isEligible(swarm.toByteArray(), endpoint))
+
+        memory.recordConnected(swarm.toByteArray(), endpoint)
+        memory.recordFinalPreHandshakeFailure(swarm.toByteArray(), endpoint)
+
+        now = 10_999L
+        assertFalse(memory.isEligible(swarm.toByteArray(), endpoint))
+        now = 11_000L
+        assertTrue(memory.isEligible(swarm.toByteArray(), endpoint))
+    }
+
+    @Test
+    fun `expired startup-sized failure history resets endpoint to first backoff`() {
+        var now = 1_000L
+        val memory = AceLiveTcpConnectFailureMemory(
+            clockMillis = { now },
+            backoffMillis = 5_000L
+        )
+        val endpoint = AceLiveTcpPeerEndpoint("203.0.113.11", 8621)
+        val swarm = swarm(9)
+
+        memory.recordFinalPreHandshakeFailure(swarm.toByteArray(), endpoint)
+        now = 61_000L
+        memory.recordFinalPreHandshakeFailure(swarm.toByteArray(), endpoint)
+
+        now = 65_999L
+        assertFalse(memory.isEligible(swarm.toByteArray(), endpoint))
+        now = 66_000L
+        assertTrue(memory.isEligible(swarm.toByteArray(), endpoint))
     }
 
     @Test
