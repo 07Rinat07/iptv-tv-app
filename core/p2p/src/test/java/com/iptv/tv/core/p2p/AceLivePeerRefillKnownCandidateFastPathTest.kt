@@ -2,12 +2,13 @@ package com.iptv.tv.core.p2p
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AceLivePeerRefillKnownCandidateFastPathTest {
     @Test
-    fun `known pex candidate starts before hard-full discovery refresh without extra socket`() =
+    fun `known pex candidate starts without network discovery when it fills hard capacity`() =
         runBlocking {
             val known = endpoint("192.0.2.10", 8621)
             val coordinator = coordinator(target = 1, max = 1, maxStarts = 1)
@@ -35,8 +36,8 @@ class AceLivePeerRefillKnownCandidateFastPathTest {
 
             val result = loop.runOneCycle(nowMillis = 1_000L)
 
-            assertEquals(listOf("start:${known.host}", "discover"), events)
-            assertTrue(result.discoveryAttempted)
+            assertEquals(listOf("start:${known.host}"), events)
+            assertFalse(result.discoveryAttempted)
             assertEquals(1, result.plannedStarts)
             assertEquals(1, result.startedPeers)
         }
