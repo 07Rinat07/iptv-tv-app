@@ -110,6 +110,62 @@ class TorrentForensicReportBuilderTest {
         assertTrue(report.contains("tcp_connect_avg_ms=15 utp_connect_avg_ms=27"))
         assertTrue(report.contains("tcp_outcomes=connect_failed:1,handshake_rejected:1,qualified_winner:1"))
         assertTrue(report.contains("utp_outcomes=connect_failed:1,handshake_rejected:1,qualified_winner:1"))
+        assertFalse(report.contains("endpoint_fingerprinted="))
+    }
+
+    @Test
+    fun aggregatesOpaqueEndpointReuseWithoutExportingFingerprints() {
+        val repeatedFingerprint = "0123456789abcdefabcd"
+        val singleFingerprint = "fedcba9876543210abcd"
+        val report = TorrentForensicReportBuilder.build(
+            listOf(
+                log(1, "embedded_ace_live_startup_timeline", "phase=transport_selection, elapsed_ms=0"),
+                log(
+                    2,
+                    "embedded_ace_live_transport_race",
+                    "winner=none elapsed_ms=100 endpoint_fp=$repeatedFingerprint " +
+                        "tcp_connected_ms=none tcp_outcome=connect_timeout tcp_terminal_ms=100 " +
+                        "utp_connected_ms=none utp_outcome=connect_timeout utp_terminal_ms=100"
+                ),
+                log(
+                    3,
+                    "embedded_ace_live_transport_race",
+                    "winner=none elapsed_ms=100 endpoint_fp=$repeatedFingerprint " +
+                        "tcp_connected_ms=none tcp_outcome=connect_timeout tcp_terminal_ms=100 " +
+                        "utp_connected_ms=none utp_outcome=connect_timeout utp_terminal_ms=100"
+                ),
+                log(
+                    4,
+                    "embedded_ace_live_transport_race",
+                    "winner=none elapsed_ms=100 endpoint_fp=$repeatedFingerprint " +
+                        "tcp_connected_ms=none tcp_outcome=connect_timeout tcp_terminal_ms=100 " +
+                        "utp_connected_ms=none utp_outcome=connect_timeout utp_terminal_ms=100"
+                ),
+                log(
+                    5,
+                    "embedded_ace_live_transport_race",
+                    "winner=tcp elapsed_ms=40 endpoint_fp=$singleFingerprint " +
+                        "tcp_connected_ms=10 tcp_outcome=qualified_winner tcp_terminal_ms=40 " +
+                        "utp_connected_ms=none utp_outcome=cancelled_after_winner utp_terminal_ms=40"
+                ),
+                log(
+                    6,
+                    "embedded_ace_live_transport_race",
+                    "winner=none elapsed_ms=100 endpoint_fp=invalid-token " +
+                        "tcp_connected_ms=none tcp_outcome=connect_timeout tcp_terminal_ms=100 " +
+                        "utp_connected_ms=none utp_outcome=connect_timeout utp_terminal_ms=100"
+                )
+            )
+        )
+
+        assertTrue(
+            report.contains(
+                "endpoint_fingerprinted=4 endpoint_unique=2 endpoint_repeated=2 endpoint_max_races=3"
+            )
+        )
+        assertFalse(report.contains(repeatedFingerprint))
+        assertFalse(report.contains(singleFingerprint))
+        assertFalse(report.contains("invalid-token"))
     }
 
     @Test
