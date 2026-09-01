@@ -10,7 +10,12 @@ class AceLiveRecoveryPeerDiversityTest {
         coordinator.updatePeer(peer(id = 1, min = 10, max = 30))
         coordinator.updatePeer(peer(id = 2, min = 10, max = 30))
 
-        val initial = coordinator.assign(10, 30, nowMillis = 0)
+        val initial = coordinator.assign(
+            nextNeeded = 10,
+            head = 30,
+            nowMillis = 0,
+            maxInFlightPerPeer = 1
+        )
         assertEquals(listOf(1L, 2L), initial.map(AceLivePieceAssignment::peerId))
         assertEquals(listOf(10L, 11L), initial.map(AceLivePieceAssignment::piece))
 
@@ -23,7 +28,12 @@ class AceLiveRecoveryPeerDiversityTest {
             timeout.timedOutRequests
         )
 
-        val retried = coordinator.assign(10, 30, nowMillis = 4_000)
+        val retried = coordinator.assign(
+            nextNeeded = 10,
+            head = 30,
+            nowMillis = 4_000,
+            maxInFlightPerPeer = 1
+        )
 
         assertEquals(listOf(2L, 1L), retried.map(AceLivePieceAssignment::peerId))
         assertEquals(listOf(10L, 11L), retried.map(AceLivePieceAssignment::piece))
