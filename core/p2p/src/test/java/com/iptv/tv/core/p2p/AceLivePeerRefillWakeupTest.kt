@@ -208,8 +208,23 @@ class AceLivePeerRefillWakeupTest {
     }
 
     @Test
+    fun `terminal outbound loss is emitted only after pool capacity is released`() {
+        val body = sourceFile("AceLiveTcpConnectionPool.kt")
+            .substringAfter("private suspend fun runPeer(runtime: PeerRuntime)")
+            .substringBefore("private suspend fun runInboundPeer(")
+
+        val terminalEvent = body.indexOf("terminalEvent = event")
+        val removal = body.lastIndexOf("peers.remove(runtime.peerId)")
+        val terminalEmit = body.indexOf("terminalEvent?.let(::emit)")
+
+        assertTrue("terminal event must be captured before cleanup", terminalEvent >= 0)
+        assertTrue("outbound capacity must be released after terminal outcome", removal > terminalEvent)
+        assertTrue("terminal loss must be published only after capacity release", terminalEmit > removal)
+    }
+
+    @Test
     fun `embedded runtime wires qualifying pool events into refill wakeup`() {
-        val source = embeddedEngineSource()
+        val source = sourceFile("AceLiveEmbeddedEngine.kt")
         val body = source
             .substringAfter("private fun onPoolEvent(event: AceLiveTcpPoolEvent)")
             .substringBefore("private fun logProgress(event: AceLiveTcpPoolEvent.Ingress)")
@@ -253,24 +268,18 @@ class AceLivePeerRefillWakeupTest {
             )
         )
 
-    private fun embeddedEngineSource(): String {
+    private fun sourceFile(fileName: String): String {
         var cursor: File? = File(System.getProperty("user.dir")).canonicalFile
         repeat(8) {
             val directory = cursor ?: return@repeat
             val candidates = listOf(
-                File(
-                    directory,
-                    "src/main/java/com/iptv/tv/core/p2p/AceLiveEmbeddedEngine.kt"
-                ),
-                File(
-                    directory,
-                    "core/p2p/src/main/java/com/iptv/tv/core/p2p/AceLiveEmbeddedEngine.kt"
-                )
+                File(directory, "src/main/java/com/iptv/tv/core/p2p/$fileName"),
+                File(directory, "core/p2p/src/main/java/com/iptv/tv/core/p2p/$fileName")
             )
             candidates.firstOrNull(File::isFile)?.let { return it.readText() }
             cursor = directory.parentFile
         }
-        error("AceLiveEmbeddedEngine.kt was not found from Gradle test working directory")
+        error("$fileName was not found from Gradle test working directory")
     }
 
     private fun endpoint(host: String, port: Int): AceLiveTcpPeerEndpoint =
