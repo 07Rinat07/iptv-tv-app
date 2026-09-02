@@ -398,7 +398,11 @@ class AceLivePeerSessionCoordinator(
                 )
             }
 
-            val activeDuplicate = activePeers.onChunk(chunk = chunk, nextNeeded = nextNeeded)
+            val activeDuplicate = activePeers.onChunk(
+                chunk = chunk,
+                nextNeeded = nextNeeded,
+                nowMillis = nowMillis
+            )
             return if (activeDuplicate.disposition == AceLiveChunkDisposition.DUPLICATE) {
                 reportChunkRejected(
                     peerId,
@@ -426,7 +430,8 @@ class AceLivePeerSessionCoordinator(
 
         val activeResult = activePeers.onChunk(
             chunk = chunk,
-            nextNeeded = nextNeeded
+            nextNeeded = nextNeeded,
+            nowMillis = nowMillis
         )
         if (!activeResult.accepted) {
             reportChunkRejected(peerId, chunk.piece, activeResult.disposition.name, nowMillis)
