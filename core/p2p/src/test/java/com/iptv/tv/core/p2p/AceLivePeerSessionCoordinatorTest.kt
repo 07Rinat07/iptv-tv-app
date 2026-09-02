@@ -154,7 +154,7 @@ class AceLivePeerSessionCoordinatorTest {
             nowMillis = 1
         )
 
-        val plan = session.evaluateRecovery(nowMillis = 4_000)
+        val plan = session.evaluateRecovery(nowMillis = 4_001)
 
         assertEquals(listOf(10L), plan.timedOutRequests.map { it.piece })
         assertEquals(0L, session.bufferedPayloadBytes())

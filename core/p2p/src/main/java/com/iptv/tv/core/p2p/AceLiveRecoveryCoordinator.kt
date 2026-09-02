@@ -67,7 +67,8 @@ data class AceLiveRecoveryPlan(
  * Pure state coordinator around [AceLiveWindowScheduler].
  *
  * Responsibilities:
- * - timestamp outstanding piece assignments and requeue timed-out requests;
+ * - timestamp outstanding piece assignments and requeue requests that make no accepted chunk
+ *   progress for the bounded request timeout;
  * - track the contiguous playback/reassembly cursor rather than arbitrary received pieces;
  * - suggest a discontinuous cursor advance only after the current piece has aged past the request
  *   timeout and no unchoked peer advertises it anymore;
@@ -83,7 +84,7 @@ class AceLiveRecoveryCoordinator(
     val policy: AceLiveRecoveryPolicy = AceLiveRecoveryPolicy()
 ) {
     private val scheduler = AceLiveWindowScheduler(maxInFlightPerPeer)
-    private val requestStartedAtMillis = mutableMapOf<Long, Long>()
+    private val requestProgressAtMillis = mutableMapOf<Long, Long>()
 
     private var observedNextNeeded: Long? = null
     private var lastProgressAtMillis: Long? = null
@@ -91,7 +92,7 @@ class AceLiveRecoveryCoordinator(
 
     fun updatePeer(window: AceLivePeerWindow): List<Long> {
         val requeued = scheduler.updatePeer(window)
-        requeued.forEach { piece -> requestStartedAtMillis.remove(piece) }
+        requeued.forEach { piece -> requestProgressAtMillis.remove(piece) }
         return requeued
     }
 
@@ -101,7 +102,7 @@ class AceLiveRecoveryCoordinator(
 
     fun removePeer(peerId: Long): List<Long> {
         val requeued = scheduler.removePeer(peerId)
-        requeued.forEach { piece -> requestStartedAtMillis.remove(piece) }
+        requeued.forEach { piece -> requestProgressAtMillis.remove(piece) }
         return requeued
     }
 
@@ -118,16 +119,28 @@ class AceLiveRecoveryCoordinator(
             maxInFlightPerPeer = maxInFlightPerPeer
         )
         assignments.forEach { assignment ->
-            requestStartedAtMillis[assignment.piece] = nowMillis
+            requestProgressAtMillis[assignment.piece] = nowMillis
         }
         return assignments
+    }
+
+    /**
+     * Refreshes only the timeout lease for an already-owned piece after authoritative accepted
+     * chunk progress. This deliberately does not reset the global contiguous/stale-pool timer.
+     */
+    fun recordProgress(piece: Long, nowMillis: Long) {
+        validateClock(nowMillis)
+        require(piece >= 0) { "piece must be non-negative" }
+        if (scheduler.ownerOf(piece) != null && piece in requestProgressAtMillis) {
+            requestProgressAtMillis[piece] = nowMillis
+        }
     }
 
     /** Marks network/reassembly ownership complete without claiming contiguous playback progress. */
     fun complete(piece: Long) {
         require(piece >= 0) { "piece must be non-negative" }
         scheduler.complete(piece)
-        requestStartedAtMillis.remove(piece)
+        requestProgressAtMillis.remove(piece)
     }
 
     /**
@@ -145,10 +158,10 @@ class AceLiveRecoveryCoordinator(
         }
 
         scheduler.pruneBefore(nextNeeded)
-        requestStartedAtMillis.keys
+        requestProgressAtMillis.keys
             .filter { it < nextNeeded }
             .toList()
-            .forEach { piece -> requestStartedAtMillis.remove(piece) }
+            .forEach { piece -> requestProgressAtMillis.remove(piece) }
     }
 
     /**
@@ -186,9 +199,10 @@ class AceLiveRecoveryCoordinator(
         }
         lastCheckAtMillis = nowMillis
 
-        val timedOutPieces = requestStartedAtMillis.entries
-            .filter { (piece, startedAt) ->
-                piece >= nextNeeded && elapsedSince(startedAt, nowMillis) >= policy.requestTimeoutMillis
+        val timedOutPieces = requestProgressAtMillis.entries
+            .filter { (piece, lastProgressAt) ->
+                piece >= nextNeeded &&
+                    elapsedSince(lastProgressAt, nowMillis) >= policy.requestTimeoutMillis
             }
             .map { it.key }
             .sorted()
@@ -196,7 +210,7 @@ class AceLiveRecoveryCoordinator(
         val timedOut = timedOutPieces.map { piece ->
             val previousPeer = scheduler.ownerOf(piece)
             scheduler.retry(piece)
-            requestStartedAtMillis.remove(piece)
+            requestProgressAtMillis.remove(piece)
             AceLiveTimedOutRequest(piece = piece, previousPeerId = previousPeer)
         }
 

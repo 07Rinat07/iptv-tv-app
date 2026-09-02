@@ -225,11 +225,29 @@ class AceLiveActivePeerCoordinator(
     }
 
     /**
-     * Validates one decoded live chunk against current ownership and geometry.
-     * Accepted bytes are not retained here; the session reassembler consumes [AceLiveIncomingChunk]
-     * after this method returns an accepted disposition.
+     * Legacy deterministic entry point used by ownership/geometry tests that do not exercise
+     * recovery timing. Production ingress must use the timestamp-aware overload below.
      */
-    fun onChunk(chunk: AceLiveIncomingChunk, nextNeeded: Long): AceLiveChunkResult {
+    fun onChunk(chunk: AceLiveIncomingChunk, nextNeeded: Long): AceLiveChunkResult =
+        onChunkInternal(chunk = chunk, nextNeeded = nextNeeded, nowMillis = null)
+
+    /**
+     * Validates one decoded live chunk against current ownership and geometry. A newly accepted
+     * unique chunk refreshes only this piece's bounded recovery lease. Rejected and duplicate chunks
+     * never refresh timeout state.
+     */
+    fun onChunk(
+        chunk: AceLiveIncomingChunk,
+        nextNeeded: Long,
+        nowMillis: Long
+    ): AceLiveChunkResult =
+        onChunkInternal(chunk = chunk, nextNeeded = nextNeeded, nowMillis = nowMillis)
+
+    private fun onChunkInternal(
+        chunk: AceLiveIncomingChunk,
+        nextNeeded: Long,
+        nowMillis: Long?
+    ): AceLiveChunkResult {
         requireWirePiece(nextNeeded)
 
         if (chunk.streamIndex != ACE_LIVE_STREAM_INDEX) {
@@ -279,6 +297,9 @@ class AceLiveActivePeerCoordinator(
             return result(AceLiveChunkDisposition.DUPLICATE)
         }
         state.lastRequestedAtMillis.remove(chunk.chunkIndex)
+        nowMillis?.let { acceptedAt ->
+            recovery.recordProgress(chunk.piece, acceptedAt)
+        }
 
         if (state.receivedChunks.size == geometry.chunksPerPiece) {
             recovery.complete(chunk.piece)
