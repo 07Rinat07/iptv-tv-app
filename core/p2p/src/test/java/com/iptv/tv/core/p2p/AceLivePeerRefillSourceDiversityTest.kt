@@ -65,6 +65,70 @@ class AceLivePeerRefillSourceDiversityTest {
     }
 
     @Test
+    fun `source diversity never outranks richer discovery evidence`() {
+        val coordinator = coordinator(target = 2, max = 2, maxStarts = 2)
+        val richerFirst = endpoint("1.0.0.1", 8621)
+        val richerSecond = endpoint("1.0.0.2", 8621)
+        val dhtOnly = endpoint("9.9.9.9", 8621)
+
+        coordinator.ingestDiscovery(
+            discovery(
+                richerFirst to setOf(
+                    AceLivePeerDiscoverySource.UDP_TRACKER,
+                    AceLivePeerDiscoverySource.LOCAL_SERVICE_DISCOVERY
+                ),
+                richerSecond to setOf(
+                    AceLivePeerDiscoverySource.UDP_TRACKER,
+                    AceLivePeerDiscoverySource.LOCAL_SERVICE_DISCOVERY
+                ),
+                dhtOnly to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)
+            ),
+            nowMillis = 1_000L
+        )
+
+        val plan = coordinator.planRefill(
+            activePeerIds = emptySet(),
+            nextNeededPiece = null,
+            poolStale = false,
+            nowMillis = 1_000L
+        )
+
+        assertEquals(setOf(richerFirst, richerSecond), plan.candidates.map { it.endpoint }.toSet())
+    }
+
+    @Test
+    fun `source diversity never outranks more recent discovery`() {
+        val coordinator = coordinator(target = 2, max = 2, maxStarts = 2)
+        val staleDht = endpoint("9.9.9.9", 8621)
+        val freshTrackerFirst = endpoint("1.0.0.1", 8621)
+        val freshTrackerSecond = endpoint("1.0.0.2", 8621)
+
+        coordinator.ingestDiscovery(
+            discovery(staleDht to setOf(AceLivePeerDiscoverySource.MAINLINE_DHT)),
+            nowMillis = 1_000L
+        )
+        coordinator.ingestDiscovery(
+            discovery(
+                freshTrackerFirst to setOf(AceLivePeerDiscoverySource.UDP_TRACKER),
+                freshTrackerSecond to setOf(AceLivePeerDiscoverySource.UDP_TRACKER)
+            ),
+            nowMillis = 2_000L
+        )
+
+        val plan = coordinator.planRefill(
+            activePeerIds = emptySet(),
+            nextNeededPiece = null,
+            poolStale = false,
+            nowMillis = 2_000L
+        )
+
+        assertEquals(
+            setOf(freshTrackerFirst, freshTrackerSecond),
+            plan.candidates.map { it.endpoint }.toSet()
+        )
+    }
+
+    @Test
     fun `source diversity never outranks verified useful window`() {
         val coordinator = coordinator(target = 2, max = 2, maxStarts = 2)
         val usefulFirst = endpoint("1.0.0.1", 8621)

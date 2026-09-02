@@ -553,7 +553,9 @@ class AceLivePeerRefillCoordinator(
         windowUsefulnessRank = windowUsefulnessRank(state.advertisedWindow, nextNeededPiece),
         persistentReputationRank = persistentReputationRank(state.endpoint, nowMillis),
         consecutiveFailures = state.consecutiveFailures,
-        handshakeRank = if (state.lastHandshakeAtMillis != null) 0 else 1
+        handshakeRank = if (state.lastHandshakeAtMillis != null) 0 else 1,
+        discoverySourceCountRank = -state.discoverySourceCount(),
+        discoveryRecencyRank = -state.lastDiscoveredAtMillis
     )
 
     private fun ingestPeerExchangeLocked(
@@ -664,7 +666,9 @@ class AceLivePeerRefillCoordinator(
         val windowUsefulnessRank: Int,
         val persistentReputationRank: Int,
         val consecutiveFailures: Int,
-        val handshakeRank: Int
+        val handshakeRank: Int,
+        val discoverySourceCountRank: Int,
+        val discoveryRecencyRank: Long
     )
 
     private enum class CandidateDiscoveryClass {
