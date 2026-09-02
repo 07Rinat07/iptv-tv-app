@@ -76,6 +76,39 @@ class AceDhtRoutingMemoryTest {
     }
 
     @Test
+    fun `persisted restore backfills older diverse contacts before global truncation`() {
+        val firstNetwork = contact("8.8.8.8", 6881, 0x11)
+        val secondNetwork = contact("1.1.1.1", 6881, 0x22)
+        val crowdedOlder = contact("9.9.9.1", 6881, 0x31)
+        val crowdedMiddle = contact("9.9.9.2", 6881, 0x32)
+        val crowdedNewer = contact("9.9.9.3", 6881, 0x33)
+        val crowdedNewest = contact("9.9.9.4", 6881, 0x34)
+        val persistence = FakePersistence(
+            loaded = listOf(
+                AceDhtPersistedContact(firstNetwork, lastSeenEpochMillis = 9_000L),
+                AceDhtPersistedContact(secondNetwork, lastSeenEpochMillis = 9_100L),
+                AceDhtPersistedContact(crowdedOlder, lastSeenEpochMillis = 9_200L),
+                AceDhtPersistedContact(crowdedMiddle, lastSeenEpochMillis = 9_300L),
+                AceDhtPersistedContact(crowdedNewer, lastSeenEpochMillis = 9_400L),
+                AceDhtPersistedContact(crowdedNewest, lastSeenEpochMillis = 9_500L)
+            )
+        )
+
+        val memory = AceDhtRoutingMemory(
+            maxNodes = 4,
+            ttlMillis = 2_000L,
+            clockNanos = { 10_000_000_000L },
+            wallClockMillis = { 10_000L },
+            persistence = persistence
+        )
+
+        assertEquals(
+            listOf(crowdedNewest, crowdedNewer, secondNetwork, firstNetwork),
+            memory.recentContacts(limit = 8)
+        )
+    }
+
+    @Test
     fun `flush persists changed routing set and forget removes failed warm contact`() {
         var nowEpochMillis = 20_000L
         var nowNanos = 1_000_000_000L
