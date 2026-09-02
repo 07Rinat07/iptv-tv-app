@@ -21,11 +21,8 @@ class AceLiveRecoveryPeerDiversityTest {
 
         val timeout = coordinator.evaluate(10, nowMillis = 4_000)
         assertEquals(
-            listOf(
-                AceLiveTimedOutRequest(piece = 10, previousPeerId = 1),
-                AceLiveTimedOutRequest(piece = 11, previousPeerId = 2)
-            ),
-            timeout.timedOutRequests
+            listOf(10L to 1L, 11L to 2L),
+            timeout.timedOutRequests.map { it.piece to it.previousPeerId }
         )
 
         val retried = coordinator.assign(
