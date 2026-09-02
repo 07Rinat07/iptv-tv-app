@@ -766,7 +766,7 @@ class AceLivePeerRefillLoop(
             extraProbePeers = requestedAdaptiveProbePeers,
             maxStarts = remainingStartBudget
         )
-        val knownResult = startPlan(knownPlan)
+        val knownResult = startPlan(knownPlan, desiredQualifiedPeers)
         plannedStarts += knownResult.plannedStarts
         startedPeers += knownResult.startedPeers
         immediateStartFailures += knownResult.immediateStartFailures
@@ -789,7 +789,7 @@ class AceLivePeerRefillLoop(
                     extraProbePeers = requestedAdaptiveProbePeers,
                     maxStarts = remainingStartBudget
                 )
-                val discoveredResult = startPlan(discoveredPlan)
+                val discoveredResult = startPlan(discoveredPlan, desiredQualifiedPeers)
                 plannedStarts += discoveredResult.plannedStarts
                 startedPeers += discoveredResult.startedPeers
                 immediateStartFailures += discoveredResult.immediateStartFailures
@@ -815,7 +815,11 @@ class AceLivePeerRefillLoop(
         }
     }
 
-    private suspend fun startPlan(plan: AceLivePeerRefillPlan): StartPlanResult {
+    private suspend fun startPlan(
+        plan: AceLivePeerRefillPlan,
+        desiredQualifiedPeers: Int
+    ): StartPlanResult {
+        var planned = 0
         var started = 0
         var failed = 0
         val unstartedReservations = plan.candidates
@@ -823,6 +827,11 @@ class AceLivePeerRefillLoop(
         try {
             for (candidate in plan.candidates) {
                 currentCoroutineContext().ensureActive()
+                val active = activePeerIds()
+                coordinator.syncActivePeerIds(active)
+                if (coordinator.qualifiedActivePeerCount(active) >= desiredQualifiedPeers) break
+
+                planned += 1
                 val peerId = allocatePeerId()
                 require(peerId >= 0) { "allocatePeerId returned a negative peer id" }
                 coordinator.beginStart(peerId, candidate.endpoint)
@@ -845,7 +854,7 @@ class AceLivePeerRefillLoop(
             }
         }
         return StartPlanResult(
-            plannedStarts = plan.candidates.size,
+            plannedStarts = planned,
             startedPeers = started,
             immediateStartFailures = failed
         )
