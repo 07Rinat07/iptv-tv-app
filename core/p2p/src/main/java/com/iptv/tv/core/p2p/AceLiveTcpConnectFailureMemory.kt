@@ -3,12 +3,14 @@ package com.iptv.tv.core.p2p
 /**
  * Carries direct-runtime pre-handshake peer failures across short-lived Ace Live runtimes.
  *
- * The first final failure keeps the existing short [backoffMillis] so a transient endpoint can be
- * retried. If the same swarm/endpoint fails again while its small failure history is still retained,
- * [repeatedFailureBackoffMillis] suppresses another full transport race for the rest of a normal
- * startup window. A successful connection/accepted live handshake clears both the active block and
- * the retained streak. The retained history is process-local, bounded and does not itself make an
- * endpoint ineligible.
+ * A first final connect-acquisition failure keeps the existing short [backoffMillis] so a transient
+ * endpoint can be retried. A post-connect failure before an accepted live handshake is stronger
+ * qualification evidence, so [recordFinalPostConnectPreHandshakeFailure] immediately applies the
+ * existing [repeatedFailureBackoffMillis] startup-sized backoff. Repeated ordinary acquisition
+ * failures still escalate to the same longer backoff while their small failure history is retained.
+ * A successful connection/accepted live handshake clears both the active block and retained streak.
+ * The retained history is process-local, bounded and does not itself make an endpoint permanently
+ * ineligible.
  *
  * Metadata resolution intentionally keeps its existing semantics: it calls [recordConnected] on a
  * physical TCP connection because that is sufficient evidence of metadata-swarm TCP reachability.
@@ -37,28 +39,25 @@ class AceLiveTcpConnectFailureMemory(
         swarmKey: ByteArray,
         endpoint: AceLiveTcpPeerEndpoint,
         nowMillis: Long = clockMillis()
-    ) = synchronized(lock) {
-        val key = key(swarmKey, endpoint)
-        pruneLocked(nowMillis)
-        val previous = failures.remove(key)
-        val consecutiveFailures = if (previous == null) {
-            1
-        } else {
-            minOf(previous.consecutiveFailures + 1, REPEATED_FAILURE_THRESHOLD)
-        }
-        val currentBackoff = if (consecutiveFailures >= REPEATED_FAILURE_THRESHOLD) {
-            repeatedFailureBackoffMillis
-        } else {
-            backoffMillis
-        }
-        while (failures.size >= MAX_ENTRIES) {
-            val eldest = failures.keys.firstOrNull() ?: break
-            failures.remove(eldest)
-        }
-        failures[key] = FailureEntry(
-            retryNotBeforeMillis = safeAdd(nowMillis, currentBackoff),
-            consecutiveFailures = consecutiveFailures,
-            historyExpiresAtMillis = safeAdd(nowMillis, failureHistoryRetentionMillis)
+    ) {
+        recordFailure(
+            swarmKey = swarmKey,
+            endpoint = endpoint,
+            nowMillis = nowMillis,
+            minimumConsecutiveFailures = 1
+        )
+    }
+
+    fun recordFinalPostConnectPreHandshakeFailure(
+        swarmKey: ByteArray,
+        endpoint: AceLiveTcpPeerEndpoint,
+        nowMillis: Long = clockMillis()
+    ) {
+        recordFailure(
+            swarmKey = swarmKey,
+            endpoint = endpoint,
+            nowMillis = nowMillis,
+            minimumConsecutiveFailures = REPEATED_FAILURE_THRESHOLD
         )
     }
 
@@ -95,6 +94,40 @@ class AceLiveTcpConnectFailureMemory(
         swarmKey: ByteArray,
         nowMillis: Long = clockMillis()
     ): Boolean = activeFailureCount(swarmKey, nowMillis) > 0
+
+    private fun recordFailure(
+        swarmKey: ByteArray,
+        endpoint: AceLiveTcpPeerEndpoint,
+        nowMillis: Long,
+        minimumConsecutiveFailures: Int
+    ) = synchronized(lock) {
+        require(minimumConsecutiveFailures in 1..REPEATED_FAILURE_THRESHOLD) {
+            "minimum failure count is out of range"
+        }
+        val key = key(swarmKey, endpoint)
+        pruneLocked(nowMillis)
+        val previous = failures.remove(key)
+        val nextFailureCount = if (previous == null) {
+            1
+        } else {
+            minOf(previous.consecutiveFailures + 1, REPEATED_FAILURE_THRESHOLD)
+        }
+        val consecutiveFailures = maxOf(minimumConsecutiveFailures, nextFailureCount)
+        val currentBackoff = if (consecutiveFailures >= REPEATED_FAILURE_THRESHOLD) {
+            repeatedFailureBackoffMillis
+        } else {
+            backoffMillis
+        }
+        while (failures.size >= MAX_ENTRIES) {
+            val eldest = failures.keys.firstOrNull() ?: break
+            failures.remove(eldest)
+        }
+        failures[key] = FailureEntry(
+            retryNotBeforeMillis = safeAdd(nowMillis, currentBackoff),
+            consecutiveFailures = consecutiveFailures,
+            historyExpiresAtMillis = safeAdd(nowMillis, failureHistoryRetentionMillis)
+        )
+    }
 
     private fun key(swarmKey: ByteArray, endpoint: AceLiveTcpPeerEndpoint): EndpointKey =
         EndpointKey(
