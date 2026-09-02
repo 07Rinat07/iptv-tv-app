@@ -1,6 +1,7 @@
 package com.iptv.tv.core.p2p
 
 import java.io.IOException
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -27,7 +28,7 @@ class AceLiveHandshakeFailureBackoffRegressionTest {
             backoffMillis = 5_000L,
             repeatedFailureBackoffMillis = 60_000L
         )
-        val events = mutableListOf<AceLiveTcpPoolEvent>()
+        val events = CopyOnWriteArrayList<AceLiveTcpPoolEvent>()
         val pool = AceLiveTcpConnectionPool(
             scope = CoroutineScope(Dispatchers.Default),
             session = AceLivePeerSessionCoordinator(
@@ -64,7 +65,14 @@ class AceLiveHandshakeFailureBackoffRegressionTest {
         )
 
         withTimeout(2_000L) {
-            while (pool.activePeerIds().isNotEmpty()) delay(5L)
+            while (
+                pool.activePeerIds().isNotEmpty() ||
+                events.none { event ->
+                    event is AceLiveTcpPoolEvent.Disconnected && !event.retrying
+                }
+            ) {
+                delay(5L)
+            }
         }
 
         assertTrue(
