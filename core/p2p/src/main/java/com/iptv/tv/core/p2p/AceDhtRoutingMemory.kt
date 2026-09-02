@@ -127,8 +127,6 @@ class AceDhtRoutingMemory internal constructor(
                     persistedAgeMillis(item.lastSeenEpochMillis, nowEpochMillis) < ttlMillis
                 }
                 .sortedBy(AceDhtPersistedContact::lastSeenEpochMillis)
-                .toList()
-                .takeLast(maxNodes)
                 .forEach { item ->
                     val ageMillis = persistedAgeMillis(item.lastSeenEpochMillis, nowEpochMillis)
                     val ageNanos = ageMillis.coerceAtMost(Long.MAX_VALUE / NANOS_PER_MILLI) * NANOS_PER_MILLI
