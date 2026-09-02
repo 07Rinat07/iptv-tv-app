@@ -95,6 +95,8 @@ internal fun aceLivePeerRefillEventShouldWake(event: AceLiveTcpPoolEvent): Boole
  * reputation from earlier runtimes before local failure/handshake/source tie-breakers. Persisted
  * evidence never creates a permanent allow/deny: discovery still owns the candidate set, while
  * local retry state and shared same-swarm transport backoff both gate immediate eligibility.
+ * Equal-quality refill candidates are spread across independent discovery classes when possible;
+ * source diversity never overrides verified window/reputation/failure/handshake quality evidence.
  *
  * All mutable candidate/reservation/ownership state is serialized under one local monitor. Disk
  * persistence is deliberately invoked only after leaving this monitor so a filesystem stall cannot
@@ -139,7 +141,6 @@ class AceLivePeerRefillCoordinator(
             val state = candidates.getOrPut(key) {
                 CandidateState(endpoint = peer.endpoint)
             }
-            state.sources.clear()
             state.sources.addAll(peer.sources)
             state.lastDiscoveredAtMillis = nowMillis
         }
@@ -240,7 +241,12 @@ class AceLivePeerRefillCoordinator(
             .filter { state -> transportEligible(state.endpoint, nowMillis) }
             .sortedWith(candidateComparator(nextNeededPiece, nowMillis))
             .toList()
-        val selected = selectPlanCandidatesLocked(ranked, slots)
+        val selected = selectPlanCandidatesLocked(
+            ranked = ranked,
+            slots = slots,
+            nextNeededPiece = nextNeededPiece,
+            nowMillis = nowMillis
+        )
 
         selected.forEach { state -> state.startReserved = true }
         AceLivePeerRefillPlan(
@@ -476,35 +482,79 @@ class AceLivePeerRefillCoordinator(
 
     private fun selectPlanCandidatesLocked(
         ranked: List<CandidateState>,
-        slots: Int
+        slots: Int,
+        nextNeededPiece: Long?,
+        nowMillis: Long
     ): List<CandidateState> {
         if (slots <= 0) return emptyList()
-        val usedSinglePexSources = candidates.values
+
+        val committedStates = candidates.values.filter { state ->
+            state.managedPeerId != null || state.startReserved || state.startInProgress
+        }
+        val usedDiscoveryClasses = committedStates
+            .flatMapTo(linkedSetOf()) { state -> state.discoveryClasses() }
+        val usedSinglePexSources = committedStates
             .asSequence()
-            .filter { state -> state.managedPeerId != null && state.sources.isEmpty() }
+            .filter(CandidateState::isPeerExchangeOnly)
             .flatMap { state -> state.peerExchangeSourcePeerIds.asSequence() }
             .toMutableSet()
         val pexSourceFrequency = ranked
             .asSequence()
-            .filter { state -> state.sources.isEmpty() }
+            .filter(CandidateState::isPeerExchangeOnly)
             .flatMap { state -> state.peerExchangeSourcePeerIds.asSequence() }
             .groupingBy { sourcePeerId -> sourcePeerId }
             .eachCount()
+
+        val remaining = ranked.toMutableList()
         val selected = ArrayList<CandidateState>(slots)
-        for (state in ranked) {
-            if (selected.size >= slots) break
-            if (state.sources.isEmpty() && state.peerExchangeSourcePeerIds.isNotEmpty()) {
-                val independentSource = state.peerExchangeSourcePeerIds
+        while (selected.size < slots && remaining.isNotEmpty()) {
+            val eligible = remaining.filter { state ->
+                !state.isPeerExchangeOnly() ||
+                    state.peerExchangeSourcePeerIds.any { sourcePeerId ->
+                        sourcePeerId !in usedSinglePexSources
+                    }
+            }
+            if (eligible.isEmpty()) break
+
+            val bestQualityTier = candidateQualityTier(
+                state = eligible.first(),
+                nextNeededPiece = nextNeededPiece,
+                nowMillis = nowMillis
+            )
+            val sameQualityTier = eligible.takeWhile { state ->
+                candidateQualityTier(state, nextNeededPiece, nowMillis) == bestQualityTier
+            }
+            val chosen = sameQualityTier.firstOrNull { state ->
+                state.discoveryClasses().any { sourceClass ->
+                    sourceClass !in usedDiscoveryClasses
+                }
+            } ?: sameQualityTier.first()
+
+            if (chosen.isPeerExchangeOnly()) {
+                val independentSource = chosen.peerExchangeSourcePeerIds
                     .asSequence()
                     .filter { sourcePeerId -> sourcePeerId !in usedSinglePexSources }
                     .minByOrNull { sourcePeerId -> pexSourceFrequency[sourcePeerId] ?: Int.MAX_VALUE }
-                    ?: continue
+                    ?: error("Eligible PEX candidate lost its independent source")
                 usedSinglePexSources += independentSource
             }
-            selected += state
+            usedDiscoveryClasses += chosen.discoveryClasses()
+            selected += chosen
+            remaining.remove(chosen)
         }
         return selected
     }
+
+    private fun candidateQualityTier(
+        state: CandidateState,
+        nextNeededPiece: Long?,
+        nowMillis: Long
+    ): CandidateQualityTier = CandidateQualityTier(
+        windowUsefulnessRank = windowUsefulnessRank(state.advertisedWindow, nextNeededPiece),
+        persistentReputationRank = persistentReputationRank(state.endpoint, nowMillis),
+        consecutiveFailures = state.consecutiveFailures,
+        handshakeRank = if (state.lastHandshakeAtMillis != null) 0 else 1
+    )
 
     private fun ingestPeerExchangeLocked(
         sourcePeerId: Long,
@@ -610,6 +660,20 @@ class AceLivePeerRefillCoordinator(
 
     private fun <T> withStateLock(block: () -> T): T = synchronized(stateLock) { block() }
 
+    private data class CandidateQualityTier(
+        val windowUsefulnessRank: Int,
+        val persistentReputationRank: Int,
+        val consecutiveFailures: Int,
+        val handshakeRank: Int
+    )
+
+    private enum class CandidateDiscoveryClass {
+        MAINLINE_DHT,
+        UDP_TRACKER,
+        LOCAL_SERVICE_DISCOVERY,
+        PEER_EXCHANGE
+    }
+
     private data class CandidateState(
         val endpoint: AceLiveTcpPeerEndpoint,
         val sources: MutableSet<AceLivePeerDiscoverySource> = linkedSetOf(),
@@ -649,6 +713,27 @@ class AceLivePeerRefillCoordinator(
 
         fun discoverySourceCount(): Int =
             sources.size + if (peerExchangeSourcePeerIds.isEmpty()) 0 else 1
+
+        fun isPeerExchangeOnly(): Boolean =
+            sources.isEmpty() && peerExchangeSourcePeerIds.isNotEmpty()
+
+        fun discoveryClasses(): Set<CandidateDiscoveryClass> {
+            val result = linkedSetOf<CandidateDiscoveryClass>()
+            for (source in sources) {
+                result += when (source) {
+                    AceLivePeerDiscoverySource.MAINLINE_DHT ->
+                        CandidateDiscoveryClass.MAINLINE_DHT
+                    AceLivePeerDiscoverySource.UDP_TRACKER ->
+                        CandidateDiscoveryClass.UDP_TRACKER
+                    AceLivePeerDiscoverySource.LOCAL_SERVICE_DISCOVERY ->
+                        CandidateDiscoveryClass.LOCAL_SERVICE_DISCOVERY
+                }
+            }
+            if (peerExchangeSourcePeerIds.isNotEmpty()) {
+                result += CandidateDiscoveryClass.PEER_EXCHANGE
+            }
+            return result
+        }
     }
 
     private data class ReputationEvidence(
