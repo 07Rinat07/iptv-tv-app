@@ -77,6 +77,7 @@ internal enum class AceLiveStartupMilestone(val wireName: String) {
     HANDSHAKE_ACCEPTED("handshake"),
     USEFUL_WINDOW("useful_window"),
     FIRST_MEDIA("first_media"),
+    PRODUCING("producing"),
     BUFFER_READY("buffer_ready"),
     HTTP_READER_OPEN("http_reader_open"),
     HTTP_FIRST_READ("http_first_read"),
