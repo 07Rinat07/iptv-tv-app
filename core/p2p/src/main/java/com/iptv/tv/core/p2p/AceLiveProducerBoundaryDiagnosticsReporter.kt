@@ -37,10 +37,10 @@ class AceLiveProducerBoundaryDiagnosticsReporter(
         piece: Long? = null,
         disposition: String? = null,
         bytes: Long? = null,
+        nowMillis: Long = System.currentTimeMillis(),
         acceptedChunks: Int? = null,
         assignmentAgeMillis: Long? = null,
-        progressAgeMillis: Long? = null,
-        nowMillis: Long = System.currentTimeMillis()
+        progressAgeMillis: Long? = null
     ) {
         require(sessionId >= 0L) { "sessionId must be non-negative" }
         require(peerId == null || peerId >= 0L) { "peerId must be non-negative" }
