@@ -63,7 +63,7 @@ internal class AceLiveStartupTimelineDiagnostics(
             is AceLiveTcpPoolEvent.TransportConnected ->
                 mark(AceLiveStartupMilestone.TRANSPORT_CONNECTED, atMillis)
             is AceLiveTcpPoolEvent.HandshakeAccepted ->
-                mark(AceLiveStartupMilestone.HANDSHAKE_ACCEPTEPTED, atMillis)
+                mark(AceLiveStartupMilestone.HANDSHAKE_ACCEPTED, atMillis)
             is AceLiveTcpPoolEvent.HandshakeRejected,
             is AceLiveTcpPoolEvent.ConnectFailed,
             is AceLiveTcpPoolEvent.Disconnected,
