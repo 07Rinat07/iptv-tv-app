@@ -84,12 +84,17 @@ internal class AceLiveStartupTimelineDiagnostics(
     fun onPeerProduction(
         snapshot: AceLivePeerProductionSnapshot,
         atMillis: Long = clockMillis()
-    ): AceLiveStartupTimelineEntry? =
-        if (snapshot.windowUsefulPeers > 0) {
+    ): AceLiveStartupTimelineEntry? {
+        val usefulWindow = if (snapshot.windowUsefulPeers > 0) {
             mark(AceLiveStartupMilestone.USEFUL_WINDOW, atMillis)
         } else {
             null
         }
+        if (snapshot.producingPeers > 0) {
+            mark(AceLiveStartupMilestone.PRODUCING, atMillis)
+        }
+        return usefulWindow
+    }
 
     fun onFirstMedia(atMillis: Long = clockMillis()) =
         mark(AceLiveStartupMilestone.FIRST_MEDIA, atMillis)
