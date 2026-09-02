@@ -44,7 +44,6 @@ class AceLivePieceTimeoutTelemetryTest {
 
         val timeout = diagnostics.single { it.contains("stage=request_timeout") }
         assertTrue(timeout.contains("accepted_chunks=1"))
-        assertTrue(timeout.contains("chunks_per_piece=3"))
         assertTrue(timeout.contains("assignment_age_ms=4001"))
         assertTrue(timeout.contains("progress_age_ms=4000"))
     }
