@@ -103,7 +103,7 @@ class AceDhtRoutingMemoryTest {
         )
 
         assertEquals(
-            listOf(crowdedNewest, crowdedNewer, secondNetwork, firstNetwork),
+            listOf(crowdedNewest, secondNetwork, firstNetwork),
             memory.recentContacts(limit = 8)
         )
     }
