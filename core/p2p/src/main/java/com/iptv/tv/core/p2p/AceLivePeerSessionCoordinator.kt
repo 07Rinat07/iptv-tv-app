@@ -263,6 +263,9 @@ class AceLivePeerSessionCoordinator(
                 stage = AceLiveProducerBoundaryStage.REQUEST_TIMEOUT,
                 peerId = timedOut.previousPeerId,
                 piece = timedOut.piece,
+                acceptedChunks = timedOut.acceptedChunks,
+                assignmentAgeMillis = timedOut.assignmentAgeMillis,
+                progressAgeMillis = timedOut.progressAgeMillis,
                 nowMillis = nowMillis
             )
         }
@@ -513,6 +516,9 @@ class AceLivePeerSessionCoordinator(
         piece: Long?,
         disposition: String? = null,
         bytes: Long? = null,
+        acceptedChunks: Int? = null,
+        assignmentAgeMillis: Long? = null,
+        progressAgeMillis: Long? = null,
         nowMillis: Long
     ) {
         producerBoundaryDiagnostics.record(
@@ -522,6 +528,9 @@ class AceLivePeerSessionCoordinator(
             piece = piece,
             disposition = disposition,
             bytes = bytes,
+            acceptedChunks = acceptedChunks,
+            assignmentAgeMillis = assignmentAgeMillis,
+            progressAgeMillis = progressAgeMillis,
             nowMillis = nowMillis
         )
     }

@@ -34,8 +34,21 @@ data class AceLiveRecoveryPolicy(
 
 data class AceLiveTimedOutRequest(
     val piece: Long,
-    val previousPeerId: Long?
-)
+    val previousPeerId: Long?,
+    val acceptedChunks: Int = 0,
+    val assignmentAgeMillis: Long? = null,
+    val progressAgeMillis: Long? = null
+) {
+    init {
+        require(acceptedChunks >= 0) { "acceptedChunks must be non-negative" }
+        require(assignmentAgeMillis == null || assignmentAgeMillis >= 0L) {
+            "assignmentAgeMillis must be non-negative"
+        }
+        require(progressAgeMillis == null || progressAgeMillis >= 0L) {
+            "progressAgeMillis must be non-negative"
+        }
+    }
+}
 
 data class AceLiveCursorAdvance(
     val fromPiece: Long,
@@ -84,7 +97,9 @@ class AceLiveRecoveryCoordinator(
     val policy: AceLiveRecoveryPolicy = AceLiveRecoveryPolicy()
 ) {
     private val scheduler = AceLiveWindowScheduler(maxInFlightPerPeer)
+    private val requestAssignedAtMillis = mutableMapOf<Long, Long>()
     private val requestProgressAtMillis = mutableMapOf<Long, Long>()
+    private val requestAcceptedChunks = mutableMapOf<Long, Int>()
 
     private var observedNextNeeded: Long? = null
     private var lastProgressAtMillis: Long? = null
@@ -92,7 +107,7 @@ class AceLiveRecoveryCoordinator(
 
     fun updatePeer(window: AceLivePeerWindow): List<Long> {
         val requeued = scheduler.updatePeer(window)
-        requeued.forEach { piece -> requestProgressAtMillis.remove(piece) }
+        requeued.forEach(::forgetRequestState)
         return requeued
     }
 
@@ -102,7 +117,7 @@ class AceLiveRecoveryCoordinator(
 
     fun removePeer(peerId: Long): List<Long> {
         val requeued = scheduler.removePeer(peerId)
-        requeued.forEach { piece -> requestProgressAtMillis.remove(piece) }
+        requeued.forEach(::forgetRequestState)
         return requeued
     }
 
@@ -119,7 +134,9 @@ class AceLiveRecoveryCoordinator(
             maxInFlightPerPeer = maxInFlightPerPeer
         )
         assignments.forEach { assignment ->
+            requestAssignedAtMillis[assignment.piece] = nowMillis
             requestProgressAtMillis[assignment.piece] = nowMillis
+            requestAcceptedChunks[assignment.piece] = 0
         }
         return assignments
     }
@@ -133,6 +150,7 @@ class AceLiveRecoveryCoordinator(
         require(piece >= 0) { "piece must be non-negative" }
         if (scheduler.ownerOf(piece) != null && piece in requestProgressAtMillis) {
             requestProgressAtMillis[piece] = nowMillis
+            requestAcceptedChunks[piece] = (requestAcceptedChunks[piece] ?: 0) + 1
         }
     }
 
@@ -140,7 +158,7 @@ class AceLiveRecoveryCoordinator(
     fun complete(piece: Long) {
         require(piece >= 0) { "piece must be non-negative" }
         scheduler.complete(piece)
-        requestProgressAtMillis.remove(piece)
+        forgetRequestState(piece)
     }
 
     /**
@@ -161,7 +179,7 @@ class AceLiveRecoveryCoordinator(
         requestProgressAtMillis.keys
             .filter { it < nextNeeded }
             .toList()
-            .forEach { piece -> requestProgressAtMillis.remove(piece) }
+            .forEach(::forgetRequestState)
     }
 
     /**
@@ -209,9 +227,22 @@ class AceLiveRecoveryCoordinator(
 
         val timedOut = timedOutPieces.map { piece ->
             val previousPeer = scheduler.ownerOf(piece)
+            val assignmentAgeMillis = requestAssignedAtMillis[piece]?.let { assignedAt ->
+                elapsedSince(assignedAt, nowMillis)
+            }
+            val progressAgeMillis = requestProgressAtMillis[piece]?.let { lastProgressAt ->
+                elapsedSince(lastProgressAt, nowMillis)
+            }
+            val acceptedChunks = requestAcceptedChunks[piece] ?: 0
             scheduler.retry(piece)
-            requestProgressAtMillis.remove(piece)
-            AceLiveTimedOutRequest(piece = piece, previousPeerId = previousPeer)
+            forgetRequestState(piece)
+            AceLiveTimedOutRequest(
+                piece = piece,
+                previousPeerId = previousPeer,
+                acceptedChunks = acceptedChunks,
+                assignmentAgeMillis = assignmentAgeMillis,
+                progressAgeMillis = progressAgeMillis
+            )
         }
 
         val stalledFor = elapsedSince(lastProgressAtMillis ?: nowMillis, nowMillis)
@@ -270,6 +301,12 @@ class AceLiveRecoveryCoordinator(
 
             nextNeeded != previous -> onCursorAdvanced(nextNeeded, nowMillis)
         }
+    }
+
+    private fun forgetRequestState(piece: Long) {
+        requestAssignedAtMillis.remove(piece)
+        requestProgressAtMillis.remove(piece)
+        requestAcceptedChunks.remove(piece)
     }
 
     private fun validateClock(nowMillis: Long) {

@@ -37,12 +37,22 @@ class AceLiveProducerBoundaryDiagnosticsReporter(
         piece: Long? = null,
         disposition: String? = null,
         bytes: Long? = null,
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        acceptedChunks: Int? = null,
+        assignmentAgeMillis: Long? = null,
+        progressAgeMillis: Long? = null
     ) {
         require(sessionId >= 0L) { "sessionId must be non-negative" }
         require(peerId == null || peerId >= 0L) { "peerId must be non-negative" }
         require(piece == null || piece >= 0L) { "piece must be non-negative" }
         require(bytes == null || bytes >= 0L) { "bytes must be non-negative" }
+        require(acceptedChunks == null || acceptedChunks >= 0) { "acceptedChunks must be non-negative" }
+        require(assignmentAgeMillis == null || assignmentAgeMillis >= 0L) {
+            "assignmentAgeMillis must be non-negative"
+        }
+        require(progressAgeMillis == null || progressAgeMillis >= 0L) {
+            "progressAgeMillis must be non-negative"
+        }
 
         counts[stage] = (counts[stage] ?: 0L) + 1L
         val firstForStage = seenStages.add(stage)
@@ -61,7 +71,10 @@ class AceLiveProducerBoundaryDiagnosticsReporter(
                     peerId = peerId,
                     piece = piece,
                     disposition = disposition,
-                    bytes = bytes
+                    bytes = bytes,
+                    acceptedChunks = acceptedChunks,
+                    assignmentAgeMillis = assignmentAgeMillis,
+                    progressAgeMillis = progressAgeMillis
                 )
             )
         }
@@ -74,7 +87,10 @@ class AceLiveProducerBoundaryDiagnosticsReporter(
         peerId: Long?,
         piece: Long?,
         disposition: String?,
-        bytes: Long? = null
+        bytes: Long? = null,
+        acceptedChunks: Int? = null,
+        assignmentAgeMillis: Long? = null,
+        progressAgeMillis: Long? = null
     ): String = buildString {
         append("session=")
         append(sessionId)
@@ -88,6 +104,14 @@ class AceLiveProducerBoundaryDiagnosticsReporter(
         append(disposition ?: "none")
         append(" bytes=")
         append(bytes?.toString() ?: "none")
+        if (acceptedChunks != null || assignmentAgeMillis != null || progressAgeMillis != null) {
+            append(" accepted_chunks=")
+            append(acceptedChunks?.toString() ?: "none")
+            append(" assignment_age_ms=")
+            append(assignmentAgeMillis?.toString() ?: "none")
+            append(" progress_age_ms=")
+            append(progressAgeMillis?.toString() ?: "none")
+        }
         context?.let { correlation ->
             append(" startup_id=")
             append(correlation.startupId)
