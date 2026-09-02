@@ -528,7 +528,7 @@ class AceLiveTcpConnectionPool(
                     !runtime.stopRequested &&
                     !runtime.handshakeAcceptedAtLeastOnce
                 ) {
-                    connectFailureMemory.recordFinalPreHandshakeFailure(
+                    connectFailureMemory.recordFinalPostConnectPreHandshakeFailure(
                         swarmKey = runtime.swarmKey,
                         endpoint = runtime.endpoint,
                         nowMillis = clockMillis()
