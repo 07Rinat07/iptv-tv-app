@@ -9,6 +9,7 @@ import com.iptv.tv.core.database.dao.AllChannelsGroupCountRow
 import com.iptv.tv.core.database.dao.AllChannelsParentalSummaryRow
 import com.iptv.tv.core.database.dao.AllChannelsSummaryAggregateRow
 import com.iptv.tv.core.database.dao.AllChannelsSummaryPreviewRow
+import com.iptv.tv.core.database.dao.AllChannelsSummarySnapshot
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.ParentalChannelGateRow
 import com.iptv.tv.core.database.entity.ChannelEntity
@@ -40,8 +41,8 @@ import kotlinx.coroutines.flow.map
  * Adds the system-owned All channels aggregate on top of the existing virtual Favorites decorator.
  *
  * Normal Home/playlist observation uses scalar or narrow count projections. Explicit All-channels
- * browsing still materializes full channels, while its one-shot summary uses SQL aggregates plus
- * bounded group/preview reads unless dynamic parental keywords require a narrow projection scan.
+ * browsing still materializes full channels, while its one-shot summary uses a consistent bounded
+ * SQL snapshot unless dynamic parental keywords require a narrow projection scan.
  */
 @Singleton
 class VirtualAllChannelsPlaylistRepository @Inject constructor(
@@ -127,9 +128,7 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
         return AppResult.Success(
             loadVirtualAllChannelsSummary(
                 parentalGate = parentalGate.first(),
-                aggregate = favoriteChannelLookupDao::getAllChannelsSummaryAggregate,
-                topGroups = favoriteChannelLookupDao::getAllChannelsTopGroups,
-                previews = favoriteChannelLookupDao::getAllChannelsSummaryPreviews,
+                snapshot = favoriteChannelLookupDao::getAllChannelsSummarySnapshot,
                 parentalRows = favoriteChannelLookupDao::getAllChannelsParentalSummaryRows
             )
         )
@@ -165,9 +164,7 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
 
 internal suspend fun loadVirtualAllChannelsSummary(
     parentalGate: ParentalChannelGate,
-    aggregate: suspend () -> AllChannelsSummaryAggregateRow,
-    topGroups: suspend (Int) -> List<AllChannelsGroupCountRow>,
-    previews: suspend (Int) -> List<AllChannelsSummaryPreviewRow>,
+    snapshot: suspend (groupLimit: Int, previewLimit: Int) -> AllChannelsSummarySnapshot,
     parentalRows: suspend () -> List<AllChannelsParentalSummaryRow>
 ): PlaylistContentSummary {
     return if (parentalGate.blocksChannels) {
@@ -176,10 +173,14 @@ internal suspend fun loadVirtualAllChannelsSummary(
             parentalGate = parentalGate
         )
     } else {
+        val summarySnapshot = snapshot(
+            VIRTUAL_PLAYLIST_TOP_GROUP_LIMIT,
+            VIRTUAL_PLAYLIST_PREVIEW_LIMIT
+        )
         virtualAllChannelsSqlSummary(
-            aggregate = aggregate(),
-            topGroups = topGroups(VIRTUAL_PLAYLIST_TOP_GROUP_LIMIT),
-            previews = previews(VIRTUAL_PLAYLIST_PREVIEW_LIMIT)
+            aggregate = summarySnapshot.aggregate,
+            topGroups = summarySnapshot.topGroups,
+            previews = summarySnapshot.previews
         )
     }
 }
