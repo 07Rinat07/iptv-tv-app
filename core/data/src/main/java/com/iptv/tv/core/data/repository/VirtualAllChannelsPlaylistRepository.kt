@@ -5,12 +5,18 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.mapper.toModel
 import com.iptv.tv.core.data.settings.SettingsKeys
 import com.iptv.tv.core.data.settings.settingsDataStore
+import com.iptv.tv.core.database.dao.AllChannelsGroupCountRow
+import com.iptv.tv.core.database.dao.AllChannelsParentalSummaryRow
+import com.iptv.tv.core.database.dao.AllChannelsSummaryAggregateRow
+import com.iptv.tv.core.database.dao.AllChannelsSummaryPreviewRow
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.ParentalChannelGateRow
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.domain.repository.PlaylistRepository
 import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.Channel
+import com.iptv.tv.core.model.ChannelHealth
+import com.iptv.tv.core.model.ChannelPreview
 import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistContentSummary
@@ -19,6 +25,7 @@ import com.iptv.tv.core.model.PlaylistValidationReport
 import com.iptv.tv.core.model.VIRTUAL_ALL_CHANNELS_PLAYLIST_ID
 import com.iptv.tv.core.model.VIRTUAL_ALL_CHANNELS_SOURCE
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.PriorityQueue
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -32,9 +39,9 @@ import kotlinx.coroutines.flow.map
 /**
  * Adds the system-owned All channels aggregate on top of the existing virtual Favorites decorator.
  *
- * Normal Home/playlist observation must not materialize every ChannelEntity just to show the
- * aggregate count. The full catalog stream is subscribed only when the All-channels catalog (or
- * its detailed summary) is explicitly requested.
+ * Normal Home/playlist observation uses scalar or narrow count projections. Explicit All-channels
+ * browsing still materializes full channels, while its one-shot summary uses SQL aggregates plus
+ * bounded group/preview reads unless dynamic parental keywords require a narrow projection scan.
  */
 @Singleton
 class VirtualAllChannelsPlaylistRepository @Inject constructor(
@@ -57,10 +64,6 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
         visibleCount = favoriteChannelLookupDao::observeVisibleChannelCount,
         parentalRows = favoriteChannelLookupDao::observeVisibleParentalGateRows
     )
-
-    private val allChannelsSummary = allChannels
-        .map(::virtualAllChannelsSummary)
-        .shareVirtualAggregate(aggregateScope)
 
     override fun observePlaylists(): Flow<List<Playlist>> {
         return combine(
@@ -121,7 +124,15 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
         if (playlistId != VIRTUAL_ALL_CHANNELS_PLAYLIST_ID) {
             return delegate.getPlaylistContentSummary(playlistId)
         }
-        return AppResult.Success(allChannelsSummary.first())
+        return AppResult.Success(
+            loadVirtualAllChannelsSummary(
+                parentalGate = parentalGate.first(),
+                aggregate = favoriteChannelLookupDao::getAllChannelsSummaryAggregate,
+                topGroups = favoriteChannelLookupDao::getAllChannelsTopGroups,
+                previews = favoriteChannelLookupDao::getAllChannelsSummaryPreviews,
+                parentalRows = favoriteChannelLookupDao::getAllChannelsParentalSummaryRows
+            )
+        )
     }
 
     override suspend fun getPlaylistEpgWindow(
@@ -149,6 +160,27 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
                 )
             )
         }.distinctUntilChanged()
+    }
+}
+
+internal suspend fun loadVirtualAllChannelsSummary(
+    parentalGate: ParentalChannelGate,
+    aggregate: suspend () -> AllChannelsSummaryAggregateRow,
+    topGroups: suspend (Int) -> List<AllChannelsGroupCountRow>,
+    previews: suspend (Int) -> List<AllChannelsSummaryPreviewRow>,
+    parentalRows: suspend () -> List<AllChannelsParentalSummaryRow>
+): PlaylistContentSummary {
+    return if (parentalGate.blocksChannels) {
+        virtualAllChannelsParentalSummary(
+            rows = parentalRows(),
+            parentalGate = parentalGate
+        )
+    } else {
+        virtualAllChannelsSqlSummary(
+            aggregate = aggregate(),
+            topGroups = topGroups(VIRTUAL_PLAYLIST_TOP_GROUP_LIMIT),
+            previews = previews(VIRTUAL_PLAYLIST_PREVIEW_LIMIT)
+        )
     }
 }
 
@@ -231,5 +263,143 @@ internal fun virtualAllChannelsSummary(channels: List<Channel>): PlaylistContent
         previewComparator = compareBy<Channel> { it.playlistId }
             .thenBy { it.orderIndex }
             .thenBy { it.name }
+    )
+}
+
+internal fun virtualAllChannelsSqlSummary(
+    aggregate: AllChannelsSummaryAggregateRow,
+    topGroups: List<AllChannelsGroupCountRow>,
+    previews: List<AllChannelsSummaryPreviewRow>
+): PlaylistContentSummary {
+    return PlaylistContentSummary(
+        playlistId = VIRTUAL_ALL_CHANNELS_PLAYLIST_ID,
+        playlistName = "Все каналы",
+        sourceType = PlaylistSourceType.CUSTOM,
+        source = VIRTUAL_ALL_CHANNELS_SOURCE,
+        epgSourceUrl = null,
+        totalChannels = aggregate.totalChannels,
+        visibleChannels = aggregate.visibleChannels,
+        hiddenChannels = aggregate.hiddenChannels,
+        channelsWithLogo = aggregate.channelsWithLogo,
+        channelsWithTvgId = aggregate.channelsWithTvgId,
+        availableChannels = aggregate.availableChannels,
+        unstableChannels = aggregate.unstableChannels,
+        unavailableChannels = aggregate.unavailableChannels,
+        unknownHealthChannels = aggregate.unknownHealthChannels,
+        groupCount = aggregate.groupCount,
+        topGroups = topGroups.map { row -> row.groupName to row.channelCount },
+        channelPreviews = previews.map(::summaryPreview)
+    )
+}
+
+internal fun virtualAllChannelsParentalSummary(
+    rows: List<AllChannelsParentalSummaryRow>,
+    parentalGate: ParentalChannelGate
+): PlaylistContentSummary {
+    val groupCounts = mutableMapOf<String, Int>()
+    var totalChannels = 0
+    var visibleChannels = 0
+    var hiddenChannels = 0
+    var channelsWithLogo = 0
+    var channelsWithTvgId = 0
+    var availableChannels = 0
+    var unstableChannels = 0
+    var unavailableChannels = 0
+    var unknownHealthChannels = 0
+
+    val previewComparator = compareBy<AllChannelsParentalSummaryRow> { it.playlistId }
+        .thenBy { it.orderIndex }
+        .thenBy { it.name }
+        .thenBy { it.id }
+    val previewQueue = PriorityQueue(
+        VIRTUAL_PLAYLIST_PREVIEW_LIMIT,
+        previewComparator.reversed()
+    )
+
+    rows.forEach { row ->
+        if (
+            ParentalChannelFilter.isBlocked(
+                name = row.name,
+                groupName = row.groupName,
+                tvgId = row.tvgId,
+                gate = parentalGate
+            )
+        ) {
+            return@forEach
+        }
+
+        totalChannels++
+        if (row.isHidden) {
+            hiddenChannels++
+            return@forEach
+        }
+
+        visibleChannels++
+        if (!row.logo.isNullOrBlank()) channelsWithLogo++
+        if (!row.tvgId.isNullOrBlank()) channelsWithTvgId++
+        when (ChannelHealth.valueOf(row.health)) {
+            ChannelHealth.AVAILABLE -> availableChannels++
+            ChannelHealth.UNSTABLE -> unstableChannels++
+            ChannelHealth.UNAVAILABLE -> unavailableChannels++
+            ChannelHealth.UNKNOWN -> unknownHealthChannels++
+        }
+
+        row.groupName
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let { group -> groupCounts[group] = (groupCounts[group] ?: 0) + 1 }
+
+        if (previewQueue.size < VIRTUAL_PLAYLIST_PREVIEW_LIMIT) {
+            previewQueue.add(row)
+        } else if (previewComparator.compare(row, previewQueue.peek()) < 0) {
+            previewQueue.poll()
+            previewQueue.add(row)
+        }
+    }
+
+    return PlaylistContentSummary(
+        playlistId = VIRTUAL_ALL_CHANNELS_PLAYLIST_ID,
+        playlistName = "Все каналы",
+        sourceType = PlaylistSourceType.CUSTOM,
+        source = VIRTUAL_ALL_CHANNELS_SOURCE,
+        epgSourceUrl = null,
+        totalChannels = totalChannels,
+        visibleChannels = visibleChannels,
+        hiddenChannels = hiddenChannels,
+        channelsWithLogo = channelsWithLogo,
+        channelsWithTvgId = channelsWithTvgId,
+        availableChannels = availableChannels,
+        unstableChannels = unstableChannels,
+        unavailableChannels = unavailableChannels,
+        unknownHealthChannels = unknownHealthChannels,
+        groupCount = groupCounts.size,
+        topGroups = groupCounts.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .take(VIRTUAL_PLAYLIST_TOP_GROUP_LIMIT)
+            .map { it.key to it.value },
+        channelPreviews = previewQueue
+            .toList()
+            .sortedWith(previewComparator)
+            .map { row ->
+                ChannelPreview(
+                    id = row.id,
+                    name = row.name,
+                    group = row.groupName,
+                    logo = row.logo,
+                    health = ChannelHealth.valueOf(row.health),
+                    isHidden = row.isHidden
+                )
+            }
+    )
+}
+
+private fun summaryPreview(row: AllChannelsSummaryPreviewRow): ChannelPreview {
+    return ChannelPreview(
+        id = row.id,
+        name = row.name,
+        group = row.groupName,
+        logo = row.logo,
+        health = ChannelHealth.valueOf(row.health),
+        isHidden = row.isHidden
     )
 }
