@@ -1,5 +1,6 @@
 package com.iptv.tv.core.parser
 
+import java.io.StringReader
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -83,6 +84,21 @@ class M3uParserTest {
         assertTrue(result is ParseResult.Valid)
         val valid = result as ParseResult.Valid
         assertEquals(channels, valid.channels.size)
+    }
+
+    @Test
+    fun parsesReaderInputWithTheSameMetadataSemantics() {
+        val parser = M3uParser()
+        val raw = """
+            #EXTM3U url-tvg="https://epg.example/guide.xml"
+            #EXTINF:-1 tvg-id="archive" group-title="News" catchup="append" catchup-days="5",Archive News
+            https://example.com/archive.m3u8
+        """.trimIndent()
+
+        val fromString = parser.parse(playlistId = 11, raw = raw)
+        val fromReader = parser.parse(playlistId = 11, reader = StringReader(raw))
+
+        assertEquals(fromString, fromReader)
     }
 
     @Test
