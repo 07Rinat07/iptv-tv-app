@@ -78,14 +78,18 @@ class ReadyCatalogPlaylistRepository @Inject constructor(
                     return@withLock AppResult.Error("Ready playlist changed while refresh was pending")
                 }
 
-                val body = okHttpClient.newCall(Request.Builder().url(sourceUrl).build())
+                val parsed = okHttpClient.newCall(Request.Builder().url(sourceUrl).build())
                     .execute()
                     .use { response ->
                         if (!response.isSuccessful) error("HTTP ${response.code}")
-                        response.body?.string().orEmpty()
+                        parseM3uResponseBody(
+                            playlistId = playlistId,
+                            parser = parser,
+                            body = response.body
+                        )
                     }
 
-                when (val parsed = parser.parse(playlistId = playlistId, raw = body)) {
+                when (parsed) {
                     is ParseResult.Invalid -> {
                         logRefreshFailureBestEffort(playlistId, parsed.reason)
                         AppResult.Error(parsed.reason)
