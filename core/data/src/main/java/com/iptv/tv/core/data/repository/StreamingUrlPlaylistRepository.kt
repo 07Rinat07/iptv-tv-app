@@ -1,5 +1,7 @@
 package com.iptv.tv.core.data.repository
 
+import android.content.Context
+import android.net.Uri
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.common.toLogSummary
 import com.iptv.tv.core.data.mapper.toEntity
@@ -19,7 +21,10 @@ import com.iptv.tv.core.model.PlaylistImportReport
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.parser.M3uParser
 import com.iptv.tv.core.parser.ParseResult
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -37,22 +42,28 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 
 /**
- * Outermost playlist decorator for network M3U import paths.
+ * Outermost playlist decorator for streaming M3U import paths.
  *
- * Direct URL and Tvheadend M3U imports are handled here so the OkHttp response can stay open while
- * [M3uParser] consumes its Reader instead of first materializing the complete response as a String.
- * JSON-based provider protocols continue through the existing repository chain unchanged.
+ * Direct URL, Tvheadend and local file/content URI imports are handled here so their source stream
+ * can stay open while [M3uParser] consumes its Reader instead of first materializing the complete
+ * playlist as a String. JSON-based provider protocols continue through the existing repository chain.
  */
 @Singleton
 class StreamingUrlPlaylistRepository @Inject constructor(
     private val delegate: VirtualRecentChannelsPlaylistRepository,
-    private val importer: StreamingUrlPlaylistImporter
+    private val importer: StreamingUrlPlaylistImporter,
+    private val fileImporter: StreamingFilePlaylistImporter
 ) : PlaylistRepository by delegate {
     override suspend fun importFromUrl(
         url: String,
         name: String,
         catalogOrigin: CatalogOriginKind
     ): AppResult<PlaylistImportReport> = importer.importFromUrl(url, name, catalogOrigin)
+
+    override suspend fun importFromFile(
+        pathOrUri: String,
+        name: String
+    ): AppResult<PlaylistImportReport> = fileImporter.importFromFile(pathOrUri, name)
 
     override suspend fun importFromTvheadend(
         baseUrl: String,
@@ -149,7 +160,7 @@ class StreamingUrlPlaylistImporter @Inject constructor(
         }
     }
 
-    private suspend fun persistParsedPlaylist(
+    internal suspend fun persistParsedPlaylist(
         playlistName: String,
         sourceType: PlaylistSourceType,
         source: String,
@@ -395,6 +406,64 @@ class StreamingUrlPlaylistImporter @Inject constructor(
         const val HEALTH_CHECK_RETRIES = 2
         const val HEALTH_RETRY_DELAY_MS = 450L
         val RETRIABLE_HTTP_CODES = setOf(408, 429, 500, 502, 503, 504)
+    }
+}
+
+@Singleton
+class StreamingFilePlaylistImporter @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val parser: M3uParser,
+    private val persistence: StreamingUrlPlaylistImporter
+) {
+    suspend fun importFromFile(
+        pathOrUri: String,
+        name: String
+    ): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
+        if (pathOrUri.isBlank()) return@withContext AppResult.Error("File path/uri is empty")
+
+        val parsed = runCatching {
+            openPlaylistFileInputStream(
+                pathOrUri = pathOrUri,
+                contentUriOpener = { source ->
+                    context.contentResolver.openInputStream(Uri.parse(source))
+                }
+            ).use { input ->
+                input.bufferedReader().use { reader ->
+                    reader.mark(1)
+                    if (reader.read() == -1) {
+                        ParseResult.Invalid("Playlist content is empty")
+                    } else {
+                        reader.reset()
+                        parser.parse(playlistId = 0L, reader = reader)
+                    }
+                }
+            }
+        }.getOrElse { throwable ->
+            return@withContext AppResult.Error(
+                "Unable to read file: ${throwable.toLogSummary(maxDepth = 3)}",
+                throwable
+            )
+        }
+
+        persistence.persistParsedPlaylist(
+            playlistName = name,
+            sourceType = PlaylistSourceType.FILE,
+            source = pathOrUri,
+            catalogOrigin = CatalogOriginKind.LOCAL,
+            parsed = parsed
+        )
+    }
+}
+
+internal fun openPlaylistFileInputStream(
+    pathOrUri: String,
+    contentUriOpener: (String) -> InputStream?,
+    fileOpener: (String) -> InputStream = { source -> File(source).inputStream() }
+): InputStream {
+    return if (pathOrUri.startsWith("content://", ignoreCase = true)) {
+        contentUriOpener(pathOrUri) ?: error("Cannot open content uri")
+    } else {
+        fileOpener(pathOrUri)
     }
 }
 
