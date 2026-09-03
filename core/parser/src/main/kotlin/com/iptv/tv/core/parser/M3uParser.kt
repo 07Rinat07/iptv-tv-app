@@ -2,35 +2,48 @@ package com.iptv.tv.core.parser
 
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
+import java.io.BufferedReader
+import java.io.Reader
+import java.io.StringReader
 
 class M3uParser {
-    fun parse(playlistId: Long, raw: String): ParseResult {
-        val sanitizedRaw = raw.removePrefix(UTF8_BOM)
-        val normalizedStart = sanitizedRaw.trimStart()
-        val headerMissing = !normalizedStart.startsWith("#EXTM3U", ignoreCase = true)
-        val canRecoverMissingHeader = headerMissing && looksLikeHeaderlessPlaylist(sanitizedRaw)
-        if (headerMissing && !canRecoverMissingHeader) {
-            return ParseResult.Invalid("Missing #EXTM3U header")
-        }
+    fun parse(playlistId: Long, raw: String): ParseResult =
+        parse(playlistId = playlistId, reader = StringReader(raw))
 
-        val rawToParse = if (canRecoverMissingHeader) {
-            "#EXTM3U\n$sanitizedRaw"
-        } else {
-            sanitizedRaw
-        }
-
-        val lines = rawToParse.lineSequence().map { it.trim() }.toList()
-        val epgUrls = parseHeaderEpgUrls(lines)
+    fun parse(playlistId: Long, reader: Reader): ParseResult {
+        val bufferedReader = if (reader is BufferedReader) reader else BufferedReader(reader)
+        val epgUrls = linkedSetOf<String>()
         val channels = mutableListOf<Channel>()
         val catchUpByChannelOrderIndex = linkedMapOf<Int, ChannelCatchUpMetadata>()
-        val warnings = mutableListOf<String>()
-        if (canRecoverMissingHeader) {
-            warnings += "Missing #EXTM3U header; auto-added"
-        }
+        val parseWarnings = mutableListOf<String>()
         var currentMeta: ExtInfMeta? = null
-        var index = 0
+        var channelIndex = 0
+        var sourceLineNumber = 0
+        var headerMissing: Boolean? = null
+        var hasExtInf = false
+        var hasStreamUrl = false
 
-        for ((lineIndex, line) in lines.withIndex()) {
+        while (true) {
+            val rawLine = bufferedReader.readLine() ?: break
+            sourceLineNumber += 1
+            val lineWithoutBom = if (sourceLineNumber == 1) rawLine.removePrefix(UTF8_BOM) else rawLine
+            val line = lineWithoutBom.trim()
+
+            if (headerMissing == null && line.isNotBlank()) {
+                headerMissing = !line.startsWith("#EXTM3U", ignoreCase = true)
+            }
+
+            if (line.startsWith("#EXTINF", ignoreCase = true)) {
+                hasExtInf = true
+            }
+            if (line.isNotBlank() && !line.startsWith("#") && isLikelyStreamUrl(line)) {
+                hasStreamUrl = true
+            }
+            if (line.startsWith("#EXTM3U", ignoreCase = true)) {
+                epgUrls += parseHeaderEpgUrls(line)
+            }
+
+            val effectiveLineNumber = sourceLineNumber + if (headerMissing == true) 1 else 0
             when {
                 line.startsWith("#EXTINF", ignoreCase = true) -> currentMeta = parseMeta(line)
                 line.startsWith("#") || line.isBlank() -> Unit
@@ -46,25 +59,37 @@ class M3uParser {
                             logo = meta.logo,
                             streamUrl = line,
                             health = ChannelHealth.UNKNOWN,
-                            orderIndex = index,
+                            orderIndex = channelIndex,
                             isHidden = false,
                             catchUp = meta.catchUp
                         )
-                        meta.catchUp?.let { catchUpByChannelOrderIndex[index] = it }
-                        index += 1
+                        meta.catchUp?.let { catchUpByChannelOrderIndex[channelIndex] = it }
+                        channelIndex += 1
                     } else {
-                        warnings += "Line ${lineIndex + 1}: URL without #EXTINF skipped"
+                        parseWarnings += "Line $effectiveLineNumber: URL without #EXTINF skipped"
                     }
                     currentMeta = null
                 }
                 else -> {
                     if (currentMeta != null) {
-                        warnings += "Line ${lineIndex + 1}: invalid URL for channel '${currentMeta.name}'"
+                        parseWarnings += "Line $effectiveLineNumber: invalid URL for channel '${currentMeta.name}'"
                         currentMeta = null
                     }
                 }
             }
         }
+
+        val isHeaderMissing = headerMissing != false
+        val canRecoverMissingHeader = isHeaderMissing && hasExtInf && hasStreamUrl
+        if (isHeaderMissing && !canRecoverMissingHeader) {
+            return ParseResult.Invalid("Missing #EXTM3U header")
+        }
+
+        val warnings = mutableListOf<String>()
+        if (canRecoverMissingHeader) {
+            warnings += "Missing #EXTM3U header; auto-added"
+        }
+        warnings += parseWarnings
 
         if (currentMeta != null) {
             warnings += "Playlist ends with #EXTINF entry without URL"
@@ -77,7 +102,7 @@ class M3uParser {
         return ParseResult.Valid(
             channels = channels,
             warnings = warnings,
-            epgUrls = epgUrls,
+            epgUrls = epgUrls.toList(),
             catchUpByChannelOrderIndex = catchUpByChannelOrderIndex
         )
     }
@@ -154,33 +179,26 @@ class M3uParser {
             name to value
         }
 
-    private fun parseHeaderEpgUrls(lines: List<String>): List<String> {
-        val attributeRegex = Regex(
-            pattern = """\b(?:url-tvg|x-tvg-url|tvg-url)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+))""",
-            option = RegexOption.IGNORE_CASE
-        )
-        val httpUrlRegex = Regex("""https?://[^,;\s"']+""", RegexOption.IGNORE_CASE)
-        return lines
-            .asSequence()
-            .filter { it.startsWith("#EXTM3U", ignoreCase = true) }
-            .flatMap { line ->
-                attributeRegex.findAll(line).flatMap { match ->
-                    val rawValue = match.groupValues
-                        .drop(1)
-                        .firstOrNull { it.isNotBlank() }
-                        .orEmpty()
-                        .trim()
-                    val urls = httpUrlRegex.findAll(rawValue).map { it.value.trim() }.toList()
-                    if (urls.isNotEmpty()) urls.asSequence() else rawValue
+    private fun parseHeaderEpgUrls(line: String): List<String> =
+        EPG_ATTRIBUTE_REGEX.findAll(line)
+            .flatMap { match ->
+                val rawValue = match.groupValues
+                    .drop(1)
+                    .firstOrNull { it.isNotBlank() }
+                    .orEmpty()
+                    .trim()
+                val urls = HTTP_URL_REGEX.findAll(rawValue).map { it.value.trim() }.toList()
+                if (urls.isNotEmpty()) {
+                    urls.asSequence()
+                } else {
+                    rawValue
                         .split(',', ';')
                         .asSequence()
                         .map(String::trim)
                         .filter { value -> value.startsWith("http://", true) || value.startsWith("https://", true) }
                 }
             }
-            .distinct()
             .toList()
-    }
 
     private fun isLikelyStreamUrl(raw: String): Boolean {
         val normalized = raw.trim()
@@ -188,7 +206,12 @@ class M3uParser {
         if (normalized.contains(' ')) return false
 
         val scheme = normalized.substringBefore(':').lowercase()
-        return scheme in setOf(
+        return scheme in STREAM_SCHEMES
+    }
+
+    private companion object {
+        const val UTF8_BOM = "\uFEFF"
+        val STREAM_SCHEMES = setOf(
             "http",
             "https",
             "rtsp",
@@ -201,25 +224,15 @@ class M3uParser {
             "acestream",
             "sop"
         )
-    }
-
-    private fun looksLikeHeaderlessPlaylist(raw: String): Boolean {
-        val lines = raw.lineSequence().map { it.trim() }
-        val hasExtInf = lines.any { line -> line.startsWith("#EXTINF", ignoreCase = true) }
-        val hasStreamUrl = lines.any { line ->
-            line.isNotBlank() &&
-                !line.startsWith("#") &&
-                isLikelyStreamUrl(line)
-        }
-        return hasExtInf && hasStreamUrl
-    }
-
-    private companion object {
-        const val UTF8_BOM = "\uFEFF"
         val EXTINF_ATTRIBUTE_REGEX = Regex(
             pattern = """(?:^|\s)([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+))""",
             option = RegexOption.IGNORE_CASE
         )
+        val EPG_ATTRIBUTE_REGEX = Regex(
+            pattern = """\b(?:url-tvg|x-tvg-url|tvg-url)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+))""",
+            option = RegexOption.IGNORE_CASE
+        )
+        val HTTP_URL_REGEX = Regex("""https?://[^,;\s"']+""", RegexOption.IGNORE_CASE)
     }
 }
 
