@@ -1,5 +1,9 @@
 package com.iptv.tv.core.data.repository
 
+import com.iptv.tv.core.database.dao.AllChannelsGroupCountRow
+import com.iptv.tv.core.database.dao.AllChannelsParentalSummaryRow
+import com.iptv.tv.core.database.dao.AllChannelsSummaryAggregateRow
+import com.iptv.tv.core.database.dao.AllChannelsSummaryPreviewRow
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.Channel
@@ -9,6 +13,7 @@ import com.iptv.tv.core.model.VIRTUAL_ALL_CHANNELS_PLAYLIST_ID
 import com.iptv.tv.core.model.VIRTUAL_ALL_CHANNELS_SOURCE
 import com.iptv.tv.core.model.VIRTUAL_FAVORITES_PLAYLIST_ID
 import com.iptv.tv.core.model.isSystemVirtualPlaylistId
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -123,6 +128,141 @@ class VirtualAllChannelsPlaylistRepositoryTest {
     }
 
     @Test
+    fun summaryWithoutParentalBlockingUsesOnlyBoundedSqlReads() = runTest {
+        var aggregateReads = 0
+        var groupLimit = -1
+        var previewLimit = -1
+        var parentalRowReads = 0
+
+        val summary = loadVirtualAllChannelsSummary(
+            parentalGate = ParentalChannelGate(
+                enabled = false,
+                hideAdultChannels = true,
+                blockedKeywords = listOf("adult")
+            ),
+            aggregate = {
+                aggregateReads += 1
+                AllChannelsSummaryAggregateRow(
+                    totalChannels = 12_500,
+                    visibleChannels = 12_000,
+                    hiddenChannels = 500,
+                    channelsWithLogo = 10_000,
+                    channelsWithTvgId = 11_000,
+                    availableChannels = 9_000,
+                    unstableChannels = 1_000,
+                    unavailableChannels = 500,
+                    unknownHealthChannels = 1_500,
+                    groupCount = 250
+                )
+            },
+            topGroups = { limit ->
+                groupLimit = limit
+                listOf(AllChannelsGroupCountRow(groupName = "News", channelCount = 800))
+            },
+            previews = { limit ->
+                previewLimit = limit
+                listOf(
+                    AllChannelsSummaryPreviewRow(
+                        id = 10,
+                        name = "Alpha",
+                        groupName = "News",
+                        logo = null,
+                        health = ChannelHealth.AVAILABLE.name,
+                        isHidden = false
+                    )
+                )
+            },
+            parentalRows = {
+                parentalRowReads += 1
+                emptyList()
+            }
+        )
+
+        assertEquals(1, aggregateReads)
+        assertEquals(VIRTUAL_PLAYLIST_TOP_GROUP_LIMIT, groupLimit)
+        assertEquals(VIRTUAL_PLAYLIST_PREVIEW_LIMIT, previewLimit)
+        assertEquals(0, parentalRowReads)
+        assertEquals(12_500, summary.totalChannels)
+        assertEquals(12_000, summary.visibleChannels)
+        assertEquals(250, summary.groupCount)
+        assertEquals(listOf("News" to 800), summary.topGroups)
+        assertEquals(listOf(10L), summary.channelPreviews.map { it.id })
+    }
+
+    @Test
+    fun summaryWithParentalBlockingUsesOnlyNarrowSummaryRows() = runTest {
+        var aggregateReads = 0
+        var groupReads = 0
+        var previewReads = 0
+        var parentalRowReads = 0
+        val gate = ParentalChannelGate(
+            enabled = true,
+            hideAdultChannels = true,
+            blockedKeywords = listOf("adult", "18+")
+        )
+
+        val summary = loadVirtualAllChannelsSummary(
+            parentalGate = gate,
+            aggregate = {
+                aggregateReads += 1
+                error("aggregate SQL must not run while parental filtering is active")
+            },
+            topGroups = {
+                groupReads += 1
+                error("group SQL must not run while parental filtering is active")
+            },
+            previews = {
+                previewReads += 1
+                error("preview SQL must not run while parental filtering is active")
+            },
+            parentalRows = {
+                parentalRowReads += 1
+                listOf(
+                    parentalSummaryRow(
+                        id = 10,
+                        playlistId = 2,
+                        name = "Safe News",
+                        groupName = "News",
+                        health = ChannelHealth.AVAILABLE,
+                        orderIndex = 5,
+                        logo = "https://example.com/safe.png",
+                        tvgId = "safe.news"
+                    ),
+                    parentalSummaryRow(
+                        id = 11,
+                        playlistId = 1,
+                        name = "Adult Cinema",
+                        groupName = "Movies",
+                        health = ChannelHealth.UNSTABLE,
+                        orderIndex = 2
+                    ),
+                    parentalSummaryRow(
+                        id = 12,
+                        playlistId = 1,
+                        name = "Hidden Kids",
+                        groupName = "Family",
+                        health = ChannelHealth.UNKNOWN,
+                        orderIndex = 1,
+                        isHidden = true
+                    )
+                )
+            }
+        )
+
+        assertEquals(0, aggregateReads)
+        assertEquals(0, groupReads)
+        assertEquals(0, previewReads)
+        assertEquals(1, parentalRowReads)
+        assertEquals(2, summary.totalChannels)
+        assertEquals(1, summary.visibleChannels)
+        assertEquals(1, summary.hiddenChannels)
+        assertEquals(1, summary.channelsWithLogo)
+        assertEquals(1, summary.channelsWithTvgId)
+        assertEquals(listOf("News" to 1), summary.topGroups)
+        assertEquals(listOf(10L), summary.channelPreviews.map { it.id })
+    }
+
+    @Test
     fun systemVirtualPlaylistPredicateRecognizesOnlyReservedAggregateIds() {
         assertTrue(isSystemVirtualPlaylistId(VIRTUAL_ALL_CHANNELS_PLAYLIST_ID))
         assertTrue(isSystemVirtualPlaylistId(VIRTUAL_FAVORITES_PLAYLIST_ID))
@@ -168,6 +308,28 @@ class VirtualAllChannelsPlaylistRepositoryTest {
         logo = logo,
         streamUrl = "https://example.com/$id.m3u8",
         health = health,
+        orderIndex = orderIndex,
+        isHidden = isHidden
+    )
+
+    private fun parentalSummaryRow(
+        id: Long,
+        playlistId: Long,
+        name: String,
+        groupName: String?,
+        health: ChannelHealth,
+        orderIndex: Int,
+        tvgId: String? = null,
+        logo: String? = null,
+        isHidden: Boolean = false
+    ): AllChannelsParentalSummaryRow = AllChannelsParentalSummaryRow(
+        id = id,
+        playlistId = playlistId,
+        tvgId = tvgId,
+        name = name,
+        groupName = groupName,
+        logo = logo,
+        health = health.name,
         orderIndex = orderIndex,
         isHidden = isHidden
     )
