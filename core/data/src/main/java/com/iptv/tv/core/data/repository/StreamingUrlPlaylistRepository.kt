@@ -183,20 +183,6 @@ class StreamingUrlPlaylistImporter @Inject constructor(
             }
 
             is ParseResult.Valid -> {
-                val deduplicated = deduplicateUrlImportChannels(parsed.channels)
-                val enrichedLogos = deduplicated.map { channel ->
-                    if (!channel.logo.isNullOrBlank()) {
-                        channel
-                    } else {
-                        channel.copy(
-                            logo = logoCatalogResolver.resolve(
-                                name = channel.name,
-                                tvgId = channel.tvgId,
-                                playlistSource = source
-                            )?.url
-                        )
-                    }
-                }
                 val playlistId = playlistDao.insertPlaylist(
                     PlaylistEntity(
                         name = playlistName,
@@ -210,11 +196,22 @@ class StreamingUrlPlaylistImporter @Inject constructor(
                         catalogOrigin = catalogOrigin.name
                     )
                 )
-                val prepared = enrichedLogos.mapIndexed { index, channel ->
-                    channel.copy(playlistId = playlistId, orderIndex = index)
+                var importedCount = 0
+                prepareUrlImportEntityChunks(
+                    channels = parsed.channels,
+                    playlistId = playlistId,
+                    chunkSize = DB_INSERT_CHUNK,
+                    resolveLogo = { channel ->
+                        logoCatalogResolver.resolve(
+                            name = channel.name,
+                            tvgId = channel.tvgId,
+                            playlistSource = source
+                        )?.url
+                    }
+                ).forEach { chunk ->
+                    importedCount += chunk.size
+                    channelDao.insertAll(chunk)
                 }
-                prepared.chunked(DB_INSERT_CHUNK)
-                    .forEach { chunk -> channelDao.insertAll(chunk.map { it.toEntity() }) }
 
                 val storedChannels = channelDao.getChannels(playlistId)
                 inheritGlobalFavorites(storedChannels)
@@ -225,8 +222,8 @@ class StreamingUrlPlaylistImporter @Inject constructor(
                         playlistId = playlistId,
                         status = "imported",
                         message =
-                            "Imported ${prepared.size}/${parsed.channels.size}, " +
-                                "duplicates removed=${parsed.channels.size - prepared.size}, " +
+                            "Imported $importedCount/${parsed.channels.size}, " +
+                                "duplicates removed=${parsed.channels.size - importedCount}, " +
                                 "warnings=${parsed.warnings.size}",
                         createdAt = System.currentTimeMillis()
                     )
@@ -235,8 +232,8 @@ class StreamingUrlPlaylistImporter @Inject constructor(
                     PlaylistImportReport(
                         playlistId = playlistId,
                         totalParsed = parsed.channels.size,
-                        totalImported = prepared.size,
-                        removedDuplicates = parsed.channels.size - prepared.size,
+                        totalImported = importedCount,
+                        removedDuplicates = parsed.channels.size - importedCount,
                         warnings = parsed.warnings,
                         autoChecked = quickStats.totalChecked,
                         available = quickStats.available,
@@ -467,24 +464,53 @@ internal fun openPlaylistFileInputStream(
     }
 }
 
-internal fun deduplicateUrlImportChannels(channels: List<Channel>): List<Channel> {
-    val byUrl = linkedMapOf<String, Channel>()
-    channels.forEach { channel ->
-        val key = channel.streamUrl.trim().lowercase(Locale.ROOT)
-        if (!byUrl.containsKey(key)) byUrl[key] = channel
+internal fun prepareUrlImportEntityChunks(
+    channels: List<Channel>,
+    playlistId: Long,
+    chunkSize: Int,
+    resolveLogo: (Channel) -> String?
+): Sequence<List<ChannelEntity>> {
+    require(chunkSize > 0) { "chunkSize must be positive" }
+    return sequence {
+        var orderIndex = 0
+        var batch = ArrayList<ChannelEntity>(chunkSize)
+        for (channel in uniqueUrlImportChannels(channels)) {
+            val enriched = if (!channel.logo.isNullOrBlank()) {
+                channel
+            } else {
+                channel.copy(logo = resolveLogo(channel))
+            }
+            batch += enriched
+                .copy(playlistId = playlistId, orderIndex = orderIndex)
+                .toEntity()
+            orderIndex += 1
+            if (batch.size == chunkSize) {
+                yield(batch)
+                batch = ArrayList(chunkSize)
+            }
+        }
+        if (batch.isNotEmpty()) yield(batch)
     }
+}
 
-    val byIdAndName = linkedMapOf<String, Channel>()
-    byUrl.values.forEach { channel ->
+internal fun deduplicateUrlImportChannels(channels: List<Channel>): List<Channel> =
+    uniqueUrlImportChannels(channels).toList()
+
+private fun uniqueUrlImportChannels(channels: List<Channel>): Sequence<Channel> = sequence {
+    val seenUrls = hashSetOf<String>()
+    val seenIdentities = hashSetOf<String>()
+    for (channel in channels) {
+        val normalizedUrl = channel.streamUrl.trim().lowercase(Locale.ROOT)
+        if (!seenUrls.add(normalizedUrl)) continue
+
         val normalizedTvgId = channel.tvgId.orEmpty().trim().lowercase(Locale.ROOT)
-        val key = if (normalizedTvgId.isNotEmpty()) {
+        val identity = if (normalizedTvgId.isNotEmpty()) {
             "$normalizedTvgId::${channel.name.trim().lowercase(Locale.ROOT)}"
         } else {
-            "__url__::${channel.streamUrl.trim().lowercase(Locale.ROOT)}"
+            "__url__::$normalizedUrl"
         }
-        if (!byIdAndName.containsKey(key)) byIdAndName[key] = channel
+        if (seenIdentities.add(identity)) yield(channel)
     }
-    return byIdAndName.values.toList()
 }
 
 private data class UrlImportHealthStats(
