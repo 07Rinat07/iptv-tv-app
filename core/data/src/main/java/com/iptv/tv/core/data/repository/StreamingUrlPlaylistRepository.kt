@@ -31,15 +31,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import okhttp3.Credentials
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
 /**
- * Outermost playlist decorator for the generic URL import path.
+ * Outermost playlist decorator for network M3U import paths.
  *
- * Provider protocols continue through the existing repository chain. Only a direct URL M3U import
- * is handled here so the OkHttp response can stay open while [M3uParser] consumes its Reader instead
- * of first materializing the complete response as a String.
+ * Direct URL and Tvheadend M3U imports are handled here so the OkHttp response can stay open while
+ * [M3uParser] consumes its Reader instead of first materializing the complete response as a String.
+ * JSON-based provider protocols continue through the existing repository chain unchanged.
  */
 @Singleton
 class StreamingUrlPlaylistRepository @Inject constructor(
@@ -51,6 +53,13 @@ class StreamingUrlPlaylistRepository @Inject constructor(
         name: String,
         catalogOrigin: CatalogOriginKind
     ): AppResult<PlaylistImportReport> = importer.importFromUrl(url, name, catalogOrigin)
+
+    override suspend fun importFromTvheadend(
+        baseUrl: String,
+        username: String?,
+        password: String?,
+        name: String
+    ): AppResult<PlaylistImportReport> = importer.importFromTvheadend(baseUrl, username, password, name)
 }
 
 @Singleton
@@ -86,8 +95,9 @@ class StreamingUrlPlaylistImporter @Inject constructor(
                         body = response.body
                     )
                 }
-            persistParsedUrlPlaylist(
+            persistParsedPlaylist(
                 playlistName = name,
+                sourceType = PlaylistSourceType.URL,
                 source = url,
                 catalogOrigin = catalogOrigin,
                 parsed = parsed
@@ -100,8 +110,48 @@ class StreamingUrlPlaylistImporter @Inject constructor(
         }
     }
 
-    private suspend fun persistParsedUrlPlaylist(
+    suspend fun importFromTvheadend(
+        baseUrl: String,
+        username: String?,
+        password: String?,
+        name: String
+    ): AppResult<PlaylistImportReport> = withContext(Dispatchers.IO) {
+        val playlistUrl = normalizeTvheadendPlaylistUrl(baseUrl)
+        if (playlistUrl.isBlank()) return@withContext AppResult.Error("Tvheadend URL is empty")
+
+        runCatching {
+            val request = Request.Builder()
+                .url(playlistUrl)
+                .applyTvheadendBasicAuth(username, password)
+                .build()
+            val parsed = okHttpClient.newCall(request)
+                .execute()
+                .use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    parseM3uResponseBody(
+                        playlistId = 0L,
+                        parser = parser,
+                        body = response.body
+                    )
+                }
+            persistParsedPlaylist(
+                playlistName = name,
+                sourceType = PlaylistSourceType.TVHEADEND,
+                source = playlistUrl,
+                catalogOrigin = CatalogOriginKind.PROVIDER,
+                parsed = parsed
+            )
+        }.getOrElse { throwable ->
+            AppResult.Error(
+                "Unable to import Tvheadend: ${throwable.toLogSummary(maxDepth = 4)}",
+                throwable
+            )
+        }
+    }
+
+    private suspend fun persistParsedPlaylist(
         playlistName: String,
+        sourceType: PlaylistSourceType,
         source: String,
         catalogOrigin: CatalogOriginKind,
         parsed: ParseResult
@@ -139,7 +189,7 @@ class StreamingUrlPlaylistImporter @Inject constructor(
                 val playlistId = playlistDao.insertPlaylist(
                     PlaylistEntity(
                         name = playlistName,
-                        sourceType = PlaylistSourceType.URL.name,
+                        sourceType = sourceType.name,
                         source = source,
                         epgSourceUrl = parsed.epgUrls.firstOrNull(),
                         scheduleHours = 12,
@@ -306,6 +356,36 @@ class StreamingUrlPlaylistImporter @Inject constructor(
             normalized.contains("mpegurl") ||
             normalized.contains("dash+xml") ||
             normalized.contains("octet-stream")
+    }
+
+    private fun normalizeTvheadendPlaylistUrl(baseUrl: String): String {
+        val trimmed = baseUrl.trim()
+        if (trimmed.isBlank()) return ""
+        val url = trimmed.toHttpUrl()
+        val path = url.encodedPath.trimEnd('/')
+        if (
+            path.endsWith(".m3u", ignoreCase = true) ||
+            path.endsWith(".m3u8", ignoreCase = true) ||
+            path.contains("/playlist", ignoreCase = true)
+        ) {
+            return url.toString()
+        }
+        return url.newBuilder()
+            .encodedPath(path + "/playlist/channels.m3u")
+            .build()
+            .toString()
+    }
+
+    private fun Request.Builder.applyTvheadendBasicAuth(
+        username: String?,
+        password: String?
+    ): Request.Builder {
+        val normalizedUsername = username?.trim().orEmpty()
+        val normalizedPassword = password?.trim().orEmpty()
+        if (normalizedUsername.isNotBlank() || normalizedPassword.isNotBlank()) {
+            header("Authorization", Credentials.basic(normalizedUsername, normalizedPassword))
+        }
+        return this
     }
 
     private companion object {
