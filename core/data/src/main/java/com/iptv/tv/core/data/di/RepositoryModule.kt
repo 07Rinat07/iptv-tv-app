@@ -16,7 +16,6 @@ import com.iptv.tv.core.data.repository.ScannerRepositoryImpl
 import com.iptv.tv.core.data.repository.SettingsRepositoryImpl
 import com.iptv.tv.core.data.repository.StreamingUrlPlaylistRepository
 import com.iptv.tv.core.data.repository.TvHomeIntegrationRepositoryImpl
-import com.iptv.tv.core.data.repository.VirtualRecentChannelsPlaylistRepository
 import com.iptv.tv.core.domain.repository.ChannelMetadataRepository
 import com.iptv.tv.core.domain.repository.DiagnosticsRepository
 import com.iptv.tv.core.domain.repository.DownloadRepository
