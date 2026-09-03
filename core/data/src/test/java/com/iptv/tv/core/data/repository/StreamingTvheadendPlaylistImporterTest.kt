@@ -58,7 +58,8 @@ class StreamingTvheadendPlaylistImporterTest {
             val insertedChunks = mutableListOf<List<ChannelEntity>>()
             coEvery { playlistDao.insertPlaylist(capture(insertedPlaylist)) } returns 91L
             coEvery { channelDao.insertAll(capture(insertedChunks)) } just Runs
-            coEvery { channelDao.getChannels(91L) } returns emptyList()
+            coEvery { favoriteDao.getFavorites() } returns emptyList()
+            coEvery { channelDao.getChannelsLimited(91L, 200) } returns emptyList()
             coEvery { syncLogDao.insert(any()) } just Runs
             every { logoCatalogResolver.resolve(any(), any(), any()) } returns null
 
@@ -119,7 +120,8 @@ class StreamingTvheadendPlaylistImporterTest {
             val insertedPlaylist = slot<PlaylistEntity>()
             coEvery { playlistDao.insertPlaylist(capture(insertedPlaylist)) } returns 92L
             coEvery { channelDao.insertAll(any()) } just Runs
-            coEvery { channelDao.getChannels(92L) } returns emptyList()
+            coEvery { favoriteDao.getFavorites() } returns emptyList()
+            coEvery { channelDao.getChannelsLimited(92L, 200) } returns emptyList()
             coEvery { syncLogDao.insert(any()) } just Runs
 
             val importer = StreamingUrlPlaylistImporter(
