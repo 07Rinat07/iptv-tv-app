@@ -22,6 +22,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -50,17 +52,11 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
         }
         .shareVirtualAggregate(aggregateScope)
 
-    private val allChannelCount = combine(
-        favoriteChannelLookupDao.observeVisibleChannelCount(),
-        favoriteChannelLookupDao.observeVisibleParentalGateRows(),
-        parentalGate
-    ) { visibleCount, parentalRows, gate ->
-        virtualAllChannelCount(
-            visibleCount = visibleCount,
-            parentalRows = parentalRows,
-            parentalGate = gate
-        )
-    }.distinctUntilChanged()
+    private val allChannelCount = observeVirtualAllChannelCount(
+        parentalGate = parentalGate,
+        visibleCount = favoriteChannelLookupDao::observeVisibleChannelCount,
+        parentalRows = favoriteChannelLookupDao::observeVisibleParentalGateRows
+    )
 
     private val allChannelsSummary = allChannels
         .map(::virtualAllChannelsSummary)
@@ -155,6 +151,30 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
         }.distinctUntilChanged()
     }
 }
+
+internal fun observeVirtualAllChannelCount(
+    parentalGate: Flow<ParentalChannelGate>,
+    visibleCount: () -> Flow<Int>,
+    parentalRows: () -> Flow<List<ParentalChannelGateRow>>
+): Flow<Int> = channelFlow {
+    parentalGate.collectLatest { gate ->
+        if (!gate.blocksChannels) {
+            visibleCount().collect { count ->
+                send(count.coerceAtLeast(0))
+            }
+        } else {
+            parentalRows().collect { rows ->
+                send(
+                    virtualAllChannelCount(
+                        visibleCount = 0,
+                        parentalRows = rows,
+                        parentalGate = gate
+                    )
+                )
+            }
+        }
+    }
+}.distinctUntilChanged()
 
 internal fun virtualAllChannelCount(
     visibleCount: Int,
