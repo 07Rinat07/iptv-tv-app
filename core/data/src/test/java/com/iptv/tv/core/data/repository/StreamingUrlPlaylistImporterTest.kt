@@ -10,6 +10,7 @@ import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.parser.M3uParser
 import io.mockk.Runs
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -53,7 +54,8 @@ class StreamingUrlPlaylistImporterTest {
             val insertedChunks = mutableListOf<List<ChannelEntity>>()
             coEvery { playlistDao.insertPlaylist(any()) } returns 77L
             coEvery { channelDao.insertAll(capture(insertedChunks)) } just Runs
-            coEvery { channelDao.getChannels(77L) } returns emptyList()
+            coEvery { channelDao.getChannelsLimited(77L, 200) } returns emptyList()
+            coEvery { favoriteDao.getFavorites() } returns emptyList()
             coEvery { syncLogDao.insert(any()) } just Runs
             every { logoCatalogResolver.resolve(any(), any(), any()) } returns null
 
@@ -84,6 +86,9 @@ class StreamingUrlPlaylistImporterTest {
             assertEquals("Channel ${channelCount - 1}", last.name)
             assertEquals(1, server.requestCount)
             assertEquals("/large.m3u", server.takeRequest().path)
+            coVerify(exactly = 1) { favoriteDao.getFavorites() }
+            coVerify(exactly = 0) { channelDao.getChannels(77L) }
+            coVerify(exactly = 1) { channelDao.getChannelsLimited(77L, 200) }
         }
     }
 

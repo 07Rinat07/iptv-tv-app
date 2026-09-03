@@ -213,9 +213,13 @@ class StreamingUrlPlaylistImporter @Inject constructor(
                     channelDao.insertAll(chunk)
                 }
 
-                val storedChannels = channelDao.getChannels(playlistId)
-                inheritGlobalFavorites(storedChannels)
-                val quickStats = probeAndPersistHealth(storedChannels.take(AUTO_HEALTH_CHECK_LIMIT))
+                inheritGlobalFavorites(playlistId)
+                val quickStats = probeAndPersistHealth(
+                    channelDao.getChannelsLimited(
+                        playlistId = playlistId,
+                        limit = AUTO_HEALTH_CHECK_LIMIT
+                    )
+                )
 
                 syncLogDao.insert(
                     SyncLogEntity(
@@ -245,8 +249,7 @@ class StreamingUrlPlaylistImporter @Inject constructor(
         }
     }
 
-    private suspend fun inheritGlobalFavorites(channels: List<ChannelEntity>) {
-        if (channels.isEmpty()) return
+    private suspend fun inheritGlobalFavorites(playlistId: Long) {
         val favoriteChannelIds = favoriteDao.getFavorites().map { it.channelId }
         if (favoriteChannelIds.isEmpty()) return
 
@@ -255,6 +258,9 @@ class StreamingUrlPlaylistImporter @Inject constructor(
                 GlobalFavoriteIdentity.key(channel.tvgId, channel.name, channel.streamUrl)
             }
         if (favoriteIdentities.isEmpty()) return
+
+        val channels = channelDao.getChannels(playlistId)
+        if (channels.isEmpty()) return
 
         val inherited = channels
             .filter { channel ->

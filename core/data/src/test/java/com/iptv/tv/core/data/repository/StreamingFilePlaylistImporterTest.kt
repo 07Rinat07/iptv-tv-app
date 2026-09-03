@@ -59,7 +59,8 @@ class StreamingFilePlaylistImporterTest {
             val insertedChunks = mutableListOf<List<ChannelEntity>>()
             coEvery { playlistDao.insertPlaylist(capture(insertedPlaylist)) } returns 101L
             coEvery { channelDao.insertAll(capture(insertedChunks)) } just Runs
-            coEvery { channelDao.getChannels(101L) } returns emptyList()
+            coEvery { favoriteDao.getFavorites() } returns emptyList()
+            coEvery { channelDao.getChannelsLimited(101L, 200) } returns emptyList()
             coEvery { syncLogDao.insert(any()) } just Runs
             every { logoCatalogResolver.resolve(any(), any(), any()) } returns null
 
