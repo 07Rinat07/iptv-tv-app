@@ -4,6 +4,7 @@ import com.iptv.tv.core.database.dao.AllChannelsGroupCountRow
 import com.iptv.tv.core.database.dao.AllChannelsParentalSummaryRow
 import com.iptv.tv.core.database.dao.AllChannelsSummaryAggregateRow
 import com.iptv.tv.core.database.dao.AllChannelsSummaryPreviewRow
+import com.iptv.tv.core.database.dao.AllChannelsSummarySnapshot
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.Channel
@@ -128,10 +129,10 @@ class VirtualAllChannelsPlaylistRepositoryTest {
     }
 
     @Test
-    fun summaryWithoutParentalBlockingUsesOnlyBoundedSqlReads() = runTest {
-        var aggregateReads = 0
-        var groupLimit = -1
-        var previewLimit = -1
+    fun summaryWithoutParentalBlockingUsesSingleBoundedSnapshotRead() = runTest {
+        var snapshotReads = 0
+        var requestedGroupLimit = -1
+        var requestedPreviewLimit = -1
         var parentalRowReads = 0
 
         val summary = loadVirtualAllChannelsSummary(
@@ -140,35 +141,35 @@ class VirtualAllChannelsPlaylistRepositoryTest {
                 hideAdultChannels = true,
                 blockedKeywords = listOf("adult")
             ),
-            aggregate = {
-                aggregateReads += 1
-                AllChannelsSummaryAggregateRow(
-                    totalChannels = 12_500,
-                    visibleChannels = 12_000,
-                    hiddenChannels = 500,
-                    channelsWithLogo = 10_000,
-                    channelsWithTvgId = 11_000,
-                    availableChannels = 9_000,
-                    unstableChannels = 1_000,
-                    unavailableChannels = 500,
-                    unknownHealthChannels = 1_500,
-                    groupCount = 250
-                )
-            },
-            topGroups = { limit ->
-                groupLimit = limit
-                listOf(AllChannelsGroupCountRow(groupName = "News", channelCount = 800))
-            },
-            previews = { limit ->
-                previewLimit = limit
-                listOf(
-                    AllChannelsSummaryPreviewRow(
-                        id = 10,
-                        name = "Alpha",
-                        groupName = "News",
-                        logo = null,
-                        health = ChannelHealth.AVAILABLE.name,
-                        isHidden = false
+            snapshot = { groupLimit, previewLimit ->
+                snapshotReads += 1
+                requestedGroupLimit = groupLimit
+                requestedPreviewLimit = previewLimit
+                AllChannelsSummarySnapshot(
+                    aggregate = AllChannelsSummaryAggregateRow(
+                        totalChannels = 12_500,
+                        visibleChannels = 12_000,
+                        hiddenChannels = 500,
+                        channelsWithLogo = 10_000,
+                        channelsWithTvgId = 11_000,
+                        availableChannels = 9_000,
+                        unstableChannels = 1_000,
+                        unavailableChannels = 500,
+                        unknownHealthChannels = 1_500,
+                        groupCount = 250
+                    ),
+                    topGroups = listOf(
+                        AllChannelsGroupCountRow(groupName = "News", channelCount = 800)
+                    ),
+                    previews = listOf(
+                        AllChannelsSummaryPreviewRow(
+                            id = 10,
+                            name = "Alpha",
+                            groupName = "News",
+                            logo = null,
+                            health = ChannelHealth.AVAILABLE.name,
+                            isHidden = false
+                        )
                     )
                 )
             },
@@ -178,9 +179,9 @@ class VirtualAllChannelsPlaylistRepositoryTest {
             }
         )
 
-        assertEquals(1, aggregateReads)
-        assertEquals(VIRTUAL_PLAYLIST_TOP_GROUP_LIMIT, groupLimit)
-        assertEquals(VIRTUAL_PLAYLIST_PREVIEW_LIMIT, previewLimit)
+        assertEquals(1, snapshotReads)
+        assertEquals(VIRTUAL_PLAYLIST_TOP_GROUP_LIMIT, requestedGroupLimit)
+        assertEquals(VIRTUAL_PLAYLIST_PREVIEW_LIMIT, requestedPreviewLimit)
         assertEquals(0, parentalRowReads)
         assertEquals(12_500, summary.totalChannels)
         assertEquals(12_000, summary.visibleChannels)
@@ -191,9 +192,7 @@ class VirtualAllChannelsPlaylistRepositoryTest {
 
     @Test
     fun summaryWithParentalBlockingUsesOnlyNarrowSummaryRows() = runTest {
-        var aggregateReads = 0
-        var groupReads = 0
-        var previewReads = 0
+        var snapshotReads = 0
         var parentalRowReads = 0
         val gate = ParentalChannelGate(
             enabled = true,
@@ -203,17 +202,9 @@ class VirtualAllChannelsPlaylistRepositoryTest {
 
         val summary = loadVirtualAllChannelsSummary(
             parentalGate = gate,
-            aggregate = {
-                aggregateReads += 1
-                error("aggregate SQL must not run while parental filtering is active")
-            },
-            topGroups = {
-                groupReads += 1
-                error("group SQL must not run while parental filtering is active")
-            },
-            previews = {
-                previewReads += 1
-                error("preview SQL must not run while parental filtering is active")
+            snapshot = { _, _ ->
+                snapshotReads += 1
+                error("bounded SQL snapshot must not run while parental filtering is active")
             },
             parentalRows = {
                 parentalRowReads += 1
@@ -249,9 +240,7 @@ class VirtualAllChannelsPlaylistRepositoryTest {
             }
         )
 
-        assertEquals(0, aggregateReads)
-        assertEquals(0, groupReads)
-        assertEquals(0, previewReads)
+        assertEquals(0, snapshotReads)
         assertEquals(1, parentalRowReads)
         assertEquals(2, summary.totalChannels)
         assertEquals(1, summary.visibleChannels)
