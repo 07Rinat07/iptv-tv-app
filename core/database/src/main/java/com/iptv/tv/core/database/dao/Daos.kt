@@ -80,6 +80,9 @@ interface ChannelDao {
     @Query("SELECT * FROM channels WHERE playlistId = :playlistId ORDER BY orderIndex ASC")
     suspend fun getChannels(playlistId: Long): List<ChannelEntity>
 
+    @Query("SELECT * FROM channels WHERE playlistId = :playlistId ORDER BY orderIndex ASC LIMIT :limit")
+    suspend fun getChannelsLimited(playlistId: Long, limit: Int): List<ChannelEntity>
+
     @Query("SELECT * FROM channels")
     suspend fun getAllChannels(): List<ChannelEntity>
 
