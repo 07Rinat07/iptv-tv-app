@@ -84,7 +84,7 @@ internal fun virtualPlaylistContentSummary(
         groupCount = groupCounts.size,
         topGroups = groupCounts.entries
             .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
-            .take(10)
+            .take(VIRTUAL_PLAYLIST_TOP_GROUP_LIMIT)
             .map { it.key to it.value },
         channelPreviews = previewQueue
             .toList()
@@ -103,4 +103,5 @@ internal fun virtualPlaylistContentSummary(
     )
 }
 
+internal const val VIRTUAL_PLAYLIST_TOP_GROUP_LIMIT = 10
 internal const val VIRTUAL_PLAYLIST_PREVIEW_LIMIT = 50
