@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.FavoriteChannelEntity
 import com.iptv.tv.core.database.entity.FavoriteChannelVariantEntity
@@ -104,6 +105,13 @@ data class AllChannelsSummaryPreviewRow(
     val isHidden: Boolean
 )
 
+/** Consistent bounded summary components captured inside one Room read transaction. */
+data class AllChannelsSummarySnapshot(
+    val aggregate: AllChannelsSummaryAggregateRow,
+    val topGroups: List<AllChannelsGroupCountRow>,
+    val previews: List<AllChannelsSummaryPreviewRow>
+)
+
 /**
  * Narrow full-scan projection used only when dynamic parental keywords must be evaluated in Kotlin.
  * Stream URLs and catch-up payloads are intentionally excluded from this exceptional path.
@@ -189,6 +197,18 @@ interface FavoriteChannelLookupDao {
             "LIMIT :limit"
     )
     suspend fun getAllChannelsSummaryPreviews(limit: Int): List<AllChannelsSummaryPreviewRow>
+
+    @Transaction
+    suspend fun getAllChannelsSummarySnapshot(
+        groupLimit: Int,
+        previewLimit: Int
+    ): AllChannelsSummarySnapshot {
+        return AllChannelsSummarySnapshot(
+            aggregate = getAllChannelsSummaryAggregate(),
+            topGroups = getAllChannelsTopGroups(groupLimit),
+            previews = getAllChannelsSummaryPreviews(previewLimit)
+        )
+    }
 
     @Query(
         "SELECT id, playlistId, tvgId, name, groupName, logo, health, orderIndex, isHidden " +
