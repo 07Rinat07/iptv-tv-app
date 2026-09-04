@@ -1,6 +1,5 @@
 package com.iptv.tv.core.data.repository
 
-import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
@@ -23,7 +22,7 @@ import javax.inject.Singleton
 class FavoritesShareableExportService @Inject constructor(
     private val portableBackupService: FavoritesPortableBackupService,
     private val favoriteSnapshotDao: FavoriteSnapshotDao,
-    private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
+    private val favoriteLiveChannelResolver: FavoriteLiveChannelResolver,
     private val playlistDao: PlaylistDao
 ) {
     suspend fun export(format: FavoritesShareableExportFormat): FavoritesShareableExport {
@@ -33,7 +32,11 @@ class FavoritesShareableExportService @Inject constructor(
         portableBackupService.exportPortableBackup()
 
         val favorites = favoriteSnapshotDao.getFavoriteChannels()
-        val liveChannels = favoriteChannelLookupDao.getAllChannels()
+        val liveChannels = favoriteLiveChannelResolver.findMatchingChannels(
+            favorites.asSequence()
+                .map(FavoriteChannelEntity::logicalKey)
+                .toSet()
+        )
         val playlists = liveChannels
             .map(ChannelEntity::playlistId)
             .distinct()
