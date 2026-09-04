@@ -87,6 +87,7 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         every { settingsRepository.observeParentalControlSettings() } returns parentalSettings
         every { favoritesRepository.observeFavoriteCount() } returns flowOf(1)
         every { favoriteChannelLookupDao.observeChannelTableInvalidation() } returns flowOf(2)
+        every { favoriteSnapshotDao.observeFavoriteVariantCount() } returns flowOf(0)
         coEvery { favoriteChannelLookupDao.findChannelsByIds(any()) } returns
             listOf(adult.toEntity(), safe.toEntity())
         coEvery { favoriteSnapshotDao.findFavoritesByPreferredChannelIds(any()) } returns
@@ -176,6 +177,7 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         every { settingsRepository.observeParentalControlSettings() } returns flowOf(settings)
         every { favoritesRepository.observeFavoriteCount() } returns flowOf(0)
         every { favoriteChannelLookupDao.observeChannelTableInvalidation() } returns flowOf(0)
+        every { favoriteSnapshotDao.observeFavoriteVariantCount() } returns flowOf(0)
 
         val repository = VirtualRecentChannelsPlaylistRepository(
             delegate = delegate,
@@ -194,10 +196,63 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
 
         assertEquals(0, recent.channelCount)
         verify(exactly = 0) { delegate.observeChannels(any()) }
+        verify(exactly = 0) { favoriteSnapshotDao.observeFavoriteVariants() }
         coVerify(exactly = 0) { favoriteChannelLookupDao.findChannelsByIds(any()) }
         coVerify(exactly = 0) { favoriteSnapshotDao.findFavoritesByPreferredChannelIds(any()) }
         coVerify(exactly = 0) { favoriteSnapshotDao.findVariantsByLogicalKeys(any()) }
         coVerify(exactly = 0) { favoriteLiveChannelResolver.findMatchingChannels(any()) }
+    }
+
+    @Test
+    fun metadataCountReloadsWhenFavoriteVariantInvalidates() = runTest {
+        val favoriteVariantInvalidation = MutableStateFlow(0)
+        val historyItems = listOf(
+            history(id = 2, channelId = 10, playedAt = 200),
+            history(id = 1, channelId = 20, playedAt = 100)
+        )
+        val counts = mutableListOf<Int>()
+        var loads = 0
+
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            observeVirtualRecentChannelCount(
+                history = flowOf(historyItems),
+                parentalSettings = flowOf(
+                    ParentalControlSettings(
+                        enabled = false,
+                        pinConfigured = false,
+                        hideAdultChannels = true,
+                        blockedKeywords = emptyList()
+                    )
+                ),
+                channelInvalidation = flowOf(0),
+                favoriteInvalidation = flowOf(0),
+                favoriteVariantInvalidation = favoriteVariantInvalidation,
+                loadCandidates = {
+                    loads += 1
+                    RecentMetadataCandidates(
+                        allChannels = if (loads == 1) {
+                            listOf(channel(id = 10, playlistId = 1, name = "One"))
+                        } else {
+                            listOf(
+                                channel(id = 10, playlistId = 1, name = "One"),
+                                channel(id = 20, playlistId = 1, name = "Two")
+                            )
+                        },
+                        favoriteChannels = emptyList()
+                    )
+                }
+            ).take(2).toList(counts)
+        }
+
+        advanceUntilIdle()
+        assertEquals(listOf(1), counts)
+        assertEquals(1, loads)
+
+        favoriteVariantInvalidation.value = 1
+        advanceUntilIdle()
+
+        assertEquals(listOf(1, 2), counts)
+        assertEquals(2, loads)
     }
 
     @Test
