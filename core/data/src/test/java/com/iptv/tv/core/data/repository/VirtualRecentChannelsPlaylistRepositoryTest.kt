@@ -2,10 +2,10 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.mapper.toEntity
-import com.iptv.tv.core.database.dao.FavoriteChannelIdentityRow
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.entity.FavoriteChannelEntity
+import com.iptv.tv.core.database.entity.FavoriteChannelVariantEntity
 import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.HistoryRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
@@ -53,6 +53,7 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         val favoritesRepository = mockk<FavoritesRepository>()
         val favoriteChannelLookupDao = mockk<FavoriteChannelLookupDao>()
         val favoriteSnapshotDao = mockk<FavoriteSnapshotDao>()
+        val favoriteLiveChannelResolver = mockk<FavoriteLiveChannelResolver>()
         val adult = channel(id = 10, playlistId = 1, name = "Adult Cinema")
         val safe = channel(id = 20, playlistId = 1, name = "Kids")
         val orphanFavorite = channel(id = 30, playlistId = 77, name = "Orphan Favorite")
@@ -90,7 +91,8 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
             listOf(adult.toEntity(), safe.toEntity())
         coEvery { favoriteSnapshotDao.findFavoritesByPreferredChannelIds(any()) } returns
             listOf(orphanSnapshot)
-        coEvery { favoriteChannelLookupDao.getChannelIdentityPage(any(), any()) } returns emptyList()
+        coEvery { favoriteSnapshotDao.findVariantsByLogicalKeys(any()) } returns emptyList()
+        coEvery { favoriteLiveChannelResolver.findMatchingChannels(any()) } returns emptyList()
 
         // The production aggregate runs on an application scope. In coroutine tests, keep the
         // background-scope Job lifecycle but replace its dispatcher so MutableStateFlow updates
@@ -107,6 +109,7 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
             favoritesRepository = favoritesRepository,
             favoriteChannelLookupDao = favoriteChannelLookupDao,
             favoriteSnapshotDao = favoriteSnapshotDao,
+            favoriteLiveChannelResolver = favoriteLiveChannelResolver,
             aggregateScope = VirtualPlaylistAggregateScope.forTest(aggregateTestScope)
         )
 
@@ -160,6 +163,7 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         val favoritesRepository = mockk<FavoritesRepository>()
         val favoriteChannelLookupDao = mockk<FavoriteChannelLookupDao>()
         val favoriteSnapshotDao = mockk<FavoriteSnapshotDao>()
+        val favoriteLiveChannelResolver = mockk<FavoriteLiveChannelResolver>()
         val settings = ParentalControlSettings(
             enabled = false,
             pinConfigured = false,
@@ -181,6 +185,7 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
             favoritesRepository = favoritesRepository,
             favoriteChannelLookupDao = favoriteChannelLookupDao,
             favoriteSnapshotDao = favoriteSnapshotDao,
+            favoriteLiveChannelResolver = favoriteLiveChannelResolver,
             aggregateScope = VirtualPlaylistAggregateScope.forTest(backgroundScope)
         )
 
@@ -191,20 +196,54 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         verify(exactly = 0) { delegate.observeChannels(any()) }
         coVerify(exactly = 0) { favoriteChannelLookupDao.findChannelsByIds(any()) }
         coVerify(exactly = 0) { favoriteSnapshotDao.findFavoritesByPreferredChannelIds(any()) }
+        coVerify(exactly = 0) { favoriteSnapshotDao.findVariantsByLogicalKeys(any()) }
+        coVerify(exactly = 0) { favoriteLiveChannelResolver.findMatchingChannels(any()) }
     }
 
     @Test
-    fun metadataCandidateLoaderKeepsOnlyTrueOrphanFavoriteSnapshots() = runTest {
+    fun metadataCandidateLoaderPreservesStableFavoriteIdAndPreferredVariant() = runTest {
         val live = channel(id = 10, playlistId = 1, tvgId = "live", name = "Live")
-        val orphan = channel(id = 20, playlistId = 2, tvgId = "orphan", name = "Orphan")
-        val stale = channel(id = 30, playlistId = 3, tvgId = "sport", name = "Sport")
+        val staleFavoriteChannel = channel(
+            id = 30,
+            playlistId = 3,
+            tvgId = "sport",
+            name = "Sport"
+        )
+        val preferredStreamUrl = "https://preferred.example/sport.m3u8"
+        val favorite = favoriteSnapshot(staleFavoriteChannel).copy(
+            preferredStreamUrl = preferredStreamUrl,
+            preferredPlaylistId = 99
+        )
+        val preferredVariant = FavoriteChannelVariantEntity(
+            logicalKey = favorite.logicalKey,
+            variantKey = UnifiedFavoritePersistence.variantKey(preferredStreamUrl),
+            legacyChannelId = 77,
+            playlistId = 99,
+            playlistName = "Saved source",
+            sourceType = PlaylistSourceType.URL.name,
+            catalogOrigin = CatalogOriginKind.USER_IMPORT.name,
+            tvgId = "sport",
+            name = "Sport Preferred",
+            groupName = "Sports",
+            logo = null,
+            streamUrl = preferredStreamUrl,
+            addedAt = 1,
+            updatedAt = 1
+        )
+        val otherLiveEquivalent = channel(
+            id = 88,
+            playlistId = 8,
+            tvgId = "sport",
+            name = "Sport Live"
+        )
         val history = listOf(
-            history(id = 3, channelId = live.id, playedAt = 300),
-            history(id = 2, channelId = orphan.id, playedAt = 200),
-            history(id = 1, channelId = stale.id, playedAt = 100)
+            history(id = 2, channelId = live.id, playedAt = 300),
+            history(id = 1, channelId = favorite.preferredChannelId, playedAt = 200)
         )
         val requestedLiveIds = mutableListOf<List<Long>>()
         val requestedFavoriteIds = mutableListOf<List<Long>>()
+        val requestedLogicalKeys = mutableListOf<List<String>>()
+        val requestedLiveLogicalKeys = mutableListOf<Set<String>>()
 
         val candidates = loadRecentMetadataCandidates(
             history = history,
@@ -214,29 +253,36 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
             },
             findFavoritesByPreferredChannelIds = { ids ->
                 requestedFavoriteIds += ids
-                listOf(favoriteSnapshot(orphan), favoriteSnapshot(stale))
+                listOf(favorite)
             },
-            getChannelIdentityPage = { afterId, _ ->
-                if (afterId == 0L) {
-                    listOf(
-                        FavoriteChannelIdentityRow(
-                            id = 99,
-                            tvgId = stale.tvgId,
-                            name = "Replacement Sport",
-                            streamUrl = "https://replacement.example/sport.m3u8"
-                        )
-                    )
-                } else {
-                    emptyList()
-                }
+            findVariantsByLogicalKeys = { logicalKeys ->
+                requestedLogicalKeys += logicalKeys
+                listOf(preferredVariant)
+            },
+            findMatchingFavoriteLiveChannels = { logicalKeys ->
+                requestedLiveLogicalKeys += logicalKeys
+                listOf(otherLiveEquivalent.toEntity())
             }
         )
 
-        assertEquals(listOf(listOf(10L, 20L, 30L)), requestedLiveIds)
-        assertEquals(listOf(listOf(20L, 30L)), requestedFavoriteIds)
-        assertEquals(listOf(10L, 20L), candidates.map { it.id })
-        assertEquals(ChannelHealth.UNKNOWN, candidates.single { it.id == 20L }.health)
-        assertFalse(candidates.any { it.id == 30L })
+        assertEquals(listOf(listOf(10L, 30L)), requestedLiveIds)
+        assertEquals(listOf(listOf(10L, 30L)), requestedFavoriteIds)
+        assertEquals(listOf(listOf(favorite.logicalKey)), requestedLogicalKeys)
+        assertEquals(listOf(setOf(favorite.logicalKey)), requestedLiveLogicalKeys)
+        assertEquals(listOf(10L), candidates.allChannels.map { it.id })
+        val favoriteRepresentative = candidates.favoriteChannels.single()
+        assertEquals(30L, favoriteRepresentative.id)
+        assertEquals(99L, favoriteRepresentative.playlistId)
+        assertEquals("Sport Preferred", favoriteRepresentative.name)
+        assertEquals(preferredStreamUrl, favoriteRepresentative.streamUrl)
+
+        val recent = recentChannelsForVirtualView(
+            history = history,
+            allChannels = candidates.allChannels,
+            favoriteChannels = candidates.favoriteChannels,
+            parentalGate = ParentalChannelGate(false, true, emptyList())
+        )
+        assertEquals(listOf(10L, 30L), recent.map { it.id })
     }
 
     @Test
@@ -393,6 +439,7 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
             favoritesRepository = mockk(relaxed = true),
             favoriteChannelLookupDao = mockk(relaxed = true),
             favoriteSnapshotDao = mockk(relaxed = true),
+            favoriteLiveChannelResolver = mockk(relaxed = true),
             aggregateScope = VirtualPlaylistAggregateScope.forTest(backgroundScope)
         )
 
