@@ -91,13 +91,10 @@ class VirtualFavoritesPlaylistRepositoryTest {
     }
 
     @Test
-    fun representativeIdsKeepOrphanFavoriteMarkedAlongsideLiveVariants() {
+    fun representativeIdsKeepStableFavoriteIdAlongsideLiveVariants() {
         val result = favoriteRepresentativeIds(
             liveIds = linkedSetOf(101L, 202L),
-            representatives = listOf(
-                channel(202, "Live", "General", ChannelHealth.AVAILABLE),
-                channel(303, "Orphan snapshot", "General", ChannelHealth.UNKNOWN)
-            )
+            representativeIds = listOf(202L, 303L)
         )
 
         assertEquals(linkedSetOf(101L, 202L, 303L), result)
