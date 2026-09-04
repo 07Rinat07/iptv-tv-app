@@ -1,11 +1,18 @@
 package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
+import com.iptv.tv.core.data.mapper.toEntity
+import com.iptv.tv.core.database.dao.FavoriteChannelIdentityRow
+import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
+import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
+import com.iptv.tv.core.database.entity.FavoriteChannelEntity
+import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.HistoryRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelHealth
+import com.iptv.tv.core.model.ChannelStableIdentity
 import com.iptv.tv.core.model.LegacyPlaylistCatalogAdapter
 import com.iptv.tv.core.model.ParentalControlSettings
 import com.iptv.tv.core.model.PlaybackHistoryItem
@@ -15,13 +22,16 @@ import com.iptv.tv.core.model.VIRTUAL_ALL_CHANNELS_PLAYLIST_ID
 import com.iptv.tv.core.model.VIRTUAL_FAVORITES_PLAYLIST_ID
 import com.iptv.tv.core.model.VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID
 import com.iptv.tv.core.model.VIRTUAL_RECENT_CHANNELS_SOURCE
+import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -40,6 +50,9 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         val delegate = mockk<VirtualAllChannelsPlaylistRepository>()
         val historyRepository = mockk<HistoryRepository>()
         val settingsRepository = mockk<SettingsRepository>()
+        val favoritesRepository = mockk<FavoritesRepository>()
+        val favoriteChannelLookupDao = mockk<FavoriteChannelLookupDao>()
+        val favoriteSnapshotDao = mockk<FavoriteSnapshotDao>()
         val adult = channel(id = 10, playlistId = 1, name = "Adult Cinema")
         val safe = channel(id = 20, playlistId = 1, name = "Kids")
         val orphanFavorite = channel(id = 30, playlistId = 77, name = "Orphan Favorite")
@@ -64,12 +77,20 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
         val allPlaylist = virtualAllChannelsPlaylist(channelCount = 2)
         val favoritesPlaylist = virtualFavoritesPlaylist(channelCount = 1)
         val delegatePlaylists = listOf(physicalPlaylist, allPlaylist, favoritesPlaylist)
+        val orphanSnapshot = favoriteSnapshot(orphanFavorite)
 
         every { delegate.observePlaylists() } returns MutableStateFlow(delegatePlaylists)
         every { delegate.observeChannels(VIRTUAL_ALL_CHANNELS_PLAYLIST_ID) } returns allChannels
         every { delegate.observeChannels(VIRTUAL_FAVORITES_PLAYLIST_ID) } returns favoriteChannels
         every { historyRepository.observeHistory(any()) } returns history
         every { settingsRepository.observeParentalControlSettings() } returns parentalSettings
+        every { favoritesRepository.observeFavoriteCount() } returns flowOf(1)
+        every { favoriteChannelLookupDao.observeChannelTableInvalidation() } returns flowOf(2)
+        coEvery { favoriteChannelLookupDao.findChannelsByIds(any()) } returns
+            listOf(adult.toEntity(), safe.toEntity())
+        coEvery { favoriteSnapshotDao.findFavoritesByPreferredChannelIds(any()) } returns
+            listOf(orphanSnapshot)
+        coEvery { favoriteChannelLookupDao.getChannelIdentityPage(any(), any()) } returns emptyList()
 
         // The production aggregate runs on an application scope. In coroutine tests, keep the
         // background-scope Job lifecycle but replace its dispatcher so MutableStateFlow updates
@@ -83,6 +104,9 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
             historyRepository = historyRepository,
             settingsRepository = settingsRepository,
             epgSettingsRepository = mockk(relaxed = true),
+            favoritesRepository = favoritesRepository,
+            favoriteChannelLookupDao = favoriteChannelLookupDao,
+            favoriteSnapshotDao = favoriteSnapshotDao,
             aggregateScope = VirtualPlaylistAggregateScope.forTest(aggregateTestScope)
         )
 
@@ -108,6 +132,12 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
 
         assertEquals(2, channelEmissions.size)
         assertEquals(listOf(30L, 20L), channelEmissions.last().map { it.id })
+        assertEquals(
+            2,
+            repository.observePlaylists().first()
+                .single { it.id == VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID }
+                .channelCount
+        )
 
         history.value = emptyList()
         advanceUntilIdle()
@@ -120,6 +150,93 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
                 .single { it.id == VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID }
                 .channelCount
         )
+    }
+
+    @Test
+    fun playlistMetadataDoesNotSubscribeFullRecentChannelAggregates() = runTest {
+        val delegate = mockk<VirtualAllChannelsPlaylistRepository>()
+        val historyRepository = mockk<HistoryRepository>()
+        val settingsRepository = mockk<SettingsRepository>()
+        val favoritesRepository = mockk<FavoritesRepository>()
+        val favoriteChannelLookupDao = mockk<FavoriteChannelLookupDao>()
+        val favoriteSnapshotDao = mockk<FavoriteSnapshotDao>()
+        val settings = ParentalControlSettings(
+            enabled = false,
+            pinConfigured = false,
+            hideAdultChannels = true,
+            blockedKeywords = emptyList()
+        )
+
+        every { delegate.observePlaylists() } returns flowOf(emptyList())
+        every { historyRepository.observeHistory(any()) } returns flowOf(emptyList())
+        every { settingsRepository.observeParentalControlSettings() } returns flowOf(settings)
+        every { favoritesRepository.observeFavoriteCount() } returns flowOf(0)
+        every { favoriteChannelLookupDao.observeChannelTableInvalidation() } returns flowOf(0)
+
+        val repository = VirtualRecentChannelsPlaylistRepository(
+            delegate = delegate,
+            historyRepository = historyRepository,
+            settingsRepository = settingsRepository,
+            epgSettingsRepository = mockk(relaxed = true),
+            favoritesRepository = favoritesRepository,
+            favoriteChannelLookupDao = favoriteChannelLookupDao,
+            favoriteSnapshotDao = favoriteSnapshotDao,
+            aggregateScope = VirtualPlaylistAggregateScope.forTest(backgroundScope)
+        )
+
+        val recent = repository.observePlaylists().first()
+            .single { it.id == VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID }
+
+        assertEquals(0, recent.channelCount)
+        verify(exactly = 0) { delegate.observeChannels(any()) }
+        coVerify(exactly = 0) { favoriteChannelLookupDao.findChannelsByIds(any()) }
+        coVerify(exactly = 0) { favoriteSnapshotDao.findFavoritesByPreferredChannelIds(any()) }
+    }
+
+    @Test
+    fun metadataCandidateLoaderKeepsOnlyTrueOrphanFavoriteSnapshots() = runTest {
+        val live = channel(id = 10, playlistId = 1, tvgId = "live", name = "Live")
+        val orphan = channel(id = 20, playlistId = 2, tvgId = "orphan", name = "Orphan")
+        val stale = channel(id = 30, playlistId = 3, tvgId = "sport", name = "Sport")
+        val history = listOf(
+            history(id = 3, channelId = live.id, playedAt = 300),
+            history(id = 2, channelId = orphan.id, playedAt = 200),
+            history(id = 1, channelId = stale.id, playedAt = 100)
+        )
+        val requestedLiveIds = mutableListOf<List<Long>>()
+        val requestedFavoriteIds = mutableListOf<List<Long>>()
+
+        val candidates = loadRecentMetadataCandidates(
+            history = history,
+            findChannelsByIds = { ids ->
+                requestedLiveIds += ids
+                listOf(live.toEntity())
+            },
+            findFavoritesByPreferredChannelIds = { ids ->
+                requestedFavoriteIds += ids
+                listOf(favoriteSnapshot(orphan), favoriteSnapshot(stale))
+            },
+            getChannelIdentityPage = { afterId, _ ->
+                if (afterId == 0L) {
+                    listOf(
+                        FavoriteChannelIdentityRow(
+                            id = 99,
+                            tvgId = stale.tvgId,
+                            name = "Replacement Sport",
+                            streamUrl = "https://replacement.example/sport.m3u8"
+                        )
+                    )
+                } else {
+                    emptyList()
+                }
+            }
+        )
+
+        assertEquals(listOf(listOf(10L, 20L, 30L)), requestedLiveIds)
+        assertEquals(listOf(listOf(20L, 30L)), requestedFavoriteIds)
+        assertEquals(listOf(10L, 20L), candidates.map { it.id })
+        assertEquals(ChannelHealth.UNKNOWN, candidates.single { it.id == 20L }.health)
+        assertFalse(candidates.any { it.id == 30L })
     }
 
     @Test
@@ -273,6 +390,9 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
             historyRepository = mockk<HistoryRepository>(),
             settingsRepository = mockk<SettingsRepository>(),
             epgSettingsRepository = mockk(relaxed = true),
+            favoritesRepository = mockk(relaxed = true),
+            favoriteChannelLookupDao = mockk(relaxed = true),
+            favoriteSnapshotDao = mockk(relaxed = true),
             aggregateScope = VirtualPlaylistAggregateScope.forTest(backgroundScope)
         )
 
@@ -319,6 +439,25 @@ class VirtualRecentChannelsPlaylistRepositoryTest {
             lastSyncedAt = null,
             channelCount = channelCount,
             isCustom = false
+        )
+    }
+
+    private fun favoriteSnapshot(channel: Channel): FavoriteChannelEntity {
+        return FavoriteChannelEntity(
+            logicalKey = ChannelStableIdentity.key(
+                tvgId = channel.tvgId,
+                name = channel.name,
+                streamUrl = channel.streamUrl
+            ),
+            tvgId = channel.tvgId,
+            name = channel.name,
+            groupName = channel.group,
+            logo = channel.logo,
+            preferredStreamUrl = channel.streamUrl,
+            preferredPlaylistId = channel.playlistId,
+            preferredChannelId = channel.id,
+            addedAt = 1,
+            updatedAt = 1
         )
     }
 
