@@ -87,6 +87,7 @@ class VirtualRecentChannelsPlaylistRepository @Inject constructor(
             parentalSettings = settingsRepository.observeParentalControlSettings(),
             channelInvalidation = favoriteChannelLookupDao.observeChannelTableInvalidation(),
             favoriteInvalidation = favoritesRepository.observeFavoriteCount(),
+            favoriteVariantInvalidation = favoriteSnapshotDao.observeFavoriteVariantCount(),
             loadCandidates = { history ->
                 loadRecentMetadataCandidates(
                     history = history,
@@ -248,14 +249,16 @@ internal fun observeVirtualRecentChannelCount(
     parentalSettings: Flow<ParentalControlSettings>,
     channelInvalidation: Flow<Int>,
     favoriteInvalidation: Flow<Int>,
+    favoriteVariantInvalidation: Flow<Int>,
     loadCandidates: suspend (List<PlaybackHistoryItem>) -> RecentMetadataCandidates
 ): Flow<Int> {
     return combine(
         history,
         channelInvalidation,
         favoriteInvalidation,
+        favoriteVariantInvalidation,
         parentalSettings.distinctUntilChanged()
-    ) { historyItems, _, _, settings ->
+    ) { historyItems, _, _, _, settings ->
         RecentChannelCountInput(
             history = historyItems,
             parentalGate = settings.toParentalChannelGate()
