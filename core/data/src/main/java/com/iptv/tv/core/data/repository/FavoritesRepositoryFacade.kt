@@ -58,9 +58,12 @@ class FavoritesRepositoryFacade @Inject constructor(
     override fun observeFavoriteChannelIds(): Flow<Set<Long>> {
         return combine(
             delegate.observeFavoriteChannelIds(),
-            observeFavorites()
-        ) { liveIds, representatives ->
-            favoriteRepresentativeIds(liveIds, representatives)
+            favoriteSnapshotDao.observeFavoriteChannels()
+        ) { liveIds, favorites ->
+            favoriteRepresentativeIds(
+                liveIds = liveIds,
+                representativeIds = favorites.map(FavoriteChannelEntity::preferredChannelId)
+            )
         }
     }
 
@@ -120,8 +123,8 @@ internal fun resolvedFavoriteRepresentatives(
 
 internal fun favoriteRepresentativeIds(
     liveIds: Set<Long>,
-    representatives: List<Channel>
+    representativeIds: Iterable<Long>
 ): Set<Long> = buildSet {
     addAll(liveIds)
-    representatives.forEach { channel -> add(channel.id) }
+    addAll(representativeIds)
 }
