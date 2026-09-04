@@ -26,6 +26,7 @@ import javax.inject.Singleton
 class FavoriteSourceVariantService @Inject constructor(
     private val favoriteSnapshotDao: FavoriteSnapshotDao,
     private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
+    private val favoriteLiveChannelResolver: FavoriteLiveChannelResolver,
     private val favoriteDao: FavoriteDao,
     private val playlistDao: PlaylistDao
 ) {
@@ -95,8 +96,7 @@ class FavoriteSourceVariantService @Inject constructor(
     }
 
     private suspend fun liveChannels(favorite: FavoriteChannelEntity): List<ChannelEntity> =
-        favoriteChannelLookupDao.getAllChannels()
-            .filter { channel -> UnifiedFavoritePersistence.logicalKey(channel) == favorite.logicalKey }
+        favoriteLiveChannelResolver.findMatchingChannels(setOf(favorite.logicalKey))
 
     private suspend fun playlistsFor(liveChannels: List<ChannelEntity>): Map<Long, PlaylistEntity?> =
         liveChannels
