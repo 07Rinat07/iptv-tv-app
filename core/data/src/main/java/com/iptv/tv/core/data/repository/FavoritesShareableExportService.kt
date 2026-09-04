@@ -37,10 +37,9 @@ class FavoritesShareableExportService @Inject constructor(
                 .map(FavoriteChannelEntity::logicalKey)
                 .toSet()
         )
-        val playlists = liveChannels
-            .map(ChannelEntity::playlistId)
-            .distinct()
-            .associateWith { playlistId -> playlistDao.findById(playlistId) }
+        val playlists = playlistDao.findPlaylistMapByIds(
+            liveChannels.map(ChannelEntity::playlistId)
+        )
         val liveByLogicalKey = liveChannels.groupBy(UnifiedFavoritePersistence::logicalKey)
         val now = System.currentTimeMillis()
 
