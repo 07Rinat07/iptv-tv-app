@@ -1,6 +1,5 @@
 package com.iptv.tv.core.data.repository
 
-import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.dao.PlaylistDao
@@ -27,7 +26,7 @@ import org.json.JSONObject
 @Singleton
 class FavoritesPortableBackupService @Inject constructor(
     private val favoriteSnapshotDao: FavoriteSnapshotDao,
-    private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
+    private val favoriteLiveChannelResolver: FavoriteLiveChannelResolver,
     private val playlistDao: PlaylistDao,
     private val favoriteDao: FavoriteDao
 ) {
@@ -81,7 +80,9 @@ class FavoritesPortableBackupService @Inject constructor(
         val existingFavorites = favoriteSnapshotDao.getFavoriteChannels()
         val existingVariants = existingFavorites
             .flatMap { favorite -> favoriteSnapshotDao.getVariants(favorite.logicalKey) }
-        val liveChannels = favoriteChannelLookupDao.getAllChannels()
+        val liveChannels = favoriteLiveChannelResolver.findMatchingChannels(
+            document.favorites.mapTo(linkedSetOf(), FavoriteBackupEntry::logicalKey)
+        )
         val playlists = liveChannels
             .map(ChannelEntity::playlistId)
             .distinct()
