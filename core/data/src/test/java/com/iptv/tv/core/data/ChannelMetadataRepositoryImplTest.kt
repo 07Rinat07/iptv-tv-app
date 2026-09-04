@@ -73,11 +73,11 @@ class ChannelMetadataRepositoryImplTest {
         val channelDao = mockk<ChannelDao>()
         val playlistDao = mockk<PlaylistDao>()
         val syncLogDao = mockk<SyncLogDao>()
+        val firstChannel = channel(id = 10, name = "Kazakh News", tvgId = null, logo = null)
+        val secondChannel = channel(id = 11, name = "Kazakh Sport", tvgId = null, logo = null)
 
-        coEvery { channelDao.findById(10) } returns channel(id = 10, name = "Kazakh News", tvgId = null, logo = null)
-        coEvery { channelDao.findById(11) } returns channel(id = 11, name = "Kazakh Sport", tvgId = null, logo = null)
-        coEvery { channelDao.findById(99) } returns null
-        coEvery { metadataDao.findByChannelId(any()) } returns null
+        coEvery { channelDao.findByIds(listOf(10, 11, 99)) } returns listOf(firstChannel, secondChannel)
+        coEvery { metadataDao.findByChannelIds(listOf(10, 11)) } returns emptyList()
         coEvery { metadataDao.upsert(any()) } returns Unit
         coEvery { syncLogDao.insert(any()) } returns Unit
 
@@ -96,6 +96,10 @@ class ChannelMetadataRepositoryImplTest {
 
         assertTrue(result is AppResult.Success)
         assertEquals(2, (result as AppResult.Success).data)
+        coVerify(exactly = 1) { channelDao.findByIds(listOf(10, 11, 99)) }
+        coVerify(exactly = 0) { channelDao.findById(any()) }
+        coVerify(exactly = 1) { metadataDao.findByChannelIds(listOf(10, 11)) }
+        coVerify(exactly = 0) { metadataDao.findByChannelId(any()) }
         coVerify(exactly = 2) {
             metadataDao.upsert(
                 match<ChannelMetadataEntity> {
