@@ -1,6 +1,5 @@
 package com.iptv.tv.core.data.repository
 
-import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.FavoriteChannelEntity
@@ -18,10 +17,9 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class FavoritesShareableExportServiceBoundedLookupTest {
     @Test
-    fun exportResolvesLiveRowsForFavoriteKeysWithoutFullCatalogRead() = runTest {
+    fun exportResolvesLiveRowsForFavoriteKeysInOneBoundedBatch() = runTest {
         val portableBackupService = mockk<FavoritesPortableBackupService>()
         val favoriteSnapshotDao = mockk<FavoriteSnapshotDao>()
-        val favoriteChannelLookupDao = mockk<FavoriteChannelLookupDao>()
         val favoriteLiveChannelResolver = mockk<FavoriteLiveChannelResolver>()
         val playlistDao = mockk<PlaylistDao>()
         val first = favorite(
@@ -50,7 +48,6 @@ class FavoritesShareableExportServiceBoundedLookupTest {
         val service = FavoritesShareableExportService(
             portableBackupService = portableBackupService,
             favoriteSnapshotDao = favoriteSnapshotDao,
-            favoriteChannelLookupDao = favoriteChannelLookupDao,
             favoriteLiveChannelResolver = favoriteLiveChannelResolver,
             playlistDao = playlistDao
         )
@@ -62,7 +59,6 @@ class FavoritesShareableExportServiceBoundedLookupTest {
         assertTrue(result.content.contains(first.preferredStreamUrl))
         assertTrue(result.content.contains(second.preferredStreamUrl))
         coVerify(exactly = 1) { favoriteLiveChannelResolver.findMatchingChannels(logicalKeys) }
-        coVerify(exactly = 0) { favoriteChannelLookupDao.getAllChannels() }
     }
 
     private fun favorite(
