@@ -52,6 +52,7 @@ class VirtualRecentChannelsPlaylistEpgCorrectionTest {
             favoritesRepository = mockk<FavoritesRepository>(relaxed = true),
             favoriteChannelLookupDao = mockk<FavoriteChannelLookupDao>(relaxed = true),
             favoriteSnapshotDao = mockk<FavoriteSnapshotDao>(relaxed = true),
+            favoriteLiveChannelResolver = mockk(relaxed = true),
             aggregateScope = VirtualPlaylistAggregateScope.forTest(backgroundScope)
         )
 
