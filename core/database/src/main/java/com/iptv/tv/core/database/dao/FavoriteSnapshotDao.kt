@@ -17,6 +17,9 @@ interface FavoriteSnapshotDao {
     @Query("SELECT * FROM favorite_channels ORDER BY addedAt DESC, logicalKey ASC")
     fun observeFavoriteChannels(): Flow<List<FavoriteChannelEntity>>
 
+    @Query("SELECT COUNT(*) FROM favorite_channels")
+    fun observeFavoriteChannelCount(): Flow<Int>
+
     @Query("SELECT * FROM favorite_channel_variants ORDER BY logicalKey ASC, updatedAt DESC")
     fun observeFavoriteVariants(): Flow<List<FavoriteChannelVariantEntity>>
 
