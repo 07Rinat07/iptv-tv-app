@@ -83,10 +83,9 @@ class FavoritesPortableBackupService @Inject constructor(
         val liveChannels = favoriteLiveChannelResolver.findMatchingChannels(
             document.favorites.mapTo(linkedSetOf(), FavoriteBackupEntry::logicalKey)
         )
-        val playlists = liveChannels
-            .map(ChannelEntity::playlistId)
-            .distinct()
-            .associateWith { playlistId -> playlistDao.findById(playlistId) }
+        val playlists = playlistDao.findPlaylistMapByIds(
+            liveChannels.map(ChannelEntity::playlistId)
+        )
         val plan = FavoritesPortableBackupPlanner.planImport(
             document = document,
             existingFavorites = existingFavorites,
