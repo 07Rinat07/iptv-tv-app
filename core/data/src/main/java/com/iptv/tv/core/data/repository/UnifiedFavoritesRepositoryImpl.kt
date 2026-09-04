@@ -71,6 +71,13 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
         }
     }
 
+    override fun observeFavoriteCount(): Flow<Int> {
+        return favoriteSnapshotDao.observeFavoriteChannelCount()
+            .onStart {
+                ensureLegacySeedsMigrated()
+            }
+    }
+
     override fun observeFavoriteChannelIds(): Flow<Set<Long>> {
         return combine(
             favoriteSnapshotDao.observeFavoriteChannels(),
