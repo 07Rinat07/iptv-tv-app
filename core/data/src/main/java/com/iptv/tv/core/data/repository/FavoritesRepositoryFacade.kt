@@ -53,6 +53,8 @@ class FavoritesRepositoryFacade @Inject constructor(
         }
     }
 
+    override fun observeFavoriteCount(): Flow<Int> = delegate.observeFavoriteCount()
+
     override fun observeFavoriteChannelIds(): Flow<Set<Long>> {
         return combine(
             delegate.observeFavoriteChannelIds(),

@@ -17,11 +17,33 @@ interface FavoriteSnapshotDao {
     @Query("SELECT * FROM favorite_channels ORDER BY addedAt DESC, logicalKey ASC")
     fun observeFavoriteChannels(): Flow<List<FavoriteChannelEntity>>
 
+    @Query("SELECT COUNT(*) FROM favorite_channels")
+    fun observeFavoriteChannelCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM favorite_channel_variants")
+    fun observeFavoriteVariantCount(): Flow<Int>
+
     @Query("SELECT * FROM favorite_channel_variants ORDER BY logicalKey ASC, updatedAt DESC")
     fun observeFavoriteVariants(): Flow<List<FavoriteChannelVariantEntity>>
 
     @Query("SELECT * FROM favorite_channels ORDER BY addedAt DESC, logicalKey ASC")
     suspend fun getFavoriteChannels(): List<FavoriteChannelEntity>
+
+    @Query(
+        "SELECT * FROM favorite_channels WHERE preferredChannelId IN (:channelIds) " +
+            "ORDER BY addedAt DESC, logicalKey ASC"
+    )
+    suspend fun findFavoritesByPreferredChannelIds(
+        channelIds: List<Long>
+    ): List<FavoriteChannelEntity>
+
+    @Query(
+        "SELECT * FROM favorite_channel_variants WHERE logicalKey IN (:logicalKeys) " +
+            "ORDER BY logicalKey ASC, updatedAt DESC"
+    )
+    suspend fun findVariantsByLogicalKeys(
+        logicalKeys: List<String>
+    ): List<FavoriteChannelVariantEntity>
 
     @Query("SELECT * FROM favorite_channel_variants WHERE logicalKey = :logicalKey ORDER BY updatedAt DESC")
     suspend fun getVariants(logicalKey: String): List<FavoriteChannelVariantEntity>

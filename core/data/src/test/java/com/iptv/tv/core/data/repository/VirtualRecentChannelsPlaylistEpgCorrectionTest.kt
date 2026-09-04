@@ -1,7 +1,10 @@
 package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
+import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
+import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.domain.repository.EpgSettingsRepository
+import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.HistoryRepository
 import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.EpgProgram
@@ -46,6 +49,10 @@ class VirtualRecentChannelsPlaylistEpgCorrectionTest {
             historyRepository = mockk<HistoryRepository>(relaxed = true),
             settingsRepository = mockk<SettingsRepository>(relaxed = true),
             epgSettingsRepository = epgSettingsRepository,
+            favoritesRepository = mockk<FavoritesRepository>(relaxed = true),
+            favoriteChannelLookupDao = mockk<FavoriteChannelLookupDao>(relaxed = true),
+            favoriteSnapshotDao = mockk<FavoriteSnapshotDao>(relaxed = true),
+            favoriteLiveChannelResolver = mockk(relaxed = true),
             aggregateScope = VirtualPlaylistAggregateScope.forTest(backgroundScope)
         )
 
