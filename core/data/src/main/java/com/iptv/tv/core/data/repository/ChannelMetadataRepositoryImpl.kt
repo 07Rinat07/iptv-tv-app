@@ -90,10 +90,27 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         if (ids.isEmpty()) {
             return@withContext AppResult.Error("Нет каналов для массового обновления метаданных")
         }
+        val channelsById = ids
+            .chunked(BULK_METADATA_LOOKUP_BATCH_SIZE)
+            .flatMap { batch -> channelDao.findByIds(batch) }
+            .associateBy(ChannelEntity::id)
+        val existingMetadataByChannelId = ids
+            .asSequence()
+            .filter(channelsById::containsKey)
+            .toList()
+            .chunked(BULK_METADATA_LOOKUP_BATCH_SIZE)
+            .flatMap { batch -> channelMetadataDao.findByChannelIds(batch) }
+            .associateBy { metadata -> metadata.channelId }
         var updated = 0
         ids.forEach { channelId ->
-            val channel = channelDao.findById(channelId) ?: return@forEach
-            val metadata = buildManualMetadata(channel, country, language, category)
+            val channel = channelsById[channelId] ?: return@forEach
+            val metadata = buildManualMetadata(
+                channel = channel,
+                existing = existingMetadataByChannelId[channelId]?.toModel(),
+                country = country,
+                language = language,
+                category = category
+            )
             channelMetadataDao.upsert(metadata.toEntity())
             updated += 1
         }
@@ -302,7 +319,22 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         language: String?,
         category: String?
     ): ChannelMetadata {
-        val existing = channelMetadataDao.findByChannelId(channel.id)?.toModel()
+        return buildManualMetadata(
+            channel = channel,
+            existing = channelMetadataDao.findByChannelId(channel.id)?.toModel(),
+            country = country,
+            language = language,
+            category = category
+        )
+    }
+
+    private fun buildManualMetadata(
+        channel: ChannelEntity,
+        existing: ChannelMetadata?,
+        country: String?,
+        language: String?,
+        category: String?
+    ): ChannelMetadata {
         val metadataWithOverrides = existing.copyOrNew(channel).copy(
             manualCountry = normalizeOverride(country),
             manualLanguage = normalizeOverride(language),
@@ -387,6 +419,7 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
                 .trim()
         }
 
+        const val BULK_METADATA_LOOKUP_BATCH_SIZE = 900
         const val LOGO_PACK_URL_LOG_LIMIT = 160
     }
 }
