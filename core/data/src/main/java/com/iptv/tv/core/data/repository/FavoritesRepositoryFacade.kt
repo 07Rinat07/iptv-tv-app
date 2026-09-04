@@ -17,6 +17,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapLatest
 
 /**
@@ -37,19 +40,26 @@ class FavoritesRepositoryFacade @Inject constructor(
     private val sourceVariantService: FavoriteSourceVariantService
 ) : FavoritesRepository by delegate {
     override fun observeFavorites(): Flow<List<Channel>> {
-        return combine(
-            delegate.observeFavorites(),
-            favoriteSnapshotDao.observeFavoriteChannels(),
-            favoriteSnapshotDao.observeFavoriteVariants(),
-            favoriteChannelLookupDao.observeChannelTableInvalidation()
-        ) { _, favorites, persistedVariants, _ ->
-            val liveChannels = favoriteLiveChannelResolver.findMatchingChannels(
-                favorites.mapTo(hashSetOf(), FavoriteChannelEntity::logicalKey)
-            )
-            resolvedFavoriteRepresentatives(
-                favorites = favorites,
-                persistedVariants = persistedVariants,
-                liveChannels = liveChannels
+        return flow {
+            // The scalar delegate flow preserves the lazy v9->v10 migration barrier without
+            // running the delegate's own live representative reconciliation, whose payload the
+            // facade would otherwise discard before resolving source-aware representatives again.
+            delegate.observeFavoriteCount().first()
+            emitAll(
+                combine(
+                    favoriteSnapshotDao.observeFavoriteChannels(),
+                    favoriteSnapshotDao.observeFavoriteVariants(),
+                    favoriteChannelLookupDao.observeChannelTableInvalidation()
+                ) { favorites, persistedVariants, _ ->
+                    val liveChannels = favoriteLiveChannelResolver.findMatchingChannels(
+                        favorites.mapTo(hashSetOf(), FavoriteChannelEntity::logicalKey)
+                    )
+                    resolvedFavoriteRepresentatives(
+                        favorites = favorites,
+                        persistedVariants = persistedVariants,
+                        liveChannels = liveChannels
+                    )
+                }
             )
         }
     }
