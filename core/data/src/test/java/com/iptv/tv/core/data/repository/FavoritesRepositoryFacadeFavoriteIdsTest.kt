@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
+import com.iptv.tv.core.database.entity.FavoriteChannelEntity
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -16,15 +17,15 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class FavoritesRepositoryFacadeFavoriteIdsTest {
     @Test
-    fun favoriteIdFlowUsesNarrowPreferredIdsWithoutRepresentativeMaterialization() = runTest {
+    fun favoriteIdFlowUsesSnapshotIdsWithoutRepresentativeMaterialization() = runTest {
         val delegate = mockk<UnifiedFavoritesRepositoryImpl>()
         val favoriteSnapshotDao = mockk<FavoriteSnapshotDao>()
         val favoriteChannelLookupDao = mockk<FavoriteChannelLookupDao>()
         val favoriteLiveChannelResolver = mockk<FavoriteLiveChannelResolver>()
 
         every { delegate.observeFavoriteChannelIds() } returns flowOf(linkedSetOf(101L, 202L))
-        every { favoriteSnapshotDao.observeFavoritePreferredChannelIds() } returns
-            flowOf(listOf(202L, 303L))
+        every { favoriteSnapshotDao.observeFavoriteChannels() } returns
+            flowOf(listOf(favorite(202L), favorite(303L)))
 
         val repository = FavoritesRepositoryFacade(
             delegate = delegate,
@@ -42,11 +43,25 @@ class FavoritesRepositoryFacadeFavoriteIdsTest {
         )
 
         verify(exactly = 1) { delegate.observeFavoriteChannelIds() }
-        verify(exactly = 1) { favoriteSnapshotDao.observeFavoritePreferredChannelIds() }
+        verify(exactly = 1) { favoriteSnapshotDao.observeFavoriteChannels() }
         verify(exactly = 0) { delegate.observeFavorites() }
-        verify(exactly = 0) { favoriteSnapshotDao.observeFavoriteChannels() }
         verify(exactly = 0) { favoriteSnapshotDao.observeFavoriteVariants() }
         verify(exactly = 0) { favoriteChannelLookupDao.observeChannelTableInvalidation() }
         coVerify(exactly = 0) { favoriteLiveChannelResolver.findMatchingChannels(any()) }
+    }
+
+    private fun favorite(preferredChannelId: Long): FavoriteChannelEntity {
+        return FavoriteChannelEntity(
+            logicalKey = "favorite:$preferredChannelId",
+            tvgId = null,
+            name = "Favorite $preferredChannelId",
+            groupName = null,
+            logo = null,
+            preferredStreamUrl = "https://example.com/$preferredChannelId.m3u8",
+            preferredPlaylistId = preferredChannelId + 1_000,
+            preferredChannelId = preferredChannelId,
+            addedAt = 1,
+            updatedAt = 1
+        )
     }
 }
