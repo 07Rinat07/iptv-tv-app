@@ -2,11 +2,11 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.mapper.toModel
-import com.iptv.tv.core.database.dao.FavoriteChannelIdentityRow
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.FavoriteChannelEntity
+import com.iptv.tv.core.database.entity.FavoriteChannelVariantEntity
 import com.iptv.tv.core.domain.repository.EpgSettingsRepository
 import com.iptv.tv.core.domain.repository.FavoritesRepository
 import com.iptv.tv.core.domain.repository.HistoryRepository
@@ -15,7 +15,6 @@ import com.iptv.tv.core.domain.repository.SettingsRepository
 import com.iptv.tv.core.model.CatalogOriginKind
 import com.iptv.tv.core.model.Channel
 import com.iptv.tv.core.model.ChannelEpgInfo
-import com.iptv.tv.core.model.ChannelHealth
 import com.iptv.tv.core.model.ChannelStableIdentity
 import com.iptv.tv.core.model.EpgProgram
 import com.iptv.tv.core.model.EpgTimeCorrection
@@ -63,6 +62,7 @@ class VirtualRecentChannelsPlaylistRepository @Inject constructor(
     private val favoritesRepository: FavoritesRepository,
     private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
     private val favoriteSnapshotDao: FavoriteSnapshotDao,
+    private val favoriteLiveChannelResolver: FavoriteLiveChannelResolver,
     private val aggregateScope: VirtualPlaylistAggregateScope
 ) : PlaylistRepository by delegate {
     private val recentChannels by lazy {
@@ -93,7 +93,9 @@ class VirtualRecentChannelsPlaylistRepository @Inject constructor(
                     findChannelsByIds = favoriteChannelLookupDao::findChannelsByIds,
                     findFavoritesByPreferredChannelIds =
                         favoriteSnapshotDao::findFavoritesByPreferredChannelIds,
-                    getChannelIdentityPage = favoriteChannelLookupDao::getChannelIdentityPage
+                    findVariantsByLogicalKeys = favoriteSnapshotDao::findVariantsByLogicalKeys,
+                    findMatchingFavoriteLiveChannels =
+                        favoriteLiveChannelResolver::findMatchingChannels
                 )
             }
         )
@@ -246,7 +248,7 @@ internal fun observeVirtualRecentChannelCount(
     parentalSettings: Flow<ParentalControlSettings>,
     channelInvalidation: Flow<Int>,
     favoriteInvalidation: Flow<Int>,
-    loadCandidates: suspend (List<PlaybackHistoryItem>) -> List<Channel>
+    loadCandidates: suspend (List<PlaybackHistoryItem>) -> RecentMetadataCandidates
 ): Flow<Int> {
     return combine(
         history,
@@ -259,10 +261,11 @@ internal fun observeVirtualRecentChannelCount(
             parentalGate = settings.toParentalChannelGate()
         )
     }.mapLatest { input ->
+        val candidates = loadCandidates(input.history)
         recentChannelsForVirtualView(
             history = input.history,
-            allChannels = loadCandidates(input.history),
-            favoriteChannels = emptyList(),
+            allChannels = candidates.allChannels,
+            favoriteChannels = candidates.favoriteChannels,
             parentalGate = input.parentalGate,
             limit = MAX_RECENT_CHANNELS
         ).size
@@ -274,100 +277,67 @@ private data class RecentChannelCountInput(
     val parentalGate: ParentalChannelGate
 )
 
+internal data class RecentMetadataCandidates(
+    val allChannels: List<Channel>,
+    val favoriteChannels: List<Channel>
+)
+
 /**
  * Loads only Channel payloads that can be selected by the bounded history window.
  *
- * A durable Favorite is eligible for its stale preferred ID only when no current live row exists
- * for that logical identity. This exactly mirrors [UnifiedFavoritePersistence.representFavorites]:
- * if any live equivalent exists, Favorites selects that live ID instead and therefore cannot
- * resolve history that still points at the stale preferred ID.
+ * Favorites keep [FavoriteChannelEntity.preferredChannelId] as their stable compatibility/history
+ * ID even when the selected playback source moves to another live row or persisted variant. The
+ * bounded metadata path therefore resolves candidate snapshots with the same
+ * [resolvedFavoriteRepresentatives] function used by [FavoritesRepositoryFacade], then supplies
+ * those representatives separately so they override same-ID live rows exactly as explicit Recent
+ * browsing does.
  */
 internal suspend fun loadRecentMetadataCandidates(
     history: List<PlaybackHistoryItem>,
     findChannelsByIds: suspend (List<Long>) -> List<ChannelEntity>,
     findFavoritesByPreferredChannelIds: suspend (List<Long>) -> List<FavoriteChannelEntity>,
-    getChannelIdentityPage: suspend (afterId: Long, limit: Int) -> List<FavoriteChannelIdentityRow>
-): List<Channel> {
+    findVariantsByLogicalKeys: suspend (List<String>) -> List<FavoriteChannelVariantEntity>,
+    findMatchingFavoriteLiveChannels: suspend (Set<String>) -> List<ChannelEntity>
+): RecentMetadataCandidates {
     val historyIds = history.asSequence()
         .map(PlaybackHistoryItem::channelId)
         .filter { channelId -> channelId > 0 }
         .distinct()
         .take(RECENT_HISTORY_LOOKBACK_LIMIT)
         .toList()
-    if (historyIds.isEmpty()) return emptyList()
+    if (historyIds.isEmpty()) {
+        return RecentMetadataCandidates(emptyList(), emptyList())
+    }
 
     val liveEntities = historyIds
         .chunked(RECENT_METADATA_LOOKUP_BATCH_SIZE)
         .flatMap { ids -> findChannelsByIds(ids) }
-    val liveIds = liveEntities.mapTo(hashSetOf(), ChannelEntity::id)
-    val unresolvedIds = historyIds.filterNot(liveIds::contains)
-    if (unresolvedIds.isEmpty()) {
-        return liveEntities.map(ChannelEntity::toModel)
-    }
-
-    val favoriteSnapshots = unresolvedIds
+    val favoriteSnapshots = historyIds
         .chunked(RECENT_METADATA_LOOKUP_BATCH_SIZE)
         .flatMap { ids -> findFavoritesByPreferredChannelIds(ids) }
     if (favoriteSnapshots.isEmpty()) {
-        return liveEntities.map(ChannelEntity::toModel)
+        return RecentMetadataCandidates(
+            allChannels = liveEntities.map(ChannelEntity::toModel),
+            favoriteChannels = emptyList()
+        )
     }
 
     val candidateLogicalKeys = favoriteSnapshots
-        .mapTo(hashSetOf(), FavoriteChannelEntity::logicalKey)
-    val logicalKeysWithLiveEquivalents = findLiveLogicalKeys(
-        candidateLogicalKeys = candidateLogicalKeys,
-        getChannelIdentityPage = getChannelIdentityPage
+        .map(FavoriteChannelEntity::logicalKey)
+        .distinct()
+    val persistedVariants = candidateLogicalKeys
+        .chunked(RECENT_METADATA_LOOKUP_BATCH_SIZE)
+        .flatMap { logicalKeys -> findVariantsByLogicalKeys(logicalKeys) }
+    val favoriteLiveChannels = findMatchingFavoriteLiveChannels(candidateLogicalKeys.toSet())
+    val favoriteRepresentatives = resolvedFavoriteRepresentatives(
+        favorites = favoriteSnapshots,
+        persistedVariants = persistedVariants,
+        liveChannels = favoriteLiveChannels
     )
-    val orphanFavorites = favoriteSnapshots
-        .asSequence()
-        .filterNot { favorite -> favorite.logicalKey in logicalKeysWithLiveEquivalents }
-        .map(::favoriteSnapshotChannel)
-        .toList()
 
-    return liveEntities.map(ChannelEntity::toModel) + orphanFavorites
-}
-
-internal suspend fun findLiveLogicalKeys(
-    candidateLogicalKeys: Set<String>,
-    getChannelIdentityPage: suspend (afterId: Long, limit: Int) -> List<FavoriteChannelIdentityRow>
-): Set<String> {
-    if (candidateLogicalKeys.isEmpty()) return emptySet()
-
-    val found = hashSetOf<String>()
-    var afterId = 0L
-    while (found.size < candidateLogicalKeys.size) {
-        val page = getChannelIdentityPage(afterId, RECENT_IDENTITY_PAGE_SIZE)
-        if (page.isEmpty()) break
-
-        page.forEach { row ->
-            val logicalKey = ChannelStableIdentity.key(
-                tvgId = row.tvgId,
-                name = row.name,
-                streamUrl = row.streamUrl
-            )
-            if (logicalKey in candidateLogicalKeys) {
-                found += logicalKey
-            }
-        }
-
-        afterId = page.last().id
-        if (page.size < RECENT_IDENTITY_PAGE_SIZE) break
-    }
-    return found
-}
-
-private fun favoriteSnapshotChannel(favorite: FavoriteChannelEntity): Channel {
-    return Channel(
-        id = favorite.preferredChannelId,
-        playlistId = favorite.preferredPlaylistId,
-        tvgId = favorite.tvgId,
-        name = favorite.name,
-        group = favorite.groupName,
-        logo = favorite.logo,
-        streamUrl = favorite.preferredStreamUrl,
-        health = ChannelHealth.UNKNOWN,
-        orderIndex = 0,
-        isHidden = false
+    return RecentMetadataCandidates(
+        allChannels = liveEntities.map(ChannelEntity::toModel),
+        favoriteChannels = favoriteRepresentatives
     )
 }
 
@@ -456,6 +426,5 @@ internal fun ParentalControlSettings.toParentalChannelGate(): ParentalChannelGat
 }
 
 private const val RECENT_METADATA_LOOKUP_BATCH_SIZE = 256
-private const val RECENT_IDENTITY_PAGE_SIZE = 512
 internal const val RECENT_HISTORY_LOOKBACK_LIMIT = 250
 internal const val MAX_RECENT_CHANNELS = 100
