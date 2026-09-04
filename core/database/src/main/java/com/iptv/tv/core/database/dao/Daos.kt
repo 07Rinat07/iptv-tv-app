@@ -42,6 +42,9 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlists WHERE id = :playlistId LIMIT 1")
     suspend fun findById(playlistId: Long): PlaylistEntity?
 
+    @Query("SELECT * FROM playlists WHERE id IN (:playlistIds)")
+    suspend fun findByIds(playlistIds: List<Long>): List<PlaylistEntity>
+
     @Query(
         "SELECT * FROM playlists " +
             "WHERE source = :source AND isCustom = 1 " +
