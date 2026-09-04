@@ -34,6 +34,14 @@ interface FavoriteSnapshotDao {
         channelIds: List<Long>
     ): List<FavoriteChannelEntity>
 
+    @Query(
+        "SELECT * FROM favorite_channel_variants WHERE logicalKey IN (:logicalKeys) " +
+            "ORDER BY logicalKey ASC, updatedAt DESC"
+    )
+    suspend fun findVariantsByLogicalKeys(
+        logicalKeys: List<String>
+    ): List<FavoriteChannelVariantEntity>
+
     @Query("SELECT * FROM favorite_channel_variants WHERE logicalKey = :logicalKey ORDER BY updatedAt DESC")
     suspend fun getVariants(logicalKey: String): List<FavoriteChannelVariantEntity>
 
