@@ -9,10 +9,20 @@ import com.iptv.tv.core.model.FavoritesPortableImportStatus
 import com.iptv.tv.core.model.FavoritesShareableExport
 import com.iptv.tv.core.model.FavoritesShareableExportFormat
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 interface FavoritesRepository {
     /** One representative per logical favorite channel for the dedicated Favorites screen. */
     fun observeFavorites(): Flow<List<Channel>>
+
+    /**
+     * Number of logical favorites, with one count entry per durable favorite identity.
+     *
+     * The default preserves compatibility with alternate implementations. Production persistence
+     * overrides this with a scalar database path so playlist metadata does not materialize Channel
+     * objects or reconcile the complete live catalog.
+     */
+    fun observeFavoriteCount(): Flow<Int> = observeFavorites().map { favorites -> favorites.size }
 
     /** All concrete channel row IDs marked by the global favorite identity. */
     fun observeFavoriteChannelIds(): Flow<Set<Long>>
