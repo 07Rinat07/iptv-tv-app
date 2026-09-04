@@ -17,6 +17,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.mapLatest
 
 /**
  * Feature-facing Favorites facade.
@@ -56,13 +57,11 @@ class FavoritesRepositoryFacade @Inject constructor(
     override fun observeFavoriteCount(): Flow<Int> = delegate.observeFavoriteCount()
 
     override fun observeFavoriteChannelIds(): Flow<Set<Long>> {
-        return combine(
-            delegate.observeFavoriteChannelIds(),
-            favoriteSnapshotDao.observeFavoriteChannels()
-        ) { liveIds, favorites ->
+        return delegate.observeFavoriteChannelIds().mapLatest { liveIds ->
             favoriteRepresentativeIds(
                 liveIds = liveIds,
-                representativeIds = favorites.map(FavoriteChannelEntity::preferredChannelId)
+                representativeIds = favoriteSnapshotDao.getFavoriteChannels()
+                    .map(FavoriteChannelEntity::preferredChannelId)
             )
         }
     }
