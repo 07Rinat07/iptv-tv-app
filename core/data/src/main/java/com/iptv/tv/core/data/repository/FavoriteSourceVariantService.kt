@@ -99,10 +99,7 @@ class FavoriteSourceVariantService @Inject constructor(
         favoriteLiveChannelResolver.findMatchingChannels(setOf(favorite.logicalKey))
 
     private suspend fun playlistsFor(liveChannels: List<ChannelEntity>): Map<Long, PlaylistEntity?> =
-        liveChannels
-            .map(ChannelEntity::playlistId)
-            .distinct()
-            .associateWith { playlistId -> playlistDao.findById(playlistId) }
+        playlistDao.findPlaylistMapByIds(liveChannels.map(ChannelEntity::playlistId))
 
     private suspend fun reconcileLiveVariants(
         favorite: FavoriteChannelEntity,
