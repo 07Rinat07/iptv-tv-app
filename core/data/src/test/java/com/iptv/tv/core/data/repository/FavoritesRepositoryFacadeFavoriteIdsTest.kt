@@ -3,6 +3,7 @@ package com.iptv.tv.core.data.repository
 import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.entity.FavoriteChannelEntity
+import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -17,15 +18,15 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class FavoritesRepositoryFacadeFavoriteIdsTest {
     @Test
-    fun favoriteIdFlowUsesSnapshotIdsWithoutRepresentativeMaterialization() = runTest {
+    fun favoriteIdFlowUsesSnapshotReadWithoutRepresentativeMaterialization() = runTest {
         val delegate = mockk<UnifiedFavoritesRepositoryImpl>()
         val favoriteSnapshotDao = mockk<FavoriteSnapshotDao>()
         val favoriteChannelLookupDao = mockk<FavoriteChannelLookupDao>()
         val favoriteLiveChannelResolver = mockk<FavoriteLiveChannelResolver>()
 
         every { delegate.observeFavoriteChannelIds() } returns flowOf(linkedSetOf(101L, 202L))
-        every { favoriteSnapshotDao.observeFavoriteChannels() } returns
-            flowOf(listOf(favorite(202L), favorite(303L)))
+        coEvery { favoriteSnapshotDao.getFavoriteChannels() } returns
+            listOf(favorite(202L), favorite(303L))
 
         val repository = FavoritesRepositoryFacade(
             delegate = delegate,
@@ -43,8 +44,9 @@ class FavoritesRepositoryFacadeFavoriteIdsTest {
         )
 
         verify(exactly = 1) { delegate.observeFavoriteChannelIds() }
-        verify(exactly = 1) { favoriteSnapshotDao.observeFavoriteChannels() }
+        coVerify(exactly = 1) { favoriteSnapshotDao.getFavoriteChannels() }
         verify(exactly = 0) { delegate.observeFavorites() }
+        verify(exactly = 0) { favoriteSnapshotDao.observeFavoriteChannels() }
         verify(exactly = 0) { favoriteSnapshotDao.observeFavoriteVariants() }
         verify(exactly = 0) { favoriteChannelLookupDao.observeChannelTableInvalidation() }
         coVerify(exactly = 0) { favoriteLiveChannelResolver.findMatchingChannels(any()) }
