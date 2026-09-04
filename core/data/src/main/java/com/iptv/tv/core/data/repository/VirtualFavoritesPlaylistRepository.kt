@@ -16,7 +16,6 @@ import com.iptv.tv.core.model.VIRTUAL_FAVORITES_SOURCE
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -34,15 +33,13 @@ class VirtualFavoritesPlaylistRepository @Inject constructor(
 ) : PlaylistRepository by delegate {
     private val favoriteChannels = favoritesRepository.observeFavorites()
         .shareVirtualAggregate(aggregateScope)
-    private val favoriteChannelCount = favoriteChannels
-        .map { channels -> channels.size }
-        .distinctUntilChanged()
+    private val favoriteChannelCount = observeVirtualFavoriteCount(favoritesRepository)
     private val favoriteSummary = favoriteChannels
         .map(::virtualFavoritesSummary)
         .shareVirtualAggregate(aggregateScope)
 
     override fun observePlaylists(): Flow<List<Playlist>> {
-        return combine(
+        return kotlinx.coroutines.flow.combine(
             delegate.observePlaylists(),
             favoriteChannelCount
         ) { playlists, channelCount ->
@@ -148,6 +145,11 @@ class VirtualFavoritesPlaylistRepository @Inject constructor(
         }
     }
 }
+
+internal fun observeVirtualFavoriteCount(
+    favoritesRepository: FavoritesRepository
+): Flow<Int> = favoritesRepository.observeFavoriteCount()
+    .distinctUntilChanged()
 
 internal fun virtualFavoritesPlaylist(channelCount: Int): Playlist = Playlist(
     id = VIRTUAL_FAVORITES_PLAYLIST_ID,
