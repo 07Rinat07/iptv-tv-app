@@ -135,10 +135,9 @@ class UnifiedFavoritesRepositoryImpl @Inject constructor(
 
         val equivalents = loadLiveChannels(setOf(logicalKey))
             .ifEmpty { listOf(selected) }
-        val playlists = equivalents
-            .map(ChannelEntity::playlistId)
-            .distinct()
-            .associateWith { playlistId -> playlistDao.findById(playlistId) }
+        val playlists = playlistDao.findPlaylistMapByIds(
+            equivalents.map(ChannelEntity::playlistId)
+        )
         val now = System.currentTimeMillis()
         val batch = UnifiedFavoritePersistence.fromLiveChannels(
             logicalKey = logicalKey,
