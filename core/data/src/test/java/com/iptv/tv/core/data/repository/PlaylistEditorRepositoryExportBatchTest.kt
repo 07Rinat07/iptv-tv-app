@@ -4,6 +4,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
+import com.iptv.tv.core.model.EditorExportResult
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -56,7 +57,7 @@ class PlaylistEditorRepositoryExportBatchTest {
             channelIds = firstBatch + secondBatch + 1L
         )
 
-        val success = result as AppResult.Success
+        val success = result as AppResult.Success<EditorExportResult>
         assertEquals(7L, success.data.playlistId)
         assertEquals(2, success.data.channelCount)
         assertTrue(success.data.m3uContent.contains("Hidden selected"))
