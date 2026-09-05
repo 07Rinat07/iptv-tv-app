@@ -132,9 +132,16 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         }
         val playlist = playlistDao.findById(playlistId)
             ?: return@withContext AppResult.Error("Плейлист не найден: id=$playlistId")
-        val channels = channelDao.getChannels(playlistId)
-        val allowedIds = channelIds.toSet()
-        val targetChannels = if (allowedIds.isEmpty()) channels else channels.filter { it.id in allowedIds }
+        val targetChannels = if (channelIds.isEmpty()) {
+            channelDao.getChannels(playlistId)
+        } else {
+            channelIds
+                .distinct()
+                .chunked(BULK_METADATA_LOOKUP_BATCH_SIZE)
+                .flatMap { batch -> channelDao.findByIds(batch) }
+                .filter { channel -> channel.playlistId == playlistId }
+                .sortedBy(ChannelEntity::orderIndex)
+        }
         if (targetChannels.isEmpty()) {
             return@withContext AppResult.Error("Нет каналов для применения metadata rules")
         }

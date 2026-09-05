@@ -291,11 +291,18 @@ class ChannelMetadataRepositoryImplTest {
         val channelDao = mockk<ChannelDao>()
         val playlistDao = mockk<PlaylistDao>()
         val syncLogDao = mockk<SyncLogDao>()
+        val newsChannel = channel(id = 10, name = "Kazakh News", tvgId = "kz.news", logo = null)
+            .copy(orderIndex = 1)
+        val movieChannel = channel(id = 11, name = "Movie One", tvgId = "movie.one", logo = null)
+            .copy(orderIndex = 2)
+        val foreignChannel = channel(id = 99, name = "Foreign News", tvgId = "foreign.news", logo = null)
+            .copy(playlistId = 2, orderIndex = 0)
 
         coEvery { playlistDao.findById(1) } returns playlist()
-        coEvery { channelDao.getChannels(1) } returns listOf(
-            channel(id = 10, name = "Kazakh News", tvgId = "kz.news", logo = null),
-            channel(id = 11, name = "Movie One", tvgId = "movie.one", logo = null)
+        coEvery { channelDao.findByIds(listOf(10, 11, 99)) } returns listOf(
+            foreignChannel,
+            movieChannel,
+            newsChannel
         )
         coEvery { metadataDao.findByChannelIds(listOf(10, 11)) } returns emptyList()
         coEvery { metadataDao.upsert(any()) } returns Unit
@@ -313,11 +320,14 @@ class ChannelMetadataRepositoryImplTest {
                 match=kazakh; country=KZ; language=kk; category=Local
                 name=movie; category=Movies
             """.trimIndent(),
-            channelIds = listOf(10, 11)
+            channelIds = listOf(10, 11, 99, 10)
         )
 
         assertTrue(result is AppResult.Success)
         assertEquals(2, (result as AppResult.Success).data)
+        coVerify(exactly = 1) { channelDao.findByIds(listOf(10, 11, 99)) }
+        coVerify(exactly = 0) { channelDao.getChannels(any()) }
+        coVerify(exactly = 1) { metadataDao.findByChannelIds(listOf(10, 11)) }
         coVerify {
             metadataDao.upsert(
                 match<ChannelMetadataEntity> {
@@ -338,7 +348,13 @@ class ChannelMetadataRepositoryImplTest {
                         it.metadataSource == "manual_metadata"
                 }
             )
-            syncLogDao.insert(match<SyncLogEntity> { it.status == "metadata_rules_applied" })
+            syncLogDao.insert(
+                match<SyncLogEntity> {
+                    it.status == "metadata_rules_applied" &&
+                        it.message.contains("target=2") &&
+                        it.message.contains("updated=2")
+                }
+            )
         }
     }
 
