@@ -83,9 +83,9 @@ internal fun aceLivePeerRefillEventShouldWake(event: AceLiveTcpPoolEvent): Boole
     is AceLiveTcpPoolEvent.Ingress -> event.result.peerExchangePeers.isNotEmpty()
     is AceLiveTcpPoolEvent.ConnectFailed -> !event.retrying
     is AceLiveTcpPoolEvent.Disconnected -> !event.retrying
-    is AceLiveTcpPoolEvent.TransportConnected,
     is AceLiveTcpPoolEvent.HandshakeAccepted,
-    is AceLiveTcpPoolEvent.HandshakeRejected -> false
+    is AceLiveTcpPoolEvent.HandshakeRejected -> true
+    is AceLiveTcpPoolEvent.TransportConnected -> false
 }
 
 /**
