@@ -94,13 +94,9 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
             .chunked(BULK_METADATA_LOOKUP_BATCH_SIZE)
             .flatMap { batch -> channelDao.findByIds(batch) }
             .associateBy(ChannelEntity::id)
-        val existingMetadataByChannelId = ids
-            .asSequence()
-            .filter(channelsById::containsKey)
-            .toList()
-            .chunked(BULK_METADATA_LOOKUP_BATCH_SIZE)
-            .flatMap { batch -> channelMetadataDao.findByChannelIds(batch) }
-            .associateBy { metadata -> metadata.channelId }
+        val existingMetadataByChannelId = findMetadataByChannelIds(
+            ids.filter(channelsById::containsKey)
+        )
         var updated = 0
         ids.forEach { channelId ->
             val channel = channelsById[channelId] ?: return@forEach
@@ -145,8 +141,7 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         if (targetChannels.isEmpty()) {
             return@withContext AppResult.Error("Нет каналов для применения metadata rules")
         }
-        val existingByChannel = channelMetadataDao.findByChannelIds(targetChannels.map { it.id })
-            .associateBy { it.channelId }
+        val existingByChannel = findMetadataByChannelIds(targetChannels.map { it.id })
         var updated = 0
         targetChannels.forEach { channel ->
             val matchedRules = rules.filter { it.matches(channel, playlist.source) }
@@ -236,8 +231,7 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         val playlist = playlistDao.findById(playlistId)
             ?: return AppResult.Error("Плейлист не найден: id=$playlistId")
         val channels = channelDao.getChannels(playlistId)
-        val existingByChannel = channelMetadataDao.findByChannelIds(channels.map { it.id })
-            .associateBy { it.channelId }
+        val existingByChannel = findMetadataByChannelIds(channels.map { it.id })
         var changedLogos = 0
         channels.forEach { channel ->
             val metadata = buildMetadata(
@@ -265,6 +259,12 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         )
         return AppResult.Success(changedLogos)
     }
+
+    private suspend fun findMetadataByChannelIds(channelIds: Collection<Long>) = channelIds
+        .distinct()
+        .chunked(BULK_METADATA_LOOKUP_BATCH_SIZE)
+        .flatMap { batch -> channelMetadataDao.findByChannelIds(batch) }
+        .associateBy { metadata -> metadata.channelId }
 
     private fun buildMetadata(
         channel: ChannelEntity,
