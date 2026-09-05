@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelOrderIndexUpdate
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.PlaylistEntity
@@ -62,8 +63,18 @@ class PlaylistEditorRepositoryNormalizeOrderBatchTest {
         coVerify(exactly = 1) {
             channelDao.findByPlaylistIdAndOrderIndexes(PLAYLIST_ID, thirdBatch)
         }
-        coVerify(exactly = 1) { channelDao.updateOrderIndex(20L, 1) }
-        coVerify(exactly = 1) { channelDao.updateOrderIndex(30L, 2) }
+        coVerify(exactly = 1) {
+            channelDao.updateOrderIndexes(
+                listOf(ChannelOrderIndexUpdate(channelId = 20L, orderIndex = 1))
+            )
+        }
+        coVerify(exactly = 1) {
+            channelDao.updateOrderIndexes(
+                listOf(ChannelOrderIndexUpdate(channelId = 30L, orderIndex = 2))
+            )
+        }
+        coVerify(exactly = 2) { channelDao.updateOrderIndexes(any()) }
+        coVerify(exactly = 0) { channelDao.updateOrderIndex(any(), any()) }
     }
 
     private fun customPlaylist() = PlaylistEntity(

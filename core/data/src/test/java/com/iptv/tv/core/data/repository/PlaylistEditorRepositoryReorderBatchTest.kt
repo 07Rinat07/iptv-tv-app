@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelOrderIndexUpdate
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.PlaylistEntity
@@ -34,10 +35,17 @@ class PlaylistEditorRepositoryReorderBatchTest {
         assertEquals(PLAYLIST_ID, success.data.effectivePlaylistId)
 
         verifyBoundedOrderReads(channelDao)
-        coVerify(exactly = 1) { channelDao.updateOrderIndex(SELECTED_FIRST_ID, 0) }
-        coVerify(exactly = 1) { channelDao.updateOrderIndex(SELECTED_LAST_ID, 1) }
-        coVerify(exactly = 1) { channelDao.updateOrderIndex(FIRST_ID, 2) }
-        coVerify(exactly = 1) { channelDao.updateOrderIndex(MIDDLE_ID, 3) }
+        coVerify(exactly = 1) {
+            channelDao.updateOrderIndexes(
+                listOf(
+                    ChannelOrderIndexUpdate(SELECTED_FIRST_ID, 0),
+                    ChannelOrderIndexUpdate(SELECTED_LAST_ID, 1),
+                    ChannelOrderIndexUpdate(FIRST_ID, 2),
+                    ChannelOrderIndexUpdate(MIDDLE_ID, 3)
+                )
+            )
+        }
+        coVerify(exactly = 0) { channelDao.updateOrderIndex(any(), any()) }
     }
 
     @Test
@@ -58,10 +66,16 @@ class PlaylistEditorRepositoryReorderBatchTest {
         assertEquals(PLAYLIST_ID, success.data.effectivePlaylistId)
 
         verifyBoundedOrderReads(channelDao)
-        coVerify(exactly = 0) { channelDao.updateOrderIndex(FIRST_ID, any()) }
-        coVerify(exactly = 1) { channelDao.updateOrderIndex(MIDDLE_ID, 1) }
-        coVerify(exactly = 1) { channelDao.updateOrderIndex(SELECTED_FIRST_ID, 2) }
-        coVerify(exactly = 1) { channelDao.updateOrderIndex(SELECTED_LAST_ID, 3) }
+        coVerify(exactly = 1) {
+            channelDao.updateOrderIndexes(
+                listOf(
+                    ChannelOrderIndexUpdate(MIDDLE_ID, 1),
+                    ChannelOrderIndexUpdate(SELECTED_FIRST_ID, 2),
+                    ChannelOrderIndexUpdate(SELECTED_LAST_ID, 3)
+                )
+            )
+        }
+        coVerify(exactly = 0) { channelDao.updateOrderIndex(any(), any()) }
     }
 
     private fun stubLargePlaylistOrder(
