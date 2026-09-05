@@ -11,7 +11,3 @@ package com.iptv.tv.core.p2p
 internal fun aceLiveRecoveryRefillProbePeers(
     recovery: AceLiveRecoveryPlan
 ): Int = if (recovery.timedOutRequests.isNotEmpty()) 1 else 0
-
-internal fun aceLiveRecoveryShouldWakePeerRefill(
-    recovery: AceLiveRecoveryPlan
-): Boolean = aceLiveRecoveryRefillProbePeers(recovery) > 0
