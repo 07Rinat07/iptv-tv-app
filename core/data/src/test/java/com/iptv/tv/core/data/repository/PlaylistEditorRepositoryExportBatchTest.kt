@@ -17,11 +17,64 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlaylistEditorRepositoryExportBatchTest {
     @Test
-    fun selectedExportUsesChunkedReadsAndPreservesSelectionSemantics() = runTest {
+    fun selectedExportUsesSingleBoundedReadAndPreservesSelectionSemantics() = runTest {
         val playlistDao = mockk<PlaylistDao>(relaxed = true)
         val channelDao = mockk<ChannelDao>(relaxed = true)
-        val firstBatch = (1L..900L).toList()
-        val secondBatch = listOf(901L)
+        val selectedIds = (1L..900L).toList()
+        val hiddenSelected = channel(
+            id = 1L,
+            playlistId = 7L,
+            name = "Hidden selected",
+            orderIndex = 2,
+            isHidden = true
+        )
+        val orderedFirst = channel(
+            id = 2L,
+            playlistId = 7L,
+            name = "Ordered first",
+            orderIndex = 1,
+            isHidden = false
+        )
+        val foreignPlaylist = channel(
+            id = 900L,
+            playlistId = 8L,
+            name = "Foreign playlist",
+            orderIndex = 0,
+            isHidden = false
+        )
+
+        coEvery { channelDao.findByIds(selectedIds) } returns listOf(hiddenSelected, foreignPlaylist, orderedFirst)
+
+        val repository = PlaylistEditorRepositoryImpl(
+            playlistDao = playlistDao,
+            channelDao = channelDao
+        )
+
+        val result = repository.exportToM3u(
+            playlistId = 7L,
+            channelIds = selectedIds + 1L
+        )
+
+        val success = result as AppResult.Success<EditorExportResult>
+        assertEquals(7L, success.data.playlistId)
+        assertEquals(2, success.data.channelCount)
+        assertTrue(success.data.m3uContent.contains("Hidden selected"))
+        assertTrue(success.data.m3uContent.contains("Ordered first"))
+        assertTrue(!success.data.m3uContent.contains("Foreign playlist"))
+        assertTrue(
+            success.data.m3uContent.indexOf("Ordered first") <
+                success.data.m3uContent.indexOf("Hidden selected")
+        )
+
+        coVerify(exactly = 1) { channelDao.findByIds(selectedIds) }
+        coVerify(exactly = 0) { channelDao.getChannels(any()) }
+    }
+
+    @Test
+    fun largeSelectedExportUsesOnePlaylistSnapshotInsteadOfMultipleIdReads() = runTest {
+        val playlistDao = mockk<PlaylistDao>(relaxed = true)
+        val channelDao = mockk<ChannelDao>(relaxed = true)
+        val selectedIds = (1L..901L).toList()
         val hiddenSelected = channel(
             id = 1L,
             playlistId = 7L,
@@ -36,16 +89,15 @@ class PlaylistEditorRepositoryExportBatchTest {
             orderIndex = 1,
             isHidden = false
         )
-        val foreignPlaylist = channel(
-            id = 900L,
-            playlistId = 8L,
-            name = "Foreign playlist",
+        val unselected = channel(
+            id = 1000L,
+            playlistId = 7L,
+            name = "Unselected",
             orderIndex = 0,
             isHidden = false
         )
 
-        coEvery { channelDao.findByIds(firstBatch) } returns listOf(hiddenSelected, foreignPlaylist)
-        coEvery { channelDao.findByIds(secondBatch) } returns listOf(orderedFirst)
+        coEvery { channelDao.getChannels(7L) } returns listOf(unselected, hiddenSelected, orderedFirst)
 
         val repository = PlaylistEditorRepositoryImpl(
             playlistDao = playlistDao,
@@ -54,23 +106,21 @@ class PlaylistEditorRepositoryExportBatchTest {
 
         val result = repository.exportToM3u(
             playlistId = 7L,
-            channelIds = firstBatch + secondBatch + 1L
+            channelIds = selectedIds + 1L
         )
 
         val success = result as AppResult.Success<EditorExportResult>
-        assertEquals(7L, success.data.playlistId)
         assertEquals(2, success.data.channelCount)
         assertTrue(success.data.m3uContent.contains("Hidden selected"))
         assertTrue(success.data.m3uContent.contains("Ordered first"))
-        assertTrue(!success.data.m3uContent.contains("Foreign playlist"))
+        assertTrue(!success.data.m3uContent.contains("Unselected"))
         assertTrue(
             success.data.m3uContent.indexOf("Ordered first") <
                 success.data.m3uContent.indexOf("Hidden selected")
         )
 
-        coVerify(exactly = 1) { channelDao.findByIds(firstBatch) }
-        coVerify(exactly = 1) { channelDao.findByIds(secondBatch) }
-        coVerify(exactly = 0) { channelDao.getChannels(any()) }
+        coVerify(exactly = 1) { channelDao.getChannels(7L) }
+        coVerify(exactly = 0) { channelDao.findByIds(any()) }
     }
 
     private fun channel(
