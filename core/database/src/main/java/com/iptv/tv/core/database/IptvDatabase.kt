@@ -12,6 +12,7 @@ import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.dao.HistoryDao
 import com.iptv.tv.core.database.dao.ParentalProfileDao
 import com.iptv.tv.core.database.dao.PlaylistDao
+import com.iptv.tv.core.database.dao.PlaylistDeleteDao
 import com.iptv.tv.core.database.dao.PlaylistProviderDao
 import com.iptv.tv.core.database.dao.ProviderSyncHistoryDao
 import com.iptv.tv.core.database.dao.ReadyPlaylistRefreshDao
@@ -66,6 +67,7 @@ import com.iptv.tv.core.database.entity.TvHomeChannelEntity
 )
 abstract class IptvDatabase : RoomDatabase() {
     abstract fun playlistDao(): PlaylistDao
+    abstract fun playlistDeleteDao(): PlaylistDeleteDao
     abstract fun channelDao(): ChannelDao
     abstract fun favoriteDao(): FavoriteDao
     abstract fun favoriteSnapshotDao(): FavoriteSnapshotDao
