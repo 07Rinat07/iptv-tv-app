@@ -113,6 +113,7 @@ class PlaylistEditorRepositoryImplTest {
     fun bulkDelete_worksOnCustomPlaylistWithoutCreatingCopy() = runTest {
         val playlistDao = mockk<PlaylistDao>()
         val channelDao = mockk<ChannelDao>()
+        val normalizationWindow = listOf(0, 1)
 
         coEvery { playlistDao.findById(5) } returns PlaylistEntity(
             id = 5,
@@ -126,7 +127,10 @@ class PlaylistEditorRepositoryImplTest {
             createdAt = 1L
         )
         coEvery { channelDao.deleteByIds(listOf(100L)) } returns 1
-        coEvery { channelDao.getChannels(5) } returns listOf(
+        coEvery { channelDao.maxOrderIndex(5) } returns 1
+        coEvery {
+            channelDao.findByPlaylistIdAndOrderIndexes(5, normalizationWindow)
+        } returns listOf(
             channel(id = 101, playlistId = 5, orderIndex = 1, name = "AfterDelete", url = "https://x")
         )
         coEvery { channelDao.updateOrderIndex(101, 0) } returns Unit
@@ -141,6 +145,10 @@ class PlaylistEditorRepositoryImplTest {
         assertTrue(!data.createdWorkingCopy)
 
         coVerify(exactly = 0) { playlistDao.insertPlaylist(any()) }
+        coVerify(exactly = 0) { channelDao.getChannels(5) }
+        coVerify(exactly = 1) {
+            channelDao.findByPlaylistIdAndOrderIndexes(5, normalizationWindow)
+        }
         coVerify(exactly = 1) { channelDao.updateOrderIndex(101, 0) }
     }
 
