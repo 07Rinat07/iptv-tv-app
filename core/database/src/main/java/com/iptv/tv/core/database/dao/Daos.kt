@@ -93,6 +93,16 @@ abstract class ChannelDao {
     @Query("SELECT * FROM channels WHERE id IN (:channelIds)")
     abstract suspend fun findByIds(channelIds: List<Long>): List<ChannelEntity>
 
+    @Query(
+        "SELECT * FROM channels " +
+            "WHERE playlistId = :playlistId AND orderIndex IN (:orderIndexes) " +
+            "ORDER BY orderIndex ASC"
+    )
+    abstract suspend fun findByPlaylistIdAndOrderIndexes(
+        playlistId: Long,
+        orderIndexes: List<Int>
+    ): List<ChannelEntity>
+
     @Query("DELETE FROM channels WHERE playlistId = :playlistId")
     abstract suspend fun clearPlaylist(playlistId: Long): Int
 

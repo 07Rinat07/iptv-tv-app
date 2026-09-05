@@ -36,15 +36,18 @@ class PlaylistEditorRepositoryExistingCowBatchTest {
         assertTrue(!success.data.createdWorkingCopy)
         coVerify(exactly = 0) { channelDao.getChannels(any()) }
         coVerify(exactly = 0) { channelDao.findByIds(any()) }
+        coVerify(exactly = 0) { channelDao.findByPlaylistIdAndOrderIndexes(any(), any()) }
     }
 
     @Test
-    fun largeExistingCowSelectionUsesBoundedSourceReads() = runTest {
+    fun largeExistingCowSelectionUsesBoundedSourceAndCowReads() = runTest {
         val playlistDao = mockk<PlaylistDao>(relaxed = true)
         val channelDao = mockk<ChannelDao>(relaxed = true)
-        val firstBatch = (1L..900L).toList()
-        val secondBatch = listOf(901L)
-        val selectedIds = firstBatch + secondBatch
+        val firstSourceBatch = (1L..900L).toList()
+        val secondSourceBatch = listOf(901L)
+        val selectedIds = firstSourceBatch + secondSourceBatch
+        val firstOrderBatch = (0 until 900).toList()
+        val secondOrderBatch = listOf(900)
         val sourceChannels = selectedIds.map { id ->
             channel(
                 id = id,
@@ -63,9 +66,14 @@ class PlaylistEditorRepositoryExistingCowBatchTest {
 
         coEvery { playlistDao.findById(SOURCE_PLAYLIST_ID) } returns sourcePlaylist()
         coEvery { playlistDao.findLatestCustomBySource("cow:$SOURCE_PLAYLIST_ID") } returns cowPlaylist()
-        coEvery { channelDao.findByIds(firstBatch) } returns sourceChannels.take(900)
-        coEvery { channelDao.findByIds(secondBatch) } returns sourceChannels.drop(900)
-        coEvery { channelDao.getChannels(COW_PLAYLIST_ID) } returns cowChannels
+        coEvery { channelDao.findByIds(firstSourceBatch) } returns sourceChannels.take(900)
+        coEvery { channelDao.findByIds(secondSourceBatch) } returns sourceChannels.drop(900)
+        coEvery {
+            channelDao.findByPlaylistIdAndOrderIndexes(COW_PLAYLIST_ID, firstOrderBatch)
+        } returns cowChannels.take(900)
+        coEvery {
+            channelDao.findByPlaylistIdAndOrderIndexes(COW_PLAYLIST_ID, secondOrderBatch)
+        } returns cowChannels.drop(900)
         coEvery { channelDao.setHidden(expectedCowIds, true) } returns expectedCowIds.size
 
         val repository = PlaylistEditorRepositoryImpl(
@@ -85,10 +93,16 @@ class PlaylistEditorRepositoryExistingCowBatchTest {
         assertEquals(901, success.data.affectedCount)
         assertTrue(!success.data.createdWorkingCopy)
 
-        coVerify(exactly = 1) { channelDao.findByIds(firstBatch) }
-        coVerify(exactly = 1) { channelDao.findByIds(secondBatch) }
+        coVerify(exactly = 1) { channelDao.findByIds(firstSourceBatch) }
+        coVerify(exactly = 1) { channelDao.findByIds(secondSourceBatch) }
         coVerify(exactly = 0) { channelDao.getChannels(SOURCE_PLAYLIST_ID) }
-        coVerify(exactly = 1) { channelDao.getChannels(COW_PLAYLIST_ID) }
+        coVerify(exactly = 0) { channelDao.getChannels(COW_PLAYLIST_ID) }
+        coVerify(exactly = 1) {
+            channelDao.findByPlaylistIdAndOrderIndexes(COW_PLAYLIST_ID, firstOrderBatch)
+        }
+        coVerify(exactly = 1) {
+            channelDao.findByPlaylistIdAndOrderIndexes(COW_PLAYLIST_ID, secondOrderBatch)
+        }
         coVerify(exactly = 1) { channelDao.setHidden(expectedCowIds, true) }
     }
 

@@ -343,9 +343,23 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
         existingCowPlaylistId: Long
     ): List<Long> {
         if (selectedChannelIds.isEmpty()) return emptyList()
-        val copiedChannels = channelDao.getChannels(existingCowPlaylistId)
-        val copiedByOrder = copiedChannels.associateBy { it.orderIndex }
         val sourceById = sourceChannels.associateBy { it.id }
+        val selectedOrders = selectedChannelIds
+            .distinct()
+            .mapNotNull { sourceId -> sourceById[sourceId]?.orderIndex }
+        if (selectedOrders.isEmpty()) return emptyList()
+
+        val copiedByOrder = selectedOrders
+            .distinct()
+            .chunked(CHANNEL_LOOKUP_BATCH_SIZE)
+            .flatMap { batch ->
+                channelDao.findByPlaylistIdAndOrderIndexes(
+                    playlistId = existingCowPlaylistId,
+                    orderIndexes = batch
+                )
+            }
+            .associateBy { it.orderIndex }
+
         return selectedChannelIds.distinct().mapNotNull { sourceId ->
             sourceById[sourceId]?.orderIndex?.let { order -> copiedByOrder[order]?.id }
         }
