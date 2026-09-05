@@ -270,11 +270,14 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
             )
         }
 
-        val sourceChannels = channelDao.getChannels(playlistId).sortedBy { it.orderIndex }
         val cowSource = "cow:$playlistId"
         val existingCow = playlistDao.findLatestCustomBySource(cowSource)
 
         if (existingCow != null) {
+            val sourceChannels = loadSelectedSourceChannels(
+                playlistId = playlistId,
+                selectedChannelIds = selectedChannelIds
+            )
             val mappedSelected = mapSelectionToCow(
                 sourceChannels = sourceChannels,
                 selectedChannelIds = selectedChannelIds,
@@ -287,6 +290,7 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
             )
         }
 
+        val sourceChannels = channelDao.getChannels(playlistId).sortedBy { it.orderIndex }
         val newPlaylistId = playlistDao.insertPlaylist(
             PlaylistEntity(
                 name = "${playlist.name} (COW)",
@@ -319,6 +323,18 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
             selectedChannelIds = mappedSelected,
             createdWorkingCopy = true
         )
+    }
+
+    private suspend fun loadSelectedSourceChannels(
+        playlistId: Long,
+        selectedChannelIds: List<Long>
+    ): List<ChannelEntity> {
+        if (selectedChannelIds.isEmpty()) return emptyList()
+        return selectedChannelIds
+            .distinct()
+            .chunked(CHANNEL_LOOKUP_BATCH_SIZE)
+            .flatMap { batch -> channelDao.findByIds(batch) }
+            .filter { channel -> channel.playlistId == playlistId }
     }
 
     private suspend fun mapSelectionToCow(
