@@ -93,6 +93,32 @@ class EpgChannelMatchPolicyTest {
     }
 
     @Test
+    fun trailingTvLabelOnPlaylistNameMatchesBaseXmlTvChannel() {
+        val result = EpgChannelMatchPolicy.uniquePartialChannelId(
+            normalizedChannelName = "матчтв",
+            channelIdsByTextKey = listOf(
+                "матч" to "xmltv.match",
+                "матчстрана" to "xmltv.match-country"
+            )
+        )
+
+        assertEquals("xmltv.match", result)
+    }
+
+    @Test
+    fun trailingTvAliasFailsClosedWhenBaseAndTvFeedsBothExist() {
+        val result = EpgChannelMatchPolicy.uniquePartialChannelId(
+            normalizedChannelName = "матчтв",
+            channelIdsByTextKey = listOf(
+                "матч" to "xmltv.match",
+                "матчтв" to "xmltv.match-tv"
+            )
+        )
+
+        assertNull(result)
+    }
+
+    @Test
     fun resolutionAndAvailabilityDecorationsMatchBaseXmlTvChannel() {
         val result = EpgChannelMatchPolicy.uniquePartialChannelId(
             normalizedChannelName = "brtv720pgeoblocked",
@@ -182,6 +208,8 @@ class EpgChannelMatchPolicyTest {
     fun shortNamesAreNotDestroyedByQualitySuffixRule() {
         assertEquals(setOf("hd"), EpgChannelMatchPolicy.qualityAliases("hd"))
         assertEquals(setOf("uhd"), EpgChannelMatchPolicy.qualityAliases("uhd"))
+        assertEquals(setOf("mtv"), EpgChannelMatchPolicy.qualityAliases("mtv"))
+        assertEquals(setOf("htv"), EpgChannelMatchPolicy.qualityAliases("htv"))
     }
 
     @Test
