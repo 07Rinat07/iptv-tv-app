@@ -26,6 +26,11 @@ data class PlaylistWithCount(
     val channelCount: Int
 )
 
+data class ChannelOrderIndexUpdate(
+    val channelId: Long,
+    val orderIndex: Int
+)
+
 @Dao
 interface PlaylistDao {
     @Query(
@@ -141,6 +146,16 @@ abstract class ChannelDao {
 
     @Query("UPDATE channels SET orderIndex = :orderIndex WHERE id = :channelId")
     abstract suspend fun updateOrderIndex(channelId: Long, orderIndex: Int)
+
+    @Transaction
+    open suspend fun updateOrderIndexes(updates: List<ChannelOrderIndexUpdate>) {
+        updates.forEach { update ->
+            updateOrderIndex(
+                channelId = update.channelId,
+                orderIndex = update.orderIndex
+            )
+        }
+    }
 
     @Query(
         "UPDATE channels SET " +

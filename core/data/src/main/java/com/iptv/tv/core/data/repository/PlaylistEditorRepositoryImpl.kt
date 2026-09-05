@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelOrderIndexUpdate
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.PlaylistEntity
@@ -412,21 +413,39 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
                     .thenBy { it.id }
             )
 
-            channels.forEach { channel ->
-                if (channel.orderIndex != nextOrderIndex) {
-                    channelDao.updateOrderIndex(channel.id, nextOrderIndex)
+            val updates = buildList {
+                channels.forEach { channel ->
+                    if (channel.orderIndex != nextOrderIndex) {
+                        add(
+                            ChannelOrderIndexUpdate(
+                                channelId = channel.id,
+                                orderIndex = nextOrderIndex
+                            )
+                        )
+                    }
+                    nextOrderIndex++
                 }
-                nextOrderIndex++
+            }
+            if (updates.isNotEmpty()) {
+                channelDao.updateOrderIndexes(updates)
             }
             batchStart = batchEnd + 1
         }
     }
 
     private suspend fun applyOrder(channels: List<ChannelOrderEntry>) {
-        channels.forEachIndexed { index, channel ->
-            if (channel.orderIndex != index) {
-                channelDao.updateOrderIndex(channel.id, index)
+        val updates = channels.mapIndexedNotNull { index, channel ->
+            if (channel.orderIndex == index) {
+                null
+            } else {
+                ChannelOrderIndexUpdate(
+                    channelId = channel.id,
+                    orderIndex = index
+                )
             }
+        }
+        if (updates.isNotEmpty()) {
+            channelDao.updateOrderIndexes(updates)
         }
     }
 
