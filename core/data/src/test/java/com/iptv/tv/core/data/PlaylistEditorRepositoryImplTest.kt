@@ -3,6 +3,7 @@ package com.iptv.tv.core.data
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.repository.PlaylistEditorRepositoryImpl
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelOrderIndexUpdate
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.PlaylistEntity
@@ -114,6 +115,9 @@ class PlaylistEditorRepositoryImplTest {
         val playlistDao = mockk<PlaylistDao>()
         val channelDao = mockk<ChannelDao>()
         val normalizationWindow = listOf(0, 1)
+        val normalizationUpdates = listOf(
+            ChannelOrderIndexUpdate(channelId = 101L, orderIndex = 0)
+        )
 
         coEvery { playlistDao.findById(5) } returns PlaylistEntity(
             id = 5,
@@ -133,7 +137,7 @@ class PlaylistEditorRepositoryImplTest {
         } returns listOf(
             channel(id = 101, playlistId = 5, orderIndex = 1, name = "AfterDelete", url = "https://x")
         )
-        coEvery { channelDao.updateOrderIndex(101, 0) } returns Unit
+        coEvery { channelDao.updateOrderIndexes(normalizationUpdates) } returns Unit
 
         val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
         val result = repository.bulkDelete(5, listOf(100))
@@ -149,7 +153,8 @@ class PlaylistEditorRepositoryImplTest {
         coVerify(exactly = 1) {
             channelDao.findByPlaylistIdAndOrderIndexes(5, normalizationWindow)
         }
-        coVerify(exactly = 1) { channelDao.updateOrderIndex(101, 0) }
+        coVerify(exactly = 1) { channelDao.updateOrderIndexes(normalizationUpdates) }
+        coVerify(exactly = 0) { channelDao.updateOrderIndex(any(), any()) }
     }
 
     @Test
