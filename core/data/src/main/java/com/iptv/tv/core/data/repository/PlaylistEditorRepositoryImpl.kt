@@ -366,8 +366,32 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
     }
 
     private suspend fun normalizeOrder(playlistId: Long) {
-        val channels = channelDao.getChannels(playlistId).sortedBy { it.orderIndex }
-        applyOrder(channels)
+        val maxOrderIndex = channelDao.maxOrderIndex(playlistId)
+        if (maxOrderIndex < 0) return
+
+        var nextOrderIndex = 0
+        var batchStart = 0
+        while (batchStart <= maxOrderIndex) {
+            val batchEnd = minOf(
+                batchStart + CHANNEL_LOOKUP_BATCH_SIZE - 1,
+                maxOrderIndex
+            )
+            val channels = channelDao.findByPlaylistIdAndOrderIndexes(
+                playlistId = playlistId,
+                orderIndexes = (batchStart..batchEnd).toList()
+            ).sortedWith(
+                compareBy<ChannelEntity> { it.orderIndex }
+                    .thenBy { it.id }
+            )
+
+            channels.forEach { channel ->
+                if (channel.orderIndex != nextOrderIndex) {
+                    channelDao.updateOrderIndex(channel.id, nextOrderIndex)
+                }
+                nextOrderIndex++
+            }
+            batchStart = batchEnd + 1
+        }
     }
 
     private suspend fun applyOrder(channels: List<ChannelEntity>) {
