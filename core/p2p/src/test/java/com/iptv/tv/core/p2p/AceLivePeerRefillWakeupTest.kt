@@ -113,6 +113,53 @@ class AceLivePeerRefillWakeupTest {
     }
 
     @Test
+    fun `one shot recovery probe can exceed a full baseline target once`() = runBlocking {
+        val known = endpoint("192.0.2.21", 8621)
+        val coordinator = coordinator(target = 1, max = 2, maxStarts = 1)
+        val active = linkedSetOf(40L)
+        val recoveryProbe = AceLiveRecoveryPeerProbe()
+        var nextPeerId = 100L
+        var discoveryCalls = 0
+        val started = mutableListOf<AceLiveTcpPeerEndpoint>()
+
+        coordinator.onPoolEvent(
+            AceLiveTcpPoolEvent.Ingress(
+                peerId = 40L,
+                result = AceLivePeerIngressResult(peerExchangePeers = listOf(known))
+            ),
+            nowMillis = 1_000L
+        )
+        recoveryProbe.request()
+
+        val loop = AceLivePeerRefillLoop(
+            coordinator = coordinator,
+            discover = {
+                discoveryCalls += 1
+                emptyDiscovery()
+            },
+            activePeerIds = { active.toSet() },
+            evaluateRecovery = { AceLiveRecoveryPlan(poolStale = false) },
+            nextNeededPiece = { null },
+            allocatePeerId = { nextPeerId++ },
+            startPeer = { peerId, peer ->
+                active += peerId
+                started += peer
+            },
+            clockMillis = { 1_000L },
+            adaptiveProbePeers = { recoveryProbe.consumeCombinedWith(existingProbePeers = 0) }
+        )
+
+        val recoveryCycle = loop.runOneCycle()
+        val followingCycle = loop.runOneCycle()
+
+        assertEquals(1, recoveryCycle.startedPeers)
+        assertEquals(listOf(known), started)
+        assertEquals(0, discoveryCalls)
+        assertEquals(0, followingCycle.startedPeers)
+        assertFalse(followingCycle.discoveryAttempted)
+    }
+
+    @Test
     fun `wakeups coalesce while a refill cycle is busy`() = runBlocking {
         val coordinator = coordinator(target = 1, max = 1, maxStarts = 1)
         val firstEntered = CompletableDeferred<Unit>()
