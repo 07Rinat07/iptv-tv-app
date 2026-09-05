@@ -236,8 +236,15 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
             val channels = if (channelIds.isEmpty()) {
                 channelDao.getChannels(playlistId).filterNot { it.isHidden }
             } else {
-                val selectedSet = channelIds.toSet()
-                channelDao.getChannels(playlistId).filter { it.id in selectedSet }
+                val distinctIds = channelIds.distinct()
+                if (distinctIds.size <= CHANNEL_LOOKUP_BATCH_SIZE) {
+                    channelDao.findByIds(distinctIds)
+                        .filter { channel -> channel.playlistId == playlistId }
+                } else {
+                    val selectedSet = distinctIds.toSet()
+                    channelDao.getChannels(playlistId)
+                        .filter { channel -> channel.id in selectedSet }
+                }
             }
 
             if (channels.isEmpty()) return@withContext AppResult.Error("Нет каналов для экспорта")
@@ -377,5 +384,6 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
 
     private companion object {
         const val DB_INSERT_CHUNK = 500
+        const val CHANNEL_LOOKUP_BATCH_SIZE = 900
     }
 }
