@@ -24,8 +24,6 @@ import com.iptv.tv.core.model.Playlist
 import com.iptv.tv.core.model.PlaylistContentSummary
 import com.iptv.tv.core.model.PlaylistSourceType
 import com.iptv.tv.core.model.PlaylistValidationReport
-import com.iptv.tv.core.model.VIRTUAL_ALL_CHANNELS_PLAYLIST_ID
-import com.iptv.tv.core.model.VIRTUAL_FAVORITES_PLAYLIST_ID
 import com.iptv.tv.core.model.VIRTUAL_RECENT_CHANNELS_PLAYLIST_ID
 import com.iptv.tv.core.model.VIRTUAL_RECENT_CHANNELS_SOURCE
 import javax.inject.Inject
@@ -40,14 +38,14 @@ import kotlinx.coroutines.flow.mapLatest
 /**
  * Adds a bounded, newest-first Recent aggregate over the existing All Channels/Favorites chain.
  *
- * History stores legacy channel IDs. Resolution therefore uses both live All Channels rows and
+ * History stores legacy channel IDs. Resolution therefore uses bounded live-channel candidates and
  * durable Favorites representatives before applying the current parental policy. The returned
  * [Channel] keeps the selected source playlist ID and stream provenance for the existing Player
  * route; no physical playlist row is created.
  *
- * Playlist metadata intentionally resolves only the bounded history-ID window. Explicit Recent
- * browsing keeps the existing aggregate implementation, while Home/playlist observation avoids
- * materializing complete All-channels and Favorites lists merely to calculate channelCount.
+ * Both explicit Recent browsing and playlist metadata resolve only the bounded history-ID window.
+ * Home/playlist observation keeps a separate count flow so it does not materialize the Recent
+ * channel list merely to calculate channelCount.
  *
  * This is also the outermost [PlaylistRepository] decorator. User-requested EPG clock correction
  * is intentionally applied here so guide, Player and recording callers observe one consistent
@@ -66,20 +64,14 @@ class VirtualRecentChannelsPlaylistRepository @Inject constructor(
     private val aggregateScope: VirtualPlaylistAggregateScope
 ) : PlaylistRepository by delegate {
     private val recentChannels by lazy {
-        combine(
-            historyRepository.observeHistory(limit = RECENT_HISTORY_LOOKBACK_LIMIT),
-            delegate.observeChannels(VIRTUAL_ALL_CHANNELS_PLAYLIST_ID),
-            delegate.observeChannels(VIRTUAL_FAVORITES_PLAYLIST_ID),
-            settingsRepository.observeParentalControlSettings().distinctUntilChanged()
-        ) { history, allChannels, favoriteChannels, parentalSettings ->
-            recentChannelsForVirtualView(
-                history = history,
-                allChannels = allChannels,
-                favoriteChannels = favoriteChannels,
-                parentalGate = parentalSettings.toParentalChannelGate(),
-                limit = MAX_RECENT_CHANNELS
-            )
-        }.shareVirtualAggregate(aggregateScope)
+        observeVirtualRecentChannels(
+            history = historyRepository.observeHistory(limit = RECENT_HISTORY_LOOKBACK_LIMIT),
+            parentalSettings = settingsRepository.observeParentalControlSettings(),
+            channelInvalidation = favoriteChannelLookupDao.observeChannelTableInvalidation(),
+            favoriteInvalidation = favoritesRepository.observeFavoriteCount(),
+            favoriteVariantInvalidation = favoriteSnapshotDao.observeFavoriteVariantCount(),
+            loadCandidates = ::loadRecentCandidates
+        ).shareVirtualAggregate(aggregateScope)
     }
     private val recentChannelCount by lazy {
         observeVirtualRecentChannelCount(
@@ -88,17 +80,7 @@ class VirtualRecentChannelsPlaylistRepository @Inject constructor(
             channelInvalidation = favoriteChannelLookupDao.observeChannelTableInvalidation(),
             favoriteInvalidation = favoritesRepository.observeFavoriteCount(),
             favoriteVariantInvalidation = favoriteSnapshotDao.observeFavoriteVariantCount(),
-            loadCandidates = { history ->
-                loadRecentMetadataCandidates(
-                    history = history,
-                    findChannelsByIds = favoriteChannelLookupDao::findChannelsByIds,
-                    findFavoritesByPreferredChannelIds =
-                        favoriteSnapshotDao::findFavoritesByPreferredChannelIds,
-                    findVariantsByLogicalKeys = favoriteSnapshotDao::findVariantsByLogicalKeys,
-                    findMatchingFavoriteLiveChannels =
-                        favoriteLiveChannelResolver::findMatchingChannels
-                )
-            }
+            loadCandidates = ::loadRecentCandidates
         )
     }
     private val recentChannelsSummary by lazy {
@@ -242,6 +224,50 @@ class VirtualRecentChannelsPlaylistRepository @Inject constructor(
             )
         )
     }
+
+    private suspend fun loadRecentCandidates(
+        history: List<PlaybackHistoryItem>
+    ): RecentMetadataCandidates {
+        return loadRecentMetadataCandidates(
+            history = history,
+            findChannelsByIds = favoriteChannelLookupDao::findChannelsByIds,
+            findFavoritesByPreferredChannelIds =
+                favoriteSnapshotDao::findFavoritesByPreferredChannelIds,
+            findVariantsByLogicalKeys = favoriteSnapshotDao::findVariantsByLogicalKeys,
+            findMatchingFavoriteLiveChannels = favoriteLiveChannelResolver::findMatchingChannels
+        )
+    }
+}
+
+internal fun observeVirtualRecentChannels(
+    history: Flow<List<PlaybackHistoryItem>>,
+    parentalSettings: Flow<ParentalControlSettings>,
+    channelInvalidation: Flow<Int>,
+    favoriteInvalidation: Flow<Int>,
+    favoriteVariantInvalidation: Flow<Int>,
+    loadCandidates: suspend (List<PlaybackHistoryItem>) -> RecentMetadataCandidates
+): Flow<List<Channel>> {
+    return combine(
+        history,
+        channelInvalidation,
+        favoriteInvalidation,
+        favoriteVariantInvalidation,
+        parentalSettings.distinctUntilChanged()
+    ) { historyItems, _, _, _, settings ->
+        RecentChannelInput(
+            history = historyItems,
+            parentalGate = settings.toParentalChannelGate()
+        )
+    }.mapLatest { input ->
+        val candidates = loadCandidates(input.history)
+        recentChannelsForVirtualView(
+            history = input.history,
+            allChannels = candidates.allChannels,
+            favoriteChannels = candidates.favoriteChannels,
+            parentalGate = input.parentalGate,
+            limit = MAX_RECENT_CHANNELS
+        )
+    }.distinctUntilChanged()
 }
 
 internal fun observeVirtualRecentChannelCount(
@@ -259,7 +285,7 @@ internal fun observeVirtualRecentChannelCount(
         favoriteVariantInvalidation,
         parentalSettings.distinctUntilChanged()
     ) { historyItems, _, _, _, settings ->
-        RecentChannelCountInput(
+        RecentChannelInput(
             history = historyItems,
             parentalGate = settings.toParentalChannelGate()
         )
@@ -275,7 +301,7 @@ internal fun observeVirtualRecentChannelCount(
     }.distinctUntilChanged()
 }
 
-private data class RecentChannelCountInput(
+private data class RecentChannelInput(
     val history: List<PlaybackHistoryItem>,
     val parentalGate: ParentalChannelGate
 )
