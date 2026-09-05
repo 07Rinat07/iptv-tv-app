@@ -106,7 +106,7 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
             val context = ensureWorkingCopy(playlistId, channelIds)
             if (context.selectedChannelIds.isEmpty()) return@withContext AppResult.Error("Не удалось сопоставить выбранные каналы")
 
-            val all = channelDao.getChannels(context.effectivePlaylistId).sortedBy { it.orderIndex }
+            val all = loadChannelOrderEntries(context.effectivePlaylistId)
             val selectedSet = context.selectedChannelIds.toSet()
             val selected = all.filter { it.id in selectedSet }
             val remaining = all.filter { it.id !in selectedSet }
@@ -130,7 +130,7 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
             val context = ensureWorkingCopy(playlistId, channelIds)
             if (context.selectedChannelIds.isEmpty()) return@withContext AppResult.Error("Не удалось сопоставить выбранные каналы")
 
-            val all = channelDao.getChannels(context.effectivePlaylistId).sortedBy { it.orderIndex }
+            val all = loadChannelOrderEntries(context.effectivePlaylistId)
             val selectedSet = context.selectedChannelIds.toSet()
             val selected = all.filter { it.id in selectedSet }
             val remaining = all.filter { it.id !in selectedSet }
@@ -365,6 +365,34 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
         }
     }
 
+    private suspend fun loadChannelOrderEntries(playlistId: Long): List<ChannelOrderEntry> {
+        val maxOrderIndex = channelDao.maxOrderIndex(playlistId)
+        if (maxOrderIndex < 0) return emptyList()
+
+        val orderedChannels = mutableListOf<ChannelOrderEntry>()
+        var batchStart = 0
+        while (batchStart <= maxOrderIndex) {
+            val batchEnd = minOf(
+                batchStart + CHANNEL_LOOKUP_BATCH_SIZE - 1,
+                maxOrderIndex
+            )
+            channelDao.findByPlaylistIdAndOrderIndexes(
+                playlistId = playlistId,
+                orderIndexes = (batchStart..batchEnd).toList()
+            ).sortedWith(
+                compareBy<ChannelEntity> { it.orderIndex }
+                    .thenBy { it.id }
+            ).mapTo(orderedChannels) { channel ->
+                ChannelOrderEntry(
+                    id = channel.id,
+                    orderIndex = channel.orderIndex
+                )
+            }
+            batchStart = batchEnd + 1
+        }
+        return orderedChannels
+    }
+
     private suspend fun normalizeOrder(playlistId: Long) {
         val maxOrderIndex = channelDao.maxOrderIndex(playlistId)
         if (maxOrderIndex < 0) return
@@ -394,7 +422,7 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
         }
     }
 
-    private suspend fun applyOrder(channels: List<ChannelEntity>) {
+    private suspend fun applyOrder(channels: List<ChannelOrderEntry>) {
         channels.forEachIndexed { index, channel ->
             if (channel.orderIndex != index) {
                 channelDao.updateOrderIndex(channel.id, index)
@@ -427,6 +455,11 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
     }
+
+    private data class ChannelOrderEntry(
+        val id: Long,
+        val orderIndex: Int
+    )
 
     private data class WorkingContext(
         val effectivePlaylistId: Long,
