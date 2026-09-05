@@ -19,6 +19,7 @@ import com.iptv.tv.core.database.dao.FavoriteSnapshotDao
 import com.iptv.tv.core.database.dao.HistoryDao
 import com.iptv.tv.core.database.dao.ParentalProfileDao
 import com.iptv.tv.core.database.dao.PlaylistDao
+import com.iptv.tv.core.database.dao.PlaylistDeleteDao
 import com.iptv.tv.core.database.dao.PlaylistProviderDao
 import com.iptv.tv.core.database.dao.ProviderSyncHistoryDao
 import com.iptv.tv.core.database.dao.ReadyPlaylistRefreshDao
@@ -54,6 +55,9 @@ object DatabaseModule {
 
     @Provides
     fun providePlaylistDao(database: IptvDatabase): PlaylistDao = database.playlistDao()
+
+    @Provides
+    fun providePlaylistDeleteDao(database: IptvDatabase): PlaylistDeleteDao = database.playlistDeleteDao()
 
     @Provides
     fun provideChannelDao(database: IptvDatabase): ChannelDao = database.channelDao()
