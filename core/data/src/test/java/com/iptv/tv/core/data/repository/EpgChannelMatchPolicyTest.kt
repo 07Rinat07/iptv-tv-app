@@ -94,15 +94,26 @@ class EpgChannelMatchPolicyTest {
 
     @Test
     fun trailingTvLabelOnPlaylistNameMatchesBaseXmlTvChannel() {
-        val result = EpgChannelMatchPolicy.uniquePartialChannelId(
-            normalizedChannelName = "матчтв",
-            channelIdsByTextKey = listOf(
-                "матч" to "xmltv.match",
-                "матчстрана" to "xmltv.match-country"
+        assertEquals(
+            "xmltv.match",
+            EpgChannelMatchPolicy.uniquePartialChannelId(
+                normalizedChannelName = "матчтв",
+                channelIdsByTextKey = listOf(
+                    "матч" to "xmltv.match",
+                    "матчстрана" to "xmltv.match-country"
+                )
             )
         )
-
-        assertEquals("xmltv.match", result)
+        assertEquals(
+            "xmltv.sportsnet",
+            EpgChannelMatchPolicy.uniquePartialChannelId(
+                normalizedChannelName = "sportsnettv",
+                channelIdsByTextKey = listOf(
+                    "sportsnet" to "xmltv.sportsnet",
+                    "sportsnetwork" to "xmltv.sports-network"
+                )
+            )
+        )
     }
 
     @Test
