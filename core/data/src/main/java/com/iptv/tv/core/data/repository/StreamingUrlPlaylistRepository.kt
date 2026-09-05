@@ -250,27 +250,48 @@ class StreamingUrlPlaylistImporter @Inject constructor(
     }
 
     private suspend fun inheritGlobalFavorites(playlistId: Long) {
-        val favoriteChannelIds = favoriteDao.getFavorites().map { it.channelId }
+        val favoriteChannelIds = favoriteDao.getFavorites()
+            .map { it.channelId }
+            .distinct()
         if (favoriteChannelIds.isEmpty()) return
 
-        val favoriteIdentities = channelDao.findByIds(favoriteChannelIds)
-            .mapTo(mutableSetOf()) { channel ->
-                GlobalFavoriteIdentity.key(channel.tvgId, channel.name, channel.streamUrl)
+        val favoriteIdentities = mutableSetOf<String>()
+        favoriteChannelIds
+            .chunked(CHANNEL_LOOKUP_BATCH_SIZE)
+            .forEach { batch ->
+                channelDao.findByIds(batch).forEach { channel ->
+                    favoriteIdentities += GlobalFavoriteIdentity.key(
+                        channel.tvgId,
+                        channel.name,
+                        channel.streamUrl
+                    )
+                }
             }
         if (favoriteIdentities.isEmpty()) return
 
-        val channels = channelDao.getChannels(playlistId)
-        if (channels.isEmpty()) return
+        val maxOrderIndex = channelDao.maxOrderIndex(playlistId)
+        if (maxOrderIndex < 0) return
 
-        val inherited = channels
-            .filter { channel ->
+        var batchStart = 0
+        while (batchStart <= maxOrderIndex) {
+            val batchEnd = minOf(
+                batchStart + CHANNEL_LOOKUP_BATCH_SIZE - 1,
+                maxOrderIndex
+            )
+            val inherited = channelDao.findByPlaylistIdAndOrderIndexes(
+                playlistId = playlistId,
+                orderIndexes = (batchStart..batchEnd).toList()
+            ).filter { channel ->
                 GlobalFavoriteIdentity.key(channel.tvgId, channel.name, channel.streamUrl) in
                     favoriteIdentities
-            }
-            .map { channel ->
+            }.map { channel ->
                 FavoriteEntity(channelId = channel.id, addedAt = System.currentTimeMillis())
             }
-        if (inherited.isNotEmpty()) favoriteDao.upsertAll(inherited)
+            if (inherited.isNotEmpty()) {
+                favoriteDao.upsertAll(inherited)
+            }
+            batchStart = batchEnd + 1
+        }
     }
 
     private suspend fun probeAndPersistHealth(channels: List<ChannelEntity>): UrlImportHealthStats {
@@ -404,6 +425,7 @@ class StreamingUrlPlaylistImporter @Inject constructor(
 
     private companion object {
         const val DB_INSERT_CHUNK = 500
+        const val CHANNEL_LOOKUP_BATCH_SIZE = 900
         const val AUTO_HEALTH_CHECK_LIMIT = 200
         const val HEALTH_CHECK_CONCURRENCY = 20
         const val HEALTH_CHECK_RETRIES = 2
