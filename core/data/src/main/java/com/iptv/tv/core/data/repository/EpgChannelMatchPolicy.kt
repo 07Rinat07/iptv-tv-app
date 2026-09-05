@@ -66,7 +66,9 @@ internal object EpgChannelMatchPolicy {
 
     // Order longest/editorial tags first so e.g. "...1080pgeoblocked" becomes base channel name
     // through deterministic, bounded suffix peeling. Regional tags intentionally exclude short
-    // country codes such as "ru" because they collide with legitimate channel names.
+    // country codes such as "ru" because they collide with legitimate channel names. Generic TV
+    // labels are allowed only as a trailing token after at least four base characters, which keeps
+    // short real names such as MTV/HTV intact while covering catalogue forms such as "Матч ТВ".
     private val PRESENTATION_SUFFIXES = listOf(
         "sanktpeterburg",
         "санктпетербург",
@@ -97,6 +99,8 @@ internal object EpgChannelMatchPolicy {
         "мск",
         "4k",
         "hd",
-        "sd"
+        "sd",
+        "tv",
+        "тв"
     )
 }
