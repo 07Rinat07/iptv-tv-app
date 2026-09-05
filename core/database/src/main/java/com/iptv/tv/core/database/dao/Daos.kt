@@ -5,6 +5,7 @@ import androidx.room.Embedded
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import com.iptv.tv.core.database.entity.PlaylistEntity
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.ChannelMetadataEntity
@@ -73,52 +74,70 @@ interface PlaylistDao {
 }
 
 @Dao
-interface ChannelDao {
+abstract class ChannelDao {
     @Query("SELECT * FROM channels WHERE playlistId = :playlistId ORDER BY orderIndex ASC")
-    fun observeChannels(playlistId: Long): Flow<List<ChannelEntity>>
+    abstract fun observeChannels(playlistId: Long): Flow<List<ChannelEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(items: List<ChannelEntity>)
+    abstract suspend fun insertAll(items: List<ChannelEntity>)
 
     @Query("SELECT * FROM channels WHERE playlistId = :playlistId ORDER BY orderIndex ASC")
-    suspend fun getChannels(playlistId: Long): List<ChannelEntity>
+    abstract suspend fun getChannels(playlistId: Long): List<ChannelEntity>
 
     @Query("SELECT * FROM channels WHERE playlistId = :playlistId ORDER BY orderIndex ASC LIMIT :limit")
-    suspend fun getChannelsLimited(playlistId: Long, limit: Int): List<ChannelEntity>
+    abstract suspend fun getChannelsLimited(playlistId: Long, limit: Int): List<ChannelEntity>
 
     @Query("SELECT * FROM channels")
-    suspend fun getAllChannels(): List<ChannelEntity>
+    abstract suspend fun getAllChannels(): List<ChannelEntity>
 
     @Query("SELECT * FROM channels WHERE id IN (:channelIds)")
-    suspend fun findByIds(channelIds: List<Long>): List<ChannelEntity>
+    abstract suspend fun findByIds(channelIds: List<Long>): List<ChannelEntity>
 
     @Query("DELETE FROM channels WHERE playlistId = :playlistId")
-    suspend fun clearPlaylist(playlistId: Long): Int
+    abstract suspend fun clearPlaylist(playlistId: Long): Int
 
     @Query("SELECT * FROM channels WHERE id = :channelId LIMIT 1")
-    suspend fun findById(channelId: Long): ChannelEntity?
+    abstract suspend fun findById(channelId: Long): ChannelEntity?
 
     @Query("UPDATE channels SET health = :health WHERE id = :channelId")
-    suspend fun updateHealth(channelId: Long, health: String)
+    abstract suspend fun updateHealth(channelId: Long, health: String)
 
     @Query("UPDATE channels SET isHidden = :hidden WHERE id IN (:channelIds)")
-    suspend fun setHidden(channelIds: List<Long>, hidden: Boolean): Int
+    protected abstract suspend fun setHiddenChunk(channelIds: List<Long>, hidden: Boolean): Int
 
     @Query("DELETE FROM channels WHERE id IN (:channelIds)")
-    suspend fun deleteByIds(channelIds: List<Long>): Int
+    protected abstract suspend fun deleteByIdsChunk(channelIds: List<Long>): Int
+
+    @Transaction
+    open suspend fun setHidden(channelIds: List<Long>, hidden: Boolean): Int {
+        var affected = 0
+        for (batch in ChannelWriteBatching.batches(channelIds)) {
+            affected += setHiddenChunk(batch, hidden)
+        }
+        return affected
+    }
+
+    @Transaction
+    open suspend fun deleteByIds(channelIds: List<Long>): Int {
+        var affected = 0
+        for (batch in ChannelWriteBatching.batches(channelIds)) {
+            affected += deleteByIdsChunk(batch)
+        }
+        return affected
+    }
 
     @Query("DELETE FROM channels WHERE playlistId = :playlistId AND health = :health")
-    suspend fun deleteByHealth(playlistId: Long, health: String): Int
+    abstract suspend fun deleteByHealth(playlistId: Long, health: String): Int
 
     @Query("UPDATE channels SET orderIndex = :orderIndex WHERE id = :channelId")
-    suspend fun updateOrderIndex(channelId: Long, orderIndex: Int)
+    abstract suspend fun updateOrderIndex(channelId: Long, orderIndex: Int)
 
     @Query(
         "UPDATE channels SET " +
             "name = :name, groupName = :groupName, logo = :logo, streamUrl = :streamUrl " +
             "WHERE id = :channelId"
     )
-    suspend fun updateChannelFields(
+    abstract suspend fun updateChannelFields(
         channelId: Long,
         name: String,
         groupName: String?,
@@ -127,14 +146,14 @@ interface ChannelDao {
     ): Int
 
     @Query("SELECT COALESCE(MAX(orderIndex), -1) FROM channels WHERE playlistId = :playlistId")
-    suspend fun maxOrderIndex(playlistId: Long): Int
+    abstract suspend fun maxOrderIndex(playlistId: Long): Int
 
     @Query(
         "SELECT c.* FROM channels c " +
             "INNER JOIN favorites f ON f.channelId = c.id " +
             "ORDER BY f.addedAt DESC"
     )
-    fun observeFavoriteChannels(): Flow<List<ChannelEntity>>
+    abstract fun observeFavoriteChannels(): Flow<List<ChannelEntity>>
 }
 
 @Dao
