@@ -508,6 +508,7 @@ class AceLiveEmbeddedEngine(
         )
         private val schedulerRequestDepth = AtomicInteger(BASELINE_IN_FLIGHT_PER_PEER)
         private val adaptivePeerProbePeers = AtomicInteger(0)
+        private val recoveryPeerProbe = AceLiveRecoveryPeerProbe()
         private val authoritativeBufferPressure = AtomicReference<AceLiveBufferPressure?>(null)
         private val authoritativePressureSampleAtMillis = AtomicLong(0L)
         private val bufferDiagnosticsReporter = AceLiveBufferDiagnosticsReporter(diagnosticsObserver)
@@ -608,7 +609,9 @@ class AceLiveEmbeddedEngine(
                 )
                 firstPeerStartAtMillis.compareAndSet(0L, System.currentTimeMillis())
             },
-            adaptiveProbePeers = { adaptivePeerProbePeers.get() },
+            adaptiveProbePeers = {
+                recoveryPeerProbe.consumeCombinedWith(adaptivePeerProbePeers.get())
+            },
             replacementPeerId = { activePeerIds, nowMillis ->
                 val pressureAt = authoritativePressureSampleAtMillis.get()
                 val freshPressure = authoritativeBufferPressure.get().takeIf {
@@ -967,6 +970,7 @@ class AceLiveEmbeddedEngine(
                     )
                     val recovery = pool.evaluateRecovery()
                     if (aceLiveRecoveryShouldWakePeerRefill(recovery)) {
+                        recoveryPeerProbe.request()
                         refillLoop.requestWakeup()
                     }
                     recovery.cursorAdvance?.let { advance ->
