@@ -27,6 +27,15 @@ class EpgDisplayNameMatchPolicyTest {
     }
 
     @Test
+    fun trailingTvDisplayNameMatchesBasePlaylistName() {
+        val index = EpgDisplayNameMatchPolicy.buildIndex(
+            listOf("матчтв" to "xmltv-match")
+        )
+
+        assertEquals("xmltv-match", EpgDisplayNameMatchPolicy.uniqueChannelId("матч", index))
+    }
+
+    @Test
     fun duplicateExactDisplayNameAcrossDifferentChannelsFailsClosed() {
         val index = EpgDisplayNameMatchPolicy.buildIndex(
             listOf(
@@ -48,6 +57,18 @@ class EpgDisplayNameMatchPolicyTest {
         )
 
         assertNull(EpgDisplayNameMatchPolicy.uniqueChannelId("discoveryrussiahd", index))
+    }
+
+    @Test
+    fun baseAndTvDisplayFeedsFailClosedForDecoratedPlaylistName() {
+        val index = EpgDisplayNameMatchPolicy.buildIndex(
+            listOf(
+                "матч" to "xmltv-match-base",
+                "матчтв" to "xmltv-match-tv"
+            )
+        )
+
+        assertNull(EpgDisplayNameMatchPolicy.uniqueChannelId("матчтв", index))
     }
 
     @Test
