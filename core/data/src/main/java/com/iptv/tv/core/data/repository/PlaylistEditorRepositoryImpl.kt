@@ -192,7 +192,9 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
             val distinctIds = channelIds.distinct()
             if (distinctIds.isEmpty()) return@withContext AppResult.Error("Не выбраны каналы")
 
-            val channels = channelDao.findByIds(distinctIds)
+            val channels = distinctIds
+                .chunked(CHANNEL_LOOKUP_BATCH_SIZE)
+                .flatMap { batch -> channelDao.findByIds(batch) }
             if (channels.isEmpty()) return@withContext AppResult.Error("Выбранные каналы не найдены")
 
             val channelsById = channels.associateBy { it.id }
