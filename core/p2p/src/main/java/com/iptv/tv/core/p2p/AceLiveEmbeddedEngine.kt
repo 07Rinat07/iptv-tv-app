@@ -966,6 +966,9 @@ class AceLiveEmbeddedEngine(
                         maxInFlightPerPeer = schedulerRequestDepth.get()
                     )
                     val recovery = pool.evaluateRecovery()
+                    if (aceLiveRecoveryShouldWakePeerRefill(recovery)) {
+                        refillLoop.requestWakeup()
+                    }
                     recovery.cursorAdvance?.let { advance ->
                         val applied = pool.applyRecoveryAdvance(advance)
                         Log.w(
