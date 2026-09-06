@@ -34,21 +34,11 @@ class PlaylistEditorRepositoryImplTest {
             isCustom = false,
             createdAt = 1L
         )
-        val sourceChannels = listOf(
-            channel(id = 10, playlistId = 1, orderIndex = 0, name = "News", url = "https://a"),
-            channel(id = 11, playlistId = 1, orderIndex = 1, name = "Sport", url = "https://b")
-        )
-        val copiedChannels = listOf(
-            channel(id = 20, playlistId = 2, orderIndex = 0, name = "News", url = "https://a"),
-            channel(id = 21, playlistId = 2, orderIndex = 1, name = "Sport", url = "https://b")
-        )
 
         coEvery { playlistDao.findById(1) } returns sourcePlaylist
         coEvery { playlistDao.findLatestCustomBySource("cow:1") } returns null
-        coEvery { channelDao.getChannels(1) } returns sourceChannels
         coEvery { playlistDao.insertPlaylist(any()) } returns 2
-        coEvery { channelDao.insertAll(any()) } returns Unit
-        coEvery { channelDao.getChannels(2) } returns copiedChannels
+        coEvery { channelDao.clonePlaylistChannels(1, 2) } returns Unit
 
         val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
         val result = repository.ensureEditablePlaylist(1)
@@ -61,9 +51,69 @@ class PlaylistEditorRepositoryImplTest {
         coVerify(exactly = 1) {
             playlistDao.insertPlaylist(match { it.isCustom && it.source == "cow:1" })
         }
+        coVerify(exactly = 1) { channelDao.clonePlaylistChannels(1, 2) }
+        coVerify(exactly = 0) { channelDao.getChannels(1) }
+        coVerify(exactly = 0) { channelDao.insertAll(any()) }
+        coVerify(exactly = 0) { channelDao.findByIds(any()) }
+    }
+
+    @Test
+    fun bulkHide_createsCowWithSqlCloneAndMapsSelectedChannel() = runTest {
+        val playlistDao = mockk<PlaylistDao>()
+        val channelDao = mockk<ChannelDao>()
+        val sourceChannel = channel(
+            id = 10,
+            playlistId = 1,
+            orderIndex = 899,
+            name = "Selected",
+            url = "https://source"
+        )
+        val copiedChannel = sourceChannel.copy(
+            id = 20,
+            playlistId = 2
+        )
+
+        coEvery { playlistDao.findById(1) } returns PlaylistEntity(
+            id = 1,
+            name = "Source",
+            sourceType = "URL",
+            source = "https://example.com/list.m3u",
+            epgSourceUrl = null,
+            scheduleHours = 12,
+            lastSyncedAt = null,
+            isCustom = false,
+            createdAt = 1L
+        )
+        coEvery { playlistDao.findLatestCustomBySource("cow:1") } returns null
+        coEvery { channelDao.findByIds(listOf(10L)) } returns listOf(sourceChannel)
+        coEvery { playlistDao.insertPlaylist(any()) } returns 2
+        coEvery { channelDao.clonePlaylistChannels(1, 2) } returns Unit
+        coEvery {
+            channelDao.findByPlaylistIdAndOrderIndexes(2, listOf(899))
+        } returns listOf(copiedChannel)
+        coEvery { channelDao.setHidden(listOf(20L), true) } returns 1
+
+        val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
+        val result = repository.bulkHide(
+            playlistId = 1,
+            channelIds = listOf(10L),
+            hidden = true
+        )
+
+        assertTrue(result is AppResult.Success)
+        val data = (result as AppResult.Success).data
+        assertEquals(2L, data.effectivePlaylistId)
+        assertEquals(1, data.affectedCount)
+        assertTrue(data.createdWorkingCopy)
+
+        coVerify(exactly = 1) { channelDao.findByIds(listOf(10L)) }
+        coVerify(exactly = 1) { channelDao.clonePlaylistChannels(1, 2) }
         coVerify(exactly = 1) {
-            channelDao.insertAll(match { inserted -> inserted.size == 2 && inserted.all { it.playlistId == 2L } })
+            channelDao.findByPlaylistIdAndOrderIndexes(2, listOf(899))
         }
+        coVerify(exactly = 1) { channelDao.setHidden(listOf(20L), true) }
+        coVerify(exactly = 0) { channelDao.getChannels(1) }
+        coVerify(exactly = 0) { channelDao.insertAll(any()) }
     }
 
     @Test
@@ -108,6 +158,7 @@ class PlaylistEditorRepositoryImplTest {
 
         coVerify(exactly = 0) { playlistDao.insertPlaylist(any()) }
         coVerify(exactly = 0) { channelDao.insertAll(any()) }
+        coVerify(exactly = 0) { channelDao.clonePlaylistChannels(any(), any()) }
     }
 
     @Test
