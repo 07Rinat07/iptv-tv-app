@@ -4,6 +4,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.mapper.toEntity
 import com.iptv.tv.core.data.mapper.toModel
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.dao.SyncLogDao
@@ -22,6 +23,7 @@ import javax.inject.Singleton
 class ChannelMetadataRepositoryImpl @Inject constructor(
     private val channelMetadataDao: ChannelMetadataDao,
     private val channelDao: ChannelDao,
+    private val channelSnapshotReader: ChannelExportSnapshotReader,
     private val playlistDao: PlaylistDao,
     private val syncLogDao: SyncLogDao,
     private val logoCatalogResolver: LogoCatalogResolver = LogoCatalogResolver()
@@ -128,8 +130,8 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         }
         val playlist = playlistDao.findById(playlistId)
             ?: return@withContext AppResult.Error("Плейлист не найден: id=$playlistId")
-        val targetChannels = if (channelIds.isEmpty()) {
-            channelDao.getChannels(playlistId)
+        val targetChannelIds = if (channelIds.isEmpty()) {
+            channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(playlistId)
         } else {
             channelIds
                 .distinct()
@@ -137,16 +139,17 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
                 .flatMap { batch -> channelDao.findByIds(batch) }
                 .filter { channel -> channel.playlistId == playlistId }
                 .sortedBy(ChannelEntity::orderIndex)
+                .map(ChannelEntity::id)
         }
-        if (targetChannels.isEmpty()) {
+        if (targetChannelIds.isEmpty()) {
             return@withContext AppResult.Error("Нет каналов для применения metadata rules")
         }
-        val existingByChannel = findMetadataByChannelIds(targetChannels.map { it.id })
+
         var updated = 0
-        targetChannels.forEach { channel ->
+        val processed = visitChannelsWithMetadata(targetChannelIds) { channel, existing ->
             val matchedRules = rules.filter { it.matches(channel, playlist.source) }
-            if (matchedRules.isEmpty()) return@forEach
-            val existing = existingByChannel[channel.id]?.toModel()
+            if (matchedRules.isEmpty()) return@visitChannelsWithMetadata
+
             var metadata = existing.copyOrNew(channel)
             matchedRules.forEach { rule ->
                 metadata = metadata.copy(
@@ -166,7 +169,7 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         }
         addLog(
             status = "metadata_rules_applied",
-            message = "playlistId=$playlistId, rules=${rules.size}, target=${targetChannels.size}, updated=$updated"
+            message = "playlistId=$playlistId, rules=${rules.size}, target=$processed, updated=$updated"
         )
         AppResult.Success(updated)
     }
@@ -230,13 +233,12 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
     ): AppResult<Int> {
         val playlist = playlistDao.findById(playlistId)
             ?: return AppResult.Error("Плейлист не найден: id=$playlistId")
-        val channels = channelDao.getChannels(playlistId)
-        val existingByChannel = findMetadataByChannelIds(channels.map { it.id })
+        val channelIds = channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(playlistId)
         var changedLogos = 0
-        channels.forEach { channel ->
+        val processed = visitChannelsWithMetadata(channelIds) { channel, existing ->
             val metadata = buildMetadata(
                 channel = channel,
-                existing = existingByChannel[channel.id]?.toModel(),
+                existing = existing,
                 playlistSource = playlist.source,
                 resolver = resolver
             )
@@ -255,9 +257,30 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         }
         addLog(
             status = logStatus,
-            message = "${logPrefix}playlistId=$playlistId, channels=${channels.size}, changedLogos=$changedLogos"
+            message = "${logPrefix}playlistId=$playlistId, channels=$processed, changedLogos=$changedLogos"
         )
         return AppResult.Success(changedLogos)
+    }
+
+    private suspend fun visitChannelsWithMetadata(
+        channelIds: List<Long>,
+        visitor: suspend (ChannelEntity, ChannelMetadata?) -> Unit
+    ): Int {
+        var processed = 0
+        channelIds.chunked(BULK_METADATA_LOOKUP_BATCH_SIZE).forEach { batchIds ->
+            val channelsById = channelDao.findByIds(batchIds).associateBy(ChannelEntity::id)
+            val channels = batchIds.mapNotNull(channelsById::get)
+            if (channels.isEmpty()) return@forEach
+
+            val existingByChannel = channelMetadataDao
+                .findByChannelIds(channels.map(ChannelEntity::id))
+                .associateBy { metadata -> metadata.channelId }
+            channels.forEach { channel ->
+                visitor(channel, existingByChannel[channel.id]?.toModel())
+                processed += 1
+            }
+        }
+        return processed
     }
 
     private suspend fun findMetadataByChannelIds(channelIds: Collection<Long>) = channelIds
