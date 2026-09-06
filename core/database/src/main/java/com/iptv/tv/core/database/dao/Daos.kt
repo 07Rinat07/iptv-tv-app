@@ -121,6 +121,47 @@ abstract class ChannelDao {
         orderIndexes: List<Int>
     ): List<ChannelEntity>
 
+    @Transaction
+    open suspend fun clonePlaylistChannelsAndMapSelection(
+        sourcePlaylistId: Long,
+        targetPlaylistId: Long,
+        selectedChannelIds: List<Long>
+    ): List<Long> {
+        val distinctSelectedIds = selectedChannelIds.distinct()
+        val selectedSourceChannels = ChannelWriteBatching.batches(distinctSelectedIds)
+            .flatMap { batch -> findByIds(batch) }
+            .filter { channel -> channel.playlistId == sourcePlaylistId }
+        val sourceById = selectedSourceChannels.associateBy { channel -> channel.id }
+
+        clonePlaylistChannels(
+            sourcePlaylistId = sourcePlaylistId,
+            targetPlaylistId = targetPlaylistId
+        )
+
+        if (distinctSelectedIds.isEmpty()) return emptyList()
+
+        val selectedOrders = distinctSelectedIds
+            .mapNotNull { sourceId -> sourceById[sourceId]?.orderIndex }
+        if (selectedOrders.isEmpty()) return emptyList()
+
+        val copiedByOrder = selectedOrders
+            .distinct()
+            .chunked(ChannelWriteBatching.MAX_IDS_PER_QUERY)
+            .flatMap { batch ->
+                findByPlaylistIdAndOrderIndexes(
+                    playlistId = targetPlaylistId,
+                    orderIndexes = batch
+                )
+            }
+            .associateBy { channel -> channel.orderIndex }
+
+        return distinctSelectedIds.mapNotNull { sourceId ->
+            sourceById[sourceId]?.orderIndex?.let { orderIndex ->
+                copiedByOrder[orderIndex]?.id
+            }
+        }
+    }
+
     @Query("DELETE FROM channels WHERE playlistId = :playlistId")
     abstract suspend fun clearPlaylist(playlistId: Long): Int
 
