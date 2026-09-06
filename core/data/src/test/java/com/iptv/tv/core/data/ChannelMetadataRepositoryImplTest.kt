@@ -4,6 +4,7 @@ import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.repository.ChannelMetadataRepositoryImpl
 import com.iptv.tv.core.data.repository.parseMetadataRules
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.dao.SyncLogDao
@@ -25,6 +26,7 @@ class ChannelMetadataRepositoryImplTest {
     fun setManualMetadata_storesManualOverridesAsEffectiveMetadata() = runTest {
         val metadataDao = mockk<ChannelMetadataDao>()
         val channelDao = mockk<ChannelDao>()
+        val channelSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         val playlistDao = mockk<PlaylistDao>()
         val syncLogDao = mockk<SyncLogDao>()
 
@@ -36,6 +38,7 @@ class ChannelMetadataRepositoryImplTest {
         val repository = ChannelMetadataRepositoryImpl(
             channelMetadataDao = metadataDao,
             channelDao = channelDao,
+            channelSnapshotReader = channelSnapshotReader,
             playlistDao = playlistDao,
             syncLogDao = syncLogDao
         )
@@ -48,6 +51,7 @@ class ChannelMetadataRepositoryImplTest {
 
         assertTrue(result is AppResult.Success)
         assertEquals(1, (result as AppResult.Success).data)
+        coVerify(exactly = 0) { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(any()) }
         coVerify {
             metadataDao.upsert(
                 match<ChannelMetadataEntity> {
@@ -71,6 +75,7 @@ class ChannelMetadataRepositoryImplTest {
     fun setManualMetadataBulk_appliesOverridesToExistingChannels() = runTest {
         val metadataDao = mockk<ChannelMetadataDao>()
         val channelDao = mockk<ChannelDao>()
+        val channelSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         val playlistDao = mockk<PlaylistDao>()
         val syncLogDao = mockk<SyncLogDao>()
         val firstChannel = channel(id = 10, name = "Kazakh News", tvgId = null, logo = null)
@@ -84,6 +89,7 @@ class ChannelMetadataRepositoryImplTest {
         val repository = ChannelMetadataRepositoryImpl(
             channelMetadataDao = metadataDao,
             channelDao = channelDao,
+            channelSnapshotReader = channelSnapshotReader,
             playlistDao = playlistDao,
             syncLogDao = syncLogDao
         )
@@ -100,6 +106,7 @@ class ChannelMetadataRepositoryImplTest {
         coVerify(exactly = 0) { channelDao.findById(any()) }
         coVerify(exactly = 1) { metadataDao.findByChannelIds(listOf(10, 11)) }
         coVerify(exactly = 0) { metadataDao.findByChannelId(any()) }
+        coVerify(exactly = 0) { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(any()) }
         coVerify(exactly = 2) {
             metadataDao.upsert(
                 match<ChannelMetadataEntity> {
@@ -128,13 +135,14 @@ class ChannelMetadataRepositoryImplTest {
     fun refreshMetadataWithLogoPack_appliesExternalLogoPackToPlaylistChannels() = runTest {
         val metadataDao = mockk<ChannelMetadataDao>()
         val channelDao = mockk<ChannelDao>()
+        val channelSnapshotReader = mockk<ChannelExportSnapshotReader>()
         val playlistDao = mockk<PlaylistDao>()
         val syncLogDao = mockk<SyncLogDao>()
+        val targetChannel = channel(id = 10, name = "External News HD", tvgId = "external.news", logo = null)
 
         coEvery { playlistDao.findById(1) } returns playlist()
-        coEvery { channelDao.getChannels(1) } returns listOf(
-            channel(id = 10, name = "External News HD", tvgId = "external.news", logo = null)
-        )
+        coEvery { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(1) } returns listOf(10)
+        coEvery { channelDao.findByIds(listOf(10)) } returns listOf(targetChannel)
         coEvery { metadataDao.findByChannelIds(listOf(10)) } returns emptyList()
         coEvery { metadataDao.upsert(any()) } returns Unit
         coEvery {
@@ -151,6 +159,7 @@ class ChannelMetadataRepositoryImplTest {
         val repository = ChannelMetadataRepositoryImpl(
             channelMetadataDao = metadataDao,
             channelDao = channelDao,
+            channelSnapshotReader = channelSnapshotReader,
             playlistDao = playlistDao,
             syncLogDao = syncLogDao
         )
@@ -174,6 +183,9 @@ class ChannelMetadataRepositoryImplTest {
 
         assertTrue(result is AppResult.Success)
         assertEquals(1, (result as AppResult.Success).data)
+        coVerify(exactly = 1) { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(1) }
+        coVerify(exactly = 1) { channelDao.findByIds(listOf(10)) }
+        coVerify(exactly = 0) { channelDao.getChannels(any()) }
         coVerify {
             metadataDao.upsert(
                 match<ChannelMetadataEntity> {
@@ -195,13 +207,14 @@ class ChannelMetadataRepositoryImplTest {
     fun refreshMetadataWithLogoPack_preservesManualMetadataOverrides() = runTest {
         val metadataDao = mockk<ChannelMetadataDao>()
         val channelDao = mockk<ChannelDao>()
+        val channelSnapshotReader = mockk<ChannelExportSnapshotReader>()
         val playlistDao = mockk<PlaylistDao>()
         val syncLogDao = mockk<SyncLogDao>()
+        val targetChannel = channel(id = 10, name = "External News HD", tvgId = "external.news", logo = null)
 
         coEvery { playlistDao.findById(1) } returns playlist()
-        coEvery { channelDao.getChannels(1) } returns listOf(
-            channel(id = 10, name = "External News HD", tvgId = "external.news", logo = null)
-        )
+        coEvery { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(1) } returns listOf(10)
+        coEvery { channelDao.findByIds(listOf(10)) } returns listOf(targetChannel)
         coEvery { metadataDao.findByChannelIds(listOf(10)) } returns listOf(
             metadataEntity(
                 channelId = 10,
@@ -225,6 +238,7 @@ class ChannelMetadataRepositoryImplTest {
         val repository = ChannelMetadataRepositoryImpl(
             channelMetadataDao = metadataDao,
             channelDao = channelDao,
+            channelSnapshotReader = channelSnapshotReader,
             playlistDao = playlistDao,
             syncLogDao = syncLogDao
         )
@@ -248,6 +262,9 @@ class ChannelMetadataRepositoryImplTest {
 
         assertTrue(result is AppResult.Success)
         assertEquals(1, (result as AppResult.Success).data)
+        coVerify(exactly = 1) { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(1) }
+        coVerify(exactly = 1) { channelDao.findByIds(listOf(10)) }
+        coVerify(exactly = 0) { channelDao.getChannels(any()) }
         coVerify {
             metadataDao.upsert(
                 match<ChannelMetadataEntity> {
@@ -289,6 +306,7 @@ class ChannelMetadataRepositoryImplTest {
     fun applyMetadataRules_appliesRulesToRequestedChannels() = runTest {
         val metadataDao = mockk<ChannelMetadataDao>()
         val channelDao = mockk<ChannelDao>()
+        val channelSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         val playlistDao = mockk<PlaylistDao>()
         val syncLogDao = mockk<SyncLogDao>()
         val newsChannel = channel(id = 10, name = "Kazakh News", tvgId = "kz.news", logo = null)
@@ -311,6 +329,7 @@ class ChannelMetadataRepositoryImplTest {
         val repository = ChannelMetadataRepositoryImpl(
             channelMetadataDao = metadataDao,
             channelDao = channelDao,
+            channelSnapshotReader = channelSnapshotReader,
             playlistDao = playlistDao,
             syncLogDao = syncLogDao
         )
@@ -328,6 +347,7 @@ class ChannelMetadataRepositoryImplTest {
         coVerify(exactly = 1) { channelDao.findByIds(listOf(10, 11, 99)) }
         coVerify(exactly = 0) { channelDao.getChannels(any()) }
         coVerify(exactly = 1) { metadataDao.findByChannelIds(listOf(10, 11)) }
+        coVerify(exactly = 0) { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(any()) }
         coVerify {
             metadataDao.upsert(
                 match<ChannelMetadataEntity> {

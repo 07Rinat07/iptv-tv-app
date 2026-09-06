@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.dao.SyncLogDao
@@ -19,9 +20,10 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelMetadataRepositoryExistingReadBatchTest {
     @Test
-    fun applyMetadataRulesBatchesExistingMetadataReadsAt901Channels() = runTest {
+    fun applyMetadataRulesProcessesFullPlaylistSnapshotIn900RowBatches() = runTest {
         val channelMetadataDao = mockk<ChannelMetadataDao>(relaxed = true)
         val channelDao = mockk<ChannelDao>(relaxed = true)
+        val channelSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         val playlistDao = mockk<PlaylistDao>(relaxed = true)
         val syncLogDao = mockk<SyncLogDao>(relaxed = true)
         val logoCatalogResolver = mockk<LogoCatalogResolver>(relaxed = true)
@@ -33,15 +35,20 @@ class ChannelMetadataRepositoryExistingReadBatchTest {
                 orderIndex = index
             )
         }
+        val firstBatchIds = ids.take(900)
+        val finalBatchIds = ids.drop(900)
 
         coEvery { playlistDao.findById(1L) } returns playlist()
-        coEvery { channelDao.getChannels(1L) } returns channels
-        coEvery { channelMetadataDao.findByChannelIds(ids.take(900)) } returns emptyList()
-        coEvery { channelMetadataDao.findByChannelIds(ids.drop(900)) } returns emptyList()
+        coEvery { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(1L) } returns ids
+        coEvery { channelDao.findByIds(firstBatchIds) } returns channels.take(900)
+        coEvery { channelDao.findByIds(finalBatchIds) } returns channels.drop(900)
+        coEvery { channelMetadataDao.findByChannelIds(firstBatchIds) } returns emptyList()
+        coEvery { channelMetadataDao.findByChannelIds(finalBatchIds) } returns emptyList()
 
         val repository = ChannelMetadataRepositoryImpl(
             channelMetadataDao = channelMetadataDao,
             channelDao = channelDao,
+            channelSnapshotReader = channelSnapshotReader,
             playlistDao = playlistDao,
             syncLogDao = syncLogDao,
             logoCatalogResolver = logoCatalogResolver
@@ -55,15 +62,19 @@ class ChannelMetadataRepositoryExistingReadBatchTest {
 
         assertTrue(result is AppResult.Success)
         assertEquals(1, (result as AppResult.Success).data)
-        coVerify(exactly = 1) { channelMetadataDao.findByChannelIds(ids.take(900)) }
-        coVerify(exactly = 1) { channelMetadataDao.findByChannelIds(ids.drop(900)) }
-        coVerify(exactly = 0) { channelDao.findByIds(any()) }
+        coVerify(exactly = 1) { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(1L) }
+        coVerify(exactly = 1) { channelDao.findByIds(firstBatchIds) }
+        coVerify(exactly = 1) { channelDao.findByIds(finalBatchIds) }
+        coVerify(exactly = 1) { channelMetadataDao.findByChannelIds(firstBatchIds) }
+        coVerify(exactly = 1) { channelMetadataDao.findByChannelIds(finalBatchIds) }
+        coVerify(exactly = 0) { channelDao.getChannels(any()) }
     }
 
     @Test
-    fun refreshMetadataBatchesExistingMetadataReadsAt901Channels() = runTest {
+    fun refreshMetadataProcessesFullPlaylistSnapshotIn900RowBatches() = runTest {
         val channelMetadataDao = mockk<ChannelMetadataDao>(relaxed = true)
         val channelDao = mockk<ChannelDao>(relaxed = true)
+        val channelSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         val playlistDao = mockk<PlaylistDao>(relaxed = true)
         val syncLogDao = mockk<SyncLogDao>(relaxed = true)
         val logoCatalogResolver = mockk<LogoCatalogResolver>(relaxed = true)
@@ -71,15 +82,20 @@ class ChannelMetadataRepositoryExistingReadBatchTest {
         val channels = ids.mapIndexed { index, id ->
             channel(id = id, name = "Channel $id", orderIndex = index)
         }
+        val firstBatchIds = ids.take(900)
+        val finalBatchIds = ids.drop(900)
 
         coEvery { playlistDao.findById(1L) } returns playlist()
-        coEvery { channelDao.getChannels(1L) } returns channels
-        coEvery { channelMetadataDao.findByChannelIds(ids.take(900)) } returns emptyList()
-        coEvery { channelMetadataDao.findByChannelIds(ids.drop(900)) } returns emptyList()
+        coEvery { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(1L) } returns ids
+        coEvery { channelDao.findByIds(firstBatchIds) } returns channels.take(900)
+        coEvery { channelDao.findByIds(finalBatchIds) } returns channels.drop(900)
+        coEvery { channelMetadataDao.findByChannelIds(firstBatchIds) } returns emptyList()
+        coEvery { channelMetadataDao.findByChannelIds(finalBatchIds) } returns emptyList()
 
         val repository = ChannelMetadataRepositoryImpl(
             channelMetadataDao = channelMetadataDao,
             channelDao = channelDao,
+            channelSnapshotReader = channelSnapshotReader,
             playlistDao = playlistDao,
             syncLogDao = syncLogDao,
             logoCatalogResolver = logoCatalogResolver
@@ -89,8 +105,12 @@ class ChannelMetadataRepositoryExistingReadBatchTest {
 
         assertTrue(result is AppResult.Success)
         assertEquals(0, (result as AppResult.Success).data)
-        coVerify(exactly = 1) { channelMetadataDao.findByChannelIds(ids.take(900)) }
-        coVerify(exactly = 1) { channelMetadataDao.findByChannelIds(ids.drop(900)) }
+        coVerify(exactly = 1) { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(1L) }
+        coVerify(exactly = 1) { channelDao.findByIds(firstBatchIds) }
+        coVerify(exactly = 1) { channelDao.findByIds(finalBatchIds) }
+        coVerify(exactly = 1) { channelMetadataDao.findByChannelIds(firstBatchIds) }
+        coVerify(exactly = 1) { channelMetadataDao.findByChannelIds(finalBatchIds) }
+        coVerify(exactly = 0) { channelDao.getChannels(any()) }
     }
 
     private fun playlist() = PlaylistEntity(

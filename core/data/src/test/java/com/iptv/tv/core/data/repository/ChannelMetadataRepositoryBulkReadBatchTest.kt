@@ -1,6 +1,7 @@
 package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.ChannelMetadataDao
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.dao.SyncLogDao
@@ -19,6 +20,7 @@ class ChannelMetadataRepositoryBulkReadBatchTest {
     fun bulkManualMetadataUsesBatchReadsAndPreservesWrites() = runTest {
         val channelMetadataDao = mockk<ChannelMetadataDao>(relaxed = true)
         val channelDao = mockk<ChannelDao>(relaxed = true)
+        val channelSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         val playlistDao = mockk<PlaylistDao>(relaxed = true)
         val syncLogDao = mockk<SyncLogDao>(relaxed = true)
         val logoCatalogResolver = mockk<LogoCatalogResolver>(relaxed = true)
@@ -47,6 +49,7 @@ class ChannelMetadataRepositoryBulkReadBatchTest {
         val repository = ChannelMetadataRepositoryImpl(
             channelMetadataDao = channelMetadataDao,
             channelDao = channelDao,
+            channelSnapshotReader = channelSnapshotReader,
             playlistDao = playlistDao,
             syncLogDao = syncLogDao,
             logoCatalogResolver = logoCatalogResolver
@@ -63,6 +66,7 @@ class ChannelMetadataRepositoryBulkReadBatchTest {
         coVerify(exactly = 0) { channelDao.findById(any()) }
         coVerify(exactly = 1) { channelMetadataDao.findByChannelIds(listOf(101L, 102L)) }
         coVerify(exactly = 0) { channelMetadataDao.findByChannelId(any()) }
+        coVerify(exactly = 0) { channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(any()) }
         coVerify(exactly = 1) {
             channelMetadataDao.upsert(
                 match { metadata ->
