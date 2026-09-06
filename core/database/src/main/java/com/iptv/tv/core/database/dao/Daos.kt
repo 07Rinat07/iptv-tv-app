@@ -321,6 +321,17 @@ interface RecordingDao {
     @Query("SELECT * FROM recordings WHERE status = :status ORDER BY scheduledStartAt ASC, createdAt ASC")
     suspend fun findByStatus(status: String): List<RecordingEntity>
 
+    @Query(
+        "SELECT * FROM recordings " +
+            "WHERE status = :status AND COALESCE(scheduledStartAt, createdAt) <= :beforeEpochMs " +
+            "ORDER BY scheduledStartAt ASC, createdAt ASC LIMIT :limit"
+    )
+    suspend fun findDueByStatusLimited(
+        status: String,
+        beforeEpochMs: Long,
+        limit: Int
+    ): List<RecordingEntity>
+
     @Query("SELECT * FROM recordings WHERE status IN (:statuses) AND COALESCE(endedAt, createdAt) < :beforeEpochMs")
     suspend fun findOlderThan(statuses: List<String>, beforeEpochMs: Long): List<RecordingEntity>
 

@@ -223,12 +223,11 @@ class RecordingRepositoryImpl @Inject constructor(
 
     override suspend fun processDueRecordings(maxConcurrent: Int): AppResult<Int> = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
-        val due = recordingDao.findByStatus(RecordingStatus.SCHEDULED.name)
-            .filter { recording ->
-                val startAt = recording.scheduledStartAt ?: recording.createdAt
-                startAt <= now
-            }
-            .take(maxConcurrent.coerceIn(1, MAX_CONCURRENT_RECORDINGS))
+        val due = recordingDao.findDueByStatusLimited(
+            status = RecordingStatus.SCHEDULED.name,
+            beforeEpochMs = now,
+            limit = maxConcurrent.coerceIn(1, MAX_CONCURRENT_RECORDINGS)
+        )
 
         var processed = 0
         due.forEach { recording ->
