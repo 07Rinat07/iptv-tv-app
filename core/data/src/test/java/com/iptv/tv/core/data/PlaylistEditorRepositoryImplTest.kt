@@ -207,22 +207,74 @@ class PlaylistEditorRepositoryImplTest {
     }
 
     @Test
-    fun exportToM3u_excludesHiddenChannelsWhenNoExplicitSelection() = runTest {
+    fun exportToM3u_readsFullPlaylistInBoundedOrderWindows() = runTest {
+        val playlistDao = mockk<PlaylistDao>()
+        val channelDao = mockk<ChannelDao>()
+        val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
+        val firstWindow = (0..899).toList()
+        val secondWindow = (900..1799).toList()
+        val finalWindow = listOf(1800)
+
+        coEvery { channelDao.maxOrderIndex(9) } returns 1800
+        coEvery {
+            channelDao.findByPlaylistIdAndOrderIndexes(9, firstWindow)
+        } returns listOf(
+            channel(id = 1, playlistId = 9, orderIndex = 0, name = "First", url = "https://first"),
+            channel(id = 2, playlistId = 9, orderIndex = 899, name = "Hidden", url = "https://hidden", hidden = true)
+        )
+        coEvery {
+            channelDao.findByPlaylistIdAndOrderIndexes(9, secondWindow)
+        } returns listOf(
+            channel(id = 3, playlistId = 9, orderIndex = 900, name = "Middle", url = "https://middle")
+        )
+        coEvery {
+            channelDao.findByPlaylistIdAndOrderIndexes(9, finalWindow)
+        } returns listOf(
+            channel(id = 4, playlistId = 9, orderIndex = 1800, name = "Last", url = "https://last")
+        )
+
+        val result = repository.exportToM3u(9, emptyList())
+
+        assertTrue(result is AppResult.Success)
+        val exported = (result as AppResult.Success).data
+        assertEquals(3, exported.channelCount)
+        assertTrue(exported.m3uContent.contains("First"))
+        assertTrue(exported.m3uContent.contains("Middle"))
+        assertTrue(exported.m3uContent.contains("Last"))
+        assertTrue(!exported.m3uContent.contains("Hidden"))
+        assertTrue(exported.m3uContent.indexOf("First") < exported.m3uContent.indexOf("Middle"))
+        assertTrue(exported.m3uContent.indexOf("Middle") < exported.m3uContent.indexOf("Last"))
+
+        coVerify(exactly = 1) { channelDao.maxOrderIndex(9) }
+        coVerify(exactly = 1) { channelDao.findByPlaylistIdAndOrderIndexes(9, firstWindow) }
+        coVerify(exactly = 1) { channelDao.findByPlaylistIdAndOrderIndexes(9, secondWindow) }
+        coVerify(exactly = 1) { channelDao.findByPlaylistIdAndOrderIndexes(9, finalWindow) }
+        coVerify(exactly = 0) { channelDao.getChannels(9) }
+        coVerify(exactly = 0) { channelDao.findByIds(any()) }
+    }
+
+    @Test
+    fun exportToM3u_keepsSelectedChannelLookupBoundedByIds() = runTest {
         val playlistDao = mockk<PlaylistDao>()
         val channelDao = mockk<ChannelDao>()
         val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
 
-        coEvery { channelDao.getChannels(9) } returns listOf(
-            channel(id = 1, playlistId = 9, orderIndex = 0, name = "Visible", url = "https://visible"),
-            channel(id = 2, playlistId = 9, orderIndex = 1, name = "Hidden", url = "https://hidden", hidden = true)
+        coEvery { channelDao.findByIds(listOf(2L, 1L)) } returns listOf(
+            channel(id = 1, playlistId = 9, orderIndex = 0, name = "First", url = "https://first"),
+            channel(id = 2, playlistId = 9, orderIndex = 1, name = "Second", url = "https://second")
         )
 
-        val result = repository.exportToM3u(9, emptyList())
+        val result = repository.exportToM3u(9, listOf(2L, 1L, 2L))
+
         assertTrue(result is AppResult.Success)
         val exported = (result as AppResult.Success).data
-        assertEquals(1, exported.channelCount)
-        assertTrue(exported.m3uContent.contains("Visible"))
-        assertTrue(!exported.m3uContent.contains("Hidden"))
+        assertEquals(2, exported.channelCount)
+        assertTrue(exported.m3uContent.indexOf("First") < exported.m3uContent.indexOf("Second"))
+
+        coVerify(exactly = 1) { channelDao.findByIds(listOf(2L, 1L)) }
+        coVerify(exactly = 0) { channelDao.maxOrderIndex(9) }
+        coVerify(exactly = 0) { channelDao.findByPlaylistIdAndOrderIndexes(any(), any()) }
+        coVerify(exactly = 0) { channelDao.getChannels(9) }
     }
 
     private fun channel(
