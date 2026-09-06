@@ -291,10 +291,6 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
             )
         }
 
-        val selectedSourceChannels = loadSelectedSourceChannels(
-            playlistId = playlistId,
-            selectedChannelIds = selectedChannelIds
-        )
         val newPlaylistId = playlistDao.insertPlaylist(
             PlaylistEntity(
                 name = "${playlist.name} (COW)",
@@ -308,15 +304,10 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
             )
         )
 
-        channelDao.clonePlaylistChannels(
+        val mappedSelected = channelDao.clonePlaylistChannelsAndMapSelection(
             sourcePlaylistId = playlistId,
-            targetPlaylistId = newPlaylistId
-        )
-
-        val mappedSelected = mapSelectionToCow(
-            sourceChannels = selectedSourceChannels,
-            selectedChannelIds = selectedChannelIds,
-            existingCowPlaylistId = newPlaylistId
+            targetPlaylistId = newPlaylistId,
+            selectedChannelIds = selectedChannelIds
         )
 
         return WorkingContext(
