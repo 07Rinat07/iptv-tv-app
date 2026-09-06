@@ -86,6 +86,19 @@ abstract class ChannelDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun insertAll(items: List<ChannelEntity>)
 
+    @Query(
+        "INSERT INTO channels (" +
+            "playlistId, tvgId, name, groupName, logo, streamUrl, health, orderIndex, isHidden, " +
+            "catchUpMode, catchUpDays, catchUpSourceTemplate, catchUpDaysDeclared" +
+            ") SELECT :targetPlaylistId, tvgId, name, groupName, logo, streamUrl, health, orderIndex, isHidden, " +
+            "catchUpMode, catchUpDays, catchUpSourceTemplate, catchUpDaysDeclared " +
+            "FROM channels WHERE playlistId = :sourcePlaylistId"
+    )
+    abstract suspend fun clonePlaylistChannels(
+        sourcePlaylistId: Long,
+        targetPlaylistId: Long
+    )
+
     @Query("SELECT * FROM channels WHERE playlistId = :playlistId ORDER BY orderIndex ASC")
     abstract suspend fun getChannels(playlistId: Long): List<ChannelEntity>
 
