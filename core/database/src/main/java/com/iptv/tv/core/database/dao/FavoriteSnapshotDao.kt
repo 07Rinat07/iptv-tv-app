@@ -94,7 +94,8 @@ data class FavoriteChannelIdentityRow(
 data class ParentalChannelGateRow(
     val tvgId: String?,
     val name: String,
-    val groupName: String?
+    val groupName: String?,
+    val id: Long = Long.MIN_VALUE
 )
 
 /** Scalar aggregate for the All-channels summary when parental filtering is inactive. */
@@ -156,7 +157,7 @@ data class AllChannelsParentalSummaryRow(
  * Favorites must use [observeChannelTableInvalidation], [getChannelIdentityPage] and
  * [findChannelsByIds]. Full ChannelEntity-table calls remain only for explicit compatibility
  * operations and the explicit All-channels channel view. Summary/count hot paths use scalar,
- * bounded or narrow projections instead.
+ * bounded or transactionally paged narrow projections instead.
  */
 @Dao
 interface FavoriteChannelLookupDao {
@@ -166,8 +167,35 @@ interface FavoriteChannelLookupDao {
     @Query("SELECT COUNT(*) FROM channels WHERE isHidden = 0")
     fun observeVisibleChannelCount(): Flow<Int>
 
-    @Query("SELECT tvgId, name, groupName FROM channels WHERE isHidden = 0")
-    fun observeVisibleParentalGateRows(): Flow<List<ParentalChannelGateRow>>
+    @Query(
+        "SELECT id, tvgId, name, groupName FROM channels " +
+            "WHERE isHidden = 0 AND id > :afterId ORDER BY id ASC LIMIT :limit"
+    )
+    suspend fun getVisibleParentalGatePage(
+        afterId: Long,
+        limit: Int
+    ): List<ParentalChannelGateRow>
+
+    @Transaction
+    suspend fun visitVisibleParentalGatePages(
+        visitor: (List<ParentalChannelGateRow>) -> Unit
+    ) {
+        var afterId = Long.MIN_VALUE
+        while (true) {
+            val page = getVisibleParentalGatePage(
+                afterId = afterId,
+                limit = ChannelWriteBatching.MAX_IDS_PER_QUERY
+            )
+            if (page.isEmpty()) return
+
+            visitor(page)
+            if (page.size < ChannelWriteBatching.MAX_IDS_PER_QUERY) return
+
+            val nextAfterId = page.last().id
+            check(nextAfterId > afterId) { "Parental count page cursor did not advance" }
+            afterId = nextAfterId
+        }
+    }
 
     @Query(
         "SELECT id, tvgId, name, streamUrl FROM channels " +
