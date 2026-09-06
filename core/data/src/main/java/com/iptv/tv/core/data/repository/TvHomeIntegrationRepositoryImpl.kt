@@ -14,6 +14,7 @@ import com.iptv.tv.core.common.toLogSummary
 import com.iptv.tv.core.data.mapper.toEntity
 import com.iptv.tv.core.data.mapper.toModel
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.FavoriteChannelLookupDao
 import com.iptv.tv.core.database.dao.HistoryDao
 import com.iptv.tv.core.database.dao.RecordingDao
 import com.iptv.tv.core.database.dao.SyncLogDao
@@ -40,6 +41,7 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val tvHomeChannelDao: TvHomeChannelDao,
     private val channelDao: ChannelDao,
+    private val favoriteChannelLookupDao: FavoriteChannelLookupDao,
     private val historyDao: HistoryDao,
     private val recordingDao: RecordingDao,
     private val syncLogDao: SyncLogDao
@@ -57,7 +59,7 @@ class TvHomeIntegrationRepositoryImpl @Inject constructor(
     override suspend fun publishFavorites(): AppResult<Int> = publishPreviewRow(
         type = TvHomeChannelType.FAVORITES,
         displayName = "Избранные каналы",
-        channels = channelDao.observeFavoriteChannels().first().take(MAX_PREVIEW_PROGRAMS)
+        channels = favoriteChannelLookupDao.getFavoriteChannelsLimited(MAX_PREVIEW_PROGRAMS)
     )
 
     override suspend fun publishWatchNext(): AppResult<Int> = withContext(Dispatchers.IO) {

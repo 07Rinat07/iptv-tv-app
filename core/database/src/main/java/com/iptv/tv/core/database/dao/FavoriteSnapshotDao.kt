@@ -213,6 +213,13 @@ interface FavoriteChannelLookupDao {
     suspend fun findChannelById(channelId: Long): ChannelEntity?
 
     @Query(
+        "SELECT c.* FROM channels c " +
+            "INNER JOIN favorites f ON f.channelId = c.id " +
+            "ORDER BY f.addedAt DESC LIMIT :limit"
+    )
+    suspend fun getFavoriteChannelsLimited(limit: Int): List<ChannelEntity>
+
+    @Query(
         "SELECT " +
             "COUNT(*) AS totalChannels, " +
             "COUNT(CASE WHEN isHidden = 0 THEN 1 END) AS visibleChannels, " +
