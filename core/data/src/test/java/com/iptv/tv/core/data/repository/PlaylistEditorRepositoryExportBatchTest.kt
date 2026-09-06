@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.model.EditorExportResult
@@ -20,6 +21,7 @@ class PlaylistEditorRepositoryExportBatchTest {
     fun selectedExportUsesSingleBoundedReadAndPreservesSelectionSemantics() = runTest {
         val playlistDao = mockk<PlaylistDao>(relaxed = true)
         val channelDao = mockk<ChannelDao>(relaxed = true)
+        val snapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         val selectedIds = (1L..900L).toList()
         val hiddenSelected = channel(
             id = 1L,
@@ -47,7 +49,8 @@ class PlaylistEditorRepositoryExportBatchTest {
 
         val repository = PlaylistEditorRepositoryImpl(
             playlistDao = playlistDao,
-            channelDao = channelDao
+            channelDao = channelDao,
+            channelExportSnapshotReader = snapshotReader
         )
 
         val result = repository.exportToM3u(
@@ -68,12 +71,14 @@ class PlaylistEditorRepositoryExportBatchTest {
 
         coVerify(exactly = 1) { channelDao.findByIds(selectedIds) }
         coVerify(exactly = 0) { channelDao.getChannels(any()) }
+        coVerify(exactly = 0) { snapshotReader.visitPlaylistChannelsInOrderWindows(any(), any()) }
     }
 
     @Test
     fun largeSelectedExportUsesChunkedBoundedReadsWithoutPlaylistSnapshot() = runTest {
         val playlistDao = mockk<PlaylistDao>(relaxed = true)
         val channelDao = mockk<ChannelDao>(relaxed = true)
+        val snapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         val selectedIds = (1L..901L).toList()
         val firstBatch = selectedIds.take(900)
         val secondBatch = selectedIds.drop(900)
@@ -104,7 +109,8 @@ class PlaylistEditorRepositoryExportBatchTest {
 
         val repository = PlaylistEditorRepositoryImpl(
             playlistDao = playlistDao,
-            channelDao = channelDao
+            channelDao = channelDao,
+            channelExportSnapshotReader = snapshotReader
         )
 
         val result = repository.exportToM3u(
@@ -125,6 +131,7 @@ class PlaylistEditorRepositoryExportBatchTest {
         coVerify(exactly = 1) { channelDao.findByIds(firstBatch) }
         coVerify(exactly = 1) { channelDao.findByIds(secondBatch) }
         coVerify(exactly = 0) { channelDao.getChannels(any()) }
+        coVerify(exactly = 0) { snapshotReader.visitPlaylistChannelsInOrderWindows(any(), any()) }
     }
 
     private fun channel(
