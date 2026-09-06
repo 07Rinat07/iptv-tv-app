@@ -38,7 +38,9 @@ class PlaylistEditorRepositoryImplTest {
         coEvery { playlistDao.findById(1) } returns sourcePlaylist
         coEvery { playlistDao.findLatestCustomBySource("cow:1") } returns null
         coEvery { playlistDao.insertPlaylist(any()) } returns 2
-        coEvery { channelDao.clonePlaylistChannels(1, 2) } returns Unit
+        coEvery {
+            channelDao.clonePlaylistChannelsAndMapSelection(1, 2, emptyList())
+        } returns emptyList()
 
         val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
         val result = repository.ensureEditablePlaylist(1)
@@ -51,27 +53,19 @@ class PlaylistEditorRepositoryImplTest {
         coVerify(exactly = 1) {
             playlistDao.insertPlaylist(match { it.isCustom && it.source == "cow:1" })
         }
-        coVerify(exactly = 1) { channelDao.clonePlaylistChannels(1, 2) }
+        coVerify(exactly = 1) {
+            channelDao.clonePlaylistChannelsAndMapSelection(1, 2, emptyList())
+        }
+        coVerify(exactly = 0) { channelDao.clonePlaylistChannels(any(), any()) }
         coVerify(exactly = 0) { channelDao.getChannels(1) }
         coVerify(exactly = 0) { channelDao.insertAll(any()) }
         coVerify(exactly = 0) { channelDao.findByIds(any()) }
     }
 
     @Test
-    fun bulkHide_createsCowWithSqlCloneAndMapsSelectedChannel() = runTest {
+    fun bulkHide_createsCowWithTransactionalSqlCloneAndMapsSelectedChannel() = runTest {
         val playlistDao = mockk<PlaylistDao>()
         val channelDao = mockk<ChannelDao>()
-        val sourceChannel = channel(
-            id = 10,
-            playlistId = 1,
-            orderIndex = 899,
-            name = "Selected",
-            url = "https://source"
-        )
-        val copiedChannel = sourceChannel.copy(
-            id = 20,
-            playlistId = 2
-        )
 
         coEvery { playlistDao.findById(1) } returns PlaylistEntity(
             id = 1,
@@ -85,12 +79,10 @@ class PlaylistEditorRepositoryImplTest {
             createdAt = 1L
         )
         coEvery { playlistDao.findLatestCustomBySource("cow:1") } returns null
-        coEvery { channelDao.findByIds(listOf(10L)) } returns listOf(sourceChannel)
         coEvery { playlistDao.insertPlaylist(any()) } returns 2
-        coEvery { channelDao.clonePlaylistChannels(1, 2) } returns Unit
         coEvery {
-            channelDao.findByPlaylistIdAndOrderIndexes(2, listOf(899))
-        } returns listOf(copiedChannel)
+            channelDao.clonePlaylistChannelsAndMapSelection(1, 2, listOf(10L))
+        } returns listOf(20L)
         coEvery { channelDao.setHidden(listOf(20L), true) } returns 1
 
         val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
@@ -106,12 +98,15 @@ class PlaylistEditorRepositoryImplTest {
         assertEquals(1, data.affectedCount)
         assertTrue(data.createdWorkingCopy)
 
-        coVerify(exactly = 1) { channelDao.findByIds(listOf(10L)) }
-        coVerify(exactly = 1) { channelDao.clonePlaylistChannels(1, 2) }
         coVerify(exactly = 1) {
-            channelDao.findByPlaylistIdAndOrderIndexes(2, listOf(899))
+            channelDao.clonePlaylistChannelsAndMapSelection(1, 2, listOf(10L))
         }
         coVerify(exactly = 1) { channelDao.setHidden(listOf(20L), true) }
+        coVerify(exactly = 0) { channelDao.clonePlaylistChannels(any(), any()) }
+        coVerify(exactly = 0) { channelDao.findByIds(any()) }
+        coVerify(exactly = 0) {
+            channelDao.findByPlaylistIdAndOrderIndexes(any(), any())
+        }
         coVerify(exactly = 0) { channelDao.getChannels(1) }
         coVerify(exactly = 0) { channelDao.insertAll(any()) }
     }
@@ -159,6 +154,9 @@ class PlaylistEditorRepositoryImplTest {
         coVerify(exactly = 0) { playlistDao.insertPlaylist(any()) }
         coVerify(exactly = 0) { channelDao.insertAll(any()) }
         coVerify(exactly = 0) { channelDao.clonePlaylistChannels(any(), any()) }
+        coVerify(exactly = 0) {
+            channelDao.clonePlaylistChannelsAndMapSelection(any(), any(), any())
+        }
     }
 
     @Test
