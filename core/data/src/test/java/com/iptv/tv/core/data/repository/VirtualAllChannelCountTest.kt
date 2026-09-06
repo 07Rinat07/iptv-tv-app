@@ -4,6 +4,8 @@ import com.iptv.tv.core.database.dao.ParentalChannelGateRow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -46,9 +48,10 @@ class VirtualAllChannelCountTest {
     }
 
     @Test
-    fun disabledParentalGateDoesNotSubscribeFullParentalRows() = runTest {
+    fun disabledParentalGateUsesScalarCountWithoutPageScan() = runTest {
         var countSubscriptions = 0
-        var parentalRowSubscriptions = 0
+        var invalidationSubscriptions = 0
+        var parentalPageWalks = 0
         val disabledGate = ParentalChannelGate(
             enabled = false,
             hideAdultChannels = true,
@@ -63,23 +66,28 @@ class VirtualAllChannelCountTest {
                     emit(12_345)
                 }
             },
-            parentalRows = {
+            parentalInvalidation = {
                 flow {
-                    parentalRowSubscriptions += 1
-                    emit(listOf(ParentalChannelGateRow("adult", "Adult", "18+")))
+                    invalidationSubscriptions += 1
+                    emit(1)
                 }
+            },
+            parentalPages = {
+                parentalPageWalks += 1
             }
         ).first()
 
         assertEquals(12_345, result)
         assertEquals(1, countSubscriptions)
-        assertEquals(0, parentalRowSubscriptions)
+        assertEquals(0, invalidationSubscriptions)
+        assertEquals(0, parentalPageWalks)
     }
 
     @Test
-    fun enabledParentalGateSubscribesRowsInsteadOfScalarCount() = runTest {
+    fun enabledParentalGateAggregatesAcrossPagedSnapshot() = runTest {
         var countSubscriptions = 0
-        var parentalRowSubscriptions = 0
+        var invalidationSubscriptions = 0
+        var parentalPageWalks = 0
         val enabledGate = ParentalChannelGate(
             enabled = true,
             hideAdultChannels = true,
@@ -91,25 +99,67 @@ class VirtualAllChannelCountTest {
             visibleCount = {
                 flow {
                     countSubscriptions += 1
-                    emit(3)
+                    emit(4)
                 }
             },
-            parentalRows = {
+            parentalInvalidation = {
                 flow {
-                    parentalRowSubscriptions += 1
-                    emit(
+                    invalidationSubscriptions += 1
+                    emit(4)
+                }
+            },
+            parentalPages = { visitor ->
+                parentalPageWalks += 1
+                visitor(
+                    listOf(
+                        ParentalChannelGateRow("one", "News", "News", id = 10),
+                        ParentalChannelGateRow("adult", "Adult Cinema", "18+", id = 11)
+                    )
+                )
+                visitor(
+                    listOf(
+                        ParentalChannelGateRow("three", "Travel", "Travel", id = 12),
+                        ParentalChannelGateRow("four", "Kids", "Family", id = 13)
+                    )
+                )
+            }
+        ).first()
+
+        assertEquals(3, result)
+        assertEquals(0, countSubscriptions)
+        assertEquals(1, invalidationSubscriptions)
+        assertEquals(1, parentalPageWalks)
+    }
+
+    @Test
+    fun parentalInvalidationRetriggersPagedSnapshotCount() = runTest {
+        var parentalPageWalks = 0
+        val enabledGate = ParentalChannelGate(
+            enabled = true,
+            hideAdultChannels = true,
+            blockedKeywords = listOf("adult")
+        )
+
+        val results = observeVirtualAllChannelCount(
+            parentalGate = flowOf(enabledGate),
+            visibleCount = { flowOf(0) },
+            parentalInvalidation = { flowOf(1, 2) },
+            parentalPages = { visitor ->
+                parentalPageWalks += 1
+                if (parentalPageWalks == 1) {
+                    visitor(listOf(ParentalChannelGateRow("safe", "News", "News", id = 10)))
+                } else {
+                    visitor(
                         listOf(
-                            ParentalChannelGateRow("one", "News", "News"),
-                            ParentalChannelGateRow("adult", "Adult Cinema", "18+"),
-                            ParentalChannelGateRow("three", "Travel", "Travel")
+                            ParentalChannelGateRow("safe", "News", "News", id = 10),
+                            ParentalChannelGateRow("travel", "Travel", "Travel", id = 11)
                         )
                     )
                 }
             }
-        ).first()
+        ).take(2).toList()
 
-        assertEquals(2, result)
-        assertEquals(0, countSubscriptions)
-        assertEquals(1, parentalRowSubscriptions)
+        assertEquals(listOf(1, 2), results)
+        assertEquals(2, parentalPageWalks)
     }
 }

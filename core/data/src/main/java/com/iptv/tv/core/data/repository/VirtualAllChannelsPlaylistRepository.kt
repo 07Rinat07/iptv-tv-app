@@ -40,9 +40,10 @@ import kotlinx.coroutines.flow.map
 /**
  * Adds the system-owned All channels aggregate on top of the existing virtual Favorites decorator.
  *
- * Normal Home/playlist observation uses scalar or narrow count projections. Explicit All-channels
- * browsing still materializes full channels, while its one-shot summary uses a consistent bounded
- * SQL snapshot or a transactionally paged narrow projection when parental keywords are active.
+ * Normal Home/playlist observation uses scalar or transactionally paged count projections. Explicit
+ * All-channels browsing still materializes full channels, while its one-shot summary uses a
+ * consistent bounded SQL snapshot or a transactionally paged narrow projection when parental
+ * keywords are active.
  */
 @Singleton
 class VirtualAllChannelsPlaylistRepository @Inject constructor(
@@ -63,7 +64,8 @@ class VirtualAllChannelsPlaylistRepository @Inject constructor(
     private val allChannelCount = observeVirtualAllChannelCount(
         parentalGate = parentalGate,
         visibleCount = favoriteChannelLookupDao::observeVisibleChannelCount,
-        parentalRows = favoriteChannelLookupDao::observeVisibleParentalGateRows
+        parentalInvalidation = favoriteChannelLookupDao::observeChannelTableInvalidation,
+        parentalPages = favoriteChannelLookupDao::visitVisibleParentalGatePages
     )
 
     override fun observePlaylists(): Flow<List<Playlist>> {
@@ -187,7 +189,8 @@ internal suspend fun loadVirtualAllChannelsSummary(
 internal fun observeVirtualAllChannelCount(
     parentalGate: Flow<ParentalChannelGate>,
     visibleCount: () -> Flow<Int>,
-    parentalRows: () -> Flow<List<ParentalChannelGateRow>>
+    parentalInvalidation: () -> Flow<Int>,
+    parentalPages: suspend ((List<ParentalChannelGateRow>) -> Unit) -> Unit
 ): Flow<Int> = channelFlow {
     parentalGate.collectLatest { gate ->
         if (!gate.blocksChannels) {
@@ -195,18 +198,32 @@ internal fun observeVirtualAllChannelCount(
                 send(count.coerceAtLeast(0))
             }
         } else {
-            parentalRows().collect { rows ->
+            parentalInvalidation().collect {
                 send(
-                    virtualAllChannelCount(
-                        visibleCount = 0,
-                        parentalRows = rows,
-                        parentalGate = gate
+                    loadVirtualAllChannelCount(
+                        parentalGate = gate,
+                        parentalPages = parentalPages
                     )
                 )
             }
         }
     }
 }.distinctUntilChanged()
+
+internal suspend fun loadVirtualAllChannelCount(
+    parentalGate: ParentalChannelGate,
+    parentalPages: suspend ((List<ParentalChannelGateRow>) -> Unit) -> Unit
+): Int {
+    var count = 0
+    parentalPages { rows ->
+        count += virtualAllChannelCount(
+            visibleCount = rows.size,
+            parentalRows = rows,
+            parentalGate = parentalGate
+        )
+    }
+    return count
+}
 
 internal fun virtualAllChannelCount(
     visibleCount: Int,
