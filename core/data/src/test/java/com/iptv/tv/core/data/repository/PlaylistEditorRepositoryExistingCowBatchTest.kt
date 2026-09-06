@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import com.iptv.tv.core.database.entity.PlaylistEntity
@@ -25,7 +26,8 @@ class PlaylistEditorRepositoryExistingCowBatchTest {
 
         val repository = PlaylistEditorRepositoryImpl(
             playlistDao = playlistDao,
-            channelDao = channelDao
+            channelDao = channelDao,
+            channelExportSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         )
 
         val result = repository.ensureEditablePlaylist(SOURCE_PLAYLIST_ID)
@@ -78,7 +80,8 @@ class PlaylistEditorRepositoryExistingCowBatchTest {
 
         val repository = PlaylistEditorRepositoryImpl(
             playlistDao = playlistDao,
-            channelDao = channelDao
+            channelDao = channelDao,
+            channelExportSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         )
 
         val result = repository.bulkHide(

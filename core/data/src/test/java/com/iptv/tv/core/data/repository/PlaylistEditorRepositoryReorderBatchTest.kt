@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.ChannelOrderIndexUpdate
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
@@ -22,7 +23,11 @@ class PlaylistEditorRepositoryReorderBatchTest {
         val playlistDao = mockk<PlaylistDao>(relaxed = true)
         val channelDao = mockk<ChannelDao>(relaxed = true)
         stubLargePlaylistOrder(playlistDao, channelDao)
-        val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
+        val repository = PlaylistEditorRepositoryImpl(
+            playlistDao = playlistDao,
+            channelDao = channelDao,
+            channelExportSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
+        )
 
         val result = repository.moveChannelsToTop(
             playlistId = PLAYLIST_ID,
@@ -53,7 +58,11 @@ class PlaylistEditorRepositoryReorderBatchTest {
         val playlistDao = mockk<PlaylistDao>(relaxed = true)
         val channelDao = mockk<ChannelDao>(relaxed = true)
         stubLargePlaylistOrder(playlistDao, channelDao)
-        val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
+        val repository = PlaylistEditorRepositoryImpl(
+            playlistDao = playlistDao,
+            channelDao = channelDao,
+            channelExportSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
+        )
 
         val result = repository.moveChannelsToBottom(
             playlistId = PLAYLIST_ID,

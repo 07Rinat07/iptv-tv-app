@@ -3,6 +3,7 @@ package com.iptv.tv.core.data
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.data.repository.PlaylistEditorRepositoryImpl
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.ChannelOrderIndexUpdate
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
@@ -42,7 +43,7 @@ class PlaylistEditorRepositoryImplTest {
             channelDao.clonePlaylistChannelsAndMapSelection(1, 2, emptyList())
         } returns emptyList()
 
-        val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
+        val repository = repository(playlistDao, channelDao)
         val result = repository.ensureEditablePlaylist(1)
 
         assertTrue(result is AppResult.Success)
@@ -85,7 +86,7 @@ class PlaylistEditorRepositoryImplTest {
         } returns listOf(20L)
         coEvery { channelDao.setHidden(listOf(20L), true) } returns 1
 
-        val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
+        val repository = repository(playlistDao, channelDao)
         val result = repository.bulkHide(
             playlistId = 1,
             channelIds = listOf(10L),
@@ -143,7 +144,7 @@ class PlaylistEditorRepositoryImplTest {
         coEvery { playlistDao.findLatestCustomBySource("cow:1") } returns existingCow
         coEvery { channelDao.getChannels(1) } returns emptyList()
 
-        val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
+        val repository = repository(playlistDao, channelDao)
         val result = repository.ensureEditablePlaylist(1)
 
         assertTrue(result is AppResult.Success)
@@ -188,7 +189,7 @@ class PlaylistEditorRepositoryImplTest {
         )
         coEvery { channelDao.updateOrderIndexes(normalizationUpdates) } returns Unit
 
-        val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
+        val repository = repository(playlistDao, channelDao)
         val result = repository.bulkDelete(5, listOf(100))
 
         assertTrue(result is AppResult.Success)
@@ -207,22 +208,89 @@ class PlaylistEditorRepositoryImplTest {
     }
 
     @Test
-    fun exportToM3u_excludesHiddenChannelsWhenNoExplicitSelection() = runTest {
+    fun exportToM3u_readsFullPlaylistThroughSnapshotWindowReader() = runTest {
         val playlistDao = mockk<PlaylistDao>()
         val channelDao = mockk<ChannelDao>()
-        val repository = PlaylistEditorRepositoryImpl(playlistDao, channelDao)
+        val snapshotReader = mockk<ChannelExportSnapshotReader>()
+        val repository = repository(playlistDao, channelDao, snapshotReader)
 
-        coEvery { channelDao.getChannels(9) } returns listOf(
-            channel(id = 1, playlistId = 9, orderIndex = 0, name = "Visible", url = "https://visible"),
-            channel(id = 2, playlistId = 9, orderIndex = 1, name = "Hidden", url = "https://hidden", hidden = true)
-        )
+        coEvery {
+            snapshotReader.visitPlaylistChannelsInOrderWindows(9, any())
+        } coAnswers {
+            val visitor = secondArg<(List<ChannelEntity>) -> Unit>()
+            visitor(
+                listOf(
+                    channel(id = 1, playlistId = 9, orderIndex = 0, name = "First", url = "https://first"),
+                    channel(id = 2, playlistId = 9, orderIndex = 899, name = "Hidden", url = "https://hidden", hidden = true)
+                )
+            )
+            visitor(
+                listOf(
+                    channel(id = 3, playlistId = 9, orderIndex = 900, name = "Middle", url = "https://middle")
+                )
+            )
+            visitor(
+                listOf(
+                    channel(id = 4, playlistId = 9, orderIndex = 1800, name = "Last", url = "https://last")
+                )
+            )
+        }
 
         val result = repository.exportToM3u(9, emptyList())
+
         assertTrue(result is AppResult.Success)
         val exported = (result as AppResult.Success).data
-        assertEquals(1, exported.channelCount)
-        assertTrue(exported.m3uContent.contains("Visible"))
+        assertEquals(3, exported.channelCount)
+        assertTrue(exported.m3uContent.contains("First"))
+        assertTrue(exported.m3uContent.contains("Middle"))
+        assertTrue(exported.m3uContent.contains("Last"))
         assertTrue(!exported.m3uContent.contains("Hidden"))
+        assertTrue(exported.m3uContent.indexOf("First") < exported.m3uContent.indexOf("Middle"))
+        assertTrue(exported.m3uContent.indexOf("Middle") < exported.m3uContent.indexOf("Last"))
+
+        coVerify(exactly = 1) { snapshotReader.visitPlaylistChannelsInOrderWindows(9, any()) }
+        coVerify(exactly = 0) { channelDao.maxOrderIndex(9) }
+        coVerify(exactly = 0) { channelDao.findByPlaylistIdAndOrderIndexes(any(), any()) }
+        coVerify(exactly = 0) { channelDao.getChannels(9) }
+        coVerify(exactly = 0) { channelDao.findByIds(any()) }
+    }
+
+    @Test
+    fun exportToM3u_keepsSelectedChannelLookupBoundedByIds() = runTest {
+        val playlistDao = mockk<PlaylistDao>()
+        val channelDao = mockk<ChannelDao>()
+        val snapshotReader = mockk<ChannelExportSnapshotReader>()
+        val repository = repository(playlistDao, channelDao, snapshotReader)
+
+        coEvery { channelDao.findByIds(listOf(2L, 1L)) } returns listOf(
+            channel(id = 1, playlistId = 9, orderIndex = 0, name = "First", url = "https://first"),
+            channel(id = 2, playlistId = 9, orderIndex = 1, name = "Second", url = "https://second")
+        )
+
+        val result = repository.exportToM3u(9, listOf(2L, 1L, 2L))
+
+        assertTrue(result is AppResult.Success)
+        val exported = (result as AppResult.Success).data
+        assertEquals(2, exported.channelCount)
+        assertTrue(exported.m3uContent.indexOf("First") < exported.m3uContent.indexOf("Second"))
+
+        coVerify(exactly = 1) { channelDao.findByIds(listOf(2L, 1L)) }
+        coVerify(exactly = 0) { snapshotReader.visitPlaylistChannelsInOrderWindows(any(), any()) }
+        coVerify(exactly = 0) { channelDao.maxOrderIndex(9) }
+        coVerify(exactly = 0) { channelDao.findByPlaylistIdAndOrderIndexes(any(), any()) }
+        coVerify(exactly = 0) { channelDao.getChannels(9) }
+    }
+
+    private fun repository(
+        playlistDao: PlaylistDao,
+        channelDao: ChannelDao,
+        snapshotReader: ChannelExportSnapshotReader = mockk(relaxed = true)
+    ): PlaylistEditorRepositoryImpl {
+        return PlaylistEditorRepositoryImpl(
+            playlistDao = playlistDao,
+            channelDao = channelDao,
+            channelExportSnapshotReader = snapshotReader
+        )
     }
 
     private fun channel(

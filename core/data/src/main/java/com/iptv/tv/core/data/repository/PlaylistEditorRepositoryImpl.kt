@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.ChannelOrderIndexUpdate
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
@@ -20,7 +21,8 @@ import javax.inject.Singleton
 @Singleton
 class PlaylistEditorRepositoryImpl @Inject constructor(
     private val playlistDao: PlaylistDao,
-    private val channelDao: ChannelDao
+    private val channelDao: ChannelDao,
+    private val channelExportSnapshotReader: ChannelExportSnapshotReader
 ) : PlaylistEditorRepository {
 
     override suspend fun ensureEditablePlaylist(playlistId: Long): AppResult<EditorActionResult> =
@@ -236,27 +238,48 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
 
     override suspend fun exportToM3u(playlistId: Long, channelIds: List<Long>): AppResult<EditorExportResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val channels = if (channelIds.isEmpty()) {
-                channelDao.getChannels(playlistId).filterNot { it.isHidden }
-            } else {
-                channelIds
-                    .distinct()
-                    .chunked(CHANNEL_LOOKUP_BATCH_SIZE)
-                    .flatMap { batch -> channelDao.findByIds(batch) }
-                    .filter { channel -> channel.playlistId == playlistId }
+            if (channelIds.isEmpty()) {
+                val export = exportFullPlaylistToM3u(playlistId)
+                    ?: return@withContext AppResult.Error("Нет каналов для экспорта")
+                return@withContext AppResult.Success(export)
             }
+
+            val channels = channelIds
+                .distinct()
+                .chunked(CHANNEL_LOOKUP_BATCH_SIZE)
+                .flatMap { batch -> channelDao.findByIds(batch) }
+                .filter { channel -> channel.playlistId == playlistId }
 
             if (channels.isEmpty()) return@withContext AppResult.Error("Нет каналов для экспорта")
 
-            val m3u = buildM3u(channels)
             AppResult.Success(
                 EditorExportResult(
                     playlistId = playlistId,
                     channelCount = channels.size,
-                    m3uContent = m3u
+                    m3uContent = buildM3u(channels)
                 )
             )
         }.getOrElse { AppResult.Error("Не удалось экспортировать плейлист", it) }
+    }
+
+    private suspend fun exportFullPlaylistToM3u(playlistId: Long): EditorExportResult? {
+        val builder = StringBuilder("#EXTM3U\n")
+        var channelCount = 0
+        channelExportSnapshotReader.visitPlaylistChannelsInOrderWindows(playlistId) { channels ->
+            channels.forEach { channel ->
+                if (!channel.isHidden) {
+                    appendM3uChannel(builder, channel)
+                    channelCount++
+                }
+            }
+        }
+
+        if (channelCount == 0) return null
+        return EditorExportResult(
+            playlistId = playlistId,
+            channelCount = channelCount,
+            m3uContent = builder.toString()
+        )
     }
 
     private suspend fun ensureWorkingCopy(playlistId: Long, selectedChannelIds: List<Long>): WorkingContext {
@@ -443,20 +466,24 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
     private fun buildM3u(channels: List<ChannelEntity>): String {
         val builder = StringBuilder("#EXTM3U\n")
         channels.sortedBy { it.orderIndex }.forEach { channel ->
-            val attrs = mutableListOf<String>()
-            channel.tvgId?.takeIf { it.isNotBlank() }?.let { attrs += "tvg-id=\"${escapeAttr(it)}\"" }
-            channel.logo?.takeIf { it.isNotBlank() }?.let { attrs += "tvg-logo=\"${escapeAttr(it)}\"" }
-            channel.groupName?.takeIf { it.isNotBlank() }?.let { attrs += "group-title=\"${escapeAttr(it)}\"" }
-
-            val attrsChunk = if (attrs.isEmpty()) "" else " ${attrs.joinToString(" ")}"
-            builder.append("#EXTINF:-1")
-                .append(attrsChunk)
-                .append(',')
-                .append(channel.name)
-                .append('\n')
-            builder.append(channel.streamUrl).append('\n')
+            appendM3uChannel(builder, channel)
         }
         return builder.toString()
+    }
+
+    private fun appendM3uChannel(builder: StringBuilder, channel: ChannelEntity) {
+        val attrs = mutableListOf<String>()
+        channel.tvgId?.takeIf { it.isNotBlank() }?.let { attrs += "tvg-id=\"${escapeAttr(it)}\"" }
+        channel.logo?.takeIf { it.isNotBlank() }?.let { attrs += "tvg-logo=\"${escapeAttr(it)}\"" }
+        channel.groupName?.takeIf { it.isNotBlank() }?.let { attrs += "group-title=\"${escapeAttr(it)}\"" }
+
+        val attrsChunk = if (attrs.isEmpty()) "" else " ${attrs.joinToString(" ")}"
+        builder.append("#EXTINF:-1")
+            .append(attrsChunk)
+            .append(',')
+            .append(channel.name)
+            .append('\n')
+        builder.append(channel.streamUrl).append('\n')
     }
 
     private fun escapeAttr(value: String): String {
