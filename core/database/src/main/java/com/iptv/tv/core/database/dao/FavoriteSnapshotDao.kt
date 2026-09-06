@@ -135,7 +135,7 @@ data class AllChannelsSummarySnapshot(
 )
 
 /**
- * Narrow full-scan projection used only when dynamic parental keywords must be evaluated in Kotlin.
+ * Narrow row used when dynamic parental keywords must be evaluated in Kotlin.
  * Stream URLs and catch-up payloads are intentionally excluded from this exceptional path.
  */
 data class AllChannelsParentalSummaryRow(
@@ -234,9 +234,33 @@ interface FavoriteChannelLookupDao {
 
     @Query(
         "SELECT id, playlistId, tvgId, name, groupName, logo, health, orderIndex, isHidden " +
-            "FROM channels ORDER BY playlistId ASC, orderIndex ASC, id ASC"
+            "FROM channels WHERE id > :afterId ORDER BY id ASC LIMIT :limit"
     )
-    suspend fun getAllChannelsParentalSummaryRows(): List<AllChannelsParentalSummaryRow>
+    suspend fun getAllChannelsParentalSummaryPage(
+        afterId: Long,
+        limit: Int
+    ): List<AllChannelsParentalSummaryRow>
+
+    @Transaction
+    suspend fun visitAllChannelsParentalSummaryPages(
+        visitor: (List<AllChannelsParentalSummaryRow>) -> Unit
+    ) {
+        var afterId = Long.MIN_VALUE
+        while (true) {
+            val page = getAllChannelsParentalSummaryPage(
+                afterId = afterId,
+                limit = ChannelWriteBatching.MAX_IDS_PER_QUERY
+            )
+            if (page.isEmpty()) return
+
+            visitor(page)
+            if (page.size < ChannelWriteBatching.MAX_IDS_PER_QUERY) return
+
+            val nextAfterId = page.last().id
+            check(nextAfterId > afterId) { "Parental summary page cursor did not advance" }
+            afterId = nextAfterId
+        }
+    }
 
     @Query("SELECT * FROM channels ORDER BY playlistId ASC, orderIndex ASC, id ASC")
     suspend fun getAllChannels(): List<ChannelEntity>
