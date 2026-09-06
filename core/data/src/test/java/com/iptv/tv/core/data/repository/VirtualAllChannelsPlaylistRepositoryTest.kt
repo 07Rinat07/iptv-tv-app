@@ -133,7 +133,7 @@ class VirtualAllChannelsPlaylistRepositoryTest {
         var snapshotReads = 0
         var requestedGroupLimit = -1
         var requestedPreviewLimit = -1
-        var parentalRowReads = 0
+        var parentalPageWalks = 0
 
         val summary = loadVirtualAllChannelsSummary(
             parentalGate = ParentalChannelGate(
@@ -173,16 +173,15 @@ class VirtualAllChannelsPlaylistRepositoryTest {
                     )
                 )
             },
-            parentalRows = {
-                parentalRowReads += 1
-                emptyList()
+            parentalPages = {
+                parentalPageWalks += 1
             }
         )
 
         assertEquals(1, snapshotReads)
         assertEquals(VIRTUAL_PLAYLIST_TOP_GROUP_LIMIT, requestedGroupLimit)
         assertEquals(VIRTUAL_PLAYLIST_PREVIEW_LIMIT, requestedPreviewLimit)
-        assertEquals(0, parentalRowReads)
+        assertEquals(0, parentalPageWalks)
         assertEquals(12_500, summary.totalChannels)
         assertEquals(12_000, summary.visibleChannels)
         assertEquals(250, summary.groupCount)
@@ -191,9 +190,9 @@ class VirtualAllChannelsPlaylistRepositoryTest {
     }
 
     @Test
-    fun summaryWithParentalBlockingUsesOnlyNarrowSummaryRows() = runTest {
+    fun summaryWithParentalBlockingAggregatesAcrossNarrowPages() = runTest {
         var snapshotReads = 0
-        var parentalRowReads = 0
+        var parentalPageWalks = 0
         val gate = ParentalChannelGate(
             enabled = true,
             hideAdultChannels = true,
@@ -206,49 +205,67 @@ class VirtualAllChannelsPlaylistRepositoryTest {
                 snapshotReads += 1
                 error("bounded SQL snapshot must not run while parental filtering is active")
             },
-            parentalRows = {
-                parentalRowReads += 1
-                listOf(
-                    parentalSummaryRow(
-                        id = 10,
-                        playlistId = 2,
-                        name = "Safe News",
-                        groupName = "News",
-                        health = ChannelHealth.AVAILABLE,
-                        orderIndex = 5,
-                        logo = "https://example.com/safe.png",
-                        tvgId = "safe.news"
-                    ),
-                    parentalSummaryRow(
-                        id = 11,
-                        playlistId = 1,
-                        name = "Adult Cinema",
-                        groupName = "Movies",
-                        health = ChannelHealth.UNSTABLE,
-                        orderIndex = 2
-                    ),
-                    parentalSummaryRow(
-                        id = 12,
-                        playlistId = 1,
-                        name = "Hidden Kids",
-                        groupName = "Family",
-                        health = ChannelHealth.UNKNOWN,
-                        orderIndex = 1,
-                        isHidden = true
+            parentalPages = { visitor ->
+                parentalPageWalks += 1
+                visitor(
+                    listOf(
+                        parentalSummaryRow(
+                            id = 10,
+                            playlistId = 2,
+                            name = "Safe News",
+                            groupName = "News",
+                            health = ChannelHealth.AVAILABLE,
+                            orderIndex = 5,
+                            logo = "https://example.com/safe.png",
+                            tvgId = "safe.news"
+                        ),
+                        parentalSummaryRow(
+                            id = 11,
+                            playlistId = 1,
+                            name = "Adult Cinema",
+                            groupName = "Movies",
+                            health = ChannelHealth.UNSTABLE,
+                            orderIndex = 2
+                        )
+                    )
+                )
+                visitor(
+                    listOf(
+                        parentalSummaryRow(
+                            id = 12,
+                            playlistId = 1,
+                            name = "Hidden Kids",
+                            groupName = "Family",
+                            health = ChannelHealth.UNKNOWN,
+                            orderIndex = 1,
+                            isHidden = true
+                        ),
+                        parentalSummaryRow(
+                            id = 13,
+                            playlistId = 1,
+                            name = "Safe Sport",
+                            groupName = "Sports",
+                            health = ChannelHealth.UNSTABLE,
+                            orderIndex = 0
+                        )
                     )
                 )
             }
         )
 
         assertEquals(0, snapshotReads)
-        assertEquals(1, parentalRowReads)
-        assertEquals(2, summary.totalChannels)
-        assertEquals(1, summary.visibleChannels)
+        assertEquals(1, parentalPageWalks)
+        assertEquals(3, summary.totalChannels)
+        assertEquals(2, summary.visibleChannels)
         assertEquals(1, summary.hiddenChannels)
         assertEquals(1, summary.channelsWithLogo)
         assertEquals(1, summary.channelsWithTvgId)
-        assertEquals(listOf("News" to 1), summary.topGroups)
-        assertEquals(listOf(10L), summary.channelPreviews.map { it.id })
+        assertEquals(1, summary.availableChannels)
+        assertEquals(1, summary.unstableChannels)
+        assertEquals(0, summary.unavailableChannels)
+        assertEquals(0, summary.unknownHealthChannels)
+        assertEquals(listOf("News" to 1, "Sports" to 1), summary.topGroups)
+        assertEquals(listOf(13L, 10L), summary.channelPreviews.map { it.id })
     }
 
     @Test
