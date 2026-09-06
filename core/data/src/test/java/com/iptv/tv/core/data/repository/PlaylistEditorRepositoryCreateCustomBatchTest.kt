@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
 import io.mockk.coEvery
@@ -33,7 +34,8 @@ class PlaylistEditorRepositoryCreateCustomBatchTest {
 
         val repository = PlaylistEditorRepositoryImpl(
             playlistDao = playlistDao,
-            channelDao = channelDao
+            channelDao = channelDao,
+            channelExportSnapshotReader = mockk<ChannelExportSnapshotReader>(relaxed = true)
         )
 
         val result = repository.createCustomPlaylistFromChannels(
