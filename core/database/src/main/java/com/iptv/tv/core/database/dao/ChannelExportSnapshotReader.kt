@@ -16,15 +16,40 @@ class ChannelExportSnapshotReader @Inject constructor(
         visitor: (List<ChannelEntity>) -> Unit
     ) {
         database.withTransaction {
-            val maxOrderIndex = channelDao.maxOrderIndex(playlistId)
-            for (window in orderIndexWindows(maxOrderIndex)) {
-                visitor(
-                    channelDao.findByPlaylistIdAndOrderIndexes(
-                        playlistId = playlistId,
-                        orderIndexes = window.toList()
-                    )
-                )
+            visitPlaylistChannelsInOrderWindowsInTransaction(
+                playlistId = playlistId,
+                visitor = visitor
+            )
+        }
+    }
+
+    /**
+     * Captures playlist membership/order as lightweight IDs while retaining at most one bounded
+     * ChannelEntity window at a time. Callers can process those IDs outside the read transaction
+     * without pinning a full playlist of heavy channel rows in memory.
+     */
+    suspend fun snapshotPlaylistChannelIdsInOrder(playlistId: Long): List<Long> {
+        return database.withTransaction {
+            val channelIds = mutableListOf<Long>()
+            visitPlaylistChannelsInOrderWindowsInTransaction(playlistId) { page ->
+                page.forEach { channel -> channelIds += channel.id }
             }
+            channelIds
+        }
+    }
+
+    private suspend fun visitPlaylistChannelsInOrderWindowsInTransaction(
+        playlistId: Long,
+        visitor: (List<ChannelEntity>) -> Unit
+    ) {
+        val maxOrderIndex = channelDao.maxOrderIndex(playlistId)
+        for (window in orderIndexWindows(maxOrderIndex)) {
+            visitor(
+                channelDao.findByPlaylistIdAndOrderIndexes(
+                    playlistId = playlistId,
+                    orderIndexes = window.toList()
+                )
+            )
         }
     }
 
