@@ -130,48 +130,76 @@ class ChannelMetadataRepositoryImpl @Inject constructor(
         }
         val playlist = playlistDao.findById(playlistId)
             ?: return@withContext AppResult.Error("Плейлист не найден: id=$playlistId")
-        val targetChannelIds = if (channelIds.isEmpty()) {
-            channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(playlistId)
+
+        var updated = 0
+        val processed = if (channelIds.isEmpty()) {
+            val snapshotIds = channelSnapshotReader.snapshotPlaylistChannelIdsInOrder(playlistId)
+            if (snapshotIds.isEmpty()) {
+                return@withContext AppResult.Error("Нет каналов для применения metadata rules")
+            }
+            visitChannelsWithMetadata(snapshotIds) { channel, existing ->
+                if (applyRulesToChannel(channel, existing, rules, playlist.source)) {
+                    updated += 1
+                }
+            }
         } else {
-            channelIds
+            val targetChannels = channelIds
                 .distinct()
                 .chunked(BULK_METADATA_LOOKUP_BATCH_SIZE)
                 .flatMap { batch -> channelDao.findByIds(batch) }
                 .filter { channel -> channel.playlistId == playlistId }
                 .sortedBy(ChannelEntity::orderIndex)
-                .map(ChannelEntity::id)
-        }
-        if (targetChannelIds.isEmpty()) {
-            return@withContext AppResult.Error("Нет каналов для применения metadata rules")
-        }
-
-        var updated = 0
-        val processed = visitChannelsWithMetadata(targetChannelIds) { channel, existing ->
-            val matchedRules = rules.filter { it.matches(channel, playlist.source) }
-            if (matchedRules.isEmpty()) return@visitChannelsWithMetadata
-
-            var metadata = existing.copyOrNew(channel)
-            matchedRules.forEach { rule ->
-                metadata = metadata.copy(
-                    manualCountry = rule.country ?: metadata.manualCountry,
-                    manualLanguage = rule.language ?: metadata.manualLanguage,
-                    manualCategory = rule.category ?: metadata.manualCategory
-                )
+            if (targetChannels.isEmpty()) {
+                return@withContext AppResult.Error("Нет каналов для применения metadata rules")
             }
-            channelMetadataDao.upsert(
-                buildMetadata(
-                    channel = channel,
-                    existing = metadata,
-                    playlistSource = playlist.source
-                ).copy(updatedAt = System.currentTimeMillis()).toEntity()
-            )
-            updated += 1
+            val existingByChannel = findMetadataByChannelIds(targetChannels.map(ChannelEntity::id))
+            targetChannels.forEach { channel ->
+                if (
+                    applyRulesToChannel(
+                        channel = channel,
+                        existing = existingByChannel[channel.id]?.toModel(),
+                        rules = rules,
+                        playlistSource = playlist.source
+                    )
+                ) {
+                    updated += 1
+                }
+            }
+            targetChannels.size
         }
+
         addLog(
             status = "metadata_rules_applied",
             message = "playlistId=$playlistId, rules=${rules.size}, target=$processed, updated=$updated"
         )
         AppResult.Success(updated)
+    }
+
+    private suspend fun applyRulesToChannel(
+        channel: ChannelEntity,
+        existing: ChannelMetadata?,
+        rules: List<MetadataRule>,
+        playlistSource: String
+    ): Boolean {
+        val matchedRules = rules.filter { it.matches(channel, playlistSource) }
+        if (matchedRules.isEmpty()) return false
+
+        var metadata = existing.copyOrNew(channel)
+        matchedRules.forEach { rule ->
+            metadata = metadata.copy(
+                manualCountry = rule.country ?: metadata.manualCountry,
+                manualLanguage = rule.language ?: metadata.manualLanguage,
+                manualCategory = rule.category ?: metadata.manualCategory
+            )
+        }
+        channelMetadataDao.upsert(
+            buildMetadata(
+                channel = channel,
+                existing = metadata,
+                playlistSource = playlistSource
+            ).copy(updatedAt = System.currentTimeMillis()).toEntity()
+        )
+        return true
     }
 
     override suspend fun refreshMetadata(playlistId: Long): AppResult<Int> = withContext(Dispatchers.IO) {
