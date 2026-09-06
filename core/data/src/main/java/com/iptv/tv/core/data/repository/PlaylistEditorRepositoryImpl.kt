@@ -2,6 +2,7 @@ package com.iptv.tv.core.data.repository
 
 import com.iptv.tv.core.common.AppResult
 import com.iptv.tv.core.database.dao.ChannelDao
+import com.iptv.tv.core.database.dao.ChannelExportSnapshotReader
 import com.iptv.tv.core.database.dao.ChannelOrderIndexUpdate
 import com.iptv.tv.core.database.dao.PlaylistDao
 import com.iptv.tv.core.database.entity.ChannelEntity
@@ -20,7 +21,8 @@ import javax.inject.Singleton
 @Singleton
 class PlaylistEditorRepositoryImpl @Inject constructor(
     private val playlistDao: PlaylistDao,
-    private val channelDao: ChannelDao
+    private val channelDao: ChannelDao,
+    private val channelExportSnapshotReader: ChannelExportSnapshotReader
 ) : PlaylistEditorRepository {
 
     override suspend fun ensureEditablePlaylist(playlistId: Long): AppResult<EditorActionResult> =
@@ -261,27 +263,15 @@ class PlaylistEditorRepositoryImpl @Inject constructor(
     }
 
     private suspend fun exportFullPlaylistToM3u(playlistId: Long): EditorExportResult? {
-        val maxOrderIndex = channelDao.maxOrderIndex(playlistId)
-        if (maxOrderIndex < 0) return null
-
         val builder = StringBuilder("#EXTM3U\n")
         var channelCount = 0
-        var batchStart = 0
-        while (batchStart <= maxOrderIndex) {
-            val batchEnd = minOf(
-                batchStart + CHANNEL_LOOKUP_BATCH_SIZE - 1,
-                maxOrderIndex
-            )
-            channelDao.findByPlaylistIdAndOrderIndexes(
-                playlistId = playlistId,
-                orderIndexes = (batchStart..batchEnd).toList()
-            ).forEach { channel ->
+        channelExportSnapshotReader.visitPlaylistChannelsInOrderWindows(playlistId) { channels ->
+            channels.forEach { channel ->
                 if (!channel.isHidden) {
                     appendM3uChannel(builder, channel)
                     channelCount++
                 }
             }
-            batchStart = batchEnd + 1
         }
 
         if (channelCount == 0) return null
